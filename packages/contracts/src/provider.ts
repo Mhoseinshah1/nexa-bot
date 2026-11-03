@@ -486,7 +486,26 @@ export interface ProviderDescriptor {
    * an HMAC key rather than a bearer value, a short one is a guessable signature.
    */
   readonly minimumApiTokenLength?: number;
+  /**
+   * v0.9.5 PR-3: capabilities this provider type CAN have but a given panel has only
+   * while its last health check ANNOUNCED them (`PanelHealthRecord.announcedCapabilities`).
+   * Each entry is also in `capabilities` — the type's code exists — and is offered on a
+   * panel only by `panelOffersCapability`, which asks the panel's last health check too.
+   * Absent means none: every capability of the providers that predate this is static.
+   *
+   * The custom bridge protocol's `files` operation is optional (protocol v1.1), so a
+   * bridge that does not implement it keeps working exactly as before and is never asked.
+   */
+  readonly announcedOnly?: readonly ProviderAnnounceableCapability[];
 }
+
+/**
+ * v0.9.5 PR-3: the capabilities a panel can ANNOUNCE in its health answer, and so the only
+ * values `panel_health.announced_capabilities` may hold. Closed: an announced value outside
+ * it is ignored by the adapter, never stored.
+ */
+export const PROVIDER_ANNOUNCEABLE_CAPABILITIES = ['SUBSCRIPTION_FILES'] as const;
+export type ProviderAnnounceableCapability = (typeof PROVIDER_ANNOUNCEABLE_CAPABILITIES)[number];
 
 /**
  * What a customer actually receives. The payload is provider-specific — a
@@ -924,6 +943,13 @@ export type ProviderProbeOutcome =
        * panel is up and configured correctly and something else is wrong.
        */
       readonly degraded: boolean;
+      /**
+       * v0.9.5 PR-3: the optional capabilities the provider ANNOUNCED in this answer —
+       * only those its descriptor lists in `announcedOnly`. Absent for every provider whose
+       * capabilities are static; stored with the health row and asked by
+       * `panelOffersCapability`.
+       */
+      readonly announcedCapabilities?: readonly ProviderAnnounceableCapability[];
     }
   | {
       readonly ok: false;
@@ -1718,6 +1744,33 @@ export function providerDeliversConnectionFiles(providerType: string): boolean {
 }
 
 /**
+ * v0.9.5 PR-3: whether ONE panel offers a capability — its type declares it, and, when the
+ * type lists it in `announcedOnly`, the panel's last health check announced it.
+ * `announced` is that health row's `announcedCapabilities`; null when the panel has never
+ * been checked, which announces nothing. The one question the Web Admin (whether to enable
+ * the file options) and the server (whether to accept them, and whether to fetch files)
+ * both ask, so the two cannot disagree.
+ */
+export function panelOffersCapability(
+  providerType: string,
+  capability: ProviderCapability,
+  announced: readonly string[] | null,
+): boolean {
+  const descriptor = providerDescriptor(providerType);
+  if (descriptor === null || !descriptor.capabilities.includes(capability)) return false;
+  const gated = (descriptor.announcedOnly as readonly string[] | undefined)?.includes(capability);
+  return gated === true ? (announced ?? []).includes(capability) : true;
+}
+
+/** `panelOffersCapability` for `SUBSCRIPTION_FILES`: this panel hands over files NOW. */
+export function panelDeliversConnectionFiles(
+  providerType: string,
+  announced: readonly string[] | null,
+): boolean {
+  return panelOffersCapability(providerType, 'SUBSCRIPTION_FILES', announced);
+}
+
+/**
  * Marzban.
  *
  * Username and password, exchanged for a bearer token at `/api/admin/token`.
@@ -2019,9 +2072,14 @@ const SANAEI: ProviderDescriptor = {
  *   - `ROTATE_SUBSCRIPTION_LINK`: proven per call by reading the account back, as
  *     RickPanel's is.
  *
- * Undeclared: `SUBSCRIPTION_FILES`, `DELIVER_RAW_CONFIGS` (`links` is specified and not
- * yet called, `OQ-C2-06`), `RESET_USAGE`, `DEVICE_LIMIT_ADJUSTMENT`, `LOCATION_CHANGE` —
- * the protocol has no operation for any of them.
+ *   - `SUBSCRIPTION_FILES` (protocol v1.1, v0.9.5 PR-3): the OPTIONAL
+ *     `GET v1/accounts/{username}/files`, bounded by RickPanel's limits. Listed in
+ *     `announcedOnly`: a panel offers it only while its last health check answered
+ *     `capabilities: ["files"]`, so a bridge without the operation is never asked for it.
+ *
+ * Undeclared: `DELIVER_RAW_CONFIGS` (`links` is specified and not yet called,
+ * `OQ-C2-06`), `RESET_USAGE`, `DEVICE_LIMIT_ADJUSTMENT`, `LOCATION_CHANGE` — the protocol
+ * has no operation for any of them.
  */
 const CUSTOM: ProviderDescriptor = {
   key: 'custom',
@@ -2044,12 +2102,14 @@ const CUSTOM: ProviderDescriptor = {
     'ADD_VOLUME',
     'ADD_TIME',
     'ROTATE_SUBSCRIPTION_LINK',
+    'SUBSCRIPTION_FILES',
   ],
   // One signed `GET v1/health`; there is no session to open.
   maxRequestsPerProbe: 1,
   requiredActivationFields: [],
   transport: 'HTTPS_ONLY',
   minimumApiTokenLength: 32,
+  announcedOnly: ['SUBSCRIPTION_FILES'],
 };
 
 export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [

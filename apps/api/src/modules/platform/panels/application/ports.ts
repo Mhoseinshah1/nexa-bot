@@ -4,6 +4,7 @@ import type {
   PanelHealthState,
   PanelQrKind,
   PanelStatus,
+  ProviderAnnounceableCapability,
   ProviderFailureKind,
   ProviderType,
   TenantContext,
@@ -108,6 +109,12 @@ export interface PanelHealthRecord {
   readonly statusCode: number | null;
   readonly providerVersion: string | null;
   readonly lastHealthyAt: Date | null;
+  /**
+   * v0.9.5 PR-3: the optional capabilities THIS probe announced (a custom bridge's
+   * `capabilities: ["files"]`). Empty for a failed probe and for every provider whose
+   * capabilities are static. Read with `panelOffersCapability`.
+   */
+  readonly announcedCapabilities: readonly ProviderAnnounceableCapability[];
 }
 
 /**

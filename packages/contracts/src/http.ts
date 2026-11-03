@@ -189,6 +189,7 @@ import {
 } from './panels.js';
 import {
   CREDENTIAL_SHAPES,
+  PROVIDER_ANNOUNCEABLE_CAPABILITIES,
   PROVIDER_CAPABILITIES,
   PROVIDER_FAILURE_KINDS,
   PROVIDER_TYPES,
@@ -1435,6 +1436,13 @@ export const panelHealthSchema = z.object({
    * from a history this installation does not keep.
    */
   unusableStreak: z.number().int().nonnegative().nullable(),
+  /**
+   * v0.9.5 PR-3: the optional capabilities the latest probe ANNOUNCED (the custom
+   * bridge's `capabilities: ["files"]`). Empty when it announced none, failed, or never
+   * ran. Read with `panelOffersCapability`, never on its own. Defaults to empty when
+   * absent (an older server), which announces nothing — the strict reading.
+   */
+  announcedCapabilities: z.array(z.enum(PROVIDER_ANNOUNCEABLE_CAPABILITIES)).default([]),
   /**
    * Whether the result is old enough that an operator should not act on it.
    *

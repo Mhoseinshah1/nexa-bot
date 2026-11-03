@@ -35,13 +35,21 @@ export function decodeStrictBase64(text: string): Uint8Array | null {
 /**
  * A file name a customer's device can save: a base name, no control characters, no
  * quotes, bounded. A name that reduces to nothing becomes `subscription-<n>`.
+ *
+ * v0.9.5 PR-3: Unicode direction marks, embeddings, overrides and isolates (U+200E,
+ * U+200F, U+202A–U+202E, U+2066–U+2069) are removed too: an override is how a name
+ * ending `.exe` is made to read as one ending `.json`, and the name a customer sees must
+ * be the name the file has. Shared by every provider's files.
  */
 export function safeFileName(value: unknown, index: number): string {
   const fallback = `subscription-${String(index + 1)}`;
   if (typeof value !== 'string') return fallback;
   const base = value.split(/[/\\]/).pop() ?? '';
-  // eslint-disable-next-line no-control-regex
-  const cleaned = base.replace(/[\u0000-\u001f\u007f"'`<>|*?:]/g, '').trim();
+  const cleaned = base
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f"'`<>|*?:]/g, '')
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .trim();
   const bounded = cleaned.slice(0, SUBSCRIPTION_FILE_NAME_MAX_LENGTH);
   // A name of only dots would be a directory reference, not a file.
   return bounded.length === 0 || /^\.+$/.test(bounded) ? fallback : bounded;

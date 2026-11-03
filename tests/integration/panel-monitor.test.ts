@@ -3153,6 +3153,7 @@ describe('the panel health monitor', () => {
             failure: 'AUTHENTICATION_FAILED',
             statusCode: 401,
             providerVersion: null,
+            announcedCapabilities: [],
             lastHealthyAt: null,
           },
           // The identity is irrelevant to what this asserts — the write is
@@ -3199,6 +3200,7 @@ describe('the panel health monitor', () => {
               failure: 'AUTHENTICATION_FAILED',
               statusCode: 401,
               providerVersion: null,
+              announcedCapabilities: [],
               lastHealthyAt: null,
             },
             identity,

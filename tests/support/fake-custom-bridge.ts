@@ -27,7 +27,23 @@ import { join } from 'node:path';
  */
 
 export type BridgeRoute =
-  'health' | 'create' | 'get' | 'allowance' | 'disable' | 'enable' | 'delete' | 'rotate' | 'links';
+  | 'health'
+  | 'create'
+  | 'get'
+  | 'allowance'
+  | 'disable'
+  | 'enable'
+  | 'delete'
+  | 'rotate'
+  | 'links'
+  | 'files';
+
+/** One entry of a v1.1 `files` answer (§5.10), as the bridge sends it. */
+export interface BridgeFile {
+  readonly name: unknown;
+  readonly contentType: unknown;
+  readonly contentBase64: unknown;
+}
 
 export type BadPayload =
   | 'non-json'
@@ -117,6 +133,15 @@ export interface FakeCustomBridge {
   setLastConnection(username: string, at: string | null | 'UNSUPPORTED'): void;
   /** Move the bridge's clock, in seconds, to exercise the timestamp window. */
   setSkewSeconds(seconds: number): void;
+  /**
+   * v1.1: whether health announces `capabilities: ["files"]` and the `files` route exists.
+   * Off (a v1.0 bridge) by default: the route is then unknown, a signed 400.
+   */
+  setFilesSupported(supported: boolean): void;
+  /** v1.1: what `files` answers for one account; by default one JSON file naming it. */
+  setFiles(username: string, files: readonly BridgeFile[]): void;
+  /** The default file of an account: `<username>.json`, its bytes naming the account. */
+  defaultFile(username: string): { readonly name: string; readonly bytes: Buffer };
   subscriptionUrl(username: string): string;
   close(): Promise<void>;
 }
@@ -129,6 +154,8 @@ export interface FakeCustomBridgeOptions {
   readonly tls?: BridgeTls;
   /** The bridge's clock in ms. Defaults to the wall clock, which the adapter also uses. */
   readonly now?: () => number;
+  /** v1.1: start announcing and serving `files` (see `setFilesSupported`). */
+  readonly files?: boolean;
 }
 
 export const BRIDGE_SECRET = 'k7Qz3N9vR2xW8pL5mT1yB6cH4jD0fG2sA9eU3iO7nK5q';
@@ -238,6 +265,12 @@ export async function startFakeCustomBridge(
   const tls = options.tls ?? bridgeTls();
   const now = options.now ?? (() => Date.now());
   let skewSeconds = 0;
+  let filesSupported = options.files ?? false;
+  const filesOf = new Map<string, readonly BridgeFile[]>();
+  const defaultFile = (username: string) => ({
+    name: `${username}.json`,
+    bytes: Buffer.from(JSON.stringify({ account: username, outbounds: [] }), 'utf8'),
+  });
   const accounts = new Map<string, BridgeAccount>();
   const operations = new Map<
     string,
@@ -294,6 +327,9 @@ export async function startFakeCustomBridge(
     const suffix = match[2];
     if (suffix === undefined) return method === 'GET' ? { route: 'get', username } : null;
     if (method === 'GET' && suffix === 'links') return { route: 'links', username };
+    if (method === 'GET' && suffix === 'files' && filesSupported) {
+      return { route: 'files', username };
+    }
     if (method !== 'POST') return null;
     const table: Record<string, BridgeRoute> = {
       allowance: 'allowance',
@@ -492,7 +528,23 @@ export async function startFakeCustomBridge(
           bridge: { name: 'fake-bridge', version: '1.4.2' },
           upstream: behaviour === 'upstream-down' ? 'DOWN' : 'OK',
           time: new Date(now()).toISOString(),
+          ...(filesSupported ? { capabilities: ['files'] } : {}),
         },
+      };
+    }
+    if (route === 'files') {
+      const account = accounts.get(username!);
+      if (account === undefined) return err(404, 'ACCOUNT_NOT_FOUND');
+      const files = filesOf.get(account.username) ?? [
+        {
+          name: defaultFile(account.username).name,
+          contentType: 'application/json',
+          contentBase64: defaultFile(account.username).bytes.toString('base64'),
+        },
+      ];
+      return {
+        status: 200,
+        body: { username: account.username, nexaRef: account.nexaRef, files },
       };
     }
     if (route === 'get' || route === 'links') {
@@ -660,6 +712,13 @@ export async function startFakeCustomBridge(
     setSkewSeconds(seconds) {
       skewSeconds = seconds;
     },
+    setFilesSupported(supported) {
+      filesSupported = supported;
+    },
+    setFiles(username, files) {
+      filesOf.set(username, files);
+    },
+    defaultFile,
     subscriptionUrl,
     async close() {
       for (const socket of sockets) socket.destroy();

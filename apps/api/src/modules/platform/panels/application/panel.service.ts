@@ -28,6 +28,7 @@ import {
   NexaError,
   shapeAcceptsCredential,
   providerDescriptor,
+  panelDeliversConnectionFiles,
   providerDeliversConnectionFiles,
   panelSupportsQrKind,
   DEFAULT_PANEL_QR_KIND,
@@ -763,10 +764,18 @@ export class PanelService {
    * the switch) AND the adapter must implement and declare it (the capability registry's
    * row), so a provider that declares files with no method behind them cannot be switched
    * into hiding the only thing a customer would have.
+   *
+   * v0.9.5 PR-3: and the PANEL must hand them over now — for a type whose files are
+   * announced per panel (a custom bridge's `files`), its latest health check announced
+   * them (`panelDeliversConnectionFiles`), read from the row held under the lock.
    */
-  private assertDeliversFiles(providerType: string): void {
+  private assertDeliversFiles(view: PanelView): void {
+    const providerType = view.panel.providerType;
     let supported = false;
-    if (providerDeliversConnectionFiles(providerType)) {
+    if (
+      providerDeliversConnectionFiles(providerType) &&
+      panelDeliversConnectionFiles(providerType, view.health?.announcedCapabilities ?? null)
+    ) {
       supported = deriveCapabilityRegistry(this.deps.adapters(providerType as ProviderType)).some(
         (entry) => entry.row === 'SUBSCRIPTION_FILES' && entry.supported,
       );
@@ -1233,7 +1242,7 @@ export class PanelService {
          * Setting the value it already has changes nothing and is not an audit row.
          */
         if (command.filesOnlyDelivery !== undefined) {
-          if (command.filesOnlyDelivery) this.assertDeliversFiles(before.panel.providerType);
+          if (command.filesOnlyDelivery) this.assertDeliversFiles(before);
           if (command.filesOnlyDelivery !== before.panel.filesOnlyDelivery) {
             changes.filesOnlyDelivery = command.filesOnlyDelivery;
           }

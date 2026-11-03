@@ -1,9 +1,14 @@
-# Nexa Custom Panel Bridge Protocol — v1
+# Nexa Custom Panel Bridge Protocol — v1 (revision 1.1)
 
 Status: **v1, implemented** in Nexa (R10 C2) as the `custom` provider type (shown to the
 operator as «پنل کاستوم»), always offered in Web Admin → Panels → new panel. **Not yet
 accepted against a real bridge** — §12 is the acceptance run the first real bridge must pass
 before a production tenant relies on it (`OQ-C2-02`).
+
+**Revision 1.1** (v0.9.5) adds one **optional** operation, connection files (§5.10), which a
+bridge announces in its health answer (`capabilities`, §5.1). It is backward compatible: the
+path stays `/v1/`, `X-Nexa-Protocol` stays `1`, and a v1.0 bridge — one that announces no
+capability — keeps working exactly as before and is never asked for files (§9).
 
 Nexa's side: `apps/api/src/modules/platform/providers/infrastructure/custom-panel.adapter.ts`
 and `custom-panel-protocol.ts`. This document is the specification, and
@@ -42,6 +47,7 @@ The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 | 7   | Delete account       | POST   | `v1/accounts/{username}/delete`      | terminate                                             |
 | 8   | Change link          | POST   | `v1/accounts/{username}/rotate-link` | customer/operator link rotation                       |
 | 9   | Get connection links | GET    | `v1/accounts/{username}/links`       | subscription link and raw configs                     |
+| 10  | Get account files    | GET    | `v1/accounts/{username}/files`       | connection files (v1.1, optional, announced — §5.10)  |
 
 Every write is a `POST` with a JSON body, including delete — so every write is signed over a
 body and carries an `operationId`. There are no query strings in v1; a bridge MUST reject a
@@ -68,7 +74,7 @@ URL-safe and is sent unencoded. A bridge MUST treat it as case-sensitive and exa
   (`Content-Encoding: gzip`, `deflate` or `br`); the signature covers the body **after**
   decoding.
 - Header names are case-insensitive, as HTTP says; Nexa sends them in lower case.
-- Response size: Nexa reads at most the installation's panel response cap (default 1 MiB);
+- Response size: Nexa reads at most the installation's panel response cap (`PANEL_HTTP_MAX_RESPONSE_BYTES`, default 512 KiB, at most 8 MiB);
   a larger response is a failure.
 - Redirects (3xx) are never followed and are treated as a failure.
 - Unknown request fields: a bridge MUST ignore fields it does not recognise. Unknown response
@@ -187,7 +193,21 @@ Secret: `k7Qz3N9vR2xW8pL5mT1yB6cH4jD0fG2sA9eU3iO7nK5q`
 `258da40cf4133a174c1263b53e412860ea7a5326259265e6ec7cb9714bbc7813`) →
 `X-Nexa-Bridge-Signature: v1=5873939127852962daede1adeb82617124a770a316f2ed4eaed5507c5ab9d75f`
 
-These three vectors are pinned by Nexa's unit tests; a bridge SHOULD pin them too.
+**Vector D — files (v1.1).** `GET /v1/accounts/nx7k2m9p4qwe/files`, timestamp `1793000000`,
+nonce `0123456789abcdef0123456789abcdef`, empty body →
+`X-Nexa-Signature: v1=6a7e04d7b52be1cde1dd1e506372a25da24dbe68c679bbaf4f2242a65d66346e`
+
+**Vector E — signed 200 answering vector D.** Status `200`, body (exact bytes, one line; the
+file is the 17 bytes `{"outbounds":[]}` and a newline):
+
+```
+{"username":"nx7k2m9p4qwe","nexaRef":"5f0c9a7e-2b1d-4e6f-8a3c-9d2e1f0a7b6c","files":[{"name":"nx7k2m9p4qwe.json","contentType":"application/json","contentBase64":"eyJvdXRib3VuZHMiOltdfQo="}]}
+```
+
+- body SHA-256: `613a63b5c04d1eb937894ac82f28863558a0f2d5f183af7c5506ccfa9c0877b0`
+- `X-Nexa-Bridge-Signature: v1=97ee12b35cfc02081d0f5f7596898d4401ee06aedd84981ab711fea823eb373a`
+
+These five vectors are pinned by Nexa's unit tests; a bridge SHOULD pin them too.
 
 ---
 
@@ -269,7 +289,8 @@ Response `200`:
   "protocolVersions": [1],
   "bridge": { "name": "acme-bridge", "version": "1.4.2" },
   "upstream": "OK",
-  "time": "2026-10-26T07:33:20Z"
+  "time": "2026-10-26T07:33:20Z",
+  "capabilities": ["files"]
 }
 ```
 
@@ -279,7 +300,20 @@ Response `200`:
   answered, so the secret is right, and something behind it is wrong.
 - `bridge.version`: ≤ 64 characters of `[A-Za-z0-9._+-]`; shown to the operator, never acted on.
 - `time`: the bridge's clock, for the operator's diagnosis of a timestamp-window refusal.
+- `capabilities` (v1.1, optional): the optional operations this bridge implements, as an
+  array of strings from the table below. Absent, `[]`, or anything that is not an array of
+  strings means **none** — the v1.0 behaviour; it never fails the health check. A value Nexa
+  does not know is ignored.
 - Health MUST NOT change any state and SHOULD answer within 2 seconds.
+
+| Capability | Operation                                  | What Nexa does while the latest health check announces it  |
+| ---------- | ------------------------------------------ | ---------------------------------------------------------- |
+| `files`    | `GET v1/accounts/{username}/files` (§5.10) | offers the panel's file delivery options and fetches files |
+
+Nexa stores what the **latest** health check announced — the operator's «test connection» and
+every background check — and asks nothing else. A check that fails, or a signed 200 without
+`files`, announces nothing: Nexa then stops offering and fetching files on that panel until a
+later check announces it again.
 
 A signed 200 with the right `protocol` and version is the **only** successful connection test.
 
@@ -437,6 +471,72 @@ equal to the old one is treated as "no rotation happened".
   endpoint**; bridges SHOULD implement it so raw-config delivery can be enabled later without a
   protocol change.
 
+### 5.10 Get account files — `GET v1/accounts/{username}/files` (v1.1, optional)
+
+The account's ready-made connection files (a sing-box or Clash profile, a QR image, …), which
+Nexa sends to the account's owner as Telegram documents. A bridge that implements it MUST
+announce `files` in health (§5.1); Nexa calls it **only** while the latest health check did,
+and never for any account but the one whose service is being served — by that service's own
+`{username}`.
+
+Response `200`:
+
+```json
+{
+  "username": "nx7k2m9p4qwe",
+  "nexaRef": "5f0c9a7e-2b1d-4e6f-8a3c-9d2e1f0a7b6c",
+  "files": [
+    {
+      "name": "nx7k2m9p4qwe.json",
+      "contentType": "application/json",
+      "contentBase64": "eyJvdXRib3VuZHMiOltdfQo="
+    }
+  ]
+}
+```
+
+| Field      | Type              | Required | Meaning                                                                        |
+| ---------- | ----------------- | -------- | ------------------------------------------------------------------------------ |
+| `username` | Username          | yes      | Echo of the account's name; an answer about another account is malformed.      |
+| `nexaRef`  | NexaRef or `null` | yes      | The account's stored binding (§6.5). Nexa sends files only when it is ours.    |
+| `files`    | array             | yes      | 0..20 entries, in the order the customer should receive them. `[]` = no files. |
+
+Each entry is `{ "name": string, "contentType": string, "contentBase64": string }`. The limits
+are the ones Nexa already applies to every panel's connection files:
+
+| Limit                      | Value                                                                                                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Entries per answer         | at most `20`                                                                                                                                                                   |
+| Bytes per file (decoded)   | `1` to `5242880` (5 MiB)                                                                                                                                                       |
+| Bytes per answer (decoded) | at most `20971520` (20 MiB), counted in order                                                                                                                                  |
+| `name`                     | at most `128` characters after cleaning                                                                                                                                        |
+| `contentType`              | exactly one of `application/octet-stream`, `text/plain`, `application/json`, `application/yaml`, `application/x-yaml`, `text/yaml`, `application/xml`, `text/xml`, `image/png` |
+
+How Nexa reads an answer (bridge content is **untrusted**):
+
+- More than 20 entries, `files` missing or not an array, a `username` other than the one asked
+  about, or an entry that is not an object: **malformed** (§7.3) — nothing is sent.
+- `nexaRef` that is not this service's (another value, or `null`): **refused**
+  (`PROVIDER_REFUSED`, 409), as for §5.3 — nothing is sent. One customer never receives
+  another account's files.
+- An entry whose `contentType` is not exactly one of the listed values (lowercase, no
+  parameters), whose `contentBase64` is not strict standard Base64 with padding, that decodes
+  to nothing or to more than 5 MiB, or that would take the answer past 20 MiB, is **refused**:
+  it is not sent, and it is counted as a file that could not be delivered. The others are sent.
+- `name` is reduced to a base name (everything up to the last `/` or `\` is dropped), and
+  control characters, Unicode direction overrides and isolates (U+200E, U+200F, U+202A–U+202E,
+  U+2066–U+2069) and the characters `"`, `'`, backtick, `<`, `>`, `|`, `*`, `?` and `:` are removed; a name that is left empty or
+  only dots becomes `subscription-<n>`. Nexa never executes, opens or unpacks a file, and never
+  logs or stores its content — it exists in memory between the bridge's answer and Telegram's.
+- The whole answer is bounded first by the installation's panel response cap (§2): a larger
+  answer is a failure, and nothing is sent. A files answer larger than that cap is therefore
+  refused as a whole, not trimmed: an operator who expects large files raises
+  `PANEL_HTTP_MAX_RESPONSE_BYTES` (the same holds for RickPanel).
+- Errors: `404 ACCOUNT_NOT_FOUND` (nothing is sent), `501 UNSUPPORTED_OPERATION` (read as
+  unsupported), and every other code as §7.2. MUST NOT change state.
+- A bridge SHOULD answer within 5 s like every other read; the request timeout is the same
+  (§8). Nexa calls it once per customer request and once after a delivery, never in a loop.
+
 ---
 
 ## 6. Idempotency, binding and ambiguous outcomes
@@ -511,8 +611,9 @@ Rules:
 - A code not in this table, or a code with a status other than its row's, is read by Nexa as
   `PROVIDER_ERROR` (UNKNOWN for a write) — the safe reading, because it costs a read rather than
   a refund for an account the customer may hold.
-- Every v1 operation is mandatory except `links` (§5.9); `UNSUPPORTED_OPERATION` exists for
-  forward compatibility and makes Nexa refuse the operation without retrying.
+- Every v1 operation is mandatory except `links` (§5.9) and `files` (§5.10, v1.1);
+  `UNSUPPORTED_OPERATION` exists for forward compatibility and makes Nexa refuse the operation
+  without retrying.
 - These readings apply to **signed** answers only. An unsigned or wrongly signed answer is
   read by §3.4's table, whatever code it carries.
 
@@ -522,8 +623,9 @@ Nexa treats as **malformed** (`MALFORMED_RESPONSE`): a body that is not a JSON o
 missing a required field; a `Bytes` field that is a JSON number, negative, has leading zeros
 or exceeds 2^63−1; a non-UTC or unparsable `Timestamp`; an unknown `status`; a
 `subscriptionUrl` that is not absolute `https`; an `account.username` that differs from the
-request; an unsigned or wrongly signed response (§3.4). For a write, a malformed 2xx is an
-UNKNOWN outcome: the write probably happened, and a read settles it.
+request; an unsigned or wrongly signed response (§3.4); for `files` (§5.10), more than 20
+entries, a missing `files` array or an entry that is not an object. For a write, a malformed
+2xx is an UNKNOWN outcome: the write probably happened, and a read settles it.
 
 ---
 
@@ -552,6 +654,9 @@ UNKNOWN outcome: the write probably happened, and a read settles it.
 - **Within v1**, only additive changes: a new optional response field, a new optional request
   field a bridge may ignore, a new endpoint Nexa calls only after health advertises it. Nothing
   that changes the meaning of an existing field, status or code.
+- **Revision 1.1** is such a change: health's optional `capabilities` (§5.1) and the optional
+  `files` operation (§5.10), called only while health announces `files`. A v1.0 bridge needs
+  no change.
 - Anything else is **v2**, at `/v2/`. A bridge MAY serve several versions; Nexa uses the
   highest version both sides support and never silently falls back.
 
@@ -560,7 +665,10 @@ UNKNOWN outcome: the write probably happened, and a read settles it.
 ## 10. Security notes for bridge authors
 
 - Verify before parsing (§3.3). Compare signatures in constant time. Reject bodies over 64 KiB.
-- Never log the secret, `X-Nexa-Signature`, `subscriptionUrl`, `configs` or `nexaRef`.
+- Never log the secret, `X-Nexa-Signature`, `subscriptionUrl`, `configs`, `nexaRef` or a
+  file's `contentBase64` — a connection file is a bearer credential, like the link.
+- Serve `files` only for the account named in the path, and only with that account's own
+  `nexaRef` in the answer.
 - Bind the bridge to HTTPS with a valid certificate; Nexa will not call `http://`.
 - The bridge holds your panel's admin credentials; Nexa never sees them. Give the bridge the
   least privilege your panel allows.
@@ -585,6 +693,10 @@ UNKNOWN outcome: the write probably happened, and a read settles it.
 ACCOUNT_NOT_BOUND`, account untouched.
 11. Rotate replayed with the same `operationId` does not rotate twice.
 12. Bytes are always strings; timestamps always `Z`.
+13. (v1.1, if `files` is announced) Vectors D–E (§3.5) verify; `files` answers the account's
+    own `username` and `nexaRef`, at most 20 entries, each within §5.10's limits and types;
+    a missing name answers a signed `404 ACCOUNT_NOT_FOUND`.
+14. (v1.1) A bridge that does not implement `files` does not announce it.
 
 ---
 
@@ -614,6 +726,15 @@ test against the first real bridge**, with a disposable account namespace on its
   enable restarts it; a rotation invalidates nothing it should not; a delete or disable
   carrying another `nexaRef` leaves the account untouched; and a signed `404` comes back for
   a name that does not exist while a stopped upstream yields a 5xx, never a `404`.
+- Covering, for a bridge that announces `files` (v1.1), §11 items 13–14 the same way:
+  health answers `capabilities: ["files"]` and the panel's delivery options in the Web Admin
+  enable the two file options; a service's files arrive in Telegram as documents with the
+  names, types and bytes the panel holds for **that** account and no other; «فقط فایل» sends
+  files and no link, and «دریافت فایل‌های جدید» changes the link and sends the new files; a
+  file over 5 MiB or of an unlisted type is refused while the rest are delivered; and after
+  the bridge stops announcing `files`, the next health check disables the two file options and
+  no files are fetched. For a bridge that does not announce it: the two file options stay
+  disabled with their reason and the bridge is never sent a `files` request.
 - Recorded with the bridge's name and version (`GET v1/health`) and the date, so the
   capability list in the `custom` descriptor rests on evidence rather than on this
   document alone.

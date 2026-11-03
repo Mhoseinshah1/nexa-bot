@@ -4,12 +4,14 @@ import {
   PANEL_ERROR_CODES,
   PANEL_PAGE_DEFAULT,
   PANEL_UNUSABLE_HEALTH_STATES,
+  PROVIDER_ANNOUNCEABLE_CAPABILITIES,
 } from '@nexa/contracts';
 import type {
   MonitorDeferralReason,
   PanelHealthState,
   PanelQrKind,
   PanelStatus,
+  ProviderAnnounceableCapability,
   ProviderFailureKind,
   ProviderType,
   TenantContext,
@@ -601,6 +603,7 @@ export class DrizzlePanelRepository implements PanelRepository {
       statusCode: health.statusCode,
       providerVersion: health.providerVersion,
       lastHealthyAt: health.lastHealthyAt,
+      announcedCapabilities: [...health.announcedCapabilities],
       validatedIdentity,
     };
     const written = await tx.tx
@@ -1452,6 +1455,11 @@ function toView(row: Row): PanelView {
             statusCode: row.health.statusCode,
             providerVersion: row.health.providerVersion,
             lastHealthyAt: row.health.lastHealthyAt,
+            // Only the closed set is ever written; anything else in a row is dropped.
+            announcedCapabilities: row.health.announcedCapabilities.filter(
+              (one): one is ProviderAnnounceableCapability =>
+                (PROVIDER_ANNOUNCEABLE_CAPABILITIES as readonly string[]).includes(one),
+            ),
             unusableStreak: row.health.unusableStreak,
             validatedIdentity: row.health.validatedIdentity,
           },
