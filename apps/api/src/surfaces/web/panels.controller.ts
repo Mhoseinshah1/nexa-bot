@@ -63,25 +63,14 @@ export class PanelsController {
     // No permission beyond a session: it is a catalogue of code, and a permission
     // nobody can be denied is a permission that exists to be looked at rather than
     // enforced.
-    const { scope } = await authenticateAdmin(this.container, request);
+    await authenticateAdmin(this.container, request);
     // Only the types this release has an ADAPTER for. The descriptor catalogue
     // is the frozen contract and lists `sanaei`, whose adapter is Phase 3B; a
     // client shown it would offer a configuration that every create rejects
     // with PROVIDER_TYPE_UNSUPPORTED, which is the legacy bot's "your panel was
     // added successfully" failure wearing better manners.
-    /*
-     * R10 C2: a type whose descriptor `requiresFeature` is off for THIS tenant is not
-     * offered — the form would only produce `PROVIDER_FEATURE_DISABLED`. A courtesy, not
-     * the enforcement: the panel service refuses the create itself. Read from the
-     * descriptor, never by type name. Existing panels of the type are unaffected; their
-     * pages read the contract's descriptor, not this list.
-     */
-    const offered = await this.container.panels.offeredProviderTypes(
-      scope,
-      IMPLEMENTED_PROVIDER_TYPES,
-    );
     return {
-      providers: offered.map((type) => {
+      providers: IMPLEMENTED_PROVIDER_TYPES.map((type) => {
         const adapter = providerAdapter(type);
         const descriptor = adapter.descriptor;
         return {

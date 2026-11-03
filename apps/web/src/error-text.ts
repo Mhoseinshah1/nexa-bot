@@ -474,7 +474,6 @@ export const ERROR_TEXT = {
   'panel.policy_capability_unsupported': 'web.err_panel_policy_capability_unsupported',
   'panel.policy_stale': 'web.err_panel_policy_stale',
   'panel.probe_limited': 'web.err_panel_probe_limited',
-  'panel.provider_feature_disabled': 'web.err_panel_provider_feature_disabled',
   'panel.provider_type_unsupported': 'web.err_panel_provider_type_unsupported',
   'panel.request_invalid': 'web.err_panel_request_invalid',
   'panel.target_blocked': 'web.err_panel_target_blocked',
