@@ -984,6 +984,18 @@ nexa_set_deploy_values() {
 #   max_connections       150 (seven roles at DATABASE_POOL_MAX=10 is 70, plus the
 #                         backup tools and an operator's psql)
 #
+# NEXA v096 PR-2, for the one-time import's bulk load (crash-safe settings only;
+# fsync, full_page_writes and synchronous_commit are never touched):
+#   max_wal_size          50 % of RAM, at least 1 GB (PostgreSQL's default), at most
+#                         8 GB: the import wrote WAL fast enough to force a checkpoint
+#                         every 1 GB ("checkpoint starting: wal", write=269 s)
+#   checkpoint_timeout    15min (default 5min): fewer full-page images; a crash replays
+#                         at most that much WAL, which is still crash-safe
+#   maintenance_work_mem  1/32 of RAM, at least 64 MB (the default), at most 1 GB:
+#                         index builds and vacuum after the load (autovacuum's workers
+#                         each take as much, so it stays small)
+#   wal_compression       lz4: smaller full-page images for little CPU
+#
 # Safe on update and rollback: it changes PostgreSQL's memory settings and nothing in
 # the data directory, and a release whose compose file does not name these keys (a
 # rollback past R12) simply ignores them. A host whose memory cannot be read keeps
@@ -999,7 +1011,7 @@ nexa_host_memory_mb() {
 }
 
 nexa_pg_tuning() {
-  local mb shared cache
+  local mb shared cache wal maint
   mb="$(nexa_host_memory_mb)" || return 1
   [ "$mb" -gt 0 ] || return 1
   shared=$((mb / 4))
@@ -1011,6 +1023,16 @@ nexa_pg_tuning() {
   printf 'NEXA_PG_EFFECTIVE_CACHE_SIZE=%sMB\n' "$cache"
   printf 'NEXA_PG_WORK_MEM=16MB\n'
   printf 'NEXA_PG_MAX_CONNECTIONS=150\n'
+  wal=$((mb / 2))
+  [ "$wal" -ge 1024 ] || wal=1024
+  [ "$wal" -le 8192 ] || wal=8192
+  maint=$((mb / 32))
+  [ "$maint" -ge 64 ] || maint=64
+  [ "$maint" -le 1024 ] || maint=1024
+  printf 'NEXA_PG_MAX_WAL_SIZE=%sMB\n' "$wal"
+  printf 'NEXA_PG_CHECKPOINT_TIMEOUT=15min\n'
+  printf 'NEXA_PG_MAINTENANCE_WORK_MEM=%sMB\n' "$maint"
+  printf 'NEXA_PG_WAL_COMPRESSION=lz4\n'
 }
 
 # Records the sizing in deploy.env. Never fatal: a host whose memory cannot be read is
@@ -1031,7 +1053,9 @@ nexa_db_tuning_report() {
   local file="${NEXA_CONFIG_DIR}/deploy.env" pair key value default
   printf '\ndatabase tuning (deploy.env; applied when postgres is next recreated):\n'
   for pair in NEXA_PG_SHARED_BUFFERS:128MB NEXA_PG_EFFECTIVE_CACHE_SIZE:4GB \
-    NEXA_PG_WORK_MEM:4MB NEXA_PG_MAX_CONNECTIONS:100; do
+    NEXA_PG_WORK_MEM:4MB NEXA_PG_MAX_CONNECTIONS:100 NEXA_PG_MAX_WAL_SIZE:1GB \
+    NEXA_PG_CHECKPOINT_TIMEOUT:5min NEXA_PG_MAINTENANCE_WORK_MEM:64MB \
+    NEXA_PG_WAL_COMPRESSION:off; do
     key="${pair%%:*}"
     default="${pair#*:}"
     value="$(nexa_env_value "$file" "$key" || true)"

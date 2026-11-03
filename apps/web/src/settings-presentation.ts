@@ -854,6 +854,13 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'ops',
     control: { kind: 'integer', unit: 'web.unit_bps' },
   },
+  // NEXA v096 PR-2: the import's adoption concurrency per panel (owner-only on the server).
+  'legacy_import.adoption_concurrency_per_panel': {
+    title: 'web.setting_import_adoption_concurrency',
+    description: 'web.setting_import_adoption_concurrency_desc',
+    group: 'ops',
+    control: { kind: 'integer' },
+  },
   // NEXA v095 PR-4 B.
   'phone_verification.allowed_numbers': {
     title: 'web.setting_phone_allowed_numbers',

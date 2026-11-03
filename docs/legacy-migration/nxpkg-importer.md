@@ -581,3 +581,34 @@ restore is confirmed, or another run is RUNNING. `ADOPT_RUNNING` is not cancella
 be taken; the lane resumes its own run). Tests: `tests/unit/legacy-migration.test.ts` (the
 lane's lifecycle, permission and waits) and `tests/integration/nxpkg-live-panel-inventory.test.ts`
 (§4b, end to end).
+
+## 11. Speed (NEXA v096 PR-2)
+
+Measured with `tests/perf/legacy-migration-scale.test.ts` (opt-in, `--project migration-scale`)
+and the recovery role's `legacy import section timed` lines; the tables are in the PR-2
+description. The apply's largest section was `apply.services.adopt`: one short transaction per
+eligible invoice, one after another. It reads **no panel** — every adoption's runtime facts come
+from the inventory the apply read once (`adoptEligible` / `candidateOf`), and PR-1's rule that
+the apply's panel read is fresh is untouched (the dry run's read is never reused).
+
+- **Batches.** The apply hands P6 up to 50 eligible invoices of ONE panel at a time
+  (`LegacyAdoptionPort.adoptMany` → `LegacyAdoptionService.adoptMany`), one transaction per
+  batch. Each invoice keeps the exact command, idempotency key and decision it had one at a
+  time; every invoice lock of the batch is taken first, in sorted order, before the panel's row
+  lock. A crash leaves none of the batch (a resume re-decides those invoices under their locks);
+  any error rolls the batch back and its invoices are adopted one at a time, so what is written
+  is what the one-at-a-time loop wrote.
+- **Concurrency.** The batches run at most `legacy_import.adoption_concurrency_per_panel`
+  (owner-only, default 4, 1..16; 1 is the old behaviour) at once on one panel and
+  `DATABASE_POOL_MAX - 1` overall (`adoption-pool.ts`). The panel's row lock still serialises the
+  writes of one panel; the first failure starts nothing new, waits for the running batches and
+  then interrupts the run as before.
+- **PostgreSQL.** `max_wal_size`, `checkpoint_timeout`, `maintenance_work_mem` and
+  `wal_compression` are sized for the host by botctl (`docs/deployment.md`, "database tuning" in
+  `botctl status`) so the bulk load stops forcing a checkpoint every gigabyte of WAL. `fsync`,
+  `full_page_writes` and `synchronous_commit` are never changed.
+- **Not done, and why:** reusing the dry run's customer/wallet plans (`apply.prepare` is about
+  1 % of the apply — not worth a digest-bound cache); `synchronous_commit=off` for the import's
+  session (with one commit per 50 adoptions, commits are no longer the cost, and proving a lost
+  commit is always re-decided was not worth it); `HISTORY` after go-live (OQ-V096-P2-01 in
+  `docs/open-questions.md`).

@@ -5148,3 +5148,32 @@ live; the owner decides otherwise.
 - **OQ-V095-P4-05 — CLOSED, owner: keep.** The mini app's `requestContact()` sends the contact to
   the bot as a message, and the bot answers there («شمارهٔ شما تأیید شد» and the main menu, or the
   resumed action of a tap made in the bot) while the customer is in the mini app.
+
+## NEXA v096 PR-2 — the import's `HISTORY` after go-live (design only, not built)
+
+- **OQ-V096-P2-01 — finish the old invoices, payments and history in the background after the
+  import is COMPLETED?** The round asked for it only if the measurement shows `HISTORY` is a large
+  share, and only if four conditions hold. Not built, for two reasons:
+  1. **The measurement does not show it.** On the synthetic scale run
+     (`tests/perf/legacy-migration-scale.test.ts`, the PR-2 description has the tables) the
+     `HISTORY` phase (`apply.history`, about 5 s at 50,000 customers) is about 2 % of the import
+     before PR-2 and 3 % after, and `MATERIALIZE` about 6 % before and 9 % after; the adoptions
+     were most of it. The real server's hour spent most of its time outside the
+     part the synthetic package reproduces (its history volume is not in the fixture), so the
+     share there is UNKNOWN until a rehearsal logs its `legacy import section timed` lines with
+     this release.
+  2. **Condition 1 does not hold for the whole phase.** `HISTORY` alone (`legacy_history_records`,
+     raw rows read by nothing a customer does) would qualify, but it is the small part. The
+     phase after it, `MATERIALIZE`, writes the ENDED services (`services` rows a customer sees in
+     «سرویس‌های من» and that the username reservations and capacity count), the terminal
+     `LEGACY_IMPORT` payments and the wallet history a customer's statement reads — so it cannot
+     run while the bot serves customers without a customer seeing a half-imported account.
+     Reconcile and the final report v2 also count those rows; "pending" would have to become a
+     reconcile state of its own.
+  - **Design, if the owner wants it after a rehearsal shows the share:** split `HISTORY` (raw
+    archive rows only) from `MATERIALIZE`; run `MATERIALIZE` before COMPLETED as today; move
+    only the raw `legacy_history_records` ingest to a job that resumes from the package by its
+    own idempotency keys (`ON CONFLICT DO NOTHING`, already true), reports
+    `history: {written, total}` on the import row for Web Admin, and makes reconcile count
+    "history pending N" as its own line instead of a difference. Owner: worth it, given the raw
+    ingest is the small part?

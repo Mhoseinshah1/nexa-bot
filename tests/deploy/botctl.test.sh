@@ -6319,16 +6319,27 @@ MEMINFO_FIXTURE="${NEXA_ROOT}/meminfo"
 test_case 'db tuning: 25 % / 60 % of RAM, 16MB work_mem, 150 connections, with floors and a cap'
 printf 'MemTotal:       16384000 kB\nMemFree:  1 kB\n' >"$MEMINFO_FIXTURE"
 assert_equals '16 GB host' \
-  "$(printf 'NEXA_PG_SHARED_BUFFERS=4000MB\nNEXA_PG_EFFECTIVE_CACHE_SIZE=9600MB\nNEXA_PG_WORK_MEM=16MB\nNEXA_PG_MAX_CONNECTIONS=150')" \
+  "$(printf 'NEXA_PG_SHARED_BUFFERS=4000MB\nNEXA_PG_EFFECTIVE_CACHE_SIZE=9600MB\nNEXA_PG_WORK_MEM=16MB\nNEXA_PG_MAX_CONNECTIONS=150\nNEXA_PG_MAX_WAL_SIZE=8000MB\nNEXA_PG_CHECKPOINT_TIMEOUT=15min\nNEXA_PG_MAINTENANCE_WORK_MEM=500MB\nNEXA_PG_WAL_COMPRESSION=lz4')" \
   "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)"
 printf 'MemTotal:       262144 kB\n' >"$MEMINFO_FIXTURE"
 assert_contains 'a 256 MB host is not given less than the floor' \
   "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)" 'NEXA_PG_SHARED_BUFFERS=128MB'
 assert_contains 'a 256 MB host: cache floor' \
   "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)" 'NEXA_PG_EFFECTIVE_CACHE_SIZE=256MB'
+assert_contains 'a 256 MB host: max_wal_size keeps the PostgreSQL default floor' \
+  "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)" 'NEXA_PG_MAX_WAL_SIZE=1024MB'
+assert_contains 'a 256 MB host: maintenance_work_mem keeps the PostgreSQL default floor' \
+  "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)" 'NEXA_PG_MAINTENANCE_WORK_MEM=64MB'
 printf 'MemTotal:       134217728 kB\n' >"$MEMINFO_FIXTURE"
 assert_contains 'a 128 GB host is capped at 8 GB of shared buffers' \
   "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)" 'NEXA_PG_SHARED_BUFFERS=8192MB'
+assert_contains 'a 128 GB host is capped at 8 GB of WAL between checkpoints' \
+  "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)" 'NEXA_PG_MAX_WAL_SIZE=8192MB'
+assert_contains 'a 128 GB host is capped at 1 GB of maintenance_work_mem' \
+  "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)" 'NEXA_PG_MAINTENANCE_WORK_MEM=1024MB'
+for unsafe in fsync full_page_writes synchronous_commit; do
+  assert_not_contains "the sizing touches ${unsafe}" "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)" "$unsafe"
+done
 printf 'garbage\n' >"$MEMINFO_FIXTURE"
 assert_fails 'unreadable memory produced a sizing' env NEXA_MEMINFO="$MEMINFO_FIXTURE" bash -c ". '$NEXA_LIB'; nexa_pg_tuning"
 
@@ -6342,9 +6353,16 @@ assert_contains 'shared_buffers not recorded' "$deploy_env" 'NEXA_PG_SHARED_BUFF
 assert_contains 'effective_cache_size not recorded' "$deploy_env" 'NEXA_PG_EFFECTIVE_CACHE_SIZE=4800MB'
 assert_contains 'work_mem not recorded' "$deploy_env" 'NEXA_PG_WORK_MEM=16MB'
 assert_contains 'max_connections not recorded' "$deploy_env" 'NEXA_PG_MAX_CONNECTIONS=150'
+assert_contains 'max_wal_size not recorded' "$deploy_env" 'NEXA_PG_MAX_WAL_SIZE=4000MB'
+assert_contains 'checkpoint_timeout not recorded' "$deploy_env" 'NEXA_PG_CHECKPOINT_TIMEOUT=15min'
+assert_contains 'maintenance_work_mem not recorded' "$deploy_env" 'NEXA_PG_MAINTENANCE_WORK_MEM=250MB'
+assert_contains 'wal_compression not recorded' "$deploy_env" 'NEXA_PG_WAL_COMPRESSION=lz4'
 assert_contains 'the image was lost' "$deploy_env" "NEXA_IMAGE="
 run_botctl status
 assert_contains 'status does not show shared_buffers' "$BOTCTL_OUTPUT" 'NEXA_PG_SHARED_BUFFERS         2000MB'
+assert_contains 'status does not show max_wal_size' "$BOTCTL_OUTPUT" 'NEXA_PG_MAX_WAL_SIZE           4000MB'
+assert_contains 'status does not show wal_compression' "$BOTCTL_OUTPUT" 'NEXA_PG_WAL_COMPRESSION        lz4'
+assert_contains 'status has no database tuning heading' "$BOTCTL_OUTPUT" 'database tuning'
 assert_contains 'status does not show the redis bound' "$BOTCTL_OUTPUT" 'maxmemory 64mb, allkeys-lru'
 
 test_case 'db tuning: a restart records it too (the first update into R12 runs the old botctl)'
@@ -6367,9 +6385,14 @@ compose_file="$(cat "${REPO}/deploy/compose.yml")"
 for flag in 'shared_buffers=${NEXA_PG_SHARED_BUFFERS:-128MB}' \
   'effective_cache_size=${NEXA_PG_EFFECTIVE_CACHE_SIZE:-4GB}' \
   'work_mem=${NEXA_PG_WORK_MEM:-4MB}' 'max_connections=${NEXA_PG_MAX_CONNECTIONS:-100}' \
+  'max_wal_size=${NEXA_PG_MAX_WAL_SIZE:-1GB}' 'checkpoint_timeout=${NEXA_PG_CHECKPOINT_TIMEOUT:-5min}' \
+  'maintenance_work_mem=${NEXA_PG_MAINTENANCE_WORK_MEM:-64MB}' 'wal_compression=${NEXA_PG_WAL_COMPRESSION:-off}' \
   'shared_preload_libraries=pg_stat_statements' 'shm_size: 512m' \
   'maxmemory 64mb' 'maxmemory-policy allkeys-lru'; do
   assert_contains "compose.yml lacks ${flag}" "$compose_file" "$flag"
+done
+for unsafe in 'fsync=' 'full_page_writes=' 'synchronous_commit='; do
+  assert_not_contains "compose.yml sets ${unsafe}" "$compose_file" "$unsafe"
 done
 assert_contains 'the installer does not size PostgreSQL' "$(cat "${REPO}/deploy/install.sh")" 'nexa_record_pg_tuning'
 assert_contains 'docs/deployment.md does not document the sizing' \

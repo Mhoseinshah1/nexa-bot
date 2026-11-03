@@ -467,6 +467,18 @@ export const LEGACY_IMPORT_DEMOTION_CAP_MIN_SERVICES_MAX = 1_000_000;
 export const LEGACY_IMPORT_DEMOTION_CAP_BASIS_POINTS_DEFAULT = 50;
 export const LEGACY_IMPORT_DEMOTION_CAP_BASIS_POINTS_MAX = 10_000;
 
+/**
+ * NEXA v096 PR-2 — how many adoptions an `.nxpkg` apply runs at once on one panel
+ * (`docs/legacy-migration/nxpkg-importer.md` §Speed). Each adoption stays its own transaction
+ * with its own locks and idempotency key; the cap only lets them overlap. The importer also
+ * keeps one connection of its pool free (`DATABASE_POOL_MAX - 1` overall). 1 is the importer's
+ * behaviour before v0.9.6.
+ */
+export const LEGACY_IMPORT_ADOPTION_CONCURRENCY_SETTING_KEY =
+  'legacy_import.adoption_concurrency_per_panel';
+export const LEGACY_IMPORT_ADOPTION_CONCURRENCY_DEFAULT = 4;
+export const LEGACY_IMPORT_ADOPTION_CONCURRENCY_MAX = 16;
+
 /** The setting key of the owner's outbound private-target allow-list (R12 F2). */
 export const OUTBOUND_PRIVATE_TARGETS_SETTING_KEY = 'security.outbound_private_targets';
 
@@ -480,6 +492,8 @@ export const OWNER_ONLY_SETTING_KEYS: readonly string[] = [
   // NEXA v096 PR-1: how far an import may depart from the plan the owner approved.
   LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.minServices,
   LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.basisPoints,
+  // NEXA v096 PR-2: how hard an import loads the database and the panel lock.
+  LEGACY_IMPORT_ADOPTION_CONCURRENCY_SETTING_KEY,
 ];
 
 /**
@@ -2714,6 +2728,26 @@ export const SETTINGS = [
     defaultValue: LEGACY_IMPORT_DEMOTION_CAP_BASIS_POINTS_DEFAULT,
     configures: null,
     zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * NEXA v096 PR-2: the apply's adoption concurrency per panel. Read by the importer once per
+   * apply; owner-only (`OWNER_ONLY_SETTING_KEYS`).
+   */
+  {
+    key: LEGACY_IMPORT_ADOPTION_CONCURRENCY_SETTING_KEY,
+    description:
+      'Legacy import: how many live-panel accounts an apply adopts at once on one panel. ' +
+      'Each adoption is still its own transaction; the panel row lock still serialises their ' +
+      'writes, so this only overlaps their reads. No panel is contacted by an adoption (the ' +
+      'apply reads each panel once). 1 adopts one at a time. Between 1 and ' +
+      `${String(LEGACY_IMPORT_ADOPTION_CONCURRENCY_MAX)}.`,
+    schema: z.number().int().min(1).max(LEGACY_IMPORT_ADOPTION_CONCURRENCY_MAX),
+    defaultValue: LEGACY_IMPORT_ADOPTION_CONCURRENCY_DEFAULT,
+    configures: null,
+    zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',

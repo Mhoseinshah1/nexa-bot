@@ -512,6 +512,21 @@ export interface LegacyAdoptionPort {
     actor: ActorContext,
     candidate: LegacyAdoptionCandidate,
   ): Promise<LegacyAdoptionOutcome>;
+  /**
+   * NEXA v096 PR-2: candidates of ONE panel in ONE transaction, outcomes in input order, each
+   * exactly what `adopt` would answer (`LegacyAdoptionService.adoptMany`). Absent: the
+   * importer calls `adopt` for each.
+   */
+  adoptMany?(
+    scope: TenantContext,
+    actor: ActorContext,
+    candidates: readonly LegacyAdoptionCandidate[],
+    /**
+     * Awaited inside the batch's transaction just before it first locks the panel's row, so
+     * the importer can keep one panel's batches writing in input order while they overlap.
+     */
+    options?: { readonly beforePanelLock?: () => Promise<void> },
+  ): Promise<LegacyAdoptionOutcome[]>;
 }
 
 /**

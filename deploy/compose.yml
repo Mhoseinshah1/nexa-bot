@@ -157,8 +157,8 @@ services:
     # R12 F2: sized for the host. botctl writes the NEXA_PG_* values into deploy.env
     # from the host's memory at install and at every update (`nexa_pg_tuning`); the
     # defaults after `:-` are PostgreSQL's own, so a deploy.env that predates them
-    # runs exactly as before. Memory settings only — nothing in the data directory
-    # changes, and `botctl status` prints what is recorded. pg_stat_statements is
+    # runs exactly as before. Memory and checkpoint settings only — nothing in the data
+    # directory changes, and `botctl status` prints what is recorded. pg_stat_statements is
     # preloaded so a slow query can be found (`CREATE EXTENSION pg_stat_statements`
     # in psql to read it); the image ships the module.
     command:
@@ -171,6 +171,17 @@ services:
       - work_mem=${NEXA_PG_WORK_MEM:-4MB}
       - -c
       - max_connections=${NEXA_PG_MAX_CONNECTIONS:-100}
+      # NEXA v096 PR-2: bulk-load (the one-time import) without WAL-triggered checkpoints.
+      # Crash safety is untouched: fsync, full_page_writes and synchronous_commit keep
+      # PostgreSQL's defaults; these only space checkpoints out and compress full pages.
+      - -c
+      - max_wal_size=${NEXA_PG_MAX_WAL_SIZE:-1GB}
+      - -c
+      - checkpoint_timeout=${NEXA_PG_CHECKPOINT_TIMEOUT:-5min}
+      - -c
+      - maintenance_work_mem=${NEXA_PG_MAINTENANCE_WORK_MEM:-64MB}
+      - -c
+      - wal_compression=${NEXA_PG_WAL_COMPRESSION:-off}
       - -c
       - shared_preload_libraries=pg_stat_statements
       - -c

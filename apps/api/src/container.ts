@@ -33,6 +33,7 @@ import {
   BACKUP_LOCAL_COPIES_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
   LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS,
+  LEGACY_IMPORT_ADOPTION_CONCURRENCY_SETTING_KEY,
   REMINDER_RATE_SETTING_KEYS,
   CUSTOM_GATEWAY_MAX_RESPONSE_BYTES,
   CUSTOM_GATEWAY_TIMEOUT_MS,
@@ -493,6 +494,7 @@ import { TerminatedServicesStep } from './modules/platform/legacy-materialize/ap
 import { DrizzleEndedServicesRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-ended-services.repository.js';
 import { DrizzleLegacyAdoptionStore } from './modules/commerce/legacy-adoption/infrastructure/drizzle-legacy-adoption.store.js';
 import { LegacyImporterService } from './modules/platform/legacy-importer/application/legacy-importer.service.js';
+import { adoptionConcurrency } from './modules/platform/legacy-importer/application/adoption-pool.js';
 import type {
   LegacyAdoptionPort,
   LegacyInventoryPort,
@@ -1786,6 +1788,8 @@ export interface Container {
   readonly legacyImporter: (
     options?: {
       readonly adoption?: LegacyAdoptionPort | null;
+      /** NEXA v096 PR-2: eligible invoices per adoption transaction (tests); default 50. */
+      readonly adoptionBatch?: number;
     } & LegacyInventoryOptions,
   ) => LegacyImporterService;
 
@@ -9465,6 +9469,9 @@ export function createContainer(
             ? {
                 adopt: (scope, actor, candidate) =>
                   legacyAdoption.adoptCandidate(scope, actor, candidate),
+                // NEXA v096 PR-2: one panel's eligible invoices, a batch per transaction.
+                adoptMany: (scope, actor, candidates, batchOptions) =>
+                  legacyAdoption.adoptCandidates(scope, actor, candidates, batchOptions),
               }
             : options.adoption,
         serviceCandidates: legacyServiceCandidateRepository,
@@ -9491,6 +9498,17 @@ export function createContainer(
             LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.basisPoints,
           ),
         }),
+        ...(options.adoptionBatch === undefined ? {} : { adoptionBatch: options.adoptionBatch }),
+        // NEXA v096 PR-2: the adoptions run a few at a time per panel (owner-only setting),
+        // keeping one connection of this role's pool free.
+        adoptionConcurrency: async (scope) =>
+          adoptionConcurrency(
+            await settingsResolver.valueOf<number>(
+              scope,
+              LEGACY_IMPORT_ADOPTION_CONCURRENCY_SETTING_KEY,
+            ),
+            config.DATABASE_POOL_MAX,
+          ),
       });
     },
     async shutdown() {
