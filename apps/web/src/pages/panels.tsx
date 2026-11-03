@@ -119,6 +119,8 @@ import { OpsActionDrawer } from './ops-drawer';
 import { pollUnlessFinal } from '../polling';
 import { fieldText } from '../error-text';
 import { TechnicalDetails } from '../ui/technical-details';
+import { ProtocolDocBox } from '../ui/protocol-doc-box';
+import { providerDisplayName } from '../provider-labels';
 
 /**
  * How often an open panel detail re-reads its own row.
@@ -3031,7 +3033,7 @@ export function NewPanelPage({
                         <option value="">—</option>
                         {(providers.data?.providers ?? []).map((provider) => (
                           <option key={provider.key} value={provider.key}>
-                            {provider.canonicalName}
+                            {providerDisplayName(provider.key, provider.canonicalName)}
                           </option>
                         ))}
                       </select>
@@ -3136,7 +3138,9 @@ export function NewPanelPage({
                   <div className="stack-sm">
                     <p>
                       <Badge tone="info" outline>
-                        <Ltr mono={false}>{chosen.canonicalName}</Ltr>
+                        <Ltr mono={false}>
+                          {providerDisplayName(chosen.key, chosen.canonicalName)}
+                        </Ltr>
                       </Badge>
                     </p>
                     <Banner tone="info" title={t('web.panel_credential_shape')}>
@@ -3152,6 +3156,7 @@ export function NewPanelPage({
                           .join(t('web.list_separator'))}
                       </Banner>
                     )}
+                    {chosen.key === 'custom' && <ProtocolDocBox kind="panel" />}
                     {!mayRotate && <p className="muted small">{t('web.panel_new_no_rotate')}</p>}
                   </div>
                 )}
@@ -3209,7 +3214,7 @@ export function ProvidersPage() {
                 render: (row) => (
                   // Demo parity: the provider's name as a code-style pill.
                   <Badge tone="info" outline>
-                    <Ltr>{row.canonicalName}</Ltr>
+                    <Ltr>{providerDisplayName(row.key, row.canonicalName)}</Ltr>
                   </Badge>
                 ),
               },

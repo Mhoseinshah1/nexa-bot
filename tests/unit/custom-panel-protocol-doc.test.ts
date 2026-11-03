@@ -65,6 +65,14 @@ function rows(text: string): string[][] {
 const backticked = (cell: string): string | null => /`([^`]+)`/.exec(cell)?.[1] ?? null;
 
 describe('the protocol document and the adapter agree', () => {
+  it('names the type «پنل کاستوم», mentions no feature flag, and keeps the §12 warning', () => {
+    // The `custom_panel_provider` flag was removed (v0.9.5): the type is always offered.
+    expect(DOC).not.toMatch(/custom_panel_provider|feature flag/i);
+    expect(DOC).toContain('«پنل کاستوم»');
+    expect(DOC.replace(/\s+/g, ' ')).toContain('Not yet accepted against a real bridge');
+    expect(section('## 12.')).toContain('first real bridge');
+  });
+
   it('§1 — every operation, its method and its path', () => {
     const table = rows(section('## 1. Overview')).map((cells) => ({
       method: cells[2],

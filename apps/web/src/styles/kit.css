@@ -1980,6 +1980,31 @@ textarea.input,
 
 /* --- Banners and notices --------------------------------------------------- */
 
+/* A framed pointer to a document: title and a muted line, then one link button. */
+.doc-box {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
+}
+.doc-box-text {
+  flex: 1 1 220px;
+  min-inline-size: 0;
+}
+.doc-box-text strong {
+  display: block;
+  color: var(--fg);
+  font-weight: 600;
+}
+.doc-box-text p {
+  margin: 2px 0 0;
+}
+
 .banner,
 .notice {
   display: flex;

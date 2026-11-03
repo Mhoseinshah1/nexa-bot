@@ -4583,11 +4583,11 @@ Defaults below are the readings that move no money and send no customer message.
 - **OQ-C2-02 — declare-after-acceptance.** The `custom` capabilities are declared on Nexa's
   own specification and a mock bridge, not a real one. Recommended: run §12 of the protocol
   document (Nexa's shipped adapter, env-configured URL and secret, failing rather than
-  skipping) against the first real bridge before `custom_panel_provider` is turned on for a
-  production tenant. Until then the flag stays OFF.
-- **OQ-C2-03 — the flag turned off while custom panels exist.** Built: it stops new custom
-  panels only; existing ones keep operating and selling. Alternative, if the owner wants the
-  switch to stop SALES too: an eligibility reason for gated types (a contract change).
+  skipping) against the first real bridge before a production tenant relies on a custom panel.
+  The type is always offered (the owner removed its feature flag, v0.9.5); until that run,
+  tell operators it is unaccepted — §12 of the protocol document says so.
+- **OQ-C2-03 — closed (v0.9.5).** This asked what turning the custom-panel feature flag off
+  should do to existing panels. The flag no longer exists; the type is always offered.
 - **OQ-C2-04 — `http://` bridges on a private network.** Refused everywhere (create, address
   change, the adapter itself): a subscription link is a bearer secret. Allowing plain HTTP on
   a private range is the owner's call.
