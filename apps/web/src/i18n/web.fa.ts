@@ -10718,7 +10718,6 @@ export const WEB_FA = {
   'web.err_commerce_payment_window_too_short': 'مهلت پرداخت کوتاه‌تر از حد مجاز است.',
   'web.err_commerce_phone_contact_not_own':
     'فقط شمارهٔ خود حساب تلگرام کاربر پذیرفته می‌شود؛ مخاطب دیگران یا بازارسال‌شده پذیرفته نیست.',
-  'web.err_commerce_phone_verification_disabled': 'تأیید شماره تلفن در حال حاضر خاموش است.',
   'web.err_commerce_phone_verification_required':
     'برای پرداخت با این درگاه، تأیید شماره لازم است و شمارهٔ این کاربر تأیید نشده است.',
   'web.err_commerce_phone_not_iranian': 'فقط شماره‌های ایران (+98) پذیرفته می‌شود.',
