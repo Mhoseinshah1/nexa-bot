@@ -39,6 +39,7 @@ export class DrizzleAuditHistoryReader implements AuditHistoryReader {
         surface: auditLogs.sourceSurface,
         result: auditLogs.result,
         occurredAt: auditLogs.occurredAt,
+        reason: auditLogs.reason,
         before: auditLogs.before,
         after: auditLogs.after,
       })
@@ -64,6 +65,7 @@ export class DrizzleAuditHistoryReader implements AuditHistoryReader {
       surface: row.surface as SourceSurface,
       result: row.result as AuditResult,
       occurredAt: row.occurredAt,
+      reason: row.reason === null ? null : redactSecretText(row.reason),
       before: asRecord(row.before),
       after: asRecord(row.after),
     }));

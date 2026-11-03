@@ -31,6 +31,8 @@ export interface AuditHistoryRecord {
   readonly surface: SourceSurface;
   readonly result: AuditResult;
   readonly occurredAt: Date;
+  /** The operator's written reason, when the row has one; redacted again on the way out. */
+  readonly reason: string | null;
   /** As stored: redacted at write time. Null when the row has none, or it is not an object. */
   readonly before: Readonly<Record<string, unknown>> | null;
   readonly after: Readonly<Record<string, unknown>> | null;
