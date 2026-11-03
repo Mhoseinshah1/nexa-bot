@@ -129,9 +129,6 @@ export const WEB_FA = {
   'web.features_list_title': 'همهٔ قابلیت‌ها',
   'web.features_list_hint':
     'هر تغییر همان لحظه اعمال می‌شود؛ خاموش‌کردن قابلیت‌هایی که چیزی را متوقف می‌کنند پیش از اجرا پرسیده می‌شود.',
-  'web.features_show_all': 'نمایش بقیهٔ قابلیت‌ها',
-  'web.features_show_first': 'نمایش 10 قابلیت نخست',
-  'web.features_on_count': 'قابلیت‌های روشن',
   'web.templates_list': 'فهرست متن‌ها',
   'web.alerts_all_severities': 'همهٔ شدت‌ها',
   'web.system_overall': 'وضعیت کلی',
@@ -369,6 +366,86 @@ export const WEB_FA = {
    * `FEATURE_PRESENTATION` in `pages/features-catalogue.ts`. The `_off_effect` line exists
    * only for a feature whose switch-off asks for confirmation, and is shown in that modal.
    */
+  /*
+   * v0.9.5: the Features page groups flags into categories (side list), says where each one is
+   * seen and what switching it off does. `_off` keys are the plain-language effect for flags that
+   * do NOT ask for confirmation; a flag that asks keeps its `_off_effect` key, which is both.
+   */
+  'web.features_search_label': 'جستجوی قابلیت',
+  'web.features_search_placeholder': 'جستجو در نام و توضیح قابلیت‌ها…',
+  'web.features_filter_label': 'فیلتر وضعیت',
+  'web.features_filter_all': 'همه',
+  'web.features_filter_on': 'روشن',
+  'web.features_filter_off': 'خاموش',
+  'web.features_categories_label': 'دسته‌ها',
+  'web.features_no_match': 'قابلیتی با این جستجو و فیلتر پیدا نشد.',
+  'web.features_cat_empty': 'در این دسته قابلیتی با این فیلتر نیست.',
+  'web.features_results_label': 'نتیجهٔ جستجو',
+  'web.feature_cat_reminders': 'اعلان‌ها و یادآوری‌ها',
+  'web.feature_cat_sales': 'فروش و پرداخت',
+  'web.feature_cat_customer': 'مشتری و حساب',
+  'web.feature_cat_referral': 'دعوت و پاداش',
+  'web.feature_cat_miniapp': 'مینی‌اپ',
+  'web.feature_cat_bot': 'ربات و پیام‌ها',
+  'web.feature_cat_panel': 'پنل و سرویس',
+  'web.feature_cat_other': 'سایر',
+  'web.feature_where_label': 'کجا دیده می‌شود',
+  'web.feature_where_bot': 'ربات مشتری',
+  'web.feature_where_miniapp': 'مینی‌اپ',
+  'web.feature_where_ops_group': 'گروه گزارش‌ها',
+  'web.feature_where_web_admin': 'پنل مدیریت',
+  'web.feature_where_background': 'پس‌زمینه',
+  'web.feature_off_label': 'اگر خاموش شود',
+  'web.feature_open_settings': 'تنظیمات در',
+  'web.feature_reseller_minimum_reminders_off':
+    'نمایندگان پیش از پایان ماه یادآوری نمی‌گیرند که فروششان هنوز به حداقل ماهانه نرسیده است. چیز دیگری به این وابسته نیست.',
+  'web.feature_reseller_minimum_achieved_notices_off':
+    'به نماینده خبر داده نمی‌شود که فروش ماهانه‌اش به حداقل رسیده است. چیز دیگری به این وابسته نیست.',
+  'web.feature_reminder_quiet_hours_off':
+    'یادآورها در ساعات سکوت هم فرستاده می‌شوند. یادآوری‌ای که تا آن لحظه نگه داشته شده بود در نوبت بعدی ارسال فرستاده می‌شود و چیزی از بین نمی‌رود.',
+  'web.feature_customer_link_rotation_off':
+    'دکمهٔ گرفتن لینک جدید از ربات برداشته می‌شود. چرخش لینکی که از پیش زمان‌بندی شده باشد همچنان انجام می‌شود.',
+  'web.feature_customer_refund_requests_off':
+    'دکمهٔ درخواست بازپرداخت برداشته می‌شود و درخواست تازهٔ مشتری پذیرفته نمی‌شود. درخواست‌هایی که پیش‌تر ثبت شده‌اند را مدیر همچنان می‌تواند تعیین تکلیف کند.',
+  'web.feature_referral_signup_gift_off':
+    'دکمهٔ دریافت هدیه برداشته می‌شود و درخواست تازه رد می‌شود. سهم‌های پرداخت‌شده می‌مانند و سهم‌های دریافت‌نشده بعد از روشن شدن دوباره قابل دریافت‌اند.',
+  'web.feature_referral_abuse_guard_off':
+    'هدیه و پورسانت دوباره مثل پیش از روشن شدن این قابلیت عمل می‌کنند: شرط خرید و سقف روزانه اعمال نمی‌شود. هیچ موجودی‌ای تغییر نمی‌کند.',
+  'web.feature_start_captcha_off':
+    'از کاربران تازه سؤال پرسیده نمی‌شود و همهٔ کسانی که منتظر پاسخ بودند بلافاصله وارد می‌شوند.',
+  'web.feature_phone_verification_off':
+    'دکمهٔ تأیید شماره از ربات برداشته می‌شود، مخاطب ارسال‌شده چیزی را تأیید نمی‌کند و شرط شمارهٔ تأییدشدهٔ روش‌های پرداخت نادیده گرفته می‌شود. شماره‌های ذخیره‌شده می‌مانند.',
+  'web.feature_panel_auto_balancing_off':
+    'هر سرویس جدید دوباره روی پنل خودِ محصول ساخته می‌شود. سرویس‌هایی که از پیش ساخته شده‌اند جابه‌جا نمی‌شوند.',
+  'web.feature_custom_service_off':
+    'دکمهٔ سرویس دلخواه برداشته می‌شود و پیش‌نویس و تأیید تازه رد می‌شود. سفارش‌هایی که پیش‌تر تأیید شده‌اند همچنان پرداخت و تحویل می‌شوند.',
+  'web.feature_terms_enforcement_off':
+    'همهٔ مشتریان بدون پذیرش قوانین وارد می‌شوند. هیچ پذیرشی پاک نمی‌شود.',
+  'web.feature_rich_messages_off':
+    'همهٔ صفحه‌ها دوباره به شکل پیام معمولی فرستاده می‌شوند. صفحه‌ای که پیش‌تر پیام غنی بوده به روش معمول ویرایش یا دوباره فرستاده می‌شود و چیزی از دست نمی‌رود.',
+  'web.feature_rich_plan_table_off': 'فهرست پلن‌ها بدون جدول و به‌شکل پیش‌فرض نشان داده می‌شود.',
+  'web.feature_rich_premium_emoji_off':
+    'پیام‌های غنی ایموجی ساده دارند و ایموجی پریمیوم کشیده نمی‌شود.',
+  'web.feature_terms_reprompt_off':
+    'مشتری‌ای که یک بار قوانین را پذیرفته با انتشار نسخهٔ تازه دوباره پرسیده نمی‌شود.',
+  'web.feature_addon_time_in_renew_menu_off':
+    'بسته‌های زمان اضافه از منوی تمدید برداشته می‌شوند و فقط از دکمهٔ «خرید زمان اضافه» قابل خرید هستند.',
+  'web.feature_personal_discount_off':
+    'تخفیف شخصی اعمال نمی‌شود و قیمت‌ها همان قیمت معمول است؛ درصدهای ثبت‌شده می‌مانند. تأیید پیش‌نویسی که با تخفیف شخصی قیمت‌گذاری شده رد می‌شود و مشتری باید از اول شروع کند.',
+  'web.feature_custom_panel_provider_off':
+    'افزودن پنل تازه از نوع سفارشی رد می‌شود. پنل‌های سفارشی موجود همچنان کار می‌کنند.',
+  'web.feature_service_usage_chart_off':
+    'نمودار مصرف در مینی‌اپ نشان داده نمی‌شود و دادهٔ مصرف تازه‌ای ذخیره نمی‌شود. داده‌های ذخیره‌شده می‌مانند.',
+  'web.feature_custom_menu_buttons_off':
+    'دکمه‌های سفارشی روی هیچ منویی نشان داده نمی‌شوند و ضربه روی دکمه‌ای که از پیش در چت مانده «در دسترس نیست» پاسخ می‌گیرد. دکمه‌ها و جایشان نگه داشته می‌شود.',
+  'web.feature_referral_friends_list_off':
+    'فهرست دوستان از صفحهٔ دعوت مینی‌اپ پنهان می‌شود. هیچ معرفی، پورسانت یا موجودی تغییر نمی‌کند.',
+  'web.feature_miniapp_stars_invoice_off':
+    'مینی‌اپ دوباره می‌گوید فاکتور در چت ربات است و ساخت لینک پرداخت رد می‌شود. پرداخت‌های انجام‌شده تغییر نمی‌کنند.',
+  'web.feature_notification_centre_off':
+    'زنگ اعلان‌ها از مینی‌اپ برداشته می‌شود. پیام‌های ذخیره‌شده و علامت‌های خوانده‌شده می‌مانند و ربات تغییری نمی‌کند.',
+  'web.feature_location_remaining_display_off':
+    'خط «تغییر لوکیشن باقی‌مانده» از کارت سرویس و مینی‌اپ حذف می‌شود. سقف تغییر و اجرای آن همان می‌ماند.',
   'web.feature_last_changed': 'آخرین تغییر',
   'web.feature_related_settings': 'تنظیمات مرتبط',
   'web.feature_setting_unset': 'تعیین نشده',

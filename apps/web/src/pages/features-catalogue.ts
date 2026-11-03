@@ -16,9 +16,61 @@ import type { WebKey } from '../i18n/web.fa';
  * machine key. Literal `web.*` keys, never assembled from the flag key, because
  * `check:i18n` proves a catalogue key is rendered by finding it quoted in the source.
  */
+/** The side list's categories, in the order they are drawn. */
+export const FEATURE_CATEGORIES = [
+  'reminders',
+  'sales',
+  'customer',
+  'referral',
+  'miniapp',
+  'bot',
+  'panel',
+] as const;
+export type FeatureCategory = (typeof FEATURE_CATEGORIES)[number];
+
+export const FEATURE_CATEGORY_TITLE: Readonly<Record<FeatureCategory | 'other', WebKey>> = {
+  reminders: 'web.feature_cat_reminders',
+  sales: 'web.feature_cat_sales',
+  customer: 'web.feature_cat_customer',
+  referral: 'web.feature_cat_referral',
+  miniapp: 'web.feature_cat_miniapp',
+  bot: 'web.feature_cat_bot',
+  panel: 'web.feature_cat_panel',
+  other: 'web.feature_cat_other',
+};
+
+/** Where a feature is met. A flag may be met in more than one place. */
+export const FEATURE_WHERE_LABEL = {
+  bot: 'web.feature_where_bot',
+  miniapp: 'web.feature_where_miniapp',
+  ops_group: 'web.feature_where_ops_group',
+  web_admin: 'web.feature_where_web_admin',
+  background: 'web.feature_where_background',
+} as const satisfies Readonly<Record<string, WebKey>>;
+export type FeatureWhere = keyof typeof FEATURE_WHERE_LABEL;
+
+/** A router link to the screen that holds the feature's settings. The path must exist in `nav.ts`. */
+export interface FeatureRelated {
+  readonly path: string;
+  /** The nav entry's own label, so the link reads as the screen's name. */
+  readonly label: WebKey;
+}
+
 export interface FeaturePresentation {
   readonly title: WebKey;
+  /** What it does, in practical words. Every sentence is checked against where the code reads the flag. */
   readonly summary: WebKey;
+  /** The category the flag sits in on the page. Required, so a new flag cannot lack one. */
+  readonly category: FeatureCategory;
+  /** Where an operator or customer meets it. */
+  readonly where: readonly FeatureWhere[];
+  /**
+   * What switching it OFF does, shown on every row. It is the same key as `disableEffect`
+   * when that asks for confirmation. It never decides whether the page asks.
+   */
+  readonly offEffect: WebKey;
+  /** Where its settings live: a real router link, never a scroll-jump. */
+  readonly related: FeatureRelated | null;
   /**
    * What switching this feature OFF does, said in the confirmation modal. `null` means
    * the switch-off takes one click and no confirmation.
@@ -57,6 +109,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   ops_notifications: {
     title: 'web.feature_ops_notifications_title',
     summary: 'web.feature_ops_notifications_summary',
+    category: 'reminders',
+    where: ['ops_group', 'background'],
+    offEffect: 'web.feature_ops_notifications_off_effect',
+    related: { path: '/ops-group', label: 'web.nav_ops_group' },
     disableEffect: 'web.feature_ops_notifications_off_effect',
     confirmEnable: null,
   },
@@ -65,6 +121,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   template_overrides: {
     title: 'web.feature_template_overrides_title',
     summary: 'web.feature_template_overrides_summary',
+    category: 'bot',
+    where: ['bot'],
+    offEffect: 'web.feature_template_overrides_off_effect',
+    related: { path: '/content', label: 'web.nav_templates' },
     disableEffect: 'web.feature_template_overrides_off_effect',
     confirmEnable: null,
   },
@@ -73,18 +133,30 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   service_expiry_reminders: {
     title: 'web.feature_service_expiry_reminders_title',
     summary: 'web.feature_service_expiry_reminders_summary',
+    category: 'reminders',
+    where: ['bot', 'background'],
+    offEffect: 'web.feature_service_expiry_reminders_off_effect',
+    related: { path: '/reminders', label: 'web.nav_reminders' },
     disableEffect: 'web.feature_service_expiry_reminders_off_effect',
     confirmEnable: null,
   },
   service_expired_notice: {
     title: 'web.feature_service_expired_notice_title',
     summary: 'web.feature_service_expired_notice_summary',
+    category: 'reminders',
+    where: ['bot', 'background'],
+    offEffect: 'web.feature_service_expired_notice_off_effect',
+    related: { path: '/reminders', label: 'web.nav_reminders' },
     disableEffect: 'web.feature_service_expired_notice_off_effect',
     confirmEnable: null,
   },
   service_usage_reminders: {
     title: 'web.feature_service_usage_reminders_title',
     summary: 'web.feature_service_usage_reminders_summary',
+    category: 'reminders',
+    where: ['bot', 'background'],
+    offEffect: 'web.feature_service_usage_reminders_off_effect',
+    related: { path: '/reminders', label: 'web.nav_reminders' },
     disableEffect: 'web.feature_service_usage_reminders_off_effect',
     confirmEnable: null,
   },
@@ -93,18 +165,30 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   service_expiry_day_reminder: {
     title: 'web.feature_service_expiry_day_reminder_title',
     summary: 'web.feature_service_expiry_day_reminder_summary',
+    category: 'reminders',
+    where: ['bot', 'background'],
+    offEffect: 'web.feature_service_expiry_day_reminder_off_effect',
+    related: { path: '/reminders', label: 'web.nav_reminders' },
     disableEffect: 'web.feature_service_expiry_day_reminder_off_effect',
     confirmEnable: null,
   },
   wallet_low_balance_reminders: {
     title: 'web.feature_wallet_low_balance_reminders_title',
     summary: 'web.feature_wallet_low_balance_reminders_summary',
+    category: 'reminders',
+    where: ['bot', 'background'],
+    offEffect: 'web.feature_wallet_low_balance_reminders_off_effect',
+    related: { path: '/reminders', label: 'web.nav_reminders' },
     disableEffect: 'web.feature_wallet_low_balance_reminders_off_effect',
     confirmEnable: null,
   },
   payment_pending_reminders: {
     title: 'web.feature_payment_pending_reminders_title',
     summary: 'web.feature_payment_pending_reminders_summary',
+    category: 'reminders',
+    where: ['bot', 'background'],
+    offEffect: 'web.feature_payment_pending_reminders_off_effect',
+    related: { path: '/reminders', label: 'web.nav_reminders' },
     disableEffect: 'web.feature_payment_pending_reminders_off_effect',
     confirmEnable: null,
   },
@@ -112,12 +196,20 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   reseller_minimum_reminders: {
     title: 'web.feature_reseller_minimum_reminders_title',
     summary: 'web.feature_reseller_minimum_reminders_summary',
+    category: 'reminders',
+    where: ['bot', 'background'],
+    offEffect: 'web.feature_reseller_minimum_reminders_off',
+    related: null,
     disableEffect: null,
     confirmEnable: null,
   },
   reseller_minimum_achieved_notices: {
     title: 'web.feature_reseller_minimum_achieved_notices_title',
     summary: 'web.feature_reseller_minimum_achieved_notices_summary',
+    category: 'reminders',
+    where: ['bot', 'background'],
+    offEffect: 'web.feature_reseller_minimum_achieved_notices_off',
+    related: null,
     disableEffect: null,
     confirmEnable: null,
   },
@@ -125,6 +217,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   reminder_quiet_hours: {
     title: 'web.feature_reminder_quiet_hours_title',
     summary: 'web.feature_reminder_quiet_hours_summary',
+    category: 'reminders',
+    where: ['bot', 'background'],
+    offEffect: 'web.feature_reminder_quiet_hours_off',
+    related: { path: '/reminders', label: 'web.nav_reminders' },
     disableEffect: null,
     confirmEnable: null,
   },
@@ -132,6 +228,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   customer_link_rotation: {
     title: 'web.feature_customer_link_rotation_title',
     summary: 'web.feature_customer_link_rotation_summary',
+    category: 'panel',
+    where: ['bot'],
+    offEffect: 'web.feature_customer_link_rotation_off',
+    related: null,
     disableEffect: null,
     confirmEnable: null,
   },
@@ -139,6 +239,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   customer_refund_requests: {
     title: 'web.feature_customer_refund_requests_title',
     summary: 'web.feature_customer_refund_requests_summary',
+    category: 'sales',
+    where: ['bot', 'web_admin'],
+    offEffect: 'web.feature_customer_refund_requests_off',
+    related: null,
     disableEffect: null,
     confirmEnable: null,
   },
@@ -147,6 +251,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   customer_marketing_opt_out: {
     title: 'web.feature_customer_marketing_opt_out_title',
     summary: 'web.feature_customer_marketing_opt_out_summary',
+    category: 'customer',
+    where: ['bot'],
+    offEffect: 'web.feature_customer_marketing_opt_out_off_effect',
+    related: null,
     disableEffect: 'web.feature_customer_marketing_opt_out_off_effect',
     confirmEnable: null,
   },
@@ -155,6 +263,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   customer_reminder_opt_out: {
     title: 'web.feature_customer_reminder_opt_out_title',
     summary: 'web.feature_customer_reminder_opt_out_summary',
+    category: 'reminders',
+    where: ['bot', 'miniapp', 'web_admin'],
+    offEffect: 'web.feature_customer_reminder_opt_out_off_effect',
+    related: { path: '/users', label: 'web.nav_users' },
     disableEffect: 'web.feature_customer_reminder_opt_out_off_effect',
     confirmEnable: null,
   },
@@ -163,6 +275,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   referrals: {
     title: 'web.feature_referrals_title',
     summary: 'web.feature_referrals_summary',
+    category: 'referral',
+    where: ['bot', 'background'],
+    offEffect: 'web.feature_referrals_off_effect',
+    related: { path: '/referrals', label: 'web.nav_referrals' },
     disableEffect: 'web.feature_referrals_off_effect',
     confirmEnable: null,
   },
@@ -171,6 +287,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   referral_signup_gift: {
     title: 'web.feature_referral_signup_gift_title',
     summary: 'web.feature_referral_signup_gift_summary',
+    category: 'referral',
+    where: ['bot'],
+    offEffect: 'web.feature_referral_signup_gift_off',
+    related: { path: '/settings', label: 'web.nav_settings' },
     disableEffect: null,
     confirmEnable: null,
   },
@@ -180,6 +300,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   referral_abuse_guard: {
     title: 'web.feature_referral_abuse_guard_title',
     summary: 'web.feature_referral_abuse_guard_summary',
+    category: 'referral',
+    where: ['bot', 'background'],
+    offEffect: 'web.feature_referral_abuse_guard_off',
+    related: { path: '/settings', label: 'web.nav_settings' },
     disableEffect: null,
     confirmEnable: {
       question: 'web.referral_abuse_guard_confirm_question',
@@ -192,6 +316,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   start_captcha: {
     title: 'web.feature_start_captcha_title',
     summary: 'web.feature_start_captcha_summary',
+    category: 'customer',
+    where: ['bot'],
+    offEffect: 'web.feature_start_captcha_off',
+    related: { path: '/settings', label: 'web.nav_settings' },
     disableEffect: null,
     confirmEnable: null,
   },
@@ -200,6 +328,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   phone_verification: {
     title: 'web.feature_phone_verification_title',
     summary: 'web.feature_phone_verification_summary',
+    category: 'sales',
+    where: ['bot'],
+    offEffect: 'web.feature_phone_verification_off',
+    related: { path: '/payment-gateways', label: 'web.nav_payment_gateways' },
     disableEffect: null,
     confirmEnable: null,
   },
@@ -207,6 +339,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   panel_auto_balancing: {
     title: 'web.feature_panel_auto_balancing_title',
     summary: 'web.feature_panel_auto_balancing_summary',
+    category: 'panel',
+    where: ['background'],
+    offEffect: 'web.feature_panel_auto_balancing_off',
+    related: { path: '/panels', label: 'web.nav_panels' },
     disableEffect: null,
     // On only changes where NEW drafts land, among panels an operator grouped; it stops
     // nobody, so one click.
@@ -216,6 +352,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   custom_service: {
     title: 'web.feature_custom_service_title',
     summary: 'web.feature_custom_service_summary',
+    category: 'sales',
+    where: ['bot'],
+    offEffect: 'web.feature_custom_service_off',
+    related: { path: '/custom-service', label: 'web.nav_custom_service' },
     disableEffect: null,
     confirmEnable: null,
   },
@@ -225,6 +365,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   central_fx: {
     title: 'web.feature_central_fx_title',
     summary: 'web.feature_central_fx_summary',
+    category: 'sales',
+    where: ['background', 'bot'],
+    offEffect: 'web.feature_central_fx_off_effect',
+    related: { path: '/payment-gateways', label: 'web.nav_payment_gateways' },
     disableEffect: 'web.feature_central_fx_off_effect',
     confirmEnable: null,
   },
@@ -235,6 +379,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   terms_enforcement: {
     title: 'web.feature_terms_enforcement_title',
     summary: 'web.feature_terms_enforcement_summary',
+    category: 'customer',
+    where: ['bot'],
+    offEffect: 'web.feature_terms_enforcement_off',
+    related: { path: '/terms', label: 'web.nav_terms' },
     disableEffect: null,
     confirmEnable: {
       question: 'web.terms_enforce_confirm_question',
@@ -247,6 +395,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   rich_messages: {
     title: 'web.feature_rich_messages_title',
     summary: 'web.feature_rich_messages_summary',
+    category: 'bot',
+    where: ['bot'],
+    offEffect: 'web.feature_rich_messages_off',
+    related: null,
     disableEffect: null,
     confirmEnable: null,
   },
@@ -254,12 +406,20 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   rich_plan_table: {
     title: 'web.feature_rich_plan_table_title',
     summary: 'web.feature_rich_plan_table_summary',
+    category: 'bot',
+    where: ['bot'],
+    offEffect: 'web.feature_rich_plan_table_off',
+    related: null,
     disableEffect: null,
     confirmEnable: null,
   },
   rich_premium_emoji: {
     title: 'web.feature_rich_premium_emoji_title',
     summary: 'web.feature_rich_premium_emoji_summary',
+    category: 'bot',
+    where: ['bot'],
+    offEffect: 'web.feature_rich_premium_emoji_off',
+    related: { path: '/appearance', label: 'web.nav_appearance' },
     disableEffect: null,
     confirmEnable: null,
   },
@@ -268,6 +428,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   terms_reprompt_on_new_version: {
     title: 'web.feature_terms_reprompt_title',
     summary: 'web.feature_terms_reprompt_summary',
+    category: 'customer',
+    where: ['bot'],
+    offEffect: 'web.feature_terms_reprompt_off',
+    related: { path: '/terms', label: 'web.nav_terms' },
     disableEffect: null,
     confirmEnable: {
       question: 'web.feature_terms_reprompt_confirm_question',
@@ -279,12 +443,20 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   wallet_admin_credit_notice: {
     title: 'web.feature_wallet_admin_credit_notice_title',
     summary: 'web.feature_wallet_admin_credit_notice_summary',
+    category: 'reminders',
+    where: ['bot'],
+    offEffect: 'web.feature_wallet_admin_notice_off_effect',
+    related: { path: '/users', label: 'web.nav_users' },
     disableEffect: 'web.feature_wallet_admin_notice_off_effect',
     confirmEnable: null,
   },
   wallet_admin_debit_notice: {
     title: 'web.feature_wallet_admin_debit_notice_title',
     summary: 'web.feature_wallet_admin_debit_notice_summary',
+    category: 'reminders',
+    where: ['bot'],
+    offEffect: 'web.feature_wallet_admin_notice_off_effect',
+    related: { path: '/users', label: 'web.nav_users' },
     disableEffect: 'web.feature_wallet_admin_notice_off_effect',
     confirmEnable: null,
   },
@@ -292,6 +464,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   addon_time_in_renew_menu: {
     title: 'web.feature_addon_time_in_renew_menu_title',
     summary: 'web.feature_addon_time_in_renew_menu_summary',
+    category: 'sales',
+    where: ['bot'],
+    offEffect: 'web.feature_addon_time_in_renew_menu_off',
+    related: null,
     // A display choice: nothing is lost by switching it off, so it does not ask first.
     disableEffect: null,
     confirmEnable: null,
@@ -300,6 +476,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   personal_discount: {
     title: 'web.feature_personal_discount_title',
     summary: 'web.feature_personal_discount_summary',
+    category: 'sales',
+    where: ['bot', 'miniapp'],
+    offEffect: 'web.feature_personal_discount_off',
+    related: { path: '/users', label: 'web.nav_users' },
     disableEffect: null,
     confirmEnable: null,
   },
@@ -308,6 +488,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   custom_panel_provider: {
     title: 'web.feature_custom_panel_provider_title',
     summary: 'web.feature_custom_panel_provider_summary',
+    category: 'panel',
+    where: ['web_admin'],
+    offEffect: 'web.feature_custom_panel_provider_off',
+    related: { path: '/panels', label: 'web.nav_panels' },
     disableEffect: null,
     confirmEnable: null,
   },
@@ -315,6 +499,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   mini_app: {
     title: 'web.feature_mini_app_title',
     summary: 'web.feature_mini_app_summary',
+    category: 'miniapp',
+    where: ['miniapp', 'bot'],
+    offEffect: 'web.feature_mini_app_off_effect',
+    related: null,
     disableEffect: 'web.feature_mini_app_off_effect',
     confirmEnable: null,
   },
@@ -322,6 +510,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   gift_cards: {
     title: 'web.feature_gift_cards_title',
     summary: 'web.feature_gift_cards_summary',
+    category: 'sales',
+    where: ['bot', 'miniapp', 'web_admin'],
+    offEffect: 'web.feature_gift_cards_off_effect',
+    related: { path: '/gift-cards', label: 'web.nav_gift_cards' },
     disableEffect: 'web.feature_gift_cards_off_effect',
     confirmEnable: null,
   },
@@ -330,6 +522,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   service_usage_chart: {
     title: 'web.feature_service_usage_chart_title',
     summary: 'web.feature_service_usage_chart_summary',
+    category: 'miniapp',
+    where: ['miniapp', 'background'],
+    offEffect: 'web.feature_service_usage_chart_off',
+    related: null,
     disableEffect: null,
     confirmEnable: null,
   },
@@ -337,6 +533,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   custom_menu_buttons: {
     title: 'web.feature_custom_menu_buttons_title',
     summary: 'web.feature_custom_menu_buttons_summary',
+    category: 'bot',
+    where: ['bot'],
+    offEffect: 'web.feature_custom_menu_buttons_off',
+    related: { path: '/bot-buttons', label: 'web.nav_bot_buttons' },
     disableEffect: null,
     confirmEnable: null,
   },
@@ -345,6 +545,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   referral_friends_list: {
     title: 'web.feature_referral_friends_list_title',
     summary: 'web.feature_referral_friends_list_summary',
+    category: 'miniapp',
+    where: ['miniapp'],
+    offEffect: 'web.feature_referral_friends_list_off',
+    related: null,
     disableEffect: null,
     confirmEnable: null,
   },
@@ -352,6 +556,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   service_auto_renew: {
     title: 'web.feature_service_auto_renew_title',
     summary: 'web.feature_service_auto_renew_summary',
+    category: 'sales',
+    where: ['bot', 'miniapp', 'background'],
+    offEffect: 'web.feature_service_auto_renew_off_effect',
+    related: null,
     disableEffect: 'web.feature_service_auto_renew_off_effect',
     confirmEnable: null,
   },
@@ -360,6 +568,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   miniapp_stars_invoice: {
     title: 'web.feature_miniapp_stars_invoice_title',
     summary: 'web.feature_miniapp_stars_invoice_summary',
+    category: 'miniapp',
+    where: ['miniapp'],
+    offEffect: 'web.feature_miniapp_stars_invoice_off',
+    related: null,
     disableEffect: null,
     confirmEnable: null,
   },
@@ -368,6 +580,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   notification_centre: {
     title: 'web.feature_notification_centre_title',
     summary: 'web.feature_notification_centre_summary',
+    category: 'miniapp',
+    where: ['miniapp'],
+    offEffect: 'web.feature_notification_centre_off',
+    related: null,
     disableEffect: null,
     confirmEnable: null,
   },
@@ -375,6 +591,10 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   location_remaining_display: {
     title: 'web.feature_location_remaining_display_title',
     summary: 'web.feature_location_remaining_display_summary',
+    category: 'panel',
+    where: ['bot', 'miniapp'],
+    offEffect: 'web.feature_location_remaining_display_off',
+    related: null,
     disableEffect: null,
     confirmEnable: null,
   },

@@ -8,17 +8,25 @@ import { t } from '../i18n/web.fa';
 import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
 import {
   Badge,
-  Button,
   Card,
-  CountedPager,
-  LIST_PAGE_SIZE,
+  FilterBar,
+  FilterChip,
+  FilterChips,
   Ltr,
   PageHead,
+  SearchInput,
   StateSwitch,
   Switch,
-  serverTotal,
+  Tabs,
 } from '../ui/kit';
-import { featurePresentation } from './features-catalogue';
+import { useLinkHandler } from '../router';
+import {
+  FEATURE_CATEGORIES,
+  FEATURE_CATEGORY_TITLE,
+  FEATURE_WHERE_LABEL,
+  featurePresentation,
+  type FeatureCategory,
+} from './features-catalogue';
 import { ErrorReport, registryLabel } from './settings';
 import { TechnicalDetails } from '../ui/technical-details';
 
@@ -38,65 +46,144 @@ import { TechnicalDetails } from '../ui/technical-details';
  * threshold sit on different screens, the flag is off, and nothing on either screen says
  * that the value therefore does nothing (CBR-007, GSR-008).
  */
-/** Whole rows, never a clipped one: the first ten, the rest behind one button. */
-const FEATURE_ROWS_SHOWN = 10;
+type CategoryId = FeatureCategory | 'other';
+type StatusFilter = 'all' | 'on' | 'off';
 
+/** The category a flag is drawn under; a flag this build does not know goes to the «other» category. */
+function categoryOf(key: string): CategoryId {
+  return featurePresentation(key)?.category ?? 'other';
+}
+
+/** The words a search looks through: the Persian name and sentence (the server's text for an unknown flag). */
+function searchText(flag: FeatureFlagResponse): string {
+  const presentation = featurePresentation(flag.key);
+  if (presentation === undefined) return `${flag.key} ${flag.description}`.toLowerCase();
+  return `${t(presentation.title)} ${t(presentation.summary)}`.toLowerCase();
+}
+
+/**
+ * One page, no paging. The API answers with every flag (the earlier ten-at-a-time paging was
+ * done here, in the browser), so the category counts come from the complete list.
+ */
 export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
   const flags = useQuery({ queryKey: ['features'], queryFn: fetchFeatureFlags, enabled: !denied });
   const rows = flags.data?.flags ?? [];
 
-  const [showAll, setShowAll] = useState(false);
-  /*
-   * R11: with the server's `total` the list is paged ten at a time under the demo's numbered
-   * pager; an answer without one (an older server) keeps the first ten and the button.
-   */
-  const total = flags.data?.total;
-  const [page, setPage] = useState(1);
-  const shown =
-    total !== undefined
-      ? rows.slice((page - 1) * LIST_PAGE_SIZE, page * LIST_PAGE_SIZE)
-      : showAll
-        ? rows
-        : rows.slice(0, FEATURE_ROWS_SHOWN);
-  const enabledCount = rows.filter((flag) => flag.enabled).length;
+  const [picked, setPicked] = useState<CategoryId | null>(null);
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState<StatusFilter>('all');
+
+  const byCategory = new Map<CategoryId, FeatureFlagResponse[]>();
+  for (const flag of rows) {
+    const id = categoryOf(flag.key);
+    byCategory.set(id, [...(byCategory.get(id) ?? []), flag]);
+  }
+  const categories = [...FEATURE_CATEGORIES, 'other' as const].filter((id) => byCategory.has(id));
+  const selected: CategoryId | undefined =
+    picked !== null && byCategory.has(picked) ? picked : categories[0];
+
+  const needle = query.trim().toLowerCase();
+  const searching = needle !== '';
+  const passes = (flag: FeatureFlagResponse) =>
+    (status === 'all' || (status === 'on') === flag.enabled) &&
+    (!searching || searchText(flag).includes(needle));
+
+  const onCount = rows.filter((flag) => flag.enabled).length;
+  const panelId = 'feature-pane';
+  const groups = searching
+    ? categories
+        .map((id) => ({ id, flags: (byCategory.get(id) ?? []).filter(passes) }))
+        .filter((group) => group.flags.length > 0)
+    : selected === undefined
+      ? []
+      : [{ id: selected, flags: (byCategory.get(selected) ?? []).filter(passes) }];
 
   return (
     <>
       <PageHead title={t('web.features_title')} subtitle={t('web.features_intro')} />
       <StateSwitch query={flags} denied={denied} isEmpty={rows.length === 0}>
-        <Card
-          title={t('web.features_list_title')}
-          hint={t('web.features_list_hint')}
-          actions={
-            <span className="muted small">
-              {`${t('web.features_on_count')}: ${formatNumber(enabledCount)} ${t('web.templates_count_of')} ${formatNumber(rows.length)}`}
-            </span>
-          }
-          tight
-        >
-          <ul className="feature-list">
-            {shown.map((flag) => (
-              <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
-            ))}
-          </ul>
-          {total !== undefined && (
-            <CountedPager
-              page={page}
-              pageSize={LIST_PAGE_SIZE}
-              total={serverTotal(total)}
-              onPage={setPage}
+        <FilterBar>
+          <SearchInput
+            value={query}
+            onChange={setQuery}
+            label={t('web.features_search_label')}
+            placeholder={t('web.features_search_placeholder')}
+          />
+          <FilterChips label={t('web.features_filter_label')}>
+            <FilterChip
+              pressed={status === 'all'}
+              onClick={() => setStatus('all')}
+              count={rows.length}
+            >
+              {t('web.features_filter_all')}
+            </FilterChip>
+            <FilterChip pressed={status === 'on'} onClick={() => setStatus('on')} count={onCount}>
+              {t('web.features_filter_on')}
+            </FilterChip>
+            <FilterChip
+              pressed={status === 'off'}
+              onClick={() => setStatus('off')}
+              count={rows.length - onCount}
+            >
+              {t('web.features_filter_off')}
+            </FilterChip>
+          </FilterChips>
+        </FilterBar>
+        <div className="feature-split">
+          {selected !== undefined && (
+            <Tabs
+              boxed
+              vertical
+              panelId={panelId}
+              label={t('web.features_categories_label')}
+              value={selected}
+              onChange={(next) => {
+                // Choosing a category ends a search: the pane then shows that category.
+                setQuery('');
+                setPicked(next);
+              }}
+              items={categories.map((id) => {
+                const inCategory = byCategory.get(id) ?? [];
+                const on = inCategory.filter((flag) => flag.enabled).length;
+                return {
+                  id,
+                  label: t(FEATURE_CATEGORY_TITLE[id]),
+                  countText: `${formatNumber(on)}/${formatNumber(inCategory.length)}`,
+                };
+              })}
             />
           )}
-          {total === undefined && rows.length > FEATURE_ROWS_SHOWN && (
-            <div className="feature-more">
-              <Button size="sm" onClick={() => setShowAll((open) => !open)} aria-expanded={showAll}>
-                {showAll
-                  ? t('web.features_show_first')
-                  : `${t('web.features_show_all')} (${formatNumber(rows.length - FEATURE_ROWS_SHOWN)})`}
-              </Button>
-            </div>
-          )}
-        </Card>
+          <div
+            id={panelId}
+            className="feature-pane-body"
+            {...(searching || selected === undefined
+              ? { role: 'region', 'aria-label': t('web.features_results_label') }
+              : { role: 'tabpanel', 'aria-labelledby': `${panelId}-tab-${selected}` })}
+          >
+            {groups.length === 0 || groups.every((group) => group.flags.length === 0) ? (
+              <Card title={t('web.features_list_title')} tight>
+                <p className="muted feature-empty">
+                  {searching ? t('web.features_no_match') : t('web.features_cat_empty')}
+                </p>
+              </Card>
+            ) : (
+              groups.map((group) => (
+                <Card
+                  key={group.id}
+                  title={t(FEATURE_CATEGORY_TITLE[group.id])}
+                  hint={searching ? undefined : t('web.features_list_hint')}
+                  tight
+                >
+                  <ul className="feature-list">
+                    {group.flags.map((flag) => (
+                      <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
+                    ))}
+                  </ul>
+                </Card>
+              ))
+            )}
+          </div>
+        </div>
       </StateSwitch>
     </>
   );
@@ -104,6 +191,7 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
 
 function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boolean }) {
   const client = useQueryClient();
+  const onLink = useLinkHandler();
   const presentation = featurePresentation(flag.key);
   // A flag this build has no Persian entry for can only come from a newer server; its
   // own description is then the best there is, and the key is its only name.
@@ -207,6 +295,32 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
         <div className="feature-row-text">
           <h3>{title}</h3>
           <p className="muted small">{summary}</p>
+          {presentation !== undefined && (
+            <dl className="feature-meta small">
+              <div>
+                <dt>{t('web.feature_where_label')}</dt>
+                <dd>
+                  {presentation.where
+                    .map((place) => t(FEATURE_WHERE_LABEL[place]))
+                    .join(t('web.list_separator'))}
+                </dd>
+              </div>
+              <div>
+                <dt>{t('web.feature_off_label')}</dt>
+                <dd>{t(presentation.offEffect)}</dd>
+              </div>
+              {presentation.related !== null && (
+                <div>
+                  <dt>{t('web.feature_open_settings')}</dt>
+                  <dd>
+                    <a href={presentation.related.path} onClick={onLink}>
+                      {t(presentation.related.label)}
+                    </a>
+                  </dd>
+                </div>
+              )}
+            </dl>
+          )}
           {presentation === undefined && <TechnicalDetails lines={[flag.description]} />}
           {flag.updatedAt !== null && (
             <p className="faint small">
