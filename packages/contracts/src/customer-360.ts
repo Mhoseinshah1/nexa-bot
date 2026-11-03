@@ -101,6 +101,12 @@ export const customerOverviewSchema = z.object({
   /** When an operator exempted this customer from mandatory channel membership; null: not exempt. */
   channelMembershipExemptAt: z.iso.datetime().nullable(),
   /**
+   * NEXA v095 PR-4 D: when an operator exempted this customer from phone verification — the
+   * bot-wide phone_verification gate and every payment route's verified-phone rule; null: not
+   * exempt.
+   */
+  phoneVerificationExemptAt: z.iso.datetime().nullable(),
+  /**
    * The verified number, or null when none is: one an operator verified out of band, or
    * (R11 B7) one the customer verified by sharing their own Telegram contact.
    *
@@ -167,6 +173,14 @@ export const customerChannelExemptionRequestSchema = z.object({
   reason: reasonSchema.min(1),
 });
 export type CustomerChannelExemptionRequest = z.infer<typeof customerChannelExemptionRequestSchema>;
+
+/** NEXA v095 PR-4 D: «معاف از تأیید شماره», on the channel exemption's terms (a reason is required). */
+export const customerPhoneExemptionRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  exempt: z.boolean(),
+  reason: reasonSchema.min(1),
+});
+export type CustomerPhoneExemptionRequest = z.infer<typeof customerPhoneExemptionRequestSchema>;
 
 /** `phoneNumber: null` revokes the verification and forgets the number. */
 export const customerPhoneVerificationRequestSchema = z.object({
@@ -611,6 +625,8 @@ export const customerWorkspaceResponseSchema = z.object({ workspace: customerWor
 export const CUSTOMER_360_ROUTES = {
   overview: (id: string) => `/users/${encodeURIComponent(id)}/overview`,
   channelExemption: (id: string) => `/users/${encodeURIComponent(id)}/channel-exemption`,
+  /** NEXA v095 PR-4 D: the phone-verification exemption (`users.phone_verification.exempt`). */
+  phoneExemption: (id: string) => `/users/${encodeURIComponent(id)}/phone-exemption`,
   phone: (id: string) => `/users/${encodeURIComponent(id)}/phone`,
   locationOverride: (id: string) => `/users/${encodeURIComponent(id)}/location-override`,
   notifications: (id: string) => `/users/${encodeURIComponent(id)}/notifications`,
