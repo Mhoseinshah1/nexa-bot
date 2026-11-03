@@ -1685,6 +1685,50 @@ describe('Migration P7: the legacy importer', () => {
     expect(seen).not.toContain(first.idInvoice);
   });
 
+  it('v096 PR-2: the apply adopts at most the per-panel setting at once, and never more', async () => {
+    const snap = await snapshot();
+    const measure = async (perPanel: number) => {
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+        VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId},
+                'legacy_import.adoption_concurrency_per_panel', ${JSON.stringify(perPanel)}::jsonb,
+                1, now())
+        ON CONFLICT (tenant_id, setting_key) DO UPDATE SET value = EXCLUDED.value`);
+      const running = new Map<string, number>();
+      const peak = new Map<string, number>();
+      let all = 0;
+      let peakAll = 0;
+      const adoption: LegacyAdoptionPort = {
+        adopt: async (_scope, _actor, candidate) => {
+          const panel = candidate.panelId;
+          running.set(panel, (running.get(panel) ?? 0) + 1);
+          peak.set(panel, Math.max(peak.get(panel) ?? 0, running.get(panel) ?? 0));
+          all += 1;
+          peakAll = Math.max(peakAll, all);
+          await new Promise((r) => setTimeout(r, 25));
+          running.set(panel, (running.get(panel) ?? 1) - 1);
+          all -= 1;
+          return { kind: 'ADOPTED' } as LegacyAdoptionOutcome;
+        },
+      };
+      // One invoice per batch, so every adoption could run at once if nothing held it back.
+      const report = await ctx.container
+        .legacyImporter({ adoption, inventoryPageSize: 3, adoptionBatch: 1 })
+        .apply({ ...input(`cap-${String(perPanel)}`, snap), mode: 'IMPORT' });
+      const adopted = (report.sections as Record<string, any>)['applied'].services.adoption;
+      return { peak, peakAll, adopted: adopted.ADOPTED as number };
+    };
+    const one = await measure(1);
+    expect(one.adopted).toBeGreaterThan(0);
+    // Some panel holds at least two eligible invoices, so a cap of 1 is a real limit here.
+    expect(Math.max(...one.peak.values())).toBe(1);
+    // A rerun of the same source (nothing was adopted for real: the port is a stand-in).
+    const two = await measure(2);
+    expect(two.adopted).toBe(one.adopted);
+    expect(Math.max(...two.peak.values())).toBe(2);
+    for (const p of two.peak.values()) expect(p).toBeLessThanOrEqual(2);
+  });
+
   // REHEARSE against 9942263f: `resume` printed pg's "client is already executing a query"
   // DeprecationWarning — two queries issued concurrently on ONE transaction's client.
   it('import and resume with real adoption issue no concurrent query on one pg client', async () => {
@@ -2007,10 +2051,11 @@ describe('Migration P7: the legacy importer', () => {
     expect(eligible).toBeGreaterThan(2);
     let adopted = 0;
     // The real P6, killed mid-phase: two candidates adopted and committed, then the process
-    // "dies" before the third.
+    // "dies" before the third. (NEXA v096 PR-2: the adoptions of another panel may be running
+    // when it dies; each of those commits or not on its own, so the crash leaves `adopted`.)
     const dying: LegacyAdoptionPort = {
       adopt: async (scope, actor, candidate) => {
-        if (adopted === 2) throw new Error('simulated crash inside the adoption phase');
+        if (adopted >= 2) throw new Error('simulated crash inside the adoption phase');
         const outcome = await ctx.container.legacyAdoption.adoptCandidate(scope, actor, candidate);
         adopted += 1;
         return outcome;
@@ -2022,14 +2067,16 @@ describe('Migration P7: the legacy importer', () => {
       .catch((e: unknown) => e);
     expect(crashed).toBeInstanceOf(LegacyImportInterrupted);
     expect((crashed as LegacyImportInterrupted).phase).toBe('adoption');
-    expect(await count('services')).toBe(2);
-    expect(await count('orders')).toBe(2);
+    expect(adopted).toBeGreaterThanOrEqual(2);
+    expect(adopted).toBeLessThan(eligible);
+    expect(await count('services')).toBe(adopted);
+    expect(await count('orders')).toBe(adopted);
     expect(await count('legacy_import_runs', "status = 'RUNNING' AND mode = 'APPLY'")).toBe(1);
 
     const resumed = await real.apply({ ...input('resume-in-adoption', snap), mode: 'RESUME' });
     expect(resumed.verdict).toBe('COMPLETED');
     const adoption = (resumed.sections as Record<string, any>)['applied'].services.adoption;
-    expect(adoption).toMatchObject({ ADOPTED: eligible - 2, ALREADY_ADOPTED: 2 });
+    expect(adoption).toMatchObject({ ADOPTED: eligible - adopted, ALREADY_ADOPTED: adopted });
     expect(await count('services')).toBe(eligible);
     expect(await count('orders', "origin = 'LEGACY_ADOPTION'")).toBe(eligible);
     // One service per adopted invoice, and every service has its own order.

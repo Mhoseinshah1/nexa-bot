@@ -37,6 +37,11 @@ import type {
  * `SettingsResolver` and `FeatureFlagsService`, which is where the permission checks,
  * the audit and the validation live.
  */
+
+/** One transaction's thresholds, read once (`seedPassedThresholds`'s `memo`). */
+export interface ReminderSeedMemo {
+  thresholds?: ServiceReminderThresholds;
+}
 export interface ReminderSettingsReader {
   valueOf<T>(scope: ScopeContext, key: SettingKey, tx?: unknown): Promise<T>;
 }
@@ -554,6 +559,13 @@ export class ServiceReminderService {
     scope: TenantContext,
     serviceId: string,
     tx: TransactionScope,
+    /**
+     * NEXA v096 PR-2: a caller that seeds several services in ONE transaction (the import's
+     * adoption batch) passes one memo for that transaction, so the thresholds are read once
+     * for the transaction instead of once per service — still from the same transaction as
+     * the writes they inform. Never shared between transactions.
+     */
+    memo?: ReminderSeedMemo,
   ): Promise<ServiceReminderSeed> {
     if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
       throw errors.conflict(
@@ -566,7 +578,11 @@ export class ServiceReminderService {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }
     const now = this.deps.clock.now();
-    const thresholds = await this.thresholds(scope, tx);
+    let thresholds = memo?.thresholds;
+    if (thresholds === undefined) {
+      thresholds = await this.thresholds(scope, tx);
+      if (memo !== undefined) memo.thresholds = thresholds;
+    }
     const passed = passedReminderKinds(candidate, now, thresholds);
     const snapshot = this.snapshot(candidate, now);
     const seeded: ServiceReminderKind[] = [];

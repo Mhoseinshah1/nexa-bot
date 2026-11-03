@@ -29,6 +29,10 @@ import type {
   LegacyAdoptionCommand,
   LegacyAdoptionOutcome,
 } from '../../apps/api/src/modules/commerce/legacy-adoption/application/legacy-adoption-ports';
+import {
+  LegacyAdoptionService,
+  type LegacyAdoptionDeps,
+} from '../../apps/api/src/modules/commerce/legacy-adoption/application/legacy-adoption.service';
 import { AudienceFixtures } from './audience-fixtures';
 import {
   adminActorFor,
@@ -1242,5 +1246,156 @@ describe('Migration P6: legacy service adoption', () => {
       repo.finish(tenantA, runId, { status: 'COMPLETED' }, new Date(), tx),
     );
     expect(finished).toMatchObject({ rowsImported: 1, rowsManualReview: 1 });
+  });
+
+  // ---------------------------------------------------------------------------
+  // NEXA v096 PR-2: several adoptions in ONE transaction (`adoptMany`)
+  // ---------------------------------------------------------------------------
+
+  /** The container's adoption service with its store's `insertAdoption` wrapped. */
+  function batchService(
+    hook: (legacyInvoiceSourceRef: string, call: number) => void,
+  ): LegacyAdoptionService {
+    const deps = (ctx.container.legacyAdoption as unknown as { deps: LegacyAdoptionDeps }).deps;
+    let calls = 0;
+    const store = Object.create(deps.store) as LegacyAdoptionDeps['store'];
+    store.insertAdoption = async (
+      ...args: Parameters<LegacyAdoptionDeps['store']['insertAdoption']>
+    ) => {
+      calls += 1;
+      hook(args[1].sourceRef, calls);
+      return deps.store.insertAdoption(...args);
+    };
+    return new LegacyAdoptionService({ ...deps, store });
+  }
+
+  const adoptionAudits = () =>
+    count(sql`SELECT count(*)::int AS n FROM audit_logs
+               WHERE action = 'legacy.service.adopt' AND result = 'SUCCESS'`);
+
+  it('adoptMany writes, per invoice, exactly what one-at-a-time adoption writes', async () => {
+    const commands: LegacyAdoptionCommand[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const telegramUserId = tg();
+      await fx.customer({ telegramUserId });
+      commands.push(command({ telegramUserId }));
+    }
+    // A customer P7 never created: manual review, its map row written in the same batch.
+    commands.push(command({ telegramUserId: tg() }));
+    const outcomes = await withoutNetwork(() =>
+      ctx.container.legacyAdoption.adoptMany(tenantA, actor(), commands),
+    );
+    expect(outcomes.map((o) => o.kind)).toEqual([
+      'ADOPTED',
+      'ADOPTED',
+      'ADOPTED',
+      'ADOPTED',
+      'MANUAL_REVIEW',
+    ]);
+    expect(outcomes[4]).toMatchObject({ reason: 'CUSTOMER_MISSING', recorded: true });
+    expect(await businessRows()).toMatchObject({ orders: 4, services: 4, reservations: 4 });
+    expect(await adoptionAudits()).toBe(4);
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'ServiceAdopted'`,
+      ),
+    ).toBe(4);
+    // The same keys replay, one by one or as a batch, and write nothing.
+    const before = await businessRows();
+    expect(await adopt(commands[0] as LegacyAdoptionCommand)).toEqual(outcomes[0]);
+    expect(
+      await withoutNetwork(() =>
+        ctx.container.legacyAdoption.adoptMany(tenantA, actor(), commands),
+      ),
+    ).toEqual(outcomes);
+    expect(await businessRows()).toEqual(before);
+    expect(providerCalls).toEqual([]);
+  });
+
+  it('a crash in the middle of a batched write leaves none of that batch; the resume writes each once', async () => {
+    const commands: LegacyAdoptionCommand[] = [];
+    for (let i = 0; i < 7; i += 1) {
+      const telegramUserId = tg();
+      await fx.customer({ telegramUserId });
+      commands.push(command({ telegramUserId }));
+    }
+    const first = commands.slice(0, 3);
+    const second = commands.slice(3);
+    // Batch one commits.
+    const done = await withoutNetwork(() =>
+      ctx.container.legacyAdoption.adoptMany(tenantA, actor(), first),
+    );
+    expect(done.map((o) => o.kind)).toEqual(['ADOPTED', 'ADOPTED', 'ADOPTED']);
+
+    // Batch two "crashes" after its second service row: from then on the process is dead
+    // (every write fails), so neither the batch nor the one-at-a-time retry gets anywhere.
+    let dead = false;
+    const crashing = batchService((_ref, call) => {
+      if (call === 2) dead = true;
+      if (dead) throw new Error('simulated crash');
+    });
+    await expect(
+      withoutNetwork(() => crashing.adoptMany(tenantA, actor(), second)),
+    ).rejects.toThrow('simulated crash');
+    // Nothing of batch two: the batch is one transaction.
+    expect(await businessRows()).toMatchObject({ orders: 3, services: 3, reservations: 3 });
+    expect(await adoptionAudits()).toBe(3);
+    expect(
+      await count(sql`SELECT count(*)::int AS n FROM legacy_import_map WHERE status = 'IMPORTED'`),
+    ).toBe(3);
+
+    // The resume: every invoice again, in batches. Batch one replays, batch two is written once.
+    const resumed = await withoutNetwork(() =>
+      ctx.container.legacyAdoption.adoptMany(tenantA, actor(), commands),
+    );
+    expect(resumed.slice(0, 3)).toEqual(done);
+    expect(resumed.map((o) => o.kind)).toEqual(Array.from({ length: 7 }, () => 'ADOPTED'));
+    expect(await businessRows()).toMatchObject({ orders: 7, services: 7, reservations: 7 });
+    expect(await adoptionAudits()).toBe(7);
+    expect(
+      await count(sql`SELECT count(*)::int AS n FROM legacy_import_map WHERE status = 'IMPORTED'`),
+    ).toBe(7);
+    expect(await count(sql`SELECT count(DISTINCT provider_username)::int AS n FROM services`)).toBe(
+      7,
+    );
+  });
+
+  it('an invoice that cannot be written: the batch rolls back, then one at a time as before', async () => {
+    const commands: LegacyAdoptionCommand[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const telegramUserId = tg();
+      await fx.customer({ telegramUserId });
+      commands.push(command({ telegramUserId }));
+    }
+    const bad = `invoice:${(commands[1] as LegacyAdoptionCommand).legacyInvoiceKey}`;
+    const failing = batchService((ref) => {
+      if (ref === bad) throw new Error('this invoice cannot be written');
+    });
+    await expect(
+      withoutNetwork(() => failing.adoptMany(tenantA, actor(), commands)),
+    ).rejects.toThrow('this invoice cannot be written');
+    // Exactly the one-at-a-time loop's result: the invoice before it written, it and the
+    // one after it not.
+    expect(await businessRows()).toMatchObject({ orders: 1, services: 1 });
+    expect(await mapRow((commands[0] as LegacyAdoptionCommand).legacyInvoiceKey)).toMatchObject({
+      status: 'IMPORTED',
+    });
+    expect(await mapRow((commands[1] as LegacyAdoptionCommand).legacyInvoiceKey)).toBeUndefined();
+    expect(await mapRow((commands[2] as LegacyAdoptionCommand).legacyInvoiceKey)).toBeUndefined();
+  });
+
+  it('adoptMany refuses an administrator without maintenance.run before writing anything', async () => {
+    const telegramUserId = tg();
+    await fx.customer({ telegramUserId });
+    const observer = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'obs-p6b', roleKeys: ['observer'] }),
+    );
+    await expect(
+      withoutNetwork(() =>
+        ctx.container.legacyAdoption.adoptMany(tenantA, observer, [command({ telegramUserId })]),
+      ),
+    ).rejects.toSatisfy((e: unknown) => isNexaError(e) && e.kind === 'PERMISSION_DENIED');
+    expect(await count(sql`SELECT count(*)::int AS n FROM legacy_import_map`)).toBe(0);
+    expect(await businessRows()).toMatchObject({ orders: 0, services: 0 });
   });
 });

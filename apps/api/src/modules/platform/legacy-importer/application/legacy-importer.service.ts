@@ -41,6 +41,7 @@ import {
   timedSection,
   type SectionTimingLogger,
 } from './section-timing.js';
+import { runPerPanel, SEQUENTIAL_ADOPTION, type AdoptionConcurrency } from './adoption-pool.js';
 import { recordAuditMany } from '../../audit/application/record-audit-many.js';
 import {
   isReviewClosedToRerun,
@@ -101,6 +102,7 @@ import { canonicalLegacyUsername } from '../../legacy-import/application/legacy-
 import { NxpkgImportRefused } from './nxpkg-panel-binding.js';
 import { ownershipHoldDigest } from './nxpkg-ownership.js';
 import type {
+  LegacyAdoptionCandidate,
   LegacyAdoptionOutcome,
   LegacyAdoptionPort,
   LegacyCustomerWriter,
@@ -225,6 +227,12 @@ function nextBulkBatch(size: number): number {
 /** Rows per transaction of the services section's bulk writes (map rows, candidates). */
 const SERVICE_WRITE_BATCH = 5000;
 /**
+ * NEXA v096 PR-2: eligible invoices of one panel adopted per transaction
+ * (`LegacyAdoptionPort.adoptMany`). Small: the batch holds the panel's row lock from its first
+ * adoption to its commit, and a failed batch is re-run one invoice at a time.
+ */
+export const ADOPTION_BATCH = 50;
+/**
  * The candidates' audit slice: one `legacy.service_candidate.recorded` row per this many
  * candidates, the batch the per-batch audit has always counted (CUSTOMER_BATCH, 200).
  */
@@ -275,6 +283,13 @@ export interface LegacyImporterDeps {
    * only by an apply whose fresh read demoted approved adoptions. Absent: the registry default.
    */
   readonly demotionCap?: (scope: TenantContext) => Promise<DemotionCapSetting>;
+  /**
+   * NEXA v096 PR-2: how many adoptions an apply runs at once (`adoption-pool.ts`): the
+   * owner-only per-panel setting and the role's pool size. Absent: one at a time.
+   */
+  readonly adoptionConcurrency?: (scope: TenantContext) => Promise<AdoptionConcurrency>;
+  /** NEXA v096 PR-2: eligible invoices of one panel per adoption batch. Absent: `ADOPTION_BATCH`. */
+  readonly adoptionBatch?: number;
   /** Per-section timing lines (`section-timing.ts`): counts and milliseconds only. */
   readonly logger?: SectionTimingLogger;
 }
@@ -2739,37 +2754,119 @@ export class LegacyImporterService {
         decision.category === 'ADOPTION_ELIGIBLE' ? [invoice.idInvoice] : [],
       ),
     );
+    /*
+     * NEXA v096 PR-2: the order of the decisions is fixed first (closed, kept, pending, no
+     * customer — nothing written), then the adoptions run a few at a time per panel
+     * (`adoption-pool.ts`), then every result is recorded in the SAME order as before, so the
+     * tallies and `eligibleResults` are what the one-at-a-time loop produced.
+     */
+    type EligibleStep =
+      | { readonly kind: 'SET'; readonly invoiceId: string; readonly result: EligibleResult }
+      | { readonly kind: 'SKIP_CLOSED' }
+      | {
+          readonly kind: 'ADOPT';
+          readonly invoice: (typeof decided.services)[number]['invoice'];
+          readonly decision: Extract<
+            (typeof decided.services)[number]['decision'],
+            { category: 'ADOPTION_ELIGIBLE' }
+          >;
+          readonly who: { readonly telegramUserId: string; readonly customerId: string };
+          job: number;
+        };
+    const steps: EligibleStep[] = [];
+    const jobs: Extract<EligibleStep, { kind: 'ADOPT' }>[] = [];
     for (const { invoice, decision } of decided.services) {
       if (decision.category !== 'ADOPTION_ELIGIBLE') continue;
       const before = prior.get(invoice.idInvoice);
       if (before !== undefined && isReviewClosedToRerun(before)) {
-        tallies.services.adoption.REVIEW_CLOSED += 1;
+        steps.push({ kind: 'SKIP_CLOSED' });
         continue;
       }
       if (keptAsHistory.has(invoice.idInvoice)) {
-        tallies.services.adoption.KEPT_AS_HISTORY += 1;
-        eligibleResults.set(invoice.idInvoice, { kind: 'KEPT_AS_HISTORY' });
+        steps.push({
+          kind: 'SET',
+          invoiceId: invoice.idInvoice,
+          result: { kind: 'KEPT_AS_HISTORY' },
+        });
         continue;
       }
       if (this.deps.adoption === null) {
-        tallies.services.adoption.PENDING += 1;
-        eligibleResults.set(invoice.idInvoice, { kind: 'PENDING' });
+        steps.push({ kind: 'SET', invoiceId: invoice.idInvoice, result: { kind: 'PENDING' } });
         continue;
       }
       const who = invoice.idUser === null ? undefined : imported.get(invoice.idUser);
       if (who === undefined) continue;
-      const outcome = await this.adoptEligible(
-        scope,
-        actor,
-        runId,
-        invoice,
-        decision,
-        who,
-        shapes,
-        prepared.inventories,
-        soldAt.get(invoice.idInvoice) ?? null,
-      );
-      eligibleResults.set(invoice.idInvoice, { kind: 'ADOPTION', outcome });
+      const step = { kind: 'ADOPT' as const, invoice, decision, who, job: jobs.length };
+      jobs.push(step);
+      steps.push(step);
+    }
+    // Batches of one panel's jobs in input order (`ADOPTION_BATCH` each, one transaction per
+    // batch when the port can), run a few at a time per panel.
+    const batches: (typeof jobs)[] = [];
+    const open = new Map<string, typeof jobs>();
+    for (const job of jobs) {
+      let batch = open.get(job.decision.panelId);
+      if (batch === undefined) {
+        batch = [];
+        open.set(job.decision.panelId, batch);
+        batches.push(batch);
+      }
+      batch.push(job);
+      if (batch.length >= (this.deps.adoptionBatch ?? ADOPTION_BATCH)) {
+        open.delete(job.decision.panelId);
+      }
+    }
+    const adopted = new Array<LegacyAdoptionOutcome>(jobs.length);
+    const port = this.deps.adoption;
+    await runPerPanel(
+      batches,
+      (batch) => (batch[0] as (typeof jobs)[number]).decision.panelId,
+      jobs.length === 0 || port === null
+        ? SEQUENTIAL_ADOPTION
+        : await this.adoptionConcurrencyOf(scope),
+      async (batch) => {
+        if (port === null) throw new Error('unreachable: the adoption step is not wired');
+        const candidates = batch.map((job) =>
+          this.candidateOf(
+            runId,
+            job.invoice,
+            job.decision,
+            job.who,
+            shapes,
+            prepared.inventories,
+            soldAt.get(job.invoice.idInvoice) ?? null,
+          ),
+        );
+        let outcomes: LegacyAdoptionOutcome[];
+        if (port.adoptMany === undefined) {
+          outcomes = [];
+          for (const candidate of candidates) {
+            outcomes.push(await port.adopt(scope, actor, candidate));
+          }
+        } else {
+          outcomes = await port.adoptMany(scope, actor, candidates);
+        }
+        if (outcomes.length !== batch.length) {
+          throw new Error('the adoption step answered a batch with the wrong number of outcomes');
+        }
+        batch.forEach((job, i) => {
+          adopted[job.job] = outcomes[i] as LegacyAdoptionOutcome;
+        });
+      },
+    );
+    for (const step of steps) {
+      if (step.kind === 'SKIP_CLOSED') {
+        tallies.services.adoption.REVIEW_CLOSED += 1;
+        continue;
+      }
+      if (step.kind === 'SET') {
+        tallies.services.adoption[step.result.kind === 'PENDING' ? 'PENDING' : 'KEPT_AS_HISTORY'] +=
+          1;
+        eligibleResults.set(step.invoiceId, step.result);
+        continue;
+      }
+      const outcome = adopted[step.job] as LegacyAdoptionOutcome;
+      eligibleResults.set(step.invoice.idInvoice, { kind: 'ADOPTION', outcome });
       adoptions += 1;
       // P6 wrote the invoice's map row for every one of these; P7 records nothing here.
       tallies.services.adoption[outcome.kind] += 1;
@@ -3000,10 +3097,19 @@ export class LegacyImporterService {
    * One ELIGIBLE invoice handed to P6 — the one adopter, for an APPLY run and the lane alike.
    * The runtime facts of the account come from the same read the match came from; absent (it
    * cannot be, for an ELIGIBLE match) they are null, which P6 answers FAILED.
+   * (The approval lane's one-at-a-time path; an APPLY run batches `candidateOf`, NEXA v096 PR-2.)
    */
   private async adoptEligible(
     scope: TenantContext,
     actor: ActorContext,
+    ...args: Parameters<LegacyImporterService['candidateOf']>
+  ): Promise<LegacyAdoptionOutcome> {
+    if (this.deps.adoption === null) throw new Error('unreachable: the adoption step is not wired');
+    return this.deps.adoption.adopt(scope, actor, this.candidateOf(...args));
+  }
+
+  /** The P6 candidate of one ELIGIBLE invoice (`adoptEligible`, and the apply's batches). */
+  private candidateOf(
     runId: string,
     invoice: LegacySnapshot['liveInvoices'][number],
     decision: Extract<
@@ -3015,8 +3121,7 @@ export class LegacyImporterService {
     inventories: ReadonlyMap<string, LegacyInventoryRead>,
     /** The invoice's original purchase time (the archive's `time_sell`), or null when unread. */
     legacyPurchasedAt: Date | null,
-  ): Promise<LegacyAdoptionOutcome> {
-    if (this.deps.adoption === null) throw new Error('unreachable: the adoption step is not wired');
+  ): LegacyAdoptionCandidate {
     // Navigation only (owner rule 2026-10-18): a mapped product, its shape's hidden product
     // when that product is gone, or the shape's hidden product — never a condition.
     const product =
@@ -3033,7 +3138,7 @@ export class LegacyImporterService {
       read !== undefined && read.ok && read.complete
         ? read.runtime.get(decision.providerUsername)
         : undefined;
-    return this.deps.adoption.adopt(scope, actor, {
+    return {
       runId,
       legacyInvoiceId: invoice.idInvoice,
       checksum: invoice.checksum,
@@ -3052,7 +3157,7 @@ export class LegacyImporterService {
               observedAt: read.observedAt,
               subscriptionUrl: facts.subscriptionUrl,
             },
-    });
+    };
   }
 
   /** Mirza PR5 — the candidate rows: insert, or re-decide under the row lock. */
@@ -3975,6 +4080,13 @@ export class LegacyImporterService {
       },
       tx,
     );
+  }
+
+  /** NEXA v096 PR-2: the adoption concurrency; one at a time when no reader is wired. */
+  private async adoptionConcurrencyOf(scope: TenantContext): Promise<AdoptionConcurrency> {
+    return this.deps.adoptionConcurrency === undefined
+      ? SEQUENTIAL_ADOPTION
+      : this.deps.adoptionConcurrency(scope);
   }
 
   /** The demotion cap setting; the registry default when no reader is wired. */

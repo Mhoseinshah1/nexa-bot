@@ -5,6 +5,7 @@ import {
   SUBSCRIPTION_REF_BYTES,
   errors,
   isLegacyImportKey,
+  isNexaError,
   isLegacyReviewReasonCode,
   type LegacyReviewReasonCode,
   telegramUserIdSchema,
@@ -39,11 +40,15 @@ import type { PanelCapacityRepository } from '../../../platform/panels/applicati
 import type { ProductRepository } from '../../catalog/application/ports.js';
 import type { LegacyProductShapeRepository } from '../../catalog/application/legacy-product-ports.js';
 import type { ServiceSecretSource } from '../../provisioning/application/ports.js';
-import type { ServiceReminderService } from '../../provisioning/application/service-reminder.service.js';
+import type {
+  ReminderSeedMemo,
+  ServiceReminderService,
+} from '../../provisioning/application/service-reminder.service.js';
 import { namespaceKeyFor } from '../../provisioning/application/username-allocator.js';
 import type {
   LegacyAdoptionCandidate,
   AdoptionCapacity,
+  AdoptionPanel,
   AdoptionRuntimeFacts,
   LegacyAdoptionCommand,
   LegacyAdoptionOutcome,
@@ -148,6 +153,22 @@ function acceptableLink(url: string): boolean {
   }
 }
 
+/** The command's shape, checked before anything is read or written. */
+function assertAdoptionCommand(command: LegacyAdoptionCommand): void {
+  if (command.idempotencyKey.trim().length === 0) {
+    throw errors.validation(
+      COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+      'An adoption needs an idempotency key.',
+    );
+  }
+  if (!LEGACY_SHA256_PATTERN.test(command.sourceChecksum)) {
+    throw errors.validation(
+      COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+      'The source checksum is not a lowercase SHA-256 hex.',
+    );
+  }
+}
+
 /** The request's identity for the idempotency store: every field but the key, canonical. */
 export function adoptionRequestHash(command: LegacyAdoptionCommand): string {
   const runtime = command.runtime;
@@ -221,9 +242,53 @@ export class LegacyAdoptionService {
     actor: ActorContext,
     candidate: LegacyAdoptionCandidate,
   ): Promise<LegacyAdoptionOutcome> {
+    return this.adopt(scope, actor, await this.commandOf(scope, candidate));
+  }
+
+  /**
+   * NEXA v096 PR-2 — several candidates of ONE panel adopted in ONE transaction
+   * (`adoptMany`). Each candidate becomes exactly the command `adoptCandidate` would make, with
+   * the same idempotency key, so a run that adopted some one at a time and resumes in batches
+   * (or the reverse) replays or re-decides each invoice exactly as before.
+   */
+  async adoptCandidates(
+    scope: TenantContext,
+    actor: ActorContext,
+    candidates: readonly LegacyAdoptionCandidate[],
+  ): Promise<LegacyAdoptionOutcome[]> {
+    const commands: LegacyAdoptionCommand[] = [];
+    const lookups: CommandLookups = { shapeProducts: new Map(), productExists: new Map() };
+    for (const candidate of candidates) {
+      commands.push(await this.commandOf(scope, candidate, lookups));
+    }
+    return this.adoptMany(scope, actor, commands);
+  }
+
+  /** The candidate as a command: the translation `adoptCandidate` documents. */
+  private async commandOf(
+    scope: TenantContext,
+    candidate: LegacyAdoptionCandidate,
+    /**
+     * `adoptCandidates`'s, for one call: a shape's product and whether a product exists, read
+     * once per call instead of once per candidate (navigation lookups, outside any transaction,
+     * exactly as the one-candidate path reads them).
+     */
+    lookups?: CommandLookups,
+  ): Promise<LegacyAdoptionCommand> {
     const shapeProduct = async (shapeId: string | undefined): Promise<string | null> => {
       if (shapeId === undefined || shapeId === '') return null;
-      return (await this.deps.shapes.findById(scope, shapeId))?.productId ?? null;
+      const known = lookups?.shapeProducts.get(shapeId);
+      if (known !== undefined) return known;
+      const found = (await this.deps.shapes.findById(scope, shapeId))?.productId ?? null;
+      lookups?.shapeProducts.set(shapeId, found);
+      return found;
+    };
+    const productExists = async (id: string): Promise<boolean> => {
+      const known = lookups?.productExists.get(id);
+      if (known !== undefined) return known;
+      const found = (await this.deps.products.findById(scope, id as ProductId)) !== null;
+      lookups?.productExists.set(id, found);
+      return found;
     };
     let productId: string | null;
     // The order LINE is always the invoice's own shape (its hidden product), whatever product
@@ -235,10 +300,7 @@ export class LegacyAdoptionService {
     } else {
       const mapped = candidate.product.productId ?? null;
       lineProductId = await shapeProduct(candidate.product.fallbackShapeId);
-      productId =
-        mapped !== null && (await this.deps.products.findById(scope, mapped as ProductId)) !== null
-          ? mapped
-          : lineProductId;
+      productId = mapped !== null && (await productExists(mapped)) ? mapped : lineProductId;
     }
     const command: Omit<LegacyAdoptionCommand, 'idempotencyKey'> = {
       runId: candidate.runId,
@@ -265,10 +327,129 @@ export class LegacyAdoptionService {
      * per-invoice lock and the map answer ALREADY_ADOPTED, or decide again after a review.
      */
     const draft = { ...command, idempotencyKey: '' };
-    return this.adopt(scope, actor, {
+    return {
       ...command,
       idempotencyKey: `p6:${candidate.runId}:${candidate.legacyInvoiceId}:${adoptionRequestHash(draft).slice(0, 32)}`,
-    });
+    };
+  }
+
+  /**
+   * NEXA v096 PR-2 — the commands of ONE batch in ONE transaction: the guard, the scope's
+   * activity and the commit once per batch instead of once per invoice, which is what the
+   * apply's `apply.services.adopt` section spent most of its time on.
+   *
+   * Every command is decided and written exactly as `adopt` decides and writes it, in order, and
+   * each remembers its own idempotency key inside the same transaction. Before anything else the
+   * transaction takes every command's invoice lock, in sorted order, so the per-invoice lock is
+   * still taken before the panel's row lock and two batches can never wait on each other.
+   *
+   * All or nothing: a crash or an error leaves NONE of the batch written (a resume re-decides
+   * them all under their locks). An error is not absorbed: the batch is rolled back and its
+   * commands are then run one at a time through `adopt`, in order, so what is written — every
+   * invoice before the one that cannot be, and then that invoice's own error — is exactly what
+   * the one-at-a-time loop produced before batching.
+   */
+  async adoptMany(
+    scope: TenantContext,
+    actor: ActorContext,
+    commands: readonly LegacyAdoptionCommand[],
+  ): Promise<LegacyAdoptionOutcome[]> {
+    for (const command of commands) assertAdoptionCommand(command);
+    if (commands.length === 0) return [];
+    const denial = { action: AUDIT_ADOPT, entityType: 'Service', entityId: null };
+    try {
+      await this.deps.guard.check(scope, actor, LEGACY_ADOPTION_PERMISSION);
+    } catch (error) {
+      await recordMutationDenial(
+        this.mutationDeps(),
+        scope,
+        actor,
+        LEGACY_ADOPTION_PERMISSION,
+        denial,
+        error,
+      );
+      throw error;
+    }
+
+    const results = new Array<LegacyAdoptionOutcome | undefined>(commands.length);
+    const hashes = new Array<string>(commands.length);
+    const pending: number[] = [];
+    for (const [index, command] of commands.entries()) {
+      if (!isLegacyImportKey(LEGACY_TABLE, command.legacyInvoiceKey)) {
+        results[index] = { kind: 'MANUAL_REVIEW', reason: 'INVALID_SOURCE_ROW', recorded: false };
+        continue;
+      }
+      const hash = adoptionRequestHash(command);
+      hashes[index] = hash;
+      const replay = await this.deps.idempotency.find<LegacyAdoptionOutcome>(
+        scope,
+        actor.surface,
+        command.idempotencyKey,
+        hash,
+      );
+      if (replay !== null) results[index] = replay.result;
+      else pending.push(index);
+    }
+    if (pending.length === 0) return results as LegacyAdoptionOutcome[];
+
+    let written: Map<number, LegacyAdoptionOutcome>;
+    try {
+      written = await runAuthorizedMutation(
+        this.mutationDeps(),
+        scope,
+        actor,
+        LEGACY_ADOPTION_PERMISSION,
+        denial,
+        async (tx) => {
+          if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+              'This installation has stopped accepting work.',
+            );
+          }
+          // Every invoice lock first, in one order, before any panel row lock (§3).
+          const keys = [
+            ...new Set(pending.map((i) => (commands[i] as LegacyAdoptionCommand).legacyInvoiceKey)),
+          ].sort();
+          for (const key of keys) await this.deps.store.lockInvoice(scope, key, tx);
+          const out = new Map<number, LegacyAdoptionOutcome>();
+          // Read once for THIS transaction, from it: the sales currency and the thresholds.
+          const memo: AdoptionBatchMemo = {
+            reminders: {},
+            invoicesLocked: new Set(keys),
+            panels: new Map(),
+          };
+          for (const index of pending) {
+            const command = commands[index] as LegacyAdoptionCommand;
+            const outcome = await this.decideAndWrite(scope, actor, command, tx, memo);
+            await rememberOnce(
+              this.deps.idempotency,
+              scope,
+              actor.surface,
+              command.idempotencyKey,
+              hashes[index] as string,
+              outcome,
+              tx,
+            );
+            out.set(index, outcome);
+          }
+          return out;
+        },
+      );
+    } catch (error) {
+      // A refusal of the permission is the caller's answer, whichever invoice it is asked for.
+      if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') throw error;
+      // Nothing of the batch was written: each command alone, as before batching.
+      written = new Map();
+      for (const index of pending) {
+        written.set(
+          index,
+          await this.adopt(scope, actor, commands[index] as LegacyAdoptionCommand),
+        );
+      }
+    }
+    for (const [index, outcome] of written) results[index] = outcome;
+    return results as LegacyAdoptionOutcome[];
   }
 
   async adopt(
@@ -276,18 +457,7 @@ export class LegacyAdoptionService {
     actor: ActorContext,
     command: LegacyAdoptionCommand,
   ): Promise<LegacyAdoptionOutcome> {
-    if (command.idempotencyKey.trim().length === 0) {
-      throw errors.validation(
-        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-        'An adoption needs an idempotency key.',
-      );
-    }
-    if (!LEGACY_SHA256_PATTERN.test(command.sourceChecksum)) {
-      throw errors.validation(
-        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-        'The source checksum is not a lowercase SHA-256 hex.',
-      );
-    }
+    assertAdoptionCommand(command);
     const denial = { action: AUDIT_ADOPT, entityType: 'Service', entityId: null };
     try {
       await this.deps.guard.check(scope, actor, LEGACY_ADOPTION_PERMISSION);
@@ -354,9 +524,14 @@ export class LegacyAdoptionService {
     actor: ActorContext,
     command: LegacyAdoptionCommand,
     tx: TransactionScope,
+    /** `adoptMany`'s: what one transaction reads once for all its adoptions. */
+    memo?: AdoptionBatchMemo,
   ): Promise<LegacyAdoptionOutcome> {
     // 1. Every adoption of this invoice, serialised. First lock taken; see §3.
-    await this.deps.store.lockInvoice(scope, command.legacyInvoiceKey, tx);
+    // (A batch took every invoice lock of its transaction first, in sorted order.)
+    if (memo?.invoicesLocked.has(command.legacyInvoiceKey) !== true) {
+      await this.deps.store.lockInvoice(scope, command.legacyInvoiceKey, tx);
+    }
 
     // 2. Already decided as a service: the same mapping, whatever the new key.
     const [existing] = await this.deps.map.findByLegacyKeys(
@@ -395,7 +570,7 @@ export class LegacyAdoptionService {
       return { kind: 'KEPT_AS_HISTORY' };
     }
 
-    const decided = await this.decide(scope, command, tx);
+    const decided = await this.decide(scope, command, tx, memo);
     if ('kind' in decided) {
       if (decided.kind === 'READ_FAILED') {
         const ref = await this.record(
@@ -426,7 +601,7 @@ export class LegacyAdoptionService {
       await this.auditDecision(scope, actor, command, ref, 'MANUAL_REVIEW', decided.reason, tx);
       return { kind: 'MANUAL_REVIEW', reason: decided.reason, recorded: true };
     }
-    return this.write(scope, actor, command, decided, tx);
+    return this.write(scope, actor, command, decided, tx, memo);
   }
 
   /**
@@ -437,6 +612,7 @@ export class LegacyAdoptionService {
     scope: TenantContext,
     command: LegacyAdoptionCommand,
     tx: TransactionScope,
+    memo?: AdoptionBatchMemo,
   ): Promise<Decision | Plan> {
     const match = command.match;
     switch (match.kind) {
@@ -519,14 +695,20 @@ export class LegacyAdoptionService {
         ? product
         : ((await this.deps.products.findById(scope, command.lineProductId as ProductId, tx)) ??
           product);
-    const currency = await this.deps.settings.valueOf<SalesCurrencyCode>(
-      scope,
-      'sales.currency',
-      tx,
-    );
+    let currency = memo?.currency;
+    if (currency === undefined) {
+      currency = await this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency', tx);
+      if (memo !== undefined) memo.currency = currency;
+    }
 
     // The panel's row lock, the one capacity `reserve` takes first (§3).
-    const panel = await this.deps.store.lockPanel(scope, match.panelId, tx);
+    // A batch's transaction holds a panel's row lock from its first lock to its commit, so the
+    // row it read then is the row (`AdoptionBatchMemo.panels`).
+    let panel = memo?.panels.get(match.panelId);
+    if (panel === undefined) {
+      panel = await this.deps.store.lockPanel(scope, match.panelId, tx);
+      memo?.panels.set(match.panelId, panel);
+    }
     if (panel === null) return review('PANEL_UNMAPPED');
     if (panel.providerType !== 'rickpanel') return review('SUBSCRIPTION_REF_BLOCKED');
     const namespaceKey = namespaceKeyFor(panel.providerType, panel.baseUrl);
@@ -570,6 +752,7 @@ export class LegacyAdoptionService {
     command: LegacyAdoptionCommand,
     plan: Plan,
     tx: TransactionScope,
+    memo?: AdoptionBatchMemo,
   ): Promise<LegacyAdoptionOutcome> {
     const now = this.deps.clock.now();
     const orderId = this.deps.ids.uuid();
@@ -620,7 +803,12 @@ export class LegacyAdoptionService {
     );
 
     // Item 8: nothing already behind the service is ever announced.
-    const seed = await this.deps.reminders.seedPassedThresholds(scope, serviceId, tx);
+    const seed = await this.deps.reminders.seedPassedThresholds(
+      scope,
+      serviceId,
+      tx,
+      memo?.reminders,
+    );
 
     const counted = await this.deps.capacity.read(scope, plan.panelId, now, tx);
     const capacity: AdoptionCapacity = {
@@ -748,6 +936,22 @@ export class LegacyAdoptionService {
       clock: this.deps.clock,
     };
   }
+}
+
+/** One `adoptCandidates` call's navigation lookups (`commandOf`). */
+interface CommandLookups {
+  readonly shapeProducts: Map<string, string | null>;
+  readonly productExists: Map<string, boolean>;
+}
+
+/** One batch transaction's reads, made once (`adoptMany`); never outlives that transaction. */
+interface AdoptionBatchMemo {
+  currency?: SalesCurrencyCode;
+  readonly reminders: ReminderSeedMemo;
+  /** The invoice locks this transaction already holds. */
+  readonly invoicesLocked: ReadonlySet<string>;
+  /** The panel rows this transaction locked (FOR UPDATE), as `lockPanel` read them. */
+  readonly panels: Map<string, AdoptionPanel | null>;
 }
 
 /** What `decide` hands `write` when nothing needs review. */

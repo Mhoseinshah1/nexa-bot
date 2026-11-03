@@ -509,6 +509,16 @@ export interface LegacyAdoptionPort {
     actor: ActorContext,
     candidate: LegacyAdoptionCandidate,
   ): Promise<LegacyAdoptionOutcome>;
+  /**
+   * NEXA v096 PR-2: candidates of ONE panel in ONE transaction, outcomes in input order, each
+   * exactly what `adopt` would answer (`LegacyAdoptionService.adoptMany`). Absent: the
+   * importer calls `adopt` for each.
+   */
+  adoptMany?(
+    scope: TenantContext,
+    actor: ActorContext,
+    candidates: readonly LegacyAdoptionCandidate[],
+  ): Promise<LegacyAdoptionOutcome[]>;
 }
 
 /**
