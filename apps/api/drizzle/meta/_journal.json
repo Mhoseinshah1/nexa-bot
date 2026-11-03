@@ -2178,6 +2178,13 @@
       "when": 1793709113447,
       "tag": "0310_legacy_import_demotions",
       "breakpoints": true
+    },
+    {
+      "idx": 311,
+      "version": "7",
+      "when": 1793741117157,
+      "tag": "0311_compaction_mode_apply",
+      "breakpoints": true
     }
   ]
 }
