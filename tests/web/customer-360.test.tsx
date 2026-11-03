@@ -546,6 +546,35 @@ describe('Customer 360 — the customer page', () => {
     expect(screen.getByText('owner — VIP')).toBeTruthy();
   });
 
+  it('shows the reason of a reseller suspension in the customer timeline (OQ-V095-01)', async () => {
+    stubApi(
+      routes([
+        {
+          url: `/users/${ID}/timeline`,
+          body: {
+            entries: [
+              {
+                id: 'a2',
+                action: 'reseller.update',
+                actorType: 'WEB_ADMIN',
+                actorLabel: 'owner',
+                surface: 'WEB',
+                result: 'SUCCESS',
+                occurredAt: '2026-10-03T10:00:00.000Z',
+                reason: 'تأخیر در تسویه',
+                before: { status: 'ACTIVE' },
+                after: { status: 'SUSPENDED' },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} mayViewAudit denied={false} />);
+    await openC360Tab('timeline');
+    expect(await screen.findByText('owner — تأخیر در تسویه')).toBeTruthy();
+  });
+
   it('offers a manual order only with the wallet-debit key too, and lists every product page', async () => {
     stubApi(
       routes([

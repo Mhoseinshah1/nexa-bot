@@ -6519,6 +6519,18 @@ export const WEB_FA = {
   'web.rs_danger_hint':
     'تعلیق و تغییر سطح پس از «ذخیره» اعمال می‌شود و در تاریخچهٔ تغییرات ثبت می‌شود.',
   'web.rs_danger_edit': 'شروع ویرایش',
+  // NEXA-FIX-V096 PR-4 (OQ-V095-01): a written reason for the three sensitive changes.
+  'web.rs_suspend_action': 'تعلیق نمایندگی',
+  'web.rs_sensitive_title': 'تأیید عملیات حساس',
+  'web.rs_sensitive_confirm': 'تأیید و اعمال',
+  'web.rs_effect_suspend':
+    'نمایندگی تعلیق می‌شود؛ خرید با قیمت نماینده و اعتبار متوقف می‌شود؛ کیف پول و سرویس‌ها دست نمی‌خورند.',
+  'web.rs_effect_tier':
+    'سطح نماینده عوض می‌شود؛ از خریدهای بعدی قیمت و دسترسی‌ها طبق سطح جدید است؛ سفارش‌های تأییدشده و کیف پول دست نمی‌خورند.',
+  'web.rs_reason_label': 'دلیل (اجباری)',
+  'web.rs_reason_hint': 'بین ۳ تا ۵۰۰ نویسه. در تاریخچهٔ تغییرات ثبت می‌شود.',
+  'web.rs_reason_invalid': 'دلیل باید بین ۳ تا ۵۰۰ نویسه باشد.',
+  'web.history_reason': 'دلیل',
   'web.rs_danger_readonly': 'برای تغییر وضعیت یا سطح، ابتدا ویرایش را شروع کنید.',
   'web.reseller_policy_can_sell': 'خرید سرویس تازه',
   'web.reseller_policy_allowed': 'مجاز',
