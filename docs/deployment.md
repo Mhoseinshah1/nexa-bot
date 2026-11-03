@@ -870,11 +870,15 @@ The `postgres` service used the image's defaults whatever the host had. Now:
 | `effective_cache_size` (`NEXA_PG_EFFECTIVE_CACHE_SIZE`) | 60 % of RAM, at least 256 MB                  |
 | `work_mem` (`NEXA_PG_WORK_MEM`)                         | 16 MB                                         |
 | `max_connections` (`NEXA_PG_MAX_CONNECTIONS`)           | 150                                           |
+| `max_wal_size` (`NEXA_PG_MAX_WAL_SIZE`)                 | 50 % of RAM, at least 1 GB, at most 8 GB      |
+| `checkpoint_timeout` (`NEXA_PG_CHECKPOINT_TIMEOUT`)     | 15min                                         |
+| `maintenance_work_mem` (`NEXA_PG_MAINTENANCE_WORK_MEM`) | 1/32 of RAM, at least 64 MB, at most 1 GB     |
+| `wal_compression` (`NEXA_PG_WAL_COMPRESSION`)           | lz4                                           |
 | `shared_preload_libraries`                              | `pg_stat_statements`                          |
 | `/dev/shm` (`shm_size`)                                 | 512 MB (Docker's 64 MB breaks parallel query) |
 | Redis                                                   | `maxmemory 64mb`, `allkeys-lru`               |
 
-The installer, every `botctl update` and every `botctl restart` compute the four
+The installer, every `botctl update` and every `botctl restart` compute the eight
 `NEXA_PG_*` values from `/proc/meminfo` and write them into `/etc/nexa/deploy.env`,
 so a host that grew is resized by its next update. **The first update INTO this
 release is run by the outgoing release's botctl, which does not size anything: run
@@ -891,6 +895,18 @@ whatever deploy.env already says. To read the statistics:
 once, then query `pg_stat_statements`. Redis holds only short-lived counters (the
 anti-spam and mini-app windows), so evicting the least recently used at 64 MB loses
 nothing durable.
+
+The last four (NEXA v096 PR-2) are for the one-time `.nxpkg` import's bulk load. A
+rehearsal on the real server logged `checkpoint starting: wal` again and again with
+`write=269 s`: at the default 1 GB of WAL between checkpoints the import forced a
+checkpoint every gigabyte, and each one rewrote the same hot pages as full-page images.
+A larger `max_wal_size`, a 15-minute `checkpoint_timeout` and `wal_compression=lz4` space
+those checkpoints out and shrink the full pages; `maintenance_work_mem` helps index builds
+and the vacuum after the load. **Crash safety is unchanged:** `fsync`, `full_page_writes` and
+`synchronous_commit` are never set by NEXA (the test suite refuses a compose file that sets
+them), and the only cost of the longer interval is a longer replay after a crash — at most
+`max_wal_size` of WAL. `pg_wal` can now grow to about `max_wal_size` on disk, which is why
+it is bounded by the host's memory and capped at 8 GB.
 
 ## What one installation can keep fresh
 
