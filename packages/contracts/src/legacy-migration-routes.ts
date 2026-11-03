@@ -574,6 +574,42 @@ export const legacyBotLinkReportSchema = z.object({
 });
 export type LegacyBotLinkReport = z.infer<typeof legacyBotLinkReportSchema>;
 
+/**
+ * NEXA v096 PR-1 — the categories an approved adoptable service may be DEMOTED to when the
+ * apply's fresh panel read differs from the approved dry run in the safe direction only
+ * (`docs/legacy-migration/nxpkg-importer.md` §Demotions at apply): `PROVIDER_MISSING` (the
+ * account is gone from the panel: imported as an ended service) and `INVENTORY_INCOMPLETE`
+ * (its name is now unresolved: held for review, never adopted). Nothing else is a demotion.
+ */
+export const LEGACY_IMPORT_DEMOTION_TARGETS = ['PROVIDER_MISSING', 'INVENTORY_INCOMPLETE'] as const;
+export type LegacyImportDemotionTarget = (typeof LEGACY_IMPORT_DEMOTION_TARGETS)[number];
+
+/** One demoted service: the legacy invoice, the panel account it would have adopted, and to what. */
+export const legacyImportDemotionSchema = z
+  .object({
+    legacyInvoiceId: z.string(),
+    panelId: z.string(),
+    panelUsername: z.string(),
+    to: z.enum(LEGACY_IMPORT_DEMOTION_TARGETS),
+  })
+  .strict();
+export type LegacyImportDemotion = z.infer<typeof legacyImportDemotionSchema>;
+
+/**
+ * The demotions an apply accepted: how many, the cap they were held to, the approved adoptable
+ * services the cap is a share of, and each one. OPERATOR-ONLY (the restore page and the CLI):
+ * nothing here reaches a customer, and the ops group gets at most one summary line.
+ */
+export const legacyImportDemotionsSchema = z
+  .object({
+    count,
+    cap: count,
+    approvedAdoptable: count,
+    entries: z.array(legacyImportDemotionSchema),
+  })
+  .strict();
+export type LegacyImportDemotions = z.infer<typeof legacyImportDemotionsSchema>;
+
 /** The apply's outcome (stored as `apply_report`). */
 export const legacyMigrationApplyReportSchema = z.object({
   importerVerdict: z.string(),
@@ -592,6 +628,11 @@ export const legacyMigrationApplyReportSchema = z.object({
   materialize: z.array(legacyMaterializeOutcomeSchema).optional(),
   botLink: legacyBotLinkReportSchema.nullable().optional(),
   exactMatch: legacyExactMatchReportSchema.optional(),
+  /**
+   * NEXA v096 PR-1: the approved adoptable services the apply demoted (`legacyImportDemotionsSchema`).
+   * Absent on a report recorded before it, and when the apply demoted nothing.
+   */
+  demotions: legacyImportDemotionsSchema.optional(),
 });
 export type LegacyMigrationApplyReport = z.infer<typeof legacyMigrationApplyReportSchema>;
 
