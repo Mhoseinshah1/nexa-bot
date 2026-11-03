@@ -256,6 +256,8 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
     pricingMode: 'TIER',
     discountPercentage: null,
     creditLimit: null,
+    // Present on every update: suspending, a tier change and a credit change require one.
+    reason: 'تغییر در آزمون',
     ...overrides,
   });
 

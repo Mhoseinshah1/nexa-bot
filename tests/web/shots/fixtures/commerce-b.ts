@@ -1223,6 +1223,7 @@ export const COMMERCE_B: readonly ShotFixture[] = [
         surface: 'WEB',
         result: 'SUCCESS',
         occurredAt: ago(60 * 24 * 3),
+        reason: null,
         before: { pricingMode: 'TIER', discountPercentage: null },
         after: { pricingMode: 'PERCENTAGE_DISCOUNT', discountPercentage: 25 },
       },

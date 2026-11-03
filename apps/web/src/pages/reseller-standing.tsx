@@ -409,6 +409,12 @@ function HistoryCard({
       header: t('web.history_changed'),
       render: (row) => <ChangedFields entry={row} />,
     },
+    {
+      key: 'reason',
+      header: t('web.history_reason'),
+      render: (row) =>
+        row.reason === null ? <span className="faint">—</span> : <span>{row.reason}</span>,
+    },
   ];
   return (
     <Card title={t('web.history_title')} hint={t('web.history_hint')}>

@@ -8,7 +8,7 @@ import { ResellerTiersPage } from '../../apps/web/src/pages/reseller-tiers';
 import { changedFieldsOf } from '../../apps/web/src/pages/reseller-standing';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Api } from './harness';
-import { openResellerTab } from './reseller-helpers';
+import { confirmSensitiveReason, openResellerTab } from './reseller-helpers';
 
 /**
  * WP14 on the Web Admin (`docs/wp14-reseller-phase2-audit.md` D4): a reseller's balance,
@@ -101,6 +101,7 @@ const historyEntry = (overrides: Record<string, unknown> = {}) => ({
   surface: 'WEB',
   result: 'SUCCESS',
   occurredAt: '2026-09-04T08:00:00.000Z',
+  reason: null,
   before: { status: 'ACTIVE', tierId: TIER_ID },
   after: { status: 'SUSPENDED', tierId: TIER_ID },
   ...overrides,
@@ -261,6 +262,7 @@ describe('the reseller form offers no credit', () => {
     const save = screen.getByRole('button', { name: 'ذخیره' });
     await waitFor(() => expect(save).not.toBeDisabled());
     fireEvent.click(save);
+    await confirmSensitiveReason();
     await waitFor(() => expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(1));
     expect(posts(api, `/resellers/${CUSTOMER_ID}`)[0]?.body).toMatchObject({
       status: 'SUSPENDED',

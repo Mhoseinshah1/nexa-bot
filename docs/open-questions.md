@@ -5095,9 +5095,19 @@ live; the owner decides otherwise.
 
 ## v0.9.5 PR-6 — reseller edit page
 
-- **OQ-V095-01 — should suspending a reseller, demoting a reseller to a normal customer, and a
-  manual change of reseller credit each require a confirm dialog with a written reason?** The
-  owner's v0.9.5 brief describes them that way, but today none of the three has a confirm dialog
+- **OQ-V095-01 — ANSWERED: YES (owner, NEXA-FIX-V096; PR: (this PR)).**
+  Suspending a reseller, demoting one to a normal customer and a manual change of reseller credit
+  each require a written reason of 3 to 500 characters. Built: `reason` on the reseller update
+  command (`commerce.reseller_reason_required` without one, decided against the locked row after the
+  idempotent replay lookup), written to the audit row's `reason`; the Web Admin's «عملیات حساس»
+  tab and the form's Save open the kit's confirm dialog with a reason field and an effect summary;
+  the reseller history and the customer timeline show the reason. Two readings, both on the
+  side that moves no money: a **tier change** of any direction counts as the demotion (tiers are
+  not ranked, there is no «normal customer» tier), and the **credit** rule fires on any limit
+  other than zero, which is still refused afterwards because reseller credit was removed (no UI
+  edits it). The wallet-history-in-the-bot note is closed too: not needed (`project-status.md`).
+  The original question (should the three each require a confirm dialog with a written reason?):
+  the owner's v0.9.5 brief describes them that way, but today none of the three has a confirm dialog
   and the reseller update API takes no reason, so PR-6 (reseller edit page) kept the existing
   behaviour and only regrouped them in the «عملیات حساس» box. Also note: the reseller API has no
   credit cap, no separate manual-credit action and no separate demotion action (the demo drew

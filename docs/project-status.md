@@ -157,6 +157,8 @@ Contact»). Two independent rules can ask for it (owner, NEXA v095 PR-4):
   360 page (for an administrator without `users.phone.verify`) carry `maskPhoneNumber` (`…1234`).
 - **The bot's account page (F)** carries neither «📱 تأیید شماره تلفن» nor «📜 تراکنش‌ها»; the wallet
   history itself stays (its `wh:` pages), with no entry from the bot's screens.
+  **Closed (owner, NEXA-FIX-V096):** wallet history in the bot is NOT needed; nothing is to be
+  added, and the page stays as it is.
   Open: `OQ-R11-B7-03`, `OQ-V095-P4-01..05`.
 
 **A late Telegram Stars charge is credited, once (owner, NEXA v095 PR-4 G, closes
@@ -367,6 +369,12 @@ Four reseller rules, each a way to sell below cost or on credit nobody granted:
   overdraws; a clawback never goes below zero. Never reintroduce a credit
   line, a debt, or a monthly-minimum consequence without an explicit owner
   instruction (`docs/reseller-phase3-closure.md`).
+- **Three reseller changes need a written reason, 3 to 500 characters** (owner, NEXA-FIX-V096,
+  closes `OQ-V095-01`): suspending an ACTIVE reseller, any tier change (the demotion; tiers are
+  not ranked), and a credit limit other than zero. `ResellerAdminService.update` refuses
+  `commerce.reseller_reason_required` before writing, against the locked row, after the replay
+  lookup; the reason is the audit row's `reason`, shown in the reseller history and the customer
+  timeline. Reactivating and a pricing-only change need none.
 
 ## Money rules
 

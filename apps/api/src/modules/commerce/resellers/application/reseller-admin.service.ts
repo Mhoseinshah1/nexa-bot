@@ -2,6 +2,8 @@ import {
   COMMERCE_ERROR_CODES,
   PRODUCT_PAGE_MAX,
   RESELLER_DEFAULT_CREDIT_LIMIT_MINOR,
+  RESELLER_REASON_MAX_LENGTH,
+  RESELLER_REASON_MIN_LENGTH,
   RESELLER_ENTITLEMENT_DIMENSIONS,
   RESELLER_GRANT_DIMENSION,
   RESELLER_HISTORY_MAX,
@@ -82,6 +84,12 @@ import {
   type EntitlementDecision,
 } from '../domain/entitlement.js';
 import { effectiveMonthlyMinimum } from '../domain/monthly-minimum.js';
+import {
+  isCreditChange,
+  resellerReasonMissing,
+  sensitiveResellerChanges,
+  usableResellerReason,
+} from '../domain/sensitive-change.js';
 import type {
   OrderResellerTermsRecord,
   ResellerCursor,
@@ -698,10 +706,17 @@ export class ResellerAdminService {
       readonly idempotencyKey: string;
       readonly customerId: string;
       readonly write: ResellerWrite;
+      /** Required when the change suspends, changes the tier or changes the credit limit. */
+      readonly reason?: string;
     },
   ): Promise<ResellerListing> {
     const customerId = this.id(input.customerId, 'customer');
-    const requestHash = hashRequest({ customerId, reseller: serialisableReseller(input.write) });
+    const requestHash = hashRequest({
+      customerId,
+      reseller: serialisableReseller(input.write),
+      // Only when given, so a command stored before the reason existed still replays.
+      ...(input.reason === undefined ? {} : { reason: input.reason.trim() }),
+    });
     const denial = { action: 'reseller.update', entityType: 'Customer', entityId: customerId };
     await this.authorize(scope, actor, denial);
 
@@ -712,6 +727,11 @@ export class ResellerAdminService {
     );
     if (replay !== null) return this.resellerListing(scope, replay.customerId);
     // After the replay: a command that committed before the decision replays its result.
+    // A credit change is held to the reason rule first, so the operator is asked for the
+    // reason before being told the credit line no longer exists.
+    if (isCreditChange(input.write.creditLimit) && usableResellerReason(input.reason) === null) {
+      throw reasonRequired();
+    }
     refuseCredit(input.write.creditLimit);
 
     const now = this.deps.clock.now();
@@ -738,6 +758,12 @@ export class ResellerAdminService {
         if (nextTier === null) {
           throw tierNotFound();
         }
+        // Decided against the row as locked, not as the form last saw it, and before
+        // anything is written: a suspension or a tier change with no usable reason is refused.
+        if (resellerReasonMissing(sensitiveResellerChanges(before, input.write), input.reason)) {
+          throw reasonRequired();
+        }
+        const reason = usableResellerReason(input.reason);
         /*
          * Round 11, C2: re-activating a reseller whose expiry date has passed would be undone
          * by the very next sweep (and tell them they were suspended again). The date is what
@@ -774,6 +800,9 @@ export class ResellerAdminService {
             entityId: customerId,
             before: serialisableReseller(before),
             after: serialisableReseller(after),
+            // The audit row's own `reason`: the reseller history and the customer timeline
+            // both read it from there.
+            ...(reason === null ? {} : { reason }),
             result: 'SUCCESS',
           },
           tx,
@@ -1483,6 +1512,13 @@ function serialisableReseller(r: ResellerWrite) {
         ? null
         : { amount: r.creditLimit.amountMinor.toString(), currency: r.creditLimit.currency },
   };
+}
+
+function reasonRequired(): Error {
+  return errors.validation(
+    COMMERCE_ERROR_CODES.RESELLER_REASON_REQUIRED,
+    `This change needs a written reason of ${String(RESELLER_REASON_MIN_LENGTH)} to ${String(RESELLER_REASON_MAX_LENGTH)} characters.`,
+  );
 }
 
 /**

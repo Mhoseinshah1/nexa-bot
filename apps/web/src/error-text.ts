@@ -295,6 +295,7 @@ export const ERROR_TEXT = {
   'commerce.reseller_already_registered': 'web.error_reseller_already_registered',
   'commerce.reseller_not_entitled': 'web.error_reseller_not_entitled',
   'commerce.reseller_not_found': 'web.error_reseller_not_found',
+  'commerce.reseller_reason_required': 'web.error_reseller_reason_required',
   'commerce.reseller_terms_changed': 'web.error_reseller_terms_changed',
   'commerce.reseller_tier_not_found': 'web.error_reseller_tier_not_found',
   'commerce.service_action_in_progress': 'web.err_commerce_service_action_in_progress',
