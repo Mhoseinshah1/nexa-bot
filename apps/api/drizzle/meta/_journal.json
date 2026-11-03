@@ -2178,6 +2178,20 @@
       "when": 1793709113447,
       "tag": "0310_legacy_import_demotions",
       "breakpoints": true
+    },
+    {
+      "idx": 311,
+      "version": "7",
+      "when": 1793737408535,
+      "tag": "0311_legacy_cleanup_states",
+      "breakpoints": true
+    },
+    {
+      "idx": 312,
+      "version": "7",
+      "when": 1793737424870,
+      "tag": "0312_legacy_cleanup_delete_guard",
+      "breakpoints": true
     }
   ]
 }

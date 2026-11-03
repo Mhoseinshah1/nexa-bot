@@ -1,0 +1,4 @@
+ALTER TABLE "legacy_compaction_runs" DROP CONSTRAINT "legacy_compaction_runs_state_check";--> statement-breakpoint
+ALTER TABLE "legacy_compaction_runs" DROP CONSTRAINT "legacy_compaction_runs_failure_code_check";--> statement-breakpoint
+ALTER TABLE "legacy_compaction_runs" ADD CONSTRAINT "legacy_compaction_runs_state_check" CHECK (state IN ('REQUESTED', 'ARCHIVING', 'MEASURING', 'DROPPING', 'DEDUPING', 'STRIPPING', 'CLEARING', 'VACUUMING', 'COMPLETED', 'FAILED'));--> statement-breakpoint
+ALTER TABLE "legacy_compaction_runs" ADD CONSTRAINT "legacy_compaction_runs_failure_code_check" CHECK (failure_code IN ('legacy_compaction.archive_failed', 'legacy_compaction.archive_not_delivered', 'legacy_compaction.archive_out_of_memory', 'legacy_compaction.import_not_completed', 'legacy_compaction.step_failed', 'legacy_compaction.reconciliation_not_clean'));
