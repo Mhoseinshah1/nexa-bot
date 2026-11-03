@@ -185,8 +185,8 @@ Four more from Phase 3C:
 
 ### The custom panel — Nexa's own bridge protocol (R10 C2)
 
-**Built, behind `custom_panel_provider` (OFF by default), and NOT accepted against a real
-bridge.** The specification is `docs/protocols/custom-panel.md` (v1); the adapter is
+**Built, always offered (its feature flag was removed in v0.9.5; the operator reads it as
+«پنل کاستوم»), and NOT accepted against a real bridge.** The specification is `docs/protocols/custom-panel.md` (v1); the adapter is
 `providers/infrastructure/custom-panel.adapter.ts`. Owner's spec: Nexa's OWN protocol (not
 MirzaBot-compatible), JSON over HTTPS, requests signed with a per-panel secret and a
 timestamp; create, get (traffic used/limit, expiry, status, last connection), renew / add
@@ -209,8 +209,8 @@ Lead decisions (R10 C2), binding:
   `nexaRef` is not this service's is a refusal — neither found nor absent.
 - **Absolute allowance targets.** Renew, add traffic and add time are one call carrying the
   targets; an omitted field is unchanged.
-- **Descriptor-gated, no provider-type branches.** The flag, https-only and the 32-character
-  minimum secret are declared on the descriptor (`requiresFeature`, `transport`,
+- **Descriptor-gated, no provider-type branches.** Https-only and the 32-character
+  minimum secret are declared on the descriptor (`transport`,
   `minimumApiTokenLength`) and enforced generically by the panel service. The secret lives in
   the existing encrypted API-token column, one way. A per-panel timeout may only LOWER the
   installation's `PANEL_HTTP_TIMEOUT_MS` (`SafeHttpClient.forBase` takes the minimum).
