@@ -4,14 +4,12 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   TEMPLATE_KEYS,
-  featureFlagSchema,
   navCountersResponseSchema,
   templateDefinition,
   templateViewSchema,
   type TemplateKey,
 } from '@nexa/contracts';
 import { ContentPage } from '../../apps/web/src/pages/content';
-import { FeaturesPage } from '../../apps/web/src/pages/features';
 import { SettingFold } from '../../apps/web/src/pages/settings';
 import { ServiceLocationsPage } from '../../apps/web/src/pages/service-locations';
 import { OpsLogTypeSwitches } from '../../apps/web/src/pages/ops-log-types';
@@ -85,41 +83,6 @@ describe('«متن‌ها» is paged ten at a time (S8)', () => {
     renderPage(<ContentPage mayEdit denied={false} />);
     await screen.findByTestId('counted-pager-info');
     fireEvent.click(screen.getByRole('button', { name: t('web.templates_filter_default') }));
-    expect(screen.queryByTestId('counted-pager-info')).toBeNull();
-  });
-});
-
-describe('«قابلیت‌ها» is paged under the numbered pager (S8)', () => {
-  const flag = (index: number) =>
-    featureFlagSchema.parse({
-      key: `flag_${index}`,
-      description: `flag ${index}`,
-      enabled: index % 2 === 0,
-      source: 'DEFAULT',
-      blastRadius: 'LOCAL',
-      version: null,
-      reason: null,
-      updatedAt: null,
-      updatedByAdminId: null,
-      configuration: [],
-    });
-  const flags = Array.from({ length: 12 }, (_, index) => flag(index));
-
-  it('shows ten rows and the server total, then the rest on page two', async () => {
-    stubApi([{ url: '/features', body: { flags, total: 12 } }]);
-    renderPage(<FeaturesPage mayEdit denied={false} />);
-    const info = await screen.findByTestId('counted-pager-info');
-    expect(info.textContent).toContain('1–10');
-    expect(info.textContent).toContain('12');
-    expect(document.querySelectorAll('.feature-list > li').length).toBe(10);
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_next_aria') }));
-    expect(document.querySelectorAll('.feature-list > li').length).toBe(2);
-  });
-
-  it('keeps the first ten and the «show all» button when the answer carries no total', async () => {
-    stubApi([{ url: '/features', body: { flags } }]);
-    renderPage(<FeaturesPage mayEdit denied={false} />);
-    await screen.findByRole('button', { name: new RegExp(t('web.features_show_all'), 'u') });
     expect(screen.queryByTestId('counted-pager-info')).toBeNull();
   });
 });

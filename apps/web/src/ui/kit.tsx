@@ -1071,12 +1071,22 @@ export function Tabs<T extends string>({
   items,
   panelId,
   vertical = false,
+  boxed = false,
+  label,
 }: {
   value: T;
   onChange: (next: T) => void;
-  items: readonly { id: T; label: string; count?: number }[];
+  /** `countText` replaces the number for a count that is not a bare number («3/7»). */
+  items: readonly { id: T; label: string; count?: number; countText?: string }[];
   panelId: string;
   vertical?: boolean;
+  /**
+   * Each tab is its own bordered, filled box (the Features page's category list). Boxes wrap
+   * into rows when the strip is not `vertical`, and a phone gets the wrapped row.
+   */
+  boxed?: boolean;
+  /** The strip's accessible name. */
+  label?: string;
 }) {
   /**
    * The tab buttons, so activation can MOVE FOCUS.
@@ -1110,8 +1120,9 @@ export function Tabs<T extends string>({
   return (
     <div
       ref={strip}
-      className={vertical ? 'tabs vertical' : 'tabs'}
+      className={cx('tabs', vertical && 'vertical', boxed && 'boxed')}
       role="tablist"
+      {...(label === undefined ? {} : { 'aria-label': label })}
       {...(vertical ? { 'aria-orientation': 'vertical' as const } : {})}
       onKeyDown={(event) => {
         // RTL: the strip runs right-to-left, so ArrowLeft advances.
@@ -1148,7 +1159,11 @@ export function Tabs<T extends string>({
           onClick={() => onChange(item.id)}
         >
           {item.label}
-          {item.count !== undefined && <span className="cnt">{formatNumber(item.count)}</span>}
+          {item.countText !== undefined ? (
+            <span className="cnt">{item.countText}</span>
+          ) : (
+            item.count !== undefined && <span className="cnt">{formatNumber(item.count)}</span>
+          )}
         </button>
       ))}
     </div>
