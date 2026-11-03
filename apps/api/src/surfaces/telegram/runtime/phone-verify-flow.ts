@@ -17,6 +17,7 @@ import { PHONE_VERIFY_CALLBACK_DATA } from './callbacks.js';
 import { intentOf } from './intent-of.js';
 import type { BotCommand, BotIntent } from './intents.js';
 import { mainMenuButton } from './keyboards.js';
+import { MEMBERSHIP_EXEMPT_INTENTS } from './start-menu-flow.js';
 import type { PendingReply } from './replies.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
@@ -89,14 +90,16 @@ export function phoneGatewayRequiredReply(): PendingReply {
 }
 
 /**
- * The intents the bot-wide phone gate never holds: the verification's own steps, and the
- * promotional opt-out/in (a customer must always be able to say "stop", as at the captcha).
+ * The intents the bot-wide phone gate never holds: the verification's own steps, and exactly
+ * what the channel and terms gates let through (`MEMBERSHIP_EXEMPT_INTENTS`) — «پشتیبانی» and
+ * `/help` (`/paysupport` opens the same screen) and the promotional opt-out/in. Owner, NEXA
+ * v096 (closes OQ-V095-P4-01): a customer who will not share a number can still reach
+ * support; everything else waits for the verification.
  */
 export const PHONE_GATE_EXEMPT_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>([
   'PHONE_VERIFY',
   'PHONE_CONTACT',
-  'MARKETING_OPT_OUT',
-  'MARKETING_OPT_IN',
+  ...MEMBERSHIP_EXEMPT_INTENTS,
 ]);
 
 /** Intents that are never remembered to resume: a gate's own step, or free text. */
