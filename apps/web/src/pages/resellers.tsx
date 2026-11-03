@@ -21,15 +21,8 @@ import {
   type ResellerUpdateRequest,
   type CustomerSummaryResponse,
 } from '@nexa/contracts';
-import {
-  fetchCustomer,
-  fetchResellerTiers,
-  fetchResellers,
-  registerReseller,
-  updateReseller,
-} from '../api/client';
+import { fetchCustomer, fetchResellerTiers, fetchResellers, registerReseller } from '../api/client';
 import { CustomerIdentity, CustomerPicker } from './customer-picker';
-import { ResellerExpiryCard } from './reseller-expiry';
 import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -45,12 +38,10 @@ import {
   DataTable,
   Empty,
   Field,
-  KV,
   Ltr,
   PageHead,
   StateSwitch,
   Button,
-  DetailHead,
   RowActions,
   useDiscardGuard,
   useReportDirty,
@@ -63,12 +54,8 @@ import {
 import { Icon } from '../ui/icons';
 import { listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { SaveBar } from './editor-layout';
-import {
-  ResellerBalanceCard,
-  ResellerHistoryCard,
-  ResellerPurchasesCard,
-} from './reseller-standing';
-import { ResellerPolicyCard, usePolicyKeys } from './reseller-plans';
+import { ResellerStandingView } from './reseller-edit';
+import { usePolicyKeys } from './reseller-plans';
 import { ErrorRef } from '../ui/technical-details';
 
 /**
@@ -157,7 +144,7 @@ export function ResellerStatusBadge({ value }: { value: ResellerStatus }) {
 }
 
 /** One or two letters for a reseller's avatar tile: the name's, else the Telegram id's. */
-function initialOf(reseller: ResellerSummaryResponse): string {
+export function initialOf(reseller: ResellerSummaryResponse): string {
   const name = reseller.displayName?.trim() ?? '';
   return name === '' ? reseller.telegramUserId.slice(-2) : name.slice(0, 1);
 }
@@ -187,7 +174,7 @@ export function limitWire(limit: { amount: string; currency: CurrencyCode }): Mo
 }
 
 /** The name an operator recognises, falling back to the Telegram id that always exists. */
-function ResellerCell({ reseller }: { reseller: ResellerSummaryResponse }) {
+export function ResellerCell({ reseller }: { reseller: ResellerSummaryResponse }) {
   const onLink = useLinkHandler();
   return (
     <div className="resellers-who">
@@ -352,8 +339,8 @@ export function ResellersPage({
       setViewing(null);
       setEditing(null);
     };
-    if (editing === null) close();
-    else discard.confirmDiscard(close);
+    // The edit form, or the allowed-products draft, may hold unsaved changes.
+    discard.confirmDiscard(close);
   };
 
   const apply = (event: FormEvent) => {
@@ -422,8 +409,8 @@ export function ResellersPage({
                 if (registerOpen) closeRegister();
                 setViewing(row.customerId);
               };
-              // The edit form moves out of the standing it was drawn in, and remounts.
-              if (editing !== null && editing.customerId !== row.customerId) {
+              // The standing moves to another reseller and remounts: unsaved edits are asked about.
+              if (viewing !== null && viewing !== row.customerId) {
                 discard.confirmDiscard(open);
               } else open();
             }}
@@ -441,7 +428,7 @@ export function ResellersPage({
                   setEditing(row);
                   setViewing(row.customerId);
                 };
-                if (editing?.customerId === row.customerId) open();
+                if (editing?.customerId === row.customerId || viewing === row.customerId) open();
                 else discard.confirmDiscard(open);
               }}
             >
@@ -479,7 +466,7 @@ export function ResellersPage({
                     setViewing(null);
                     setRegisterOpen(true);
                   };
-                  if (editing === null) open();
+                  if (editing === null && viewing === null) open();
                   else discard.confirmDiscard(open);
                 }}
               >
@@ -626,39 +613,27 @@ export function ResellersPage({
             id="reseller-standing"
             className="stack resellers-standing"
           >
-            <StandingHead
+            <ResellerStandingView
               customerId={viewing}
               row={rows.find((row) => row.customerId === viewing)}
+              editing={mayEdit && editing !== null && editing.customerId === viewing}
+              tiers={tierRows}
+              mayEdit={mayEdit}
+              mayViewWallet={mayViewWallet}
+              mayViewOrders={mayViewOrders}
+              mayViewAudit={mayViewAudit}
+              mayViewCatalog={mayViewCatalog}
+              mayViewPanels={mayViewPanels}
+              editKey={editKey}
+              policyKeys={policyKeys}
+              onStartEdit={() => {
+                const row = rows.find((one) => one.customerId === viewing);
+                if (row !== undefined) setEditing(row);
+              }}
+              onDone={() => setEditing(null)}
               onClose={closeStanding}
+              onDirtyChange={discard.onDirtyChange}
             />
-            {/* One column in the drawer, the balance first. */}
-            <ResellerBalanceCard customerId={viewing} mayViewWallet={mayViewWallet} />
-            <>
-              {mayEdit && editing !== null && editing.customerId === viewing && (
-                // KEYED BY THE CUSTOMER: every `useState` initialiser must read the
-                // reseller now open, not the one open before it.
-                <ResellerForm
-                  held={editKey}
-                  key={`edit-${editing.customerId}`}
-                  reseller={editing}
-                  tiers={tierRows}
-                  onDone={() => setEditing(null)}
-                  onDirtyChange={discard.onDirtyChange}
-                />
-              )}
-              {/* Round N: what this reseller may sell, inherited or their own, and the minimum. */}
-              <ResellerPolicyCard
-                held={policyKeys}
-                customerId={viewing}
-                mayEdit={mayEdit}
-                mayViewCatalog={mayViewCatalog}
-                mayViewPanels={mayViewPanels}
-              />
-              {/* Round 11, C2: the reseller's own expiry date. */}
-              <ResellerExpiryCard customerId={viewing} mayEdit={mayEdit} />
-              <ResellerPurchasesCard customerId={viewing} mayViewOrders={mayViewOrders} />
-              <ResellerHistoryCard customerId={viewing} mayViewAudit={mayViewAudit} />
-            </>
           </div>
         )}
       </Drawer>
@@ -718,66 +693,6 @@ export function ResellersPage({
   );
 }
 
-/**
- * The head of an opened reseller's standing: who, their tier and status, their terms as
- * a strip of figures, and the way back to the list. Read from the list row already held
- * — no request of its own; when the row has paged away, the customer id stands in.
- */
-function StandingHead({
-  customerId,
-  row,
-  onClose,
-}: {
-  customerId: string;
-  row: ResellerSummaryResponse | undefined;
-  onClose: () => void;
-}) {
-  return (
-    <DetailHead
-      title={
-        row === undefined ? (
-          <CopyIdButton id={customerId} />
-        ) : (
-          (row.displayName ?? <Ltr>{row.telegramUserId}</Ltr>)
-        )
-      }
-      {...(row === undefined
-        ? {}
-        : {
-            initial: initialOf(row),
-            badge: (
-              <span className="resellers-badges">
-                <Badge tone="violet">{row.tier.name}</Badge>
-                <ResellerStatusBadge value={row.status} />
-              </span>
-            ),
-            meta: (
-              <>
-                <Ltr>{row.telegramUserId}</Ltr>
-                <span>{t('web.cb_reseller_standing')}</span>
-              </>
-            ),
-            stats: [
-              {
-                label: t('web.reseller_pricing'),
-                value: (
-                  <PricingText
-                    label={OVERRIDE_LABELS[row.pricingMode]}
-                    percent={row.discountPercentage}
-                  />
-                ),
-              },
-            ],
-          })}
-      actions={
-        <Button size="sm" variant="ghost" icon="x" onClick={onClose}>
-          {t('web.close')}
-        </Button>
-      }
-    />
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Register and edit
 // ---------------------------------------------------------------------------
@@ -800,7 +715,7 @@ function blankState(customerId: string): ResellerFormState {
   };
 }
 
-function stateOf(reseller: ResellerSummaryResponse): ResellerFormState {
+export function stateOf(reseller: ResellerSummaryResponse): ResellerFormState {
   return {
     customerId: reseller.customerId,
     tierId: reseller.tier.id,
@@ -863,7 +778,6 @@ export function resellerBodyFrom(
 
 function ResellerForm({
   held,
-  reseller,
   initialCustomerId = '',
   maySearchCustomers = false,
   mayViewCustomers = false,
@@ -871,8 +785,6 @@ function ResellerForm({
   onDone,
   onDirtyChange,
 }: {
-  /** Absent for a registration; the stored reseller for an edit. */
-  reseller?: ResellerSummaryResponse;
   initialCustomerId?: string;
   /** `users.view` and `users.search`, for the picker. */
   maySearchCustomers?: boolean;
@@ -889,16 +801,13 @@ function ResellerForm({
    */
   held?: SubmissionKey | undefined;
 }) {
-  const mode = reseller === undefined ? 'register' : 'update';
-  const prefix = `reseller-${mode}`;
+  const prefix = 'reseller-register';
   const onLink = useLinkHandler();
   const notify = useToast();
   const queries = useQueryClient();
   const own = useSubmissionKey();
   const submission = held ?? own;
-  const [state, setState] = useState<ResellerFormState>(
-    reseller === undefined ? blankState(initialCustomerId) : stateOf(reseller),
-  );
+  const [state, setState] = useState<ResellerFormState>(blankState(initialCustomerId));
   /*
    * What a registration is compared with: the handed-over customer until one is
    * registered, then the blank form it resets to. The `register` query outlives the
@@ -907,9 +816,7 @@ function ResellerForm({
   const [registerBaseline, setRegisterBaseline] = useState<ResellerFormState>(() =>
     blankState(initialCustomerId),
   );
-  const dirty =
-    JSON.stringify(state) !==
-    JSON.stringify(reseller === undefined ? registerBaseline : stateOf(reseller));
+  const dirty = JSON.stringify(state) !== JSON.stringify(registerBaseline);
   useUnsavedChanges(dirty);
   useReportDirty(dirty, onDirtyChange);
   const set = <K extends keyof ResellerFormState>(key: K, value: ResellerFormState[K]) => {
@@ -922,7 +829,6 @@ function ResellerForm({
    */
   const [picked, setPicked] = useState<CustomerSummaryResponse | null>(null);
   const handedOver =
-    mode === 'register' &&
     picked === null &&
     state.customerId !== '' &&
     state.customerId === initialCustomerId &&
@@ -933,39 +839,23 @@ function ResellerForm({
     enabled: handedOver && mayViewCustomers,
   });
   const chosen = picked ?? (handedOver ? (handedOverCustomer.data?.customer ?? null) : null);
-  const checked =
-    mode === 'register' ? resellerBodyFrom(state, 'register') : resellerBodyFrom(state, 'update');
+  const checked = resellerBodyFrom(state, 'register');
   const problem = 'problem' in checked ? checked.problem : null;
   const tier = tiers?.find((candidate) => candidate.id === state.tierId);
 
   const save = useMutation({
     mutationFn: () => {
       if ('problem' in checked) throw new Error('unreachable: guarded by the submit button');
-      // Bound to the payload AND the customer, so a corrected field is a NEW command.
-      const idempotencyKey = submission.current({ customerId: state.customerId, ...checked.body });
-      if (reseller === undefined) {
-        return registerReseller({
-          ...(checked.body as Omit<ResellerRegisterRequest, 'idempotencyKey'>),
-          idempotencyKey,
-        });
-      }
-      return updateReseller({
-        ...(checked.body as Omit<ResellerUpdateRequest, 'idempotencyKey'>),
-        customerId: reseller.customerId,
-        idempotencyKey,
-      });
+      // Bound to the payload (the customer is in it), so a corrected field is a NEW command.
+      const idempotencyKey = submission.current(checked.body);
+      return registerReseller({ ...checked.body, idempotencyKey });
     },
     onSuccess: (response) => {
       submission.settle();
-      notify({
-        tone: 'ok',
-        message: mode === 'register' ? t('web.reseller_registered') : t('web.reseller_saved'),
-      });
-      if (mode === 'register') {
-        setState(blankState(''));
-        setRegisterBaseline(blankState(''));
-        setPicked(null);
-      }
+      notify({ tone: 'ok', message: t('web.reseller_registered') });
+      setState(blankState(''));
+      setRegisterBaseline(blankState(''));
+      setPicked(null);
       // The customer's card reads the same row, and a tier's count moves with it.
       queries.setQueryData(['customer-reseller', response.reseller.customerId], response);
       void queries.invalidateQueries({ queryKey: ['resellers'] });
@@ -983,12 +873,8 @@ function ResellerForm({
   });
 
   return (
-    <Card
-      // The register form lives in a dialog that carries its title (W3).
-      {...(mode === 'register'
-        ? { hint: t('web.reseller_register_hint') }
-        : { title: t('web.reseller_edit_title') })}
-    >
+    // The register form lives in a dialog that carries its title (W3).
+    <Card hint={t('web.reseller_register_hint')}>
       {tiers !== null && tiers.length === 0 && (
         <Banner tone="warn">
           {t('web.reseller_no_tiers')}{' '}
@@ -998,52 +884,47 @@ function ResellerForm({
         </Banner>
       )}
 
-      {reseller === undefined ? (
-        state.customerId === '' ? (
-          // UX batch 01, item 9: found by Telegram id, username or name, and CHOSEN —
-          // never typed as an internal id, and never chosen for the operator.
-          <CustomerPicker
-            inputId={`${prefix}-customer`}
-            maySearch={maySearchCustomers}
-            onPick={(customer) => {
-              setPicked(customer);
-              set('customerId', customer.id);
-            }}
-          />
-        ) : (
-          <Field label={t('web.reseller_customer_id')}>
-            <div
-              id={`${prefix}-customer`}
-              role="group"
-              className="customer-picker-chosen"
-              aria-label={t('web.customer_picker_selected')}
-            >
-              {chosen !== null ? (
-                <CustomerIdentity customer={chosen} />
-              ) : (
-                // Handed over by id and not readable here (no `users.view`, or still
-                // loading): the id is what the customer's own page sent.
-                <span className="muted small">
-                  {t('web.customer_picker_handed_over')} <CopyIdButton id={state.customerId} />
-                </span>
-              )}
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={save.isPending}
-                onClick={() => {
-                  setPicked(null);
-                  set('customerId', '');
-                }}
-              >
-                {t('web.customer_picker_change')}
-              </Button>
-            </div>
-          </Field>
-        )
+      {state.customerId === '' ? (
+        // UX batch 01, item 9: found by Telegram id, username or name, and CHOSEN —
+        // never typed as an internal id, and never chosen for the operator.
+        <CustomerPicker
+          inputId={`${prefix}-customer`}
+          maySearch={maySearchCustomers}
+          onPick={(customer) => {
+            setPicked(customer);
+            set('customerId', customer.id);
+          }}
+        />
       ) : (
-        /* TEXT, not a disabled input: a reseller row never moves to another customer. */
-        <KV items={[[t('web.reseller_customer'), <ResellerCell key="c" reseller={reseller} />]]} />
+        <Field label={t('web.reseller_customer_id')}>
+          <div
+            id={`${prefix}-customer`}
+            role="group"
+            className="customer-picker-chosen"
+            aria-label={t('web.customer_picker_selected')}
+          >
+            {chosen !== null ? (
+              <CustomerIdentity customer={chosen} />
+            ) : (
+              // Handed over by id and not readable here (no `users.view`, or still
+              // loading): the id is what the customer's own page sent.
+              <span className="muted small">
+                {t('web.customer_picker_handed_over')} <CopyIdButton id={state.customerId} />
+              </span>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={save.isPending}
+              onClick={() => {
+                setPicked(null);
+                set('customerId', '');
+              }}
+            >
+              {t('web.customer_picker_change')}
+            </Button>
+          </div>
+        </Field>
       )}
 
       <Field label={t('web.reseller_tier')} htmlFor={`${prefix}-tier`}>
@@ -1060,26 +941,6 @@ function ResellerForm({
           ))}
         </select>
       </Field>
-
-      {mode === 'update' && (
-        <Field
-          label={t('web.status')}
-          hint={t('web.reseller_status_hint')}
-          htmlFor={`${prefix}-status`}
-        >
-          <select
-            id={`${prefix}-status`}
-            value={state.status}
-            onChange={(event) => set('status', event.target.value as ResellerStatus)}
-          >
-            {RESELLER_STATUSES.map((one) => (
-              <option key={one} value={one}>
-                {t(RESELLER_STATUS_LABELS[one])}
-              </option>
-            ))}
-          </select>
-        </Field>
-      )}
 
       <Field
         label={t('web.reseller_pricing')}
@@ -1128,11 +989,6 @@ function ResellerForm({
       {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
 
       <SaveBar dirty={dirty}>
-        {mode === 'update' && (
-          <Button size="sm" disabled={save.isPending} onClick={onDone}>
-            {t('web.rule_cancel_edit')}
-          </Button>
-        )}
         <Button
           variant="primary"
           size="sm"
@@ -1140,7 +996,7 @@ function ResellerForm({
           disabled={problem !== null || save.isPending}
           onClick={() => save.mutate()}
         >
-          {mode === 'register' ? t('web.reseller_register') : t('web.rule_save')}
+          {t('web.reseller_register')}
         </Button>
       </SaveBar>
       {save.error !== null && (

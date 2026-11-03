@@ -120,6 +120,20 @@ const FIELD_LABELS: Readonly<Record<string, WebKey>> = {
 // D1 — the wallet balance, and a legacy debt when there is one
 // ---------------------------------------------------------------------------
 
+/**
+ * The wallet balance. The summary on top of the standing and the credit tab's card read the
+ * same answer, so it stays fresh for a moment rather than being asked again when the tab
+ * opens; a save refetches it explicitly.
+ */
+export function useResellerCredit(customerId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['reseller-credit', customerId],
+    queryFn: () => fetchResellerCredit(customerId),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
 export function ResellerBalanceCard({
   customerId,
   mayViewWallet,
@@ -128,11 +142,7 @@ export function ResellerBalanceCard({
   /** `users.view`: the balance is the customer's wallet. */
   mayViewWallet: boolean;
 }) {
-  const credit = useQuery({
-    queryKey: ['reseller-credit', customerId],
-    queryFn: () => fetchResellerCredit(customerId),
-    enabled: mayViewWallet,
-  });
+  const credit = useResellerCredit(customerId, mayViewWallet);
   return (
     <Card title={t('web.reseller_credit_title')} hint={t('web.reseller_credit_hint')}>
       {!mayViewWallet ? (

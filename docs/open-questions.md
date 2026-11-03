@@ -5071,3 +5071,14 @@ live; the owner decides otherwise.
   so an operator-verified number (R4 A6 showed it in full) is now `…1234` too. If the owner
   wants operator-verified numbers in full again, that is a per-source decision the audit row
   (`customer.phone.verify` vs `customer.phone.self_verify`) can support.
+
+## v0.9.5 PR-6 — reseller edit page
+
+- **OQ-V095-01 — should suspending a reseller, demoting a reseller to a normal customer, and a
+  manual change of reseller credit each require a confirm dialog with a written reason?** The
+  owner's v0.9.5 brief describes them that way, but today none of the three has a confirm dialog
+  and the reseller update API takes no reason, so PR-6 (reseller edit page) kept the existing
+  behaviour and only regrouped them in the «عملیات حساس» box. Also note: the reseller API has no
+  credit cap, no separate manual-credit action and no separate demotion action (the demo drew
+  them); the demotion in the box is a tier change saved by the form's one Save. Adding a reason
+  means a field on the update command, an audit payload change and a contract decision.

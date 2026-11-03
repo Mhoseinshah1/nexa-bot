@@ -899,180 +899,10 @@ export function ResellerPolicyCard({
               <Banner tone="warn">{t('web.reseller_policy_suspended')}</Banner>
             )}
 
-            <h4>{t('web.reseller_policy_entitlements')}</h4>
-            <DataTable
-              stack="labelled"
-              caption={t('web.reseller_policy_entitlements')}
-              rowKey={(row) => row.dimension}
-              rows={data.dimensions}
-              columns={[
-                {
-                  key: 'dimension',
-                  header: t('web.reseller_policy_dimension'),
-                  render: (row) => t(DIMENSION_LABELS[row.dimension]),
-                },
-                {
-                  key: 'tier',
-                  header: t('web.reseller_policy_tier_value'),
-                  render: (row) => (
-                    <span className="small">
-                      {grantsInWords(row.tierGrants, kindsOf(row.dimension), names)}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'override',
-                  header: t('web.reseller_policy_override_value'),
-                  render: (row) =>
-                    row.overrideGrants === null ? (
-                      <span className="muted">{t('web.reseller_policy_inherited')}</span>
-                    ) : (
-                      <span className="small">
-                        {grantsInWords(row.overrideGrants, kindsOf(row.dimension), names)}
-                      </span>
-                    ),
-                },
-                {
-                  key: 'effective',
-                  header: t('web.reseller_policy_effective_value'),
-                  render: (row) => (
-                    <span className="small">
-                      <strong>
-                        {grantsInWords(row.effectiveGrants, kindsOf(row.dimension), names)}
-                      </strong>{' '}
-                      <Badge tone={row.source === 'RESELLER' ? 'violet' : 'neutral'}>
-                        {t(
-                          row.source === 'RESELLER'
-                            ? 'web.reseller_policy_source_own'
-                            : 'web.reseller_policy_source_tier',
-                        )}
-                      </Badge>
-                    </span>
-                  ),
-                },
-              ]}
-            />
-
-            <h4>{t('web.reseller_pricing')}</h4>
-            <KV
-              items={[
-                [
-                  t('web.reseller_policy_tier_value'),
-                  <PricingText
-                    key="t"
-                    label={TIER_PRICING_LABELS[data.pricing.tierMode]}
-                    percent={data.pricing.tierPercent}
-                  />,
-                ],
-                [
-                  t('web.reseller_policy_override_value'),
-                  <PricingText
-                    key="o"
-                    label={OVERRIDE_LABELS[data.pricing.overrideMode]}
-                    percent={data.pricing.overridePercent}
-                  />,
-                ],
-                [
-                  t('web.reseller_policy_effective_value'),
-                  <span key="e">
-                    {t(LAYER_LABELS[data.pricing.layer])}
-                    {data.pricing.percent !== null && (
-                      <>
-                        {' '}
-                        <Num value={String(data.pricing.percent)} />{' '}
-                        {t('web.discount_percent_unit')}
-                      </>
-                    )}
-                  </span>,
-                ],
-              ]}
-            />
-            <p className="muted small">{t('web.reseller_policy_pricing_note')}</p>
-
-            <h4>{t('web.reseller_minimum')}</h4>
-            <KV
-              items={[
-                [
-                  t('web.reseller_policy_tier_value'),
-                  data.monthlyMinimum.tier === null || data.monthlyMinimum.tier.amount === '0' ? (
-                    t('web.reseller_minimum_none')
-                  ) : (
-                    <Money key="t" value={limitWire(data.monthlyMinimum.tier)} />
-                  ),
-                ],
-                [
-                  t('web.reseller_policy_override_value'),
-                  data.monthlyMinimum.own === null ? (
-                    t('web.reseller_policy_inherited')
-                  ) : data.monthlyMinimum.own.amount === '0' ? (
-                    t('web.reseller_minimum_own_none')
-                  ) : (
-                    <Money key="o" value={limitWire(data.monthlyMinimum.own)} />
-                  ),
-                ],
-                [
-                  t('web.reseller_policy_effective_value'),
-                  data.monthlyMinimum.effective === null ? (
-                    t('web.reseller_minimum_none')
-                  ) : (
-                    <span key="e">
-                      <Money value={limitWire(data.monthlyMinimum.effective)} />{' '}
-                      <span className="muted small">
-                        {t(MINIMUM_SOURCE_LABELS[data.monthlyMinimum.source])}
-                      </span>
-                    </span>
-                  ),
-                ],
-              ]}
-            />
-
-            <h4>{t('web.reseller_policy_products')}</h4>
-            {/*
-              Null: the server omitted the section because this operator does not hold
-              `catalog.view`. Said as a missing permission, never drawn as "no products".
-            */}
-            {data.products === null ? (
-              <Banner tone="info">{t('web.reseller_policy_products_denied')}</Banner>
-            ) : (
-              <p className="muted small">{t(BOT_BASIS_LABELS[data.botBasis])}</p>
-            )}
-            {data.products !== null && !data.productsComplete && (
-              <Banner tone="info">{t('web.reseller_policy_products_partial')}</Banner>
-            )}
-            {data.products === null ? null : data.products.length === 0 ? (
-              <Empty title={t('web.reseller_policy_products_empty')} icon="inbox" />
-            ) : (
-              <DataTable
-                stack="labelled"
-                caption={t('web.reseller_policy_products')}
-                rowKey={(row) => row.productId}
-                rows={data.products}
-                columns={[
-                  {
-                    key: 'title',
-                    header: t('web.reseller_grant_kind_product'),
-                    render: (row) => row.title,
-                  },
-                  {
-                    key: 'allowed',
-                    header: t('web.reseller_policy_can_sell'),
-                    render: (row) =>
-                      row.allowed ? (
-                        <Badge tone="ok">{t('web.reseller_policy_allowed')}</Badge>
-                      ) : (
-                        <span>
-                          <Badge tone="danger">{t('web.reseller_policy_refused')}</Badge>{' '}
-                          <span className="muted small">
-                            {row.refusedDimension === null
-                              ? null
-                              : t(DIMENSION_LABELS[row.refusedDimension])}
-                          </span>
-                        </span>
-                      ),
-                  },
-                ]}
-              />
-            )}
+            <PolicyEntitlements data={data} names={names} />
+            <PolicyPricing data={data} />
+            <PolicyMinimum data={data} />
+            <PolicyProductVerdicts data={data} />
 
             {mayEdit ? (
               editing ? (
@@ -1097,6 +927,226 @@ export function ResellerPolicyCard({
         )}
       </StateSwitch>
     </Card>
+  );
+}
+
+/** The entitlement table: what the tier grants, what the reseller replaces, what applies. */
+export function PolicyEntitlements({
+  data,
+  names,
+}: {
+  data: ResellerPolicy;
+  names: ReadonlyMap<string, string>;
+}) {
+  return (
+    <>
+      <h4>{t('web.reseller_policy_entitlements')}</h4>
+      <DataTable
+        stack="labelled"
+        caption={t('web.reseller_policy_entitlements')}
+        rowKey={(row) => row.dimension}
+        rows={data.dimensions}
+        columns={[
+          {
+            key: 'dimension',
+            header: t('web.reseller_policy_dimension'),
+            render: (row) => t(DIMENSION_LABELS[row.dimension]),
+          },
+          {
+            key: 'tier',
+            header: t('web.reseller_policy_tier_value'),
+            render: (row) => (
+              <span className="small">
+                {grantsInWords(row.tierGrants, kindsOf(row.dimension), names)}
+              </span>
+            ),
+          },
+          {
+            key: 'override',
+            header: t('web.reseller_policy_override_value'),
+            render: (row) =>
+              row.overrideGrants === null ? (
+                <span className="muted">{t('web.reseller_policy_inherited')}</span>
+              ) : (
+                <span className="small">
+                  {grantsInWords(row.overrideGrants, kindsOf(row.dimension), names)}
+                </span>
+              ),
+          },
+          {
+            key: 'effective',
+            header: t('web.reseller_policy_effective_value'),
+            render: (row) => (
+              <span className="small">
+                <strong>{grantsInWords(row.effectiveGrants, kindsOf(row.dimension), names)}</strong>{' '}
+                <Badge tone={row.source === 'RESELLER' ? 'violet' : 'neutral'}>
+                  {t(
+                    row.source === 'RESELLER'
+                      ? 'web.reseller_policy_source_own'
+                      : 'web.reseller_policy_source_tier',
+                  )}
+                </Badge>
+              </span>
+            ),
+          },
+        ]}
+      />
+    </>
+  );
+}
+
+/** The pricing layers: tier, own override and what applies. */
+export function PolicyPricing({
+  data,
+  heading = true,
+}: {
+  data: ResellerPolicy;
+  /** The section's own heading; a tab whose card already names it leaves it out. */
+  heading?: boolean;
+}) {
+  return (
+    <>
+      {heading && <h4>{t('web.reseller_pricing')}</h4>}
+      <KV
+        items={[
+          [
+            t('web.reseller_policy_tier_value'),
+            <PricingText
+              key="t"
+              label={TIER_PRICING_LABELS[data.pricing.tierMode]}
+              percent={data.pricing.tierPercent}
+            />,
+          ],
+          [
+            t('web.reseller_policy_override_value'),
+            <PricingText
+              key="o"
+              label={OVERRIDE_LABELS[data.pricing.overrideMode]}
+              percent={data.pricing.overridePercent}
+            />,
+          ],
+          [
+            t('web.reseller_policy_effective_value'),
+            <span key="e">
+              {t(LAYER_LABELS[data.pricing.layer])}
+              {data.pricing.percent !== null && (
+                <>
+                  {' '}
+                  <Num value={String(data.pricing.percent)} /> {t('web.discount_percent_unit')}
+                </>
+              )}
+            </span>,
+          ],
+        ]}
+      />
+      <p className="muted small">{t('web.reseller_policy_pricing_note')}</p>
+    </>
+  );
+}
+
+/** The monthly minimum: tier, own value and the effective one. */
+export function PolicyMinimum({
+  data,
+  heading = true,
+}: {
+  data: ResellerPolicy;
+  /** The section's own heading; a tab whose card already names it leaves it out. */
+  heading?: boolean;
+}) {
+  return (
+    <>
+      {heading && <h4>{t('web.reseller_minimum')}</h4>}
+      <KV
+        items={[
+          [
+            t('web.reseller_policy_tier_value'),
+            data.monthlyMinimum.tier === null || data.monthlyMinimum.tier.amount === '0' ? (
+              t('web.reseller_minimum_none')
+            ) : (
+              <Money key="t" value={limitWire(data.monthlyMinimum.tier)} />
+            ),
+          ],
+          [
+            t('web.reseller_policy_override_value'),
+            data.monthlyMinimum.own === null ? (
+              t('web.reseller_policy_inherited')
+            ) : data.monthlyMinimum.own.amount === '0' ? (
+              t('web.reseller_minimum_own_none')
+            ) : (
+              <Money key="o" value={limitWire(data.monthlyMinimum.own)} />
+            ),
+          ],
+          [
+            t('web.reseller_policy_effective_value'),
+            data.monthlyMinimum.effective === null ? (
+              t('web.reseller_minimum_none')
+            ) : (
+              <span key="e">
+                <Money value={limitWire(data.monthlyMinimum.effective)} />{' '}
+                <span className="muted small">
+                  {t(MINIMUM_SOURCE_LABELS[data.monthlyMinimum.source])}
+                </span>
+              </span>
+            ),
+          ],
+        ]}
+      />
+    </>
+  );
+}
+
+/** The evaluator's verdict for each product of the first page, and why a refusal. */
+export function PolicyProductVerdicts({ data }: { data: ResellerPolicy }) {
+  return (
+    <>
+      <h4>{t('web.reseller_policy_products')}</h4>
+      {/*
+      Null: the server omitted the section because this operator does not hold
+      `catalog.view`. Said as a missing permission, never drawn as "no products".
+    */}
+      {data.products === null ? (
+        <Banner tone="info">{t('web.reseller_policy_products_denied')}</Banner>
+      ) : (
+        <p className="muted small">{t(BOT_BASIS_LABELS[data.botBasis])}</p>
+      )}
+      {data.products !== null && !data.productsComplete && (
+        <Banner tone="info">{t('web.reseller_policy_products_partial')}</Banner>
+      )}
+      {data.products === null ? null : data.products.length === 0 ? (
+        <Empty title={t('web.reseller_policy_products_empty')} icon="inbox" />
+      ) : (
+        <DataTable
+          stack="labelled"
+          caption={t('web.reseller_policy_products')}
+          rowKey={(row) => row.productId}
+          rows={data.products}
+          columns={[
+            {
+              key: 'title',
+              header: t('web.reseller_grant_kind_product'),
+              render: (row) => row.title,
+            },
+            {
+              key: 'allowed',
+              header: t('web.reseller_policy_can_sell'),
+              render: (row) =>
+                row.allowed ? (
+                  <Badge tone="ok">{t('web.reseller_policy_allowed')}</Badge>
+                ) : (
+                  <span>
+                    <Badge tone="danger">{t('web.reseller_policy_refused')}</Badge>{' '}
+                    <span className="muted small">
+                      {row.refusedDimension === null
+                        ? null
+                        : t(DIMENSION_LABELS[row.refusedDimension])}
+                    </span>
+                  </span>
+                ),
+            },
+          ]}
+        />
+      )}
+    </>
   );
 }
 
@@ -1125,12 +1175,59 @@ function OverrideEditor({
   /** The two submission keys, held by the always-mounted page (see `held` on the forms). */
   held?: PolicyKeys | undefined;
 }) {
+  return (
+    <div className="form-section">
+      <h4>{t('web.reseller_policy_edit_title')}</h4>
+      <p className="muted small">{t('web.reseller_policy_edit_hint')}</p>
+      <OverrideGrantsEditor held={held} policy={policy} options={options} names={names} />
+      <OverrideMinimumEditor held={held} policy={policy} onDone={onDone} />
+    </div>
+  );
+}
+
+/** The override a dimension outside an editor's own set keeps when the whole set is replaced. */
+export function keptOverrides(
+  policy: ResellerPolicy,
+  editable: readonly ResellerEntitlementDimension[],
+): ResellerGrantOverride[] {
+  return policy.dimensions
+    .filter((d) => d.source === 'RESELLER' && !editable.includes(d.dimension))
+    .map((d) => ({ dimension: d.dimension, grants: d.overrideGrants ?? [] }));
+}
+
+/** Refetches everything an override write moves. */
+function useInvalidateOverrides(customerId: string): () => void {
+  const queries = useQueryClient();
+  return () => {
+    void queries.invalidateQueries({ queryKey: ['reseller-policy', customerId] });
+    void queries.invalidateQueries({ queryKey: ['reseller-minimums'] });
+    void queries.invalidateQueries({ queryKey: ['reseller-history', customerId] });
+  };
+}
+
+/**
+ * The reseller's own grants, dimension by dimension, replacing the tier's. `dimensions`
+ * narrows which dimensions this editor draws; the others keep the override they hold
+ * (`keptOverrides`) because the write replaces the whole set.
+ */
+export function OverrideGrantsEditor({
+  held,
+  policy,
+  options,
+  names,
+  dimensions = RESELLER_ENTITLEMENT_DIMENSIONS,
+}: {
+  policy: ResellerPolicy;
+  options: ReturnType<typeof useGrantOptions>['options'];
+  names: ReadonlyMap<string, string>;
+  dimensions?: readonly ResellerEntitlementDimension[];
+  held?: PolicyKeys | undefined;
+}) {
   const notify = useToast();
   const queries = useQueryClient();
   const ownGrants = useSubmissionKey();
-  const ownMinimum = useSubmissionKey();
   const grantsSubmission = held?.grants ?? ownGrants;
-  const minimumSubmission = held?.minimum ?? ownMinimum;
+  const invalidate = useInvalidateOverrides(policy.customerId);
 
   // Each dimension starts from what applies now: the override when there is one, else the
   // tier's grants, so choosing "own" begins from the inherited value rather than from nothing.
@@ -1138,49 +1235,30 @@ function OverrideEditor({
     grantsStateOf(policy.dimensions.flatMap((d) => d.overrideGrants ?? d.tierGrants)),
   );
   const [own, setOwn] = useState<ReadonlySet<ResellerEntitlementDimension>>(
-    () => new Set(policy.dimensions.filter((d) => d.source === 'RESELLER').map((d) => d.dimension)),
+    () =>
+      new Set(
+        policy.dimensions
+          .filter((d) => d.source === 'RESELLER' && dimensions.includes(d.dimension))
+          .map((d) => d.dimension),
+      ),
   );
   const typedKinds = new Set(RESELLER_GRANT_KINDS.filter((kind) => options[kind] === null));
   const checked = overridesBodyFrom(state, own, typedKinds);
   const problem = 'problem' in checked ? checked.problem : null;
-
-  const initialMinimum: MinimumChoice =
-    policy.monthlyMinimum.own === null
-      ? 'INHERIT'
-      : policy.monthlyMinimum.own.amount === '0'
-        ? 'NONE'
-        : 'OWN';
-  const [minimumChoice, setMinimumChoice] = useState<MinimumChoice>(initialMinimum);
-  const [amount, setAmount] = useState(
-    policy.monthlyMinimum.own !== null && policy.monthlyMinimum.own.amount !== '0'
-      ? policy.monthlyMinimum.own.amount
-      : '',
-  );
-  const [currency, setCurrency] = useState<CurrencyCode>(
-    policy.monthlyMinimum.own?.currency ??
-      policy.monthlyMinimum.tier?.currency ??
-      SALES_CURRENCY_CODES[0],
-  );
-  const parsedAmount = minimumAmountOf(amount);
-  const minimumProblem = minimumChoice === 'OWN' && (parsedAmount === null || parsedAmount === '0');
-
-  const invalidate = () => {
-    void queries.invalidateQueries({ queryKey: ['reseller-policy', policy.customerId] });
-    void queries.invalidateQueries({ queryKey: ['reseller-minimums'] });
-    void queries.invalidateQueries({ queryKey: ['reseller-history', policy.customerId] });
-  };
+  const kept = keptOverrides(policy, dimensions);
 
   const saveGrants = useMutation({
     mutationFn: () => {
       if ('problem' in checked) throw new Error('unreachable: guarded by the submit button');
+      const overrides = [...checked.overrides, ...kept];
       const idempotencyKey = grantsSubmission.current({
         customerId: policy.customerId,
-        overrides: checked.overrides,
+        overrides,
       });
       return replaceResellerOverrides({
         customerId: policy.customerId,
         idempotencyKey,
-        overrides: checked.overrides,
+        overrides,
       });
     },
     onSuccess: (response) => {
@@ -1192,30 +1270,9 @@ function OverrideEditor({
     onError: (error) => grantsSubmission.settleOn(error),
   });
 
-  const saveMinimum = useMutation({
-    mutationFn: () => {
-      const minimum =
-        minimumChoice === 'INHERIT'
-          ? null
-          : minimumChoice === 'NONE'
-            ? { amount: '0', currency }
-            : { amount: parsedAmount ?? '0', currency };
-      const idempotencyKey = minimumSubmission.current({ customerId: policy.customerId, minimum });
-      return setResellerMinimum({ customerId: policy.customerId, idempotencyKey, minimum });
-    },
-    onSuccess: () => {
-      minimumSubmission.settle();
-      notify({ tone: 'ok', message: t('web.reseller_minimum_saved') });
-      invalidate();
-    },
-    onError: (error) => minimumSubmission.settleOn(error),
-  });
-
   return (
-    <div className="form-section">
-      <h4>{t('web.reseller_policy_edit_title')}</h4>
-      <p className="muted small">{t('web.reseller_policy_edit_hint')}</p>
-      {RESELLER_ENTITLEMENT_DIMENSIONS.map((dimension) => (
+    <>
+      {dimensions.map((dimension) => (
         <fieldset key={dimension} className="field">
           <legend>{t(DIMENSION_LABELS[dimension])}</legend>
           {(['INHERIT', 'OWN'] as const).map((choice) => (
@@ -1270,7 +1327,67 @@ function OverrideEditor({
           <ErrorRef error={saveGrants.error} />
         </Banner>
       )}
+    </>
+  );
+}
 
+/** The reseller's own monthly minimum: inherit, none, or an amount. */
+export function OverrideMinimumEditor({
+  held,
+  policy,
+  onDone,
+}: {
+  policy: ResellerPolicy;
+  /** The editor's own cancel; absent where the surrounding page has none. */
+  onDone?: () => void;
+  held?: PolicyKeys | undefined;
+}) {
+  const notify = useToast();
+  const ownMinimum = useSubmissionKey();
+  const minimumSubmission = held?.minimum ?? ownMinimum;
+  const invalidate = useInvalidateOverrides(policy.customerId);
+
+  const initialMinimum: MinimumChoice =
+    policy.monthlyMinimum.own === null
+      ? 'INHERIT'
+      : policy.monthlyMinimum.own.amount === '0'
+        ? 'NONE'
+        : 'OWN';
+  const [minimumChoice, setMinimumChoice] = useState<MinimumChoice>(initialMinimum);
+  const [amount, setAmount] = useState(
+    policy.monthlyMinimum.own !== null && policy.monthlyMinimum.own.amount !== '0'
+      ? policy.monthlyMinimum.own.amount
+      : '',
+  );
+  const [currency, setCurrency] = useState<CurrencyCode>(
+    policy.monthlyMinimum.own?.currency ??
+      policy.monthlyMinimum.tier?.currency ??
+      SALES_CURRENCY_CODES[0],
+  );
+  const parsedAmount = minimumAmountOf(amount);
+  const minimumProblem = minimumChoice === 'OWN' && (parsedAmount === null || parsedAmount === '0');
+
+  const saveMinimum = useMutation({
+    mutationFn: () => {
+      const minimum =
+        minimumChoice === 'INHERIT'
+          ? null
+          : minimumChoice === 'NONE'
+            ? { amount: '0', currency }
+            : { amount: parsedAmount ?? '0', currency };
+      const idempotencyKey = minimumSubmission.current({ customerId: policy.customerId, minimum });
+      return setResellerMinimum({ customerId: policy.customerId, idempotencyKey, minimum });
+    },
+    onSuccess: () => {
+      minimumSubmission.settle();
+      notify({ tone: 'ok', message: t('web.reseller_minimum_saved') });
+      invalidate();
+    },
+    onError: (error) => minimumSubmission.settleOn(error),
+  });
+
+  return (
+    <>
       <fieldset className="field">
         <legend>{t('web.reseller_minimum')}</legend>
         {(['INHERIT', 'NONE', 'OWN'] as const).map((choice) => (
@@ -1310,9 +1427,11 @@ function OverrideEditor({
         >
           {t('web.reseller_minimum_save')}
         </button>
-        <button type="button" className="btn sm" onClick={onDone}>
-          {t('web.rule_cancel_edit')}
-        </button>
+        {onDone !== undefined && (
+          <button type="button" className="btn sm" onClick={onDone}>
+            {t('web.rule_cancel_edit')}
+          </button>
+        )}
       </div>
       {saveMinimum.error !== null && (
         <Banner tone="danger">
@@ -1320,6 +1439,6 @@ function OverrideEditor({
           <ErrorRef error={saveMinimum.error} />
         </Banner>
       )}
-    </div>
+    </>
   );
 }
