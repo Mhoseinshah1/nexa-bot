@@ -17,6 +17,7 @@ import {
   TOPUP_MENU_CALLBACK_PREFIX,
   TOPUP_ROUTE_CALLBACK_PREFIX,
 } from '../../apps/api/src/surfaces/telegram/runtime/callbacks';
+import { SUPPORT_CALLBACK_DATA } from '../../apps/api/src/modules/commerce/provisioning/application/delivery.service';
 import { SEED_IDS, tenantA } from './harness';
 import {
   BOT_A,
@@ -271,6 +272,34 @@ describe('NEXA v095 PR-4 — the phone gate, the route rule and the exemption', 
             }
           }
         }
+      }
+    });
+
+    it('lets «پشتیبانی», /help and /paysupport through, as the channel and terms gates do, and holds the rest (OQ-V095-P4-01)', async () => {
+      await setFlag('phone_verification', true);
+      const support = new Set(['bot.support.contact', 'bot.support.unconfigured', 'bot.faq.page']);
+      for (const turn of [
+        () => say(f, CATALOGUE_FA['bot.menu.help'], TG.customer),
+        () => say(f, '/help', TG.customer),
+        () => say(f, '/paysupport', TG.customer),
+        () => tap(f, SUPPORT_CALLBACK_DATA, TG.customer),
+      ]) {
+        const result = await turn();
+        expect(support.has(String(result.replyKey)), String(result.replyKey)).toBe(true);
+      }
+      // Nothing was remembered for a turn the gate let through: verifying resumes `/start`.
+      const resume = await rows<{ phone_resume: string | null }>(
+        f,
+        sql`SELECT phone_resume FROM customers WHERE id = ${f.customer}`,
+      );
+      expect(resume[0]?.phone_resume ?? null).toBeNull();
+      // Everything else stays held until the customer verifies.
+      for (const turn of [
+        () => say(f, '/start', TG.customer),
+        () => say(f, '/wallet', TG.customer),
+        () => tap(f, TOPUP_MENU_CALLBACK_PREFIX, TG.customer),
+      ]) {
+        expect((await turn()).replyKey).toBe('bot.phone.required');
       }
     });
 

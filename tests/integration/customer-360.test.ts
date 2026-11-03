@@ -602,6 +602,67 @@ describe('Customer 360 — backend controls', () => {
       expect((await preview()).warnings).toContain('SOURCE_OVERRIDES_STAY');
     });
 
+    it('keeps the phone exemption on the source exactly as the channel exemption: previewed, audited, not moved (OQ-V095-P4-03)', async () => {
+      await fund(source, 10_000n);
+      const none = await preview();
+      expect(none.stays).toMatchObject({ channelExemption: false, phoneExemption: false });
+      expect(none.warnings).not.toContain('SOURCE_OVERRIDES_STAY');
+
+      // The phone exemption ALONE is a source override that stays, as the channel one is.
+      await ctx.container.customerControls.setPhoneExemption(tenantA, owner, {
+        idempotencyKey: 'p403-phone',
+        customerId: source,
+        exempt: true,
+        reason: 'support verified by phone',
+      });
+      const phoneOnly = await preview();
+      expect(phoneOnly.stays).toMatchObject({ channelExemption: false, phoneExemption: true });
+      expect(phoneOnly.warnings).toContain('SOURCE_OVERRIDES_STAY');
+
+      await ctx.container.customerControls.setChannelExemption(tenantA, owner, {
+        idempotencyKey: 'p403-channel',
+        customerId: source,
+        exempt: true,
+        reason: 'VIP',
+      });
+      const plan = await preview();
+      expect(plan.stays).toMatchObject({ channelExemption: true, phoneExemption: true });
+      await transfer(plan.fingerprint, { idempotencyKey: 'p403-move' });
+
+      // Neither exemption moved: the source keeps both, the destination has neither.
+      const exemptions = await rows<{
+        id: string;
+        channel: boolean;
+        phone: boolean;
+      }>(
+        sql`SELECT id, channel_membership_exempt_at IS NOT NULL AS channel,
+                   phone_verification_exempt_at IS NOT NULL AS phone
+              FROM customers WHERE id IN (${source}, ${destination})`,
+      );
+      expect(exemptions.find((row) => row.id === source)).toMatchObject({
+        channel: true,
+        phone: true,
+      });
+      expect(exemptions.find((row) => row.id === destination)).toMatchObject({
+        channel: false,
+        phone: false,
+      });
+      // Both audit rows say what the source kept.
+      const audits = await rows<{ action: string; after: Record<string, unknown> }>(
+        sql`SELECT action, after FROM audit_logs
+             WHERE tenant_id = ${tenantA.tenantId}
+               AND action IN ('customer.account_transfer', 'customer.account_transfer.received')
+             ORDER BY action`,
+      );
+      expect(audits).toHaveLength(2);
+      for (const audit of audits) {
+        expect(audit.after['sourceKeeps'], audit.action).toEqual({
+          channelExemption: true,
+          phoneExemption: true,
+        });
+      }
+    });
+
     it('refuses a negative (legacy-debt) balance', async () => {
       await deliveredService('debt');
       await run(sql`INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount, currency, reference)

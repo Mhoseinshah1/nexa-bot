@@ -212,13 +212,16 @@ export interface LegacyRunInputsRepository {
   ): Promise<readonly string[] | null>;
   /**
    * NEXA v096 PR-1: the adoptions a DRY RUN of THIS source recorded under `planTalliesDigest`
-   * (the approved one, as a rule), or null when none did. The caller trusts them only through
-   * the restored digest (`demotionsAgainst`).
+   * (the approved one, as a rule) AND under `panelMappingFingerprint` (the apply's mapping:
+   * Codex review on #392 — a dry run decided under another code → panel mapping approved
+   * nothing this apply can be demoted from), or null when none did. The caller trusts them
+   * only through the restored digest (`demotionsAgainst`).
    */
   findApprovedAdoptions(
     scope: TenantContext,
     sourceFingerprint: string,
     planTalliesDigest: string,
+    panelMappingFingerprint: string,
   ): Promise<readonly ApprovedAdoption[] | null>;
 }
 

@@ -247,6 +247,7 @@ export class ResellersController {
     const reseller = await this.container.resellersAdmin.update(scope, actor, {
       idempotencyKey: command.idempotencyKey,
       customerId,
+      ...(command.reason === undefined ? {} : { reason: command.reason }),
       write: {
         tierId: command.tierId,
         status: command.status,
@@ -661,6 +662,7 @@ function toHistoryEntry(entry: AuditHistoryRecord): ResellerHistoryEntry {
     surface: entry.surface,
     result: entry.result,
     occurredAt: entry.occurredAt.toISOString(),
+    reason: entry.reason,
     before: entry.before === null ? null : { ...entry.before },
     after: entry.after === null ? null : { ...entry.after },
   };

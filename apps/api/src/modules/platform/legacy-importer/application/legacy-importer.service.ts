@@ -616,6 +616,14 @@ function storedDemotionsSection(stored: StoredDemotions | null) {
     : { demotions: demotionsSection(stored.entries, stored.cap, stored.approvedAdoptable) };
 }
 
+/** The accepted demotions as one comparable string (invoice and target, sorted). */
+function demotionKeys(stored: StoredDemotions | null): string {
+  return (stored?.entries ?? [])
+    .map((d) => `${d.invoice}:${d.to}`)
+    .sort()
+    .join(',');
+}
+
 /** `sections.inventoryHold` of a report: how many invoices are held, and the digest of which. */
 function inventoryHoldSection(plan: Pick<LegacyPlan, 'inventoryHold'>) {
   return {
@@ -672,6 +680,8 @@ export class LegacyImporterService {
       readonly forApply?: boolean;
       readonly ownershipHold?: ReadonlySet<string>;
       readonly inventoryHold?: ReadonlySet<string>;
+      /** The demotions the run being resumed, reconciled or reported accepted (`plan.ts`). */
+      readonly demoted?: StoredDemotions | null;
     } = {},
   ): Promise<Prepared> {
     const { destination } = this.deps;
@@ -721,6 +731,7 @@ export class LegacyImporterService {
       productionLikeTarget,
       options.ownershipHold,
       options.inventoryHold,
+      options.demoted ?? null,
     );
     // Per panel, exactly the names the matcher may ask of it. A source that resolves per name
     // (the Web Admin's) decides these when the panel is not one complete snapshot — a live
@@ -789,6 +800,7 @@ export class LegacyImporterService {
     productionLikeTarget: boolean,
     ownershipHold: ReadonlySet<string> | undefined,
     inventoryHold: ReadonlySet<string> | undefined,
+    demoted: StoredDemotions | null,
   ): Promise<PreparedReview> {
     const live = new Map(serviceCandidateInvoices(snapshot).map((i) => [i.idInvoice, i]));
     const keys = [...live.keys()].filter(recordableKey);
@@ -827,6 +839,9 @@ export class LegacyImporterService {
         keptAsHistory,
         ...(ownershipHold === undefined ? {} : { ownershipHold }),
         ...(inventoryHold === undefined ? {} : { inventoryHold }),
+        ...(demoted === null
+          ? {}
+          : { demoted: new Map(demoted.entries.map((d) => [d.invoice, d.to] as const)) }),
       },
     };
   }
@@ -1120,6 +1135,12 @@ export class LegacyImporterService {
       });
     }
     const inventoryHold = await this.inventoryHoldKeys(scope, input);
+    // NEXA v096 PR-1 (Codex review on #392): a resume plans with the demotions its run's start
+    // accepted, so an approved adoption demoted then is never adopted now — not when its name
+    // resolves again, nor when the account is back on the panel. Checked against the stored
+    // row again inside the start transaction, below.
+    const carried =
+      input.mode === 'RESUME' ? await this.runningApplyDemotions(scope, snapshot) : null;
     let prepared = await timedSection(
       this.deps.logger,
       'apply.prepare',
@@ -1128,6 +1149,7 @@ export class LegacyImporterService {
           forApply: true,
           ...holdOf(input),
           ...(inventoryHold === undefined ? {} : { inventoryHold }),
+          demoted: carried,
         }),
       (p) => p.plan.users.length + p.plan.services.length,
     );
@@ -1164,10 +1186,14 @@ export class LegacyImporterService {
     // explain a difference (`demotions.ts`). Null: none recorded under the approved digest.
     let approvedAdoptions: readonly ApprovedAdoption[] | null | undefined;
     const approvedOf = async (digest: string) => {
+      // Codex review on #392: only a dry run decided under THIS panel mapping approved these
+      // adoptions. Under another one (a code moved to another panel) a "gone" account is the
+      // remap's doing, not the panel's, and is no demotion: none found, DRY_RUN_MISMATCH.
       approvedAdoptions ??= await this.deps.runInputs.findApprovedAdoptions(
         scope,
         snapshot.fingerprint,
         digest,
+        mapping.fingerprint,
       );
       return approvedAdoptions;
     };
@@ -1231,7 +1257,19 @@ export class LegacyImporterService {
               },
             );
           }
-          prepared = { ...prepared, plan: verdict.plan };
+          // The adoption phase decides again from the review inputs: it is handed the
+          // demotions too, so this start and its resume decide them alike.
+          prepared = {
+            ...prepared,
+            plan: verdict.plan,
+            review: {
+              ...prepared.review,
+              inputs: {
+                ...prepared.review.inputs,
+                demoted: new Map(verdict.demotions.map((d) => [d.invoice, d.to] as const)),
+              },
+            },
+          };
           demotions = { cap, approvedAdoptable: approved.length, entries: verdict.demotions };
           // The one summary line (counts only): the list is the operator's, in the report.
           this.deps.logger?.info(
@@ -1334,6 +1372,14 @@ export class LegacyImporterService {
       );
       // A resume reports what its first start accepted (insert-or-nothing keeps that row).
       recordedDemotions = stored.demotions;
+      // …and was planned with exactly those (read before the panel read, outside this
+      // transaction): anything else is not the run being resumed.
+      if (input.mode === 'RESUME' && demotionKeys(stored.demotions) !== demotionKeys(carried)) {
+        throw errors.conflict(
+          LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+          `Run ${outcome.run.id} records other demotions than the resume planned with; run the resume again.`,
+        );
+      }
       if (stored.panelMappingFingerprint !== mapping.fingerprint) {
         throw errors.conflict(
           LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
@@ -1991,6 +2037,7 @@ export class LegacyImporterService {
       productionLikeTarget,
       ownershipHold,
       undefined,
+      null,
     );
 
     const users = new Map(snapshot.users.map((u) => [u.id, u]));
@@ -2672,6 +2719,9 @@ export class LegacyImporterService {
         ...(review.inputs.inventoryHold === undefined
           ? {}
           : { inventoryHold: review.inputs.inventoryHold }),
+        // Codex review on #392: the demotions the run's start accepted decide their invoices
+        // here too — the adoption phase of a resume never adopts what the start demoted.
+        ...(review.inputs.demoted === undefined ? {} : { demoted: review.inputs.demoted }),
       },
     );
     tallies.services.categories = { ...decided.categories };
@@ -3465,6 +3515,8 @@ export class LegacyImporterService {
     const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
       ...holdOf(input),
       ...(inventoryHold === undefined ? {} : { inventoryHold }),
+      // The run's accepted demotions decide its demoted invoices as the apply did.
+      demoted: inputs.demotions,
     });
     const { destination } = this.deps;
     const tallies = prepared.plan.tallies;
@@ -3712,6 +3764,8 @@ export class LegacyImporterService {
     const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
       ...holdOf(input),
       ...(inventoryHold === undefined ? {} : { inventoryHold }),
+      // The run's accepted demotions decide its demoted invoices as the apply did.
+      demoted: inputs.demotions,
     });
     const currency = inputs.walletCurrency;
     const [openings, trials, shapes, map, native, actual, resumes, tenantSlug] = await Promise.all([
@@ -4117,6 +4171,24 @@ export class LegacyImporterService {
     return this.deps.adoptionConcurrency === undefined
       ? SEQUENTIAL_ADOPTION
       : this.deps.adoptionConcurrency(scope);
+  }
+
+  /**
+   * NEXA v096 PR-1 (Codex review on #392): the demotions the tenant's RUNNING apply of this
+   * source accepted at its start, or null (none, or no such run: the start transaction then
+   * refuses the resume as it always did).
+   */
+  private async runningApplyDemotions(
+    scope: TenantContext,
+    snapshot: LegacySnapshot,
+  ): Promise<StoredDemotions | null> {
+    const id = await this.deps.destination.runningRun(scope);
+    if (id === null) return null;
+    const run = await this.deps.runs.findRun(scope, id);
+    if (run === null || run.mode !== 'APPLY' || run.sourceFingerprint !== snapshot.fingerprint) {
+      return null;
+    }
+    return (await this.deps.runInputs.find(scope, id))?.demotions ?? null;
   }
 
   /** The demotion cap setting; the registry default when no reader is wired. */

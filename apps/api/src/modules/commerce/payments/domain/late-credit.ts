@@ -114,8 +114,9 @@ export function lateCreditAmountMatches(input: {
  * payment (Telegram Stars) credits a LATE charge to the wallet, always — there is no switch,
  * because the owner decided it, and no provider to ask again: the charge Telegram reported,
  * recorded once under its unique `telegram_payment_charge_id` after every identity check, IS
- * the approval. Only a LATE approval: money returned for an attempt that can no longer pay its
- * order (`RETURNED`) stays a late completion for an operator on such a route, as before.
+ * the approval. Money for an attempt that can no longer pay its order (`RETURNED`: a CANCELLED
+ * attempt, an order another payment settled) is returned to the wallet the same way, as on
+ * every other route (owner, NEXA v096, closes OQ-V095-P4-02).
  *
  * Whether the recorded charge still stands as an approval: a charge id is on the invoice,
  * `provider_paid` is still true (a refund Telegram reported clears it), and the status is the

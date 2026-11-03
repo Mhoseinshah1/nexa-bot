@@ -265,9 +265,17 @@ describe('the reseller edit view: tabs', () => {
     });
     expect(within(bar).getByText(t('web.unsaved_changes'))).toBeInTheDocument();
     fireEvent.click(within(bar).getByRole('button', { name: t('web.rule_save') }));
+    // A suspension in the draft asks for the written reason before anything is sent.
+    const dialog = await screen.findByRole('alertdialog', { name: t('web.rs_sensitive_title') });
+    expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(0);
+    fireEvent.change(within(dialog).getByLabelText(t('web.rs_reason_label')), {
+      target: { value: 'تأخیر در تسویه' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: t('web.rs_sensitive_confirm') }));
     await waitFor(() => expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(1));
     expect(posts(api, `/resellers/${CUSTOMER_ID}`)[0]?.body).toMatchObject({
       status: 'SUSPENDED',
+      reason: 'تأخیر در تسویه',
     });
   });
 
@@ -298,6 +306,125 @@ describe('the reseller edit view: tabs', () => {
       const drawer = screen.getByRole('dialog');
       expect(drawer.textContent, tab).not.toMatch(/میرزا|Mirza|MIRZA/iu);
     }
+  });
+});
+
+describe('the reseller edit view: sensitive actions need a written reason', () => {
+  const dialogOf = () => screen.findByRole('alertdialog', { name: t('web.rs_sensitive_title') });
+
+  it('opens the confirm dialog from the suspend button, with the effect summary and a held confirm', async () => {
+    const api = stubApi(routes());
+    render();
+    await openStanding();
+    await openResellerTab('danger');
+    fireEvent.click(screen.getByRole('button', { name: t('web.rs_suspend_action') }));
+    const dialog = await dialogOf();
+    expect(within(dialog).getByText(t('web.rs_effect_suspend'))).toBeInTheDocument();
+    const confirm = within(dialog).getByRole('button', { name: t('web.rs_sensitive_confirm') });
+    expect(confirm).toBeDisabled();
+    const field = within(dialog).getByLabelText(t('web.rs_reason_label'));
+    // Too short, then only spaces: still held, and the field says why.
+    fireEvent.change(field, { target: { value: 'ab' } });
+    expect(confirm).toBeDisabled();
+    expect(within(dialog).getByText(t('web.rs_reason_invalid'))).toBeInTheDocument();
+    fireEvent.change(field, { target: { value: '     ' } });
+    expect(confirm).toBeDisabled();
+    expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(0);
+
+    fireEvent.change(field, { target: { value: '  بدحسابی  ' } });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(1));
+    expect(posts(api, `/resellers/${CUSTOMER_ID}`)[0]?.body).toMatchObject({
+      status: 'SUSPENDED',
+      tierId: TIER_ID,
+      reason: 'بدحسابی',
+    });
+  });
+
+  it('cancelling the dialog sends nothing', async () => {
+    const api = stubApi(routes());
+    render();
+    await openStanding();
+    await openResellerTab('danger');
+    fireEvent.click(screen.getByRole('button', { name: t('web.rs_suspend_action') }));
+    fireEvent.click(
+      within(await dialogOf()).getByRole('button', { name: t('web.user_action_cancel') }),
+    );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(0);
+  });
+
+  it('asks for the reason on Save when the draft changes the tier, and says what a tier change does', async () => {
+    const OTHER = '019290ab-cdef-7012-8345-6789abcdef02';
+    const api = stubApi([
+      { url: '/reseller-tiers', body: { tiers: [tier, { ...tier, id: OTHER, name: 'Silver' }] } },
+      ...routes(),
+    ]);
+    render();
+    await openStanding();
+    await openResellerTab('danger');
+    fireEvent.click(screen.getByRole('button', { name: t('web.rs_danger_edit') }));
+    fireEvent.change(await screen.findByLabelText(t('web.reseller_tier')), {
+      target: { value: OTHER },
+    });
+    fireEvent.click(screen.getByRole('button', { name: t('web.rule_save') }));
+    const dialog = await dialogOf();
+    expect(within(dialog).getByText(t('web.rs_effect_tier'))).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText(t('web.rs_reason_label')), {
+      target: { value: 'تنزل سطح' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: t('web.rs_sensitive_confirm') }));
+    await waitFor(() => expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(1));
+    expect(posts(api, `/resellers/${CUSTOMER_ID}`)[0]?.body).toMatchObject({
+      tierId: OTHER,
+      reason: 'تنزل سطح',
+    });
+  });
+
+  it('saves a pricing-only change at once, with no dialog and no reason', async () => {
+    const api = stubApi(routes());
+    render();
+    await openStanding();
+    await openResellerTab('danger');
+    fireEvent.click(screen.getByRole('button', { name: t('web.rs_danger_edit') }));
+    await openResellerTab('pricing');
+    fireEvent.change(document.getElementById('reseller-update-pricing') as HTMLElement, {
+      target: { value: 'LIST_PRICE' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: t('web.rule_save') }));
+    await waitFor(() => expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(1));
+    expect(screen.queryByRole('alertdialog', { name: t('web.rs_sensitive_title') })).toBeNull();
+    expect(posts(api, `/resellers/${CUSTOMER_ID}`)[0]?.body).not.toHaveProperty('reason');
+  });
+
+  it('shows the reason in the history of changes', async () => {
+    stubApi([
+      {
+        url: `/resellers/${CUSTOMER_ID}/history`,
+        body: {
+          entries: [
+            {
+              id: 'h1',
+              action: 'reseller.update',
+              actorType: 'WEB_ADMIN',
+              actorLabel: 'owner',
+              surface: 'WEB',
+              result: 'SUCCESS',
+              occurredAt: '2026-10-02T08:00:00.000Z',
+              reason: 'دلیل آزمایشی تعلیق',
+              before: { status: 'ACTIVE' },
+              after: { status: 'SUSPENDED' },
+            },
+          ],
+        },
+      },
+      ...routes(),
+    ]);
+    render();
+    await openStanding();
+    await openResellerTab('expiry');
+    expect(await screen.findByText('دلیل آزمایشی تعلیق')).toBeInTheDocument();
   });
 });
 

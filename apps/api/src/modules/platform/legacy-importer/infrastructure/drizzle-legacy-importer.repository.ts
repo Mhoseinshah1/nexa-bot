@@ -599,9 +599,11 @@ export class DrizzleLegacyImporterRepository
     scope: TenantContext,
     sourceFingerprint: string,
     planTalliesDigest: string,
+    panelMappingFingerprint: string,
   ): Promise<readonly ApprovedAdoption[] | null> {
     const tenantId = requireTenantId(scope);
-    // The approving dry run: the latest DRY_RUN run of this source that recorded this digest.
+    // The approving dry run: the latest DRY_RUN run of this source that recorded this digest
+    // under the apply's own panel mapping (Codex review on #392).
     const result = await this.exec(undefined).execute<{ approved_adoptions: unknown }>(sql`
       SELECT i.approved_adoptions
         FROM legacy_import_run_inputs i
@@ -610,6 +612,7 @@ export class DrizzleLegacyImporterRepository
          AND r.mode = 'DRY_RUN'
          AND r.source_fingerprint = ${sourceFingerprint}
          AND i.plan_tallies_digest = ${planTalliesDigest}
+         AND i.panel_mapping_fingerprint = ${panelMappingFingerprint}
          AND i.approved_adoptions IS NOT NULL
        ORDER BY i.recorded_at DESC, i.run_id DESC
        LIMIT 1

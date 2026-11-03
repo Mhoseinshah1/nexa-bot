@@ -28,6 +28,7 @@ import {
   TOPUP_ROUTE_CALLBACK_PREFIX,
 } from '../../apps/api/src/surfaces/telegram/runtime/callbacks';
 import { intentOf } from '../../apps/api/src/surfaces/telegram/runtime/intent-of';
+import { MEMBERSHIP_EXEMPT_INTENTS } from '../../apps/api/src/surfaces/telegram/runtime/start-menu-flow';
 
 /**
  * NEXA v095 PR-4 — the pure halves of the phone gate: who the bot-wide gate holds, which
@@ -54,11 +55,25 @@ describe('A — who the bot-wide gate holds (with the switch on)', () => {
     }
   });
 
-  it('never holds the verification’s own steps or the promotional opt-out/in', () => {
-    for (const intent of ['PHONE_VERIFY', 'PHONE_CONTACT', 'MARKETING_OPT_OUT', 'MARKETING_OPT_IN'])
-      expect(PHONE_GATE_EXEMPT_INTENTS.has(intent as never)).toBe(true);
-    for (const intent of ['START', 'MAIN_MENU', 'SUPPORT', 'HELP', 'WALLET', 'CATALOG', 'ORDER'])
-      expect(PHONE_GATE_EXEMPT_INTENTS.has(intent as never)).toBe(false);
+  it('never holds the verification’s own steps, support, help or the promotional opt-out/in', () => {
+    // OQ-V095-P4-01 (owner, NEXA v096): «پشتیبانی» and /help stay reachable behind the gate.
+    for (const intent of [
+      'PHONE_VERIFY',
+      'PHONE_CONTACT',
+      'SUPPORT',
+      'HELP',
+      'MARKETING_OPT_OUT',
+      'MARKETING_OPT_IN',
+    ])
+      expect(PHONE_GATE_EXEMPT_INTENTS.has(intent as never), intent).toBe(true);
+    for (const intent of ['START', 'MAIN_MENU', 'WALLET', 'CATALOG', 'ORDER', 'TICKET_NEW'])
+      expect(PHONE_GATE_EXEMPT_INTENTS.has(intent as never), intent).toBe(false);
+  });
+
+  it('lets through exactly what the channel and terms gates let through, plus its own steps', () => {
+    expect([...PHONE_GATE_EXEMPT_INTENTS].sort()).toEqual(
+      [...MEMBERSHIP_EXEMPT_INTENTS, 'PHONE_VERIFY', 'PHONE_CONTACT'].sort(),
+    );
   });
 
   it('draws the contact button ALONE on the mandatory screen, and remembers what it held', () => {

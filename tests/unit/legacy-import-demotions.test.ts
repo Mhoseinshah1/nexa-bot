@@ -34,7 +34,10 @@ const TENANT = '11111111-1111-4111-8111-111111111111';
 const PANEL_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PANEL_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
-async function planWith(inventories: ReadonlyMap<string, LegacyInventoryRead>) {
+async function planWith(
+  inventories: ReadonlyMap<string, LegacyInventoryRead>,
+  review?: { readonly demoted?: ReadonlyMap<string, 'PROVIDER_MISSING' | 'INVENTORY_INCOMPLETE'> },
+) {
   const connector = new FixtureLegacySourceConnector(buildSyntheticLegacyDataset() as never);
   const snapshot = await readFromSession(connector.label, await connector.open());
   const mapping = parsePanelMapping(syntheticMappingFile(TENANT, PANEL_A, PANEL_B), TENANT);
@@ -60,6 +63,7 @@ async function planWith(inventories: ReadonlyMap<string, LegacyInventoryRead>) {
       },
     ],
     inventories,
+    ...(review === undefined ? {} : { review }),
   } as never);
 }
 
@@ -290,5 +294,41 @@ describe('the demotion cap', () => {
         { code: 'demotions:cap', count: 0 },
       ]),
     );
+  });
+});
+
+describe('a resumed run keeps the demotions its start accepted (Codex review on #392)', () => {
+  it('a stored demotion decides its invoice on every later plan of the run — never adopted again, whatever the panel reads now', async () => {
+    const { dry } = await approved();
+    const key = eligibleKey(dry, 'svc_a1');
+    // The resume's read: the name resolves again / the account is back — eligible on its own.
+    const fresh = await planWith(full());
+    expect(fresh.services.find((s) => s.invoice.idInvoice === key)?.decision.category).toBe(
+      'ADOPTION_ELIGIBLE',
+    );
+    // Accepted as unresolved at the start: held, exactly as the inventory hold holds.
+    const held = await planWith(full(), { demoted: new Map([[key, 'INVENTORY_INCOMPLETE']]) });
+    expect(held.services.find((s) => s.invoice.idInvoice === key)?.decision).toEqual(
+      inventoryHeldDecision(),
+    );
+    expect(held.tallies.services.categories.ADOPTION_ELIGIBLE).toBe(
+      fresh.tallies.services.categories.ADOPTION_ELIGIBLE - 1,
+    );
+    // Accepted as gone at the start: still the ended PROVIDER_MISSING, as the start decided it.
+    const gone = await planWith(full(), { demoted: new Map([[key, 'PROVIDER_MISSING']]) });
+    const started = await planWith(without('svc_a1'));
+    expect(gone.services.find((s) => s.invoice.idInvoice === key)?.decision).toEqual(
+      started.services.find((s) => s.invoice.idInvoice === key)?.decision,
+    );
+    expect(gone.tallies.services.categories).toEqual(started.tallies.services.categories);
+    // Every other invoice is decided as the fresh read decides it.
+    for (const plan of [held, gone]) {
+      for (const s of plan.services) {
+        if (s.invoice.idInvoice === key) continue;
+        expect(s.decision).toEqual(
+          fresh.services.find((f) => f.invoice.idInvoice === s.invoice.idInvoice)?.decision,
+        );
+      }
+    }
   });
 });
