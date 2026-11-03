@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  PHONE_ALLOWED_NUMBERS_SETTING_KEY,
   errors,
   maskPhoneNumber,
   normalisePhoneNumber,
@@ -9,6 +10,7 @@ import {
   type Clock,
   type IdempotencyStore,
   type OperationalEventRecorder,
+  type PhoneAllowedNumbers,
   type TenantContext,
   type UnitOfWork,
   type UserId,
@@ -43,7 +45,21 @@ export interface SharedContact {
 }
 
 export interface PhoneVerificationDeps {
-  readonly customers: Pick<CustomerRepository, 'findById' | 'setVerifiedPhone'>;
+  readonly customers: Pick<
+    CustomerRepository,
+    'findById' | 'setVerifiedPhone' | 'setPhoneResume' | 'takePhoneResume'
+  >;
+  /**
+   * NEXA v095 PR-4 B: `phone_verification.allowed_numbers`, read in the verification's own
+   * transaction. Absent (a narrow fixture): every number is allowed, the default.
+   */
+  readonly settings?: {
+    valueOf<T>(
+      scope: TenantContext,
+      key: typeof PHONE_ALLOWED_NUMBERS_SETTING_KEY,
+      tx?: unknown,
+    ): Promise<T>;
+  };
   readonly features: {
     isEnabled(
       scope: TenantContext,
@@ -68,6 +84,41 @@ export interface PhoneVerificationResult {
   /** `maskPhoneNumber` of the verified number — the only form a reply or a log may carry. */
   readonly masked: string;
   readonly changed: boolean;
+  /**
+   * NEXA v095 PR-4 A/C: the action a phone gate held, taken (read and cleared) in this
+   * verification's transaction — the bot resumes it. Null when none was remembered, when it
+   * was older than `PHONE_RESUME_LIFETIME_MS`, or on a replay.
+   */
+  readonly resume: string | null;
+}
+
+/**
+ * NEXA v095 PR-4: how long a held action stays resumable. Long enough to find the contact
+ * button, short enough that a contact shared tomorrow does not start yesterday's payment.
+ * The resumed action is decided again by its own service in any case.
+ */
+export const PHONE_RESUME_LIFETIME_MS = 30 * 60 * 1000;
+
+/** The longest action remembered: a callback's data is at most 64 bytes, a command shorter. */
+export const PHONE_RESUME_MAX_LENGTH = 300;
+
+/**
+ * NEXA v095 PR-4 B: whether a stored (E.164, `normaliseContactPhone`) number is Iranian. The
+ * normaliser has already read `98…`, `+98…` and `0098…` as `+98…`.
+ */
+export function isIranianPhoneNumber(e164: string): boolean {
+  return /^\+98[0-9]{8,12}$/u.test(e164);
+}
+
+/**
+ * NEXA v095 PR-4 A: whether the bot-wide gate holds this customer — the feature is on (asked
+ * by the caller), and they have neither a verified number nor an exemption. A number verified
+ * earlier, whatever its country, is verified (B never revokes one).
+ */
+export function phoneGateHolds(
+  customer: Pick<CustomerRecord, 'phoneVerifiedAt' | 'phoneVerificationExemptAt'>,
+): boolean {
+  return customer.phoneVerifiedAt === null && customer.phoneVerificationExemptAt === null;
 }
 
 /** The audit action of a customer's own verification; an operator's is `customer.phone.verify`. */
@@ -101,9 +152,10 @@ export function normaliseContactPhone(raw: string): string | null {
  *
  * The write path is `CustomerService.setMarketingOptOut`'s: `maintenance.run` (the
  * customer-initiated webhook path acts as SYSTEM_JOB), the update's key under the actor's
- * surface, and ONE transaction holding the scope-activity read, the flag (re-read where the
- * row changes, so a stale button after a switch-off stores nothing), the conditional UPDATE,
- * the audit row and the `CustomerPhoneVerificationChanged` event. Idempotent: the same
+ * surface, and ONE transaction holding the scope-activity read, the allowed-numbers setting
+ * (NEXA v095 PR-4 B), the conditional UPDATE, the audit row, the
+ * `CustomerPhoneVerificationChanged` event and the held action it resumes (A/C). Not bound to
+ * the `phone_verification` flag any more (C): a route's rule verifies with the flag off. Idempotent: the same
  * number again changes nothing and keeps its first verification time; a different number
  * replaces the stored one.
  *
@@ -113,9 +165,51 @@ export function normaliseContactPhone(raw: string): string | null {
 export class PhoneVerificationService {
   constructor(private readonly deps: PhoneVerificationDeps) {}
 
-  /** Whether the bot offers verification now. A courtesy; the write decides again. */
+  /**
+   * Whether the bot-wide gate (`phone_verification`, NEXA v095 PR-4 A) is on. Verification
+   * itself does not depend on it: a payment route's rule asks for a number with it off.
+   */
   async enabled(scope: TenantContext, tx?: unknown): Promise<boolean> {
     return this.deps.features.isEnabled(scope, PHONE_VERIFICATION_FLAG, tx);
+  }
+
+  /**
+   * NEXA v095 PR-4 A/C: remember the action a phone gate held, for the verification to
+   * resume. UI state (like the wizard rows): no audit row and no event; the scope must still
+   * accept work, read in the write's transaction. A value too long to be an action is dropped.
+   */
+  async rememberResume(
+    scope: TenantContext,
+    _actor: ActorContext,
+    input: { readonly customerId: string; readonly resume: string },
+  ): Promise<void> {
+    if (input.resume.length === 0 || input.resume.length > PHONE_RESUME_MAX_LENGTH) return;
+    const customerId = this.customerId(input.customerId);
+    const now = this.deps.clock.now();
+    await this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return;
+      await this.deps.customers.setPhoneResume(scope, customerId, input.resume, now, tx);
+    });
+  }
+
+  /**
+   * NEXA v095 PR-4 C: take (read and clear) the remembered action without verifying — the
+   * customer chose «↩️ انتخاب درگاه دیگر» instead. Null when none, or when it is stale.
+   */
+  async takeResume(
+    scope: TenantContext,
+    _actor: ActorContext,
+    input: { readonly customerId: string },
+  ): Promise<string | null> {
+    const customerId = this.customerId(input.customerId);
+    const now = this.deps.clock.now();
+    return this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return null;
+      const held = await this.deps.customers.takePhoneResume(scope, customerId, now, tx);
+      return held !== null && now.getTime() - held.at.getTime() <= PHONE_RESUME_LIFETIME_MS
+        ? held.resume
+        : null;
+    });
   }
 
   async verifyOwnContact(
@@ -158,6 +252,7 @@ export class PhoneVerificationService {
           customer: replayed,
           masked: maskPhoneNumber(replayed.phoneNumber),
           changed: replay.result.changed,
+          resume: null,
         };
       }
     }
@@ -182,12 +277,6 @@ export class PhoneVerificationService {
             'This installation has stopped accepting work.',
           );
         }
-        if (!(await this.enabled(scope, tx))) {
-          throw errors.conflict(
-            COMMERCE_ERROR_CODES.PHONE_VERIFICATION_DISABLED,
-            'This installation does not verify phone numbers.',
-          );
-        }
         const before = await this.deps.customers.findById(scope, customerId, tx);
         if (before === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
@@ -198,6 +287,28 @@ export class PhoneVerificationService {
          * so no id is ever rounded through a float.
          */
         if (input.contact.userId !== before.telegramUserId) throw notOwn();
+        /*
+         * NEXA v095 PR-4 C: no longer refused while `phone_verification` is off — a payment
+         * route's verified-phone rule asks for a number whatever the bot-wide switch says.
+         *
+         * B: the allowed numbers, read here, in the write's transaction. Refused before
+         * anything is stored; a number verified earlier is untouched (this only runs on a new
+         * share).
+         */
+        const allowed =
+          this.deps.settings === undefined
+            ? 'ALL'
+            : await this.deps.settings.valueOf<PhoneAllowedNumbers>(
+                scope,
+                PHONE_ALLOWED_NUMBERS_SETTING_KEY,
+                tx,
+              );
+        if (allowed === 'IRAN_ONLY' && !isIranianPhoneNumber(phone)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PHONE_NOT_IRANIAN,
+            'Only Iranian (+98) phone numbers are accepted here.',
+          );
+        }
         const changed = await this.deps.customers.setVerifiedPhone(
           scope,
           customerId,
@@ -241,7 +352,14 @@ export class PhoneVerificationService {
           { customerId, changed },
           tx,
         );
-        return { customer: after, masked: maskPhoneNumber(phone), changed };
+        // A/C: the held action, taken in THIS transaction, so it resumes once and only after
+        // the number is on the row.
+        const held = await this.deps.customers.takePhoneResume(scope, customerId, now, tx);
+        const resume =
+          held !== null && now.getTime() - held.at.getTime() <= PHONE_RESUME_LIFETIME_MS
+            ? held.resume
+            : null;
+        return { customer: after, masked: maskPhoneNumber(phone), changed, resume };
       },
     );
   }

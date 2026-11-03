@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  CUSTOMER_PHONE_EXEMPTION_AUDIT_ACTIONS,
   PERSONAL_DISCOUNT_PERCENT_MAX,
   PERSONAL_DISCOUNT_PERCENT_MIN,
   errors,
@@ -38,6 +39,8 @@ import { CUSTOMER_VIEW_PERMISSION } from './customer.service.js';
 import type { CustomerRecord, CustomerRepository } from './ports.js';
 
 export const CHANNEL_EXEMPTION_PERMISSION: PermissionKey = 'users.channel_membership.exempt';
+/** NEXA v095 PR-4 D: «معاف از تأیید شماره» — the bot-wide gate and every route rule. */
+export const PHONE_EXEMPTION_PERMISSION: PermissionKey = 'users.phone_verification.exempt';
 export const PHONE_VERIFY_PERMISSION: PermissionKey = 'users.phone.verify';
 export const LOCATION_OVERRIDE_PERMISSION: PermissionKey = 'users.location.edit';
 export const NOTIFICATIONS_PERMISSION: PermissionKey = 'users.notifications.edit';
@@ -81,6 +84,7 @@ export interface CustomerControlDeps {
     CustomerRepository,
     | 'findById'
     | 'setChannelMembershipExemption'
+    | 'setPhoneVerificationExemption'
     | 'setVerifiedPhone'
     | 'setMarketingOptOut'
     | 'setRemindersOptOut'
@@ -212,6 +216,56 @@ export class CustomerControlService {
     });
   }
 
+  /**
+   * NEXA v095 PR-4 D: exempt a customer from phone verification, or lift the exemption —
+   * modelled exactly on the channel exemption above (its own HIGH permission, a required
+   * reason, the audit row and the history entry, the outbox event). Exempt is never asked for
+   * a phone: the bot-wide gate reads the column on every update (`BotRuntime.guardedAct`) and
+   * the mini app on every request (`MiniAppSessionService.gateFor`); a route's verified-phone
+   * rule reads it in the payment's own transaction (`PaymentGatewayService.phoneStanding`).
+   */
+  async setPhoneExemption(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly exempt: boolean;
+      readonly reason: string;
+    },
+  ): Promise<{ readonly overview: CustomerOverview; readonly changed: boolean }> {
+    return this.run(scope, actor, {
+      permission: PHONE_EXEMPTION_PERMISSION,
+      action: input.exempt
+        ? CUSTOMER_PHONE_EXEMPTION_AUDIT_ACTIONS.grant
+        : CUSTOMER_PHONE_EXEMPTION_AUDIT_ACTIONS.revoke,
+      idempotencyKey: input.idempotencyKey,
+      customerId: input.customerId,
+      reason: input.reason,
+      command: { exempt: input.exempt },
+      write: async (customerId, before, now, tx) => {
+        const changed = await this.deps.customers.setPhoneVerificationExemption(
+          scope,
+          customerId,
+          input.exempt,
+          now,
+          tx,
+        );
+        return {
+          changed,
+          before: { exemptAt: before.phoneVerificationExemptAt?.toISOString() ?? null },
+          after: { exempt: input.exempt },
+          emit: (tx) =>
+            this.deps.outbox.write(tx, actor, {
+              eventType: 'CustomerPhoneVerificationExemptionChanged',
+              aggregateType: 'Customer',
+              aggregateId: customerId,
+              payload: { exempt: input.exempt },
+            }),
+        };
+      },
+    });
+  }
   /**
    * Record a phone number an operator verified out of band, or revoke it (`null`). The
    * number is normalised to `+` and digits and refused rather than guessed when it has no
