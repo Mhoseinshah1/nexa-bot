@@ -233,7 +233,7 @@ describe('the reseller edit view: tabs', () => {
       expect(within(drawer).getAllByText(label).length).toBeGreaterThan(0);
     }
     await waitFor(() =>
-      expect(within(drawer).getByText(`1 ${t('web.progress_of')} 5`)).toBeInTheDocument(),
+      expect(within(drawer).getAllByText(`1 ${t('web.progress_of')} 5`).length).toBeGreaterThan(0),
     );
     const registered = within(drawer).getByText(formatDate('2026-09-02T08:00:00.000Z'));
     expect(registered.textContent).not.toMatch(/:/u);
@@ -292,12 +292,49 @@ describe('the reseller edit view: tabs', () => {
     stubApi(routes());
     render();
     await openStanding();
-    await screen.findByText(`1 ${t('web.progress_of')} 5`);
+    await screen.findAllByText(`1 ${t('web.progress_of')} 5`);
     for (const tab of Object.keys(RESELLER_TABS) as (keyof typeof RESELLER_TABS)[]) {
       await openResellerTab(tab);
       const drawer = screen.getByRole('dialog');
       expect(drawer.textContent, tab).not.toMatch(/میرزا|Mirza|MIRZA/iu);
     }
+  });
+});
+
+describe('the reseller edit view: unsaved sub-editor state', () => {
+  it('keeps an unsaved monthly minimum and access-rule choice across a tab switch', async () => {
+    stubApi(routes());
+    render();
+    await openStanding();
+
+    // The monthly minimum, on the credit tab: choose "own" and type an amount.
+    await openResellerTab('credit');
+    const own = await screen.findByRole('radio', { name: t('web.reseller_minimum_choice_own') });
+    fireEvent.click(own);
+    const amount = await screen.findByLabelText(t('web.reseller_minimum_amount'));
+    fireEvent.change(amount, { target: { value: '7777' } });
+
+    // The access rules, on the products tab: switch the operation dimension to its own rules.
+    await openResellerTab('products');
+    const ownRules = await waitFor(() => {
+      const radio = document.querySelector<HTMLInputElement>(
+        'input[name="override-OPERATION"]:not(:checked)',
+      );
+      expect(radio).not.toBeNull();
+      return radio as HTMLInputElement;
+    });
+    fireEvent.click(ownRules);
+    expect(ownRules.checked).toBe(true);
+
+    await openResellerTab('danger');
+    await openResellerTab('credit');
+    expect(screen.getByRole('radio', { name: t('web.reseller_minimum_choice_own') })).toBeChecked();
+    expect(screen.getByLabelText(t('web.reseller_minimum_amount'))).toHaveValue('7777');
+
+    await openResellerTab('products');
+    expect(
+      document.querySelector<HTMLInputElement>('input[name="override-OPERATION"]:checked'),
+    ).toBe(ownRules);
   });
 });
 

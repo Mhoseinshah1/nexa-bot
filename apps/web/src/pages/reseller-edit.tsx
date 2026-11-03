@@ -244,6 +244,10 @@ export function ResellerStandingView({
 }) {
   const [tab, setTab] = useState<TabId>('profile');
   const panelId = `reseller-tabs-${customerId}`;
+  // The grant-option lists (products, panels) are fetched once the products tab has first been
+  // opened, as before; the pane then stays mounted so its editors keep their state.
+  const [productsSeen, setProductsSeen] = useState(false);
+  if (tab === 'products' && !productsSeen) setProductsSeen(true);
 
   const policy = useQuery({
     queryKey: ['reseller-policy', customerId],
@@ -284,10 +288,10 @@ export function ResellerStandingView({
       />
       <TabPanel id={panelId} labelledBy={`${panelId}-tab-${tab}`}>
         <div className="stack rs-panel">
-          {tab === 'profile' && (
+          <Pane id="profile" active={tab}>
             <ProfileTab row={row} customerId={customerId} tiers={tiers} mayEdit={mayEdit} />
-          )}
-          {tab === 'pricing' && (
+          </Pane>
+          <Pane id="pricing" active={tab}>
             <PricingTab
               form={form}
               editing={editing}
@@ -296,10 +300,12 @@ export function ResellerStandingView({
               policy={policyData}
               policyQuery={policy}
             />
-          )}
-          {tab === 'credit' && (
+          </Pane>
+          <Pane id="credit" active={tab}>
             <>
-              <ResellerBalanceCard customerId={customerId} mayViewWallet={mayViewWallet} />
+              {tab === 'credit' && (
+                <ResellerBalanceCard customerId={customerId} mayViewWallet={mayViewWallet} />
+              )}
               <Card title={t('web.reseller_minimum')}>
                 <StateSwitch query={policy}>
                   {policyData !== undefined && (
@@ -314,10 +320,12 @@ export function ResellerStandingView({
                   )}
                 </StateSwitch>
               </Card>
-              <ResellerPurchasesCard customerId={customerId} mayViewOrders={mayViewOrders} />
+              {tab === 'credit' && (
+                <ResellerPurchasesCard customerId={customerId} mayViewOrders={mayViewOrders} />
+              )}
             </>
-          )}
-          {tab === 'expiry' && (
+          </Pane>
+          <Pane id="expiry" active={tab}>
             <>
               <ResellerExpiryCard customerId={customerId} mayEdit={mayEdit} />
               <Card title={t('web.rs_status_title')}>
@@ -340,10 +348,12 @@ export function ResellerStandingView({
                   )}
                 </StateSwitch>
               </Card>
-              <ResellerHistoryCard customerId={customerId} mayViewAudit={mayViewAudit} />
+              {tab === 'expiry' && (
+                <ResellerHistoryCard customerId={customerId} mayViewAudit={mayViewAudit} />
+              )}
             </>
-          )}
-          {tab === 'products' && (
+          </Pane>
+          <Pane id="products" active={tab}>
             <ProductsPanel
               customerId={customerId}
               policyQuery={policy}
@@ -355,9 +365,10 @@ export function ResellerStandingView({
               mayViewCatalog={mayViewCatalog}
               mayViewPanels={mayViewPanels}
               policyKeys={policyKeys}
+              fetchOptions={productsSeen}
             />
-          )}
-          {tab === 'danger' && (
+          </Pane>
+          <Pane id="danger" active={tab}>
             <DangerTab
               form={form}
               editing={editing}
@@ -366,7 +377,7 @@ export function ResellerStandingView({
               mayEdit={mayEdit}
               onStartEdit={onStartEdit}
             />
-          )}
+          </Pane>
         </div>
       </TabPanel>
 
@@ -506,6 +517,16 @@ function pricingOf(row: ResellerSummaryResponse): ReactNode {
 // Tabs
 // ---------------------------------------------------------------------------
 
+/**
+ * One tab's content. Every pane stays mounted and the inactive ones are only hidden, so an
+ * editor with local state (the monthly minimum, the access rules, the expiry dates) keeps an
+ * unsaved edit across a tab switch. Read-only cards that fetch (balance, purchases, history)
+ * are still rendered only while their tab is open.
+ */
+function Pane({ id, active, children }: { id: TabId; active: TabId; children: ReactNode }) {
+  return <div hidden={id !== active}>{children}</div>;
+}
+
 function ProfileTab({
   row,
   customerId,
@@ -633,6 +654,7 @@ function ProductsPanel({
   mayViewCatalog,
   mayViewPanels,
   policyKeys,
+  fetchOptions,
 }: {
   customerId: string;
   policyQuery: Parameters<typeof StateSwitch>[0]['query'];
@@ -644,8 +666,12 @@ function ProductsPanel({
   mayViewCatalog: boolean;
   mayViewPanels: boolean;
   policyKeys: PolicyKeys;
+  fetchOptions: boolean;
 }) {
-  const { options, names } = useGrantOptions({ catalogue: mayViewCatalog, panels: mayViewPanels });
+  const { options, names } = useGrantOptions({
+    catalogue: mayViewCatalog && fetchOptions,
+    panels: mayViewPanels && fetchOptions,
+  });
   return (
     <>
       <Card title={t('web.rs_products_title')}>
