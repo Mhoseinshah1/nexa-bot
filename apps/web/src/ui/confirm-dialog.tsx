@@ -20,8 +20,9 @@ export function confirmDialogOpen(): boolean {
  * A plain yes/cancel confirmation, drawn over the page.
  *
  * It is not `window.confirm`, because the browser's dialog cannot label its buttons.
- * An operator should read «بله، خاموش شود», not the browser's own OK. Nothing is typed
- * into it. The confirmation is a question, not a test.
+ * An operator should read «بله، خاموش شود», not the browser's own OK. By default nothing is
+ * typed into it: the confirmation is a question, not a test. A caller that must collect a
+ * written reason passes it as `extra` and holds the button with `confirmDisabled`.
  *
  * Focus behaviour:
  * - Cancel is focused first, so a reflexive Enter backs out.
@@ -38,6 +39,8 @@ export function ConfirmDialog({
   title,
   question,
   detail,
+  extra,
+  confirmDisabled = false,
   confirmLabel,
   cancelLabel,
   onConfirm,
@@ -48,6 +51,13 @@ export function ConfirmDialog({
   title: string;
   question: string;
   detail?: ReactNode;
+  /**
+   * A control the operator fills in before confirming, e.g. a required written reason. Drawn
+   * between the question and the buttons, inside the dialog's focus trap.
+   */
+  extra?: ReactNode;
+  /** Holds the confirm button back, e.g. while `extra` is not yet valid. */
+  confirmDisabled?: boolean;
   confirmLabel: string;
   cancelLabel: string;
   onConfirm: () => void;
@@ -138,8 +148,14 @@ export function ConfirmDialog({
           <p>{question}</p>
           {detail !== undefined && <p className="muted small">{detail}</p>}
         </div>
+        {extra}
         <div className="dialog-actions">
-          <button type="button" className="btn danger solid" onClick={onConfirm}>
+          <button
+            type="button"
+            className="btn danger solid"
+            disabled={confirmDisabled}
+            onClick={onConfirm}
+          >
             {confirmLabel}
           </button>
           <button type="button" className="btn" ref={cancelRef} onClick={onCancel}>

@@ -3663,6 +3663,14 @@ export const resellerUpdateSchema = z
     idempotencyKey: z.string().min(8).max(255),
     status: z.enum(RESELLER_STATUSES),
     ...resellerTermsShape,
+    /**
+     * The written reason (3 to 500 characters once trimmed). REQUIRED whenever the change
+     * suspends the reseller, changes their tier or changes their credit limit — the service
+     * decides that against the stored row and refuses with `RESELLER_REASON_REQUIRED`, so a
+     * change of anything else (pricing override) needs none. The length is checked there too,
+     * so the operator gets the Persian refusal rather than a schema 400.
+     */
+    reason: z.string().max(5000).optional(),
   })
   .refine(pricingRefinement.check, {
     message: pricingRefinement.message,
@@ -3791,6 +3799,8 @@ export const resellerHistoryEntrySchema = z.object({
   surface: z.enum(SOURCE_SURFACES),
   result: z.enum(AUDIT_RESULTS),
   occurredAt: z.iso.datetime(),
+  /** The operator's written reason, when the change carried one. */
+  reason: z.string().nullable(),
   before: z.record(z.string(), z.unknown()).nullable(),
   after: z.record(z.string(), z.unknown()).nullable(),
 });

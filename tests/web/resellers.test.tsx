@@ -30,7 +30,7 @@ import {
 import { openFilterPanel } from './ui-helpers';
 import { openC360Tab } from './c360-helpers';
 import { sourceFilterAbsent, rowHasBadge } from './source-helpers';
-import { openResellerTab } from './reseller-helpers';
+import { confirmSensitiveReason, openResellerTab } from './reseller-helpers';
 
 /**
  * WP9-B on the Web Admin: the Resellers page, the Tiers page and its grants editor, the
@@ -411,6 +411,7 @@ describe('registering and editing a reseller', () => {
       target: { value: OTHER_TIER_ID },
     });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await confirmSensitiveReason();
 
     await waitFor(() => expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(1));
     const body = posts(api, `/resellers/${CUSTOMER_ID}`)[0]?.body as Record<string, unknown>;
@@ -1485,7 +1486,14 @@ describe('a reseller write whose answer was lost keeps its key across close and 
       await openResellerTab('danger');
       fireEvent.change(await screen.findByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
       fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+      await confirmSensitiveReason();
       await waitFor(() => expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(n));
+      // The answer was lost, so the reason dialog stays up with the error; leave it to close.
+      fireEvent.click(
+        within(screen.getByRole('alertdialog')).getByRole('button', {
+          name: t('web.user_action_cancel'),
+        }),
+      );
     };
     await send(1);
     await closeTop();

@@ -431,6 +431,7 @@ describe('reseller HTTP surface', () => {
       idempotencyKey: key(),
       tierId,
       status: 'SUSPENDED',
+      reason: 'تعلیق در آزمون',
       pricingMode: 'LIST_PRICE',
       discountPercentage: null,
       creditLimit: { amount: '0', currency: 'IRT' },

@@ -579,6 +579,7 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
       await ctx.container.resellersAdmin.update(tenantA, owner, {
         idempotencyKey: key(),
         customerId: resellerOne,
+        reason: 'تعلیق در آزمون',
         write: {
           tierId: current.tierId,
           status: 'SUSPENDED',

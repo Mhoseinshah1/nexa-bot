@@ -293,6 +293,7 @@ describe('resellers (WP9-B)', () => {
     await ctx.container.resellersAdmin.update(tenantA, owner, {
       idempotencyKey: key(),
       customerId,
+      reason: 'تغییر وضعیت در آزمون',
       write: {
         tierId: current.tierId,
         status,
@@ -1296,6 +1297,7 @@ describe('resellers (WP9-B)', () => {
         ctx.container.resellersAdmin.update(tenantA, owner, {
           idempotencyKey: key(),
           customerId: resellerCustomer,
+          reason: 'تغییر اعتبار در آزمون',
           write: { ...terms, status: 'ACTIVE', creditLimit: money(1n, 'IRT') },
         }),
       ).rejects.toMatchObject(invalid);
@@ -2320,6 +2322,7 @@ describe('resellers (WP9-B)', () => {
           .update(tenantA, owner, {
             idempotencyKey: key(),
             customerId: resellerCustomer,
+            reason: 'تعلیق در آزمون',
             write: write('SUSPENDED', null),
           })
           .then(() => {

@@ -2,6 +2,8 @@ import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   RESELLER_OVERRIDE_MODES,
+  RESELLER_REASON_MAX_LENGTH,
+  RESELLER_REASON_MIN_LENGTH,
   RESELLER_STATUSES,
   type ResellerOverrideMode,
   type ResellerStatus,
@@ -14,6 +16,7 @@ import { formatDate, formatNumber, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import { useSubmissionKey, type SubmissionKey } from '../submission-key';
+import { ConfirmDialog } from '../ui/confirm-dialog';
 import { CopyIdButton } from '../ui/record-ref';
 import {
   Badge,
@@ -28,6 +31,7 @@ import {
   Money,
   StateSwitch,
   TabPanel,
+  Textarea,
   Tabs,
   useToast,
   useUnsavedChanges,
@@ -115,7 +119,36 @@ interface EditForm {
   readonly set: <K extends keyof ResellerFormState>(key: K, value: ResellerFormState[K]) => void;
   readonly dirty: boolean;
   readonly problem: WebKey | null;
-  readonly save: ReturnType<typeof useMutation<unknown, unknown, void>>;
+  /** The sensitive changes the draft would make against the stored row (need a reason). */
+  readonly sensitive: readonly SensitiveKind[];
+  readonly save: ReturnType<typeof useMutation<unknown, unknown, SaveInput>>;
+}
+
+/** The changes that need a written reason (OQ-V095-01); the server enforces the same. */
+export type SensitiveKind = 'SUSPEND' | 'TIER_CHANGE';
+
+/** What a save carries beyond the draft: the reason, and a status forced by a quick action. */
+interface SaveInput {
+  readonly reason: string | null;
+  readonly status?: ResellerStatus;
+}
+
+/** True when the reason, trimmed, is 3 to 500 characters — the server's rule. */
+export function reasonIsUsable(reason: string): boolean {
+  const length = [...reason.trim()].length;
+  return length >= RESELLER_REASON_MIN_LENGTH && length <= RESELLER_REASON_MAX_LENGTH;
+}
+
+/** Which sensitive changes `state` makes against the stored `row`. */
+export function sensitiveKindsOf(
+  row: ResellerSummaryResponse | undefined,
+  state: ResellerFormState,
+): readonly SensitiveKind[] {
+  if (row === undefined) return [];
+  const found: SensitiveKind[] = [];
+  if (row.status === 'ACTIVE' && state.status !== 'ACTIVE') found.push('SUSPEND');
+  if (row.tier.id !== state.tierId) found.push('TIER_CHANGE');
+  return found;
 }
 
 function useResellerEditForm({
@@ -161,19 +194,22 @@ function useResellerEditForm({
   const dirty = editing && base !== null && JSON.stringify(state) !== JSON.stringify(base);
   const checked = resellerBodyFrom(state, 'update');
   const problem = 'problem' in checked ? checked.problem : null;
+  const sensitive = sensitiveKindsOf(row, state);
 
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: (input: SaveInput) => {
       if ('problem' in checked || row === undefined) {
         throw new Error('unreachable: guarded by the submit button');
       }
-      // Bound to the payload AND the customer, so a corrected field is a NEW command.
-      const idempotencyKey = submission.current({ customerId: state.customerId, ...checked.body });
-      return updateReseller({
+      const body = {
         ...(checked.body as Omit<ResellerUpdateRequest, 'idempotencyKey'>),
-        customerId: row.customerId,
-        idempotencyKey,
-      });
+        ...(input.status === undefined ? {} : { status: input.status }),
+        ...(input.reason === null ? {} : { reason: input.reason.trim() }),
+      };
+      // Bound to the payload (the reason included) AND the customer, so a corrected field or
+      // a corrected reason is a NEW command.
+      const idempotencyKey = submission.current({ customerId: state.customerId, ...body });
+      return updateReseller({ ...body, customerId: row.customerId, idempotencyKey });
     },
     onSuccess: (response) => {
       submission.settle();
@@ -197,7 +233,7 @@ function useResellerEditForm({
     onError: (error) => submission.settleOn(error),
   });
 
-  return { state, set, dirty, problem, save: save as EditForm['save'] };
+  return { state, set, dirty, problem, sensitive, save: save as EditForm['save'] };
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +294,8 @@ export function ResellerStandingView({
   const categories = useCategories(mayViewCatalog);
   const draft = useProductDraft(policyData, products.data);
   const form = useResellerEditForm({ row, editing, held: editKey, onDone });
+  /** The reason dialog: for the Save with a sensitive change pending, or a quick suspend. */
+  const [ask, setAsk] = useState<SensitiveAsk | null>(null);
 
   const unsaved = form.dirty || draft.dirty;
   useUnsavedChanges(unsaved);
@@ -376,10 +414,29 @@ export function ResellerStandingView({
               tiers={tiers}
               mayEdit={mayEdit}
               onStartEdit={onStartEdit}
+              onSuspend={() => setAsk({ kinds: ['SUSPEND'], status: 'SUSPENDED' })}
             />
           </Pane>
         </div>
       </TabPanel>
+
+      {ask !== null && (
+        <SensitiveReasonDialog
+          kinds={ask.kinds}
+          pending={form.save.isPending}
+          error={form.save.error}
+          onCancel={() => {
+            form.save.reset();
+            setAsk(null);
+          }}
+          onConfirm={(reason) =>
+            form.save.mutate(
+              { reason, ...(ask.status === undefined ? {} : { status: ask.status }) },
+              { onSuccess: () => setAsk(null) },
+            )
+          }
+        />
+      )}
 
       {editing && (
         <div className="rs-foot">
@@ -392,13 +449,18 @@ export function ResellerStandingView({
               size="sm"
               icon="check"
               disabled={form.problem !== null || form.save.isPending}
-              onClick={() => form.save.mutate()}
+              onClick={() =>
+                // A sensitive change in the draft asks for the reason first; any other save goes.
+                form.sensitive.length > 0
+                  ? setAsk({ kinds: form.sensitive })
+                  : form.save.mutate({ reason: null })
+              }
             >
               {t('web.rule_save')}
             </Button>
           </SaveBar>
           {form.problem !== null && <Banner tone="warn">{t(form.problem)}</Banner>}
-          {form.save.error !== null && (
+          {form.save.error !== null && ask === null && (
             <Banner tone="danger">
               {messageFor(form.save.error)}
               <ErrorRef error={form.save.error} />
@@ -730,6 +792,7 @@ function DangerTab({
   tiers,
   mayEdit,
   onStartEdit,
+  onSuspend,
 }: {
   form: EditForm;
   editing: boolean;
@@ -737,6 +800,8 @@ function DangerTab({
   tiers: readonly ResellerTierSummaryResponse[] | null;
   mayEdit: boolean;
   onStartEdit: () => void;
+  /** Opens the reason dialog for suspending the reseller now. */
+  onSuspend: () => void;
 }) {
   return (
     <Card tone="danger" title={t('web.rs_danger_title')} hint={t('web.rs_danger_hint')}>
@@ -791,6 +856,11 @@ function DangerTab({
                 <Button size="sm" icon="edit" disabled={row === undefined} onClick={onStartEdit}>
                   {t('web.rs_danger_edit')}
                 </Button>
+                {row?.status === 'ACTIVE' && (
+                  <Button size="sm" variant="danger" onClick={onSuspend}>
+                    {t('web.rs_suspend_action')}
+                  </Button>
+                )}
               </div>
             </>
           ) : (
@@ -799,5 +869,77 @@ function DangerTab({
         </>
       )}
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The reason dialog (OQ-V095-01)
+// ---------------------------------------------------------------------------
+
+interface SensitiveAsk {
+  readonly kinds: readonly SensitiveKind[];
+  /** A status forced by a quick action (suspend), rather than read from the draft. */
+  readonly status?: ResellerStatus;
+}
+
+const EFFECT_LABELS: Readonly<Record<SensitiveKind, WebKey>> = {
+  SUSPEND: 'web.rs_effect_suspend',
+  TIER_CHANGE: 'web.rs_effect_tier',
+};
+
+/**
+ * The kit's confirm dialog with a required written reason and a short summary of what the
+ * change does. Confirming is held back until the reason is 3 to 500 characters; the server
+ * refuses a sensitive change without one all the same.
+ */
+function SensitiveReasonDialog({
+  kinds,
+  pending,
+  error,
+  onConfirm,
+  onCancel,
+}: {
+  kinds: readonly SensitiveKind[];
+  pending: boolean;
+  error: unknown;
+  onConfirm: (reason: string) => void;
+  onCancel: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const usable = reasonIsUsable(reason);
+  return (
+    <ConfirmDialog
+      title={t('web.rs_sensitive_title')}
+      question={kinds.map((kind) => t(EFFECT_LABELS[kind])).join(' ')}
+      confirmLabel={t('web.rs_sensitive_confirm')}
+      cancelLabel={t('web.user_action_cancel')}
+      confirmDisabled={!usable || pending}
+      onConfirm={() => onConfirm(reason.trim())}
+      onCancel={onCancel}
+      extra={
+        <div className="stack">
+          <Field
+            label={t('web.rs_reason_label')}
+            hint={t('web.rs_reason_hint')}
+            htmlFor="reseller-sensitive-reason"
+            {...(reason !== '' && !usable ? { error: t('web.rs_reason_invalid') } : {})}
+          >
+            <Textarea
+              id="reseller-sensitive-reason"
+              rows={3}
+              value={reason}
+              aria-invalid={reason !== '' && !usable}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </Field>
+          {error !== null && error !== undefined && (
+            <Banner tone="danger">
+              {messageFor(error)}
+              <ErrorRef error={error} />
+            </Banner>
+          )}
+        </div>
+      }
+    />
   );
 }
