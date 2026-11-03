@@ -4,7 +4,7 @@ import { ResellerExpiryCard } from '../../apps/web/src/pages/reseller-expiry';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { ResellersPage } from '../../apps/web/src/pages/resellers';
 import { renderPage, stubApi } from './harness';
-import { openResellerTab } from './reseller-helpers';
+import { confirmSensitiveReason, openResellerTab } from './reseller-helpers';
 
 /**
  * Round 11, C2 on the Web Admin: the expiry card of one reseller. Every response goes through
@@ -143,6 +143,7 @@ describe('the reseller expiry card (round 11, C2)', () => {
     const save = screen.getByRole('button', { name: 'ذخیره' });
     await waitFor(() => expect(save).not.toBeDisabled());
     fireEvent.click(save);
+    await confirmSensitiveReason();
     await openResellerTab('expiry');
     expect(await screen.findByText(t('web.reseller_expiry_manual_suspended'))).toBeInTheDocument();
   });

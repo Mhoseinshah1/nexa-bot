@@ -613,6 +613,10 @@ export const RESELLER_DEFAULT_CREDIT_LIMIT_MINOR = 0n;
  */
 export const RESELLER_MAX_CREDIT_LIMIT_MINOR = 1_000_000_000_000n;
 
+/** The written reason a sensitive reseller change carries (trimmed length, inclusive). */
+export const RESELLER_REASON_MIN_LENGTH = 3;
+export const RESELLER_REASON_MAX_LENGTH = 500;
+
 /**
  * Whether a debit is within a customer's means.
  *

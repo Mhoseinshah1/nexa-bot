@@ -861,6 +861,16 @@ export const COMMERCE_ERROR_CODES = {
    */
   CUSTOMER_BLOCK_REASON_REQUIRED: 'commerce.customer_block_reason_required',
 
+  /**
+   * A reseller change that suspends the reseller, changes their tier (a demotion to a normal
+   * customer is a tier change saved with the form) or changes their credit limit was sent
+   * without a written reason (NEXA-FIX-V096 PR-4, closing OQ-V095-01). The reason is trimmed
+   * and must be `RESELLER_REASON_MIN_LENGTH` to `RESELLER_REASON_MAX_LENGTH` characters; it is
+   * written to the audit row. Refused before anything is written, after the idempotent replay
+   * lookup, so the same key can carry the corrected request.
+   */
+  RESELLER_REASON_REQUIRED: 'commerce.reseller_reason_required',
+
   PRODUCT_NOT_FOUND: 'commerce.product_not_found',
   /** The product exists and is withdrawn from sale. Not the same as absent. */
   PRODUCT_NOT_PURCHASABLE: 'commerce.product_not_purchasable',

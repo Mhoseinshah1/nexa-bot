@@ -189,6 +189,7 @@ describe('reseller expiry (round 11, C2)', () => {
     await ctx.container.resellersAdmin.update(tenantA, owner, {
       idempotencyKey: key(),
       customerId,
+      reason: 'تغییر وضعیت در آزمون',
       write: {
         tierId: current.tierId,
         status,
