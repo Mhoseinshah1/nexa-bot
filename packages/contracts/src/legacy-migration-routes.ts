@@ -610,6 +610,16 @@ export const legacyImportDemotionsSchema = z
   .strict();
 export type LegacyImportDemotions = z.infer<typeof legacyImportDemotionsSchema>;
 
+/** v0.9.7: the apply's balance reconciliation, as counts (`balanceReconciliation` below). */
+export const legacyBalanceReconciliationSchema = z
+  .object({
+    verdict: z.enum(['RECONCILED', 'RECONCILED_WITH_HELD', 'DIFFERENCES']),
+    /** Differences by kind; every kind the reconciliation knows, zero included. */
+    differences: z.record(z.string(), count),
+  })
+  .strict();
+export type LegacyBalanceReconciliation = z.infer<typeof legacyBalanceReconciliationSchema>;
+
 /** The apply's outcome (stored as `apply_report`). */
 export const legacyMigrationApplyReportSchema = z.object({
   importerVerdict: z.string(),
@@ -633,6 +643,14 @@ export const legacyMigrationApplyReportSchema = z.object({
    * Absent on a report recorded before it, and when the apply demoted nothing.
    */
   demotions: legacyImportDemotionsSchema.optional(),
+  /**
+   * v0.9.7: the cutover's balance reconciliation (`cutover-reconciliation.ts`), run by the
+   * apply while the package is still open and the installation still frozen: its verdict and
+   * how many differences of each kind — counts only, never a customer. The automatic cleanup
+   * runs only when it is present and names no `LEGACY_CLEANUP_BLOCKING_DIFFERENCES` kind.
+   * Absent on a report recorded before it, or when it could not be computed.
+   */
+  balanceReconciliation: legacyBalanceReconciliationSchema.optional(),
 });
 export type LegacyMigrationApplyReport = z.infer<typeof legacyMigrationApplyReportSchema>;
 
