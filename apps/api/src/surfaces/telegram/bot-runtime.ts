@@ -27,6 +27,7 @@ import type {
   CustomerSendResult,
 } from '../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
+import { phoneGateHolds } from '../../modules/commerce/customers/application/phone-verification.service.js';
 import { SERVICE_CARD_CALLBACK_PREFIX } from '../../modules/commerce/provisioning/application/delivery.service.js';
 import type { CardMessageRef } from '../../modules/commerce/provisioning/application/operation-card.js';
 import type { TelegramWizardRecord } from '../../modules/commerce/messaging/application/telegram-message-state.js';
@@ -812,6 +813,7 @@ export class BotRuntime {
               templateKey: lead.key,
               values: lead.values,
               botInstanceId: input.botInstanceId,
+              ...(lead.keyboard === undefined ? {} : { keyboard: lead.keyboard }),
             })
           : await this.deps.messenger.sendFile(scope, {
               chatId,
@@ -1218,7 +1220,7 @@ export class BotRuntime {
       MEMBERSHIP_EXEMPT_INTENTS.has(command.intent) ||
       ADMIN_INTENTS.has(command.intent)
     ) {
-      return this.act(scope, actor, command, customer, arrival, input);
+      return this.phoneGatedAct(scope, actor, command, customer, arrival, input);
     }
     const required = await terms.requirement(scope, customer.id);
     if (
@@ -1226,7 +1228,7 @@ export class BotRuntime {
       (await this.deps.telegramAdmins?.resolve(scope, input.telegramUserId, actor.correlationId)) !=
         null
     ) {
-      return this.act(scope, actor, command, customer, arrival, input);
+      return this.phoneGatedAct(scope, actor, command, customer, arrival, input);
     }
     return termsRequired('bot.terms.required', required);
   }
@@ -1251,7 +1253,7 @@ export class BotRuntime {
     };
     const terms = this.deps.terms;
     if (terms === undefined || command.targetId === null) {
-      return this.act(scope, actor, menu, customer, arrival, input);
+      return this.phoneGatedAct(scope, actor, menu, customer, arrival, input);
     }
     // The update's key is already spent by `resolveFromUpdate` under this surface: the
     // acceptance is a second command of the same turn, so it takes the turn's sub-key.
@@ -1269,7 +1271,7 @@ export class BotRuntime {
        * published any more, there is nothing to accept: the main menu.
        */
       return accepted.current === null
-        ? this.act(scope, actor, menu, customer, arrival, input)
+        ? this.phoneGatedAct(scope, actor, menu, customer, arrival, input)
         : termsStaleReply(accepted.current);
     }
     /*
@@ -1279,6 +1281,160 @@ export class BotRuntime {
      * counts as delivered, so nothing is sent then either.
      */
     return termsAcceptedReply();
+  }
+
+  /**
+   * NEXA v095 PR-4 A: the bot-wide phone gate, the LAST link of the one central guard — after
+   * the captcha, the channels and the terms, so the screens come in that order — and `act` is
+   * reached only through it. While `phone_verification` is on, a customer with neither a
+   * verified number nor an exemption («معاف از تأیید شماره») is answered with the contact
+   * screen whatever they asked for: `/start`, a button, a message, a command, a deep link.
+   * Exempt: the verification's own steps, the promotional opt-out/in, the management panel; a
+   * bound administrator is never stopped. Only turns pass here — payment webhooks and
+   * inquiries, provisioning, reminders and the outbox never do.
+   *
+   * The held action is remembered (`phoneHold`), as is a tap a payment route's verified-phone
+   * rule refused (C), so the verification resumes it (`PHONE_CONTACT` below).
+   */
+  async phoneGatedAct(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: BotCommand,
+    customer: CustomerRecord,
+    arrival: CustomerArrival,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update: unknown;
+      readonly telegramUserId: string;
+    },
+  ): Promise<PendingReply> {
+    const phone = this.deps.phoneVerification;
+    if (
+      phone !== undefined &&
+      !phoneVerifyFlow.PHONE_GATE_EXEMPT_INTENTS.has(command.intent) &&
+      !ADMIN_INTENTS.has(command.intent) &&
+      phoneGateHolds(customer) &&
+      (await phone.enabled(scope)) &&
+      (await this.deps.telegramAdmins?.resolve(scope, input.telegramUserId, actor.correlationId)) ==
+        null
+    ) {
+      const held = phoneVerifyFlow.phoneRequiredReply();
+      await this.rememberPhoneHold(scope, actor, command, customer, input);
+      return held;
+    }
+    const reply = await this.act(scope, actor, command, customer, arrival, input);
+    if (reply.phoneHold === true) {
+      await this.rememberPhoneHold(scope, actor, command, customer, input);
+    }
+    return reply;
+  }
+
+  /** The action a phone gate held, remembered for the verification to resume (A/C). */
+  private async rememberPhoneHold(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: BotCommand,
+    customer: CustomerRecord,
+    input: { readonly update: unknown },
+  ): Promise<void> {
+    const resume = phoneVerifyFlow.phoneResumeOf(input.update, command);
+    if (resume === null || this.deps.phoneVerification === undefined) return;
+    await this.deps.phoneVerification.rememberResume(scope, actor, {
+      customerId: customer.id,
+      resume,
+    });
+  }
+
+  /**
+   * NEXA v095 PR-4 A/C: after a verification, the action a phone gate held — re-read from what
+   * was remembered and run through the WHOLE guard again as the verified customer, under the
+   * turn's own sub-key, so its service decides it afresh (a route, a price, a deadline). The
+   * «verified» sentence goes first, carrying the main menu keyboard that replaces the contact
+   * one. Nothing remembered: the main menu while the gate is on (`/start` comes back to it),
+   * the verified sentence alone otherwise.
+   */
+  private async afterPhoneVerified(
+    scope: TenantContext,
+    actor: ActorContext,
+    verified: Extract<phoneVerifyFlow.PhoneContactOutcome, { kind: 'VERIFIED' }>,
+    arrival: CustomerArrival,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update: unknown;
+      readonly telegramUserId: string;
+    },
+    mainMenu: 'MAIN_MENU' | 'MAIN_MENU_ADMIN',
+  ): Promise<PendingReply> {
+    const lead = {
+      kind: 'TEXT' as const,
+      key: 'bot.phone.verified' as const,
+      values: { phone: verified.masked },
+      keyboard: mainMenu,
+    };
+    const update = verified.resume === null ? null : phoneVerifyFlow.resumedUpdate(verified.resume);
+    let resumed: BotCommand | null = null;
+    if (update !== null) {
+      const command = intentOf(update, await this.menuFor(scope, update));
+      resumed = phoneVerifyFlow.resumable(command) ? command : null;
+    }
+    if (resumed === null) {
+      if (
+        this.deps.phoneVerification === undefined ||
+        !(await this.deps.phoneVerification.enabled(scope))
+      ) {
+        return verified.reply;
+      }
+      resumed = { intent: 'MAIN_MENU', targetId: null, callbackQueryId: null };
+    }
+    const reply = await this.guardedAct(scope, actor, resumed, verified.customer, arrival, {
+      ...input,
+      idempotencyKey: `${input.idempotencyKey}:resume`,
+    });
+    return { ...reply, lead: [lead, ...(reply.lead ?? [])] };
+  }
+
+  /**
+   * NEXA v095 PR-4 C: «↩️ انتخاب درگاه دیگر» — the remembered tap is dropped (nothing was
+   * verified) and the payment methods of the same order or top-up come back, after a line that
+   * brings the main menu keyboard back in place of the contact one.
+   */
+  private async phoneOtherGateway(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    mainMenu: 'MAIN_MENU' | 'MAIN_MENU_ADMIN',
+  ): Promise<PendingReply> {
+    const resume =
+      (await this.deps.phoneVerification?.takeResume(scope, actor, { customerId: customer.id })) ??
+      null;
+    const update = resume === null ? null : phoneVerifyFlow.resumedUpdate(resume);
+    const held = update === null ? null : intentOf(update);
+    const lead = {
+      kind: 'TEXT' as const,
+      key: 'bot.phone.cancelled' as const,
+      values: {},
+      keyboard: mainMenu,
+    };
+    let methods: PendingReply | null = null;
+    if (
+      (held?.intent === 'PAY_GATEWAY' || held?.intent === 'PAY_MANUAL') &&
+      held.targetId !== null
+    ) {
+      methods = await checkoutFlow.paymentMethods(this, scope, actor, held.targetId, customer);
+    } else if (held?.intent === 'TOPUP_ROUTE' && held.targetId !== null) {
+      const found = await this.deps.topup.routesForCapture(scope, {
+        customerId: customer.id,
+        captureId: held.targetId,
+      });
+      methods =
+        found === null
+          ? { key: 'bot.wallet.topup_expired', values: {}, buttons: [], orderId: null }
+          : await topupFlow.topupChooser(this, scope, held.targetId, found.routes);
+    }
+    if (methods === null) return phoneVerifyFlow.phoneVerifyCancelled(mainMenu);
+    return { ...methods, lead: [lead, ...(methods.lead ?? [])] };
   }
 
   /**
@@ -1469,21 +1625,32 @@ export class BotRuntime {
       }
     }
     if (command.intent === 'WALLET') return topupFlow.walletBalance(this, scope, actor, customer);
-    // R11 B7: phone verification — the button, a shared contact, the cancel label.
-    if (command.intent === 'PHONE_VERIFY') return phoneVerifyFlow.phoneVerifyPrompt(this, scope);
+    // R11 B7 / NEXA v095 PR-4: phone verification — the prompt, a shared contact, the labels.
+    if (command.intent === 'PHONE_VERIFY') return phoneVerifyFlow.phoneVerifyPrompt(this);
     if (command.intent === 'PHONE_CONTACT' && command.contact != null) {
-      return phoneVerifyFlow.phoneContactShared(
+      const mainMenu = (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU';
+      const shared = await phoneVerifyFlow.phoneContactShared(
         this,
         scope,
         actor,
         customer,
         command.contact,
         input.idempotencyKey,
-        (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
+        mainMenu,
       );
+      if (shared.kind === 'REFUSED') return shared.reply;
+      return this.afterPhoneVerified(scope, actor, shared, arrival, input, mainMenu);
     }
     if (command.intent === 'PHONE_VERIFY_CANCEL') {
       return phoneVerifyFlow.phoneVerifyCancelled(
+        (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
+      );
+    }
+    if (command.intent === 'PHONE_OTHER_GATEWAY') {
+      return this.phoneOtherGateway(
+        scope,
+        actor,
+        customer,
         (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
       );
     }

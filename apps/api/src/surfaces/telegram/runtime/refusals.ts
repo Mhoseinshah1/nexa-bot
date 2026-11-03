@@ -9,8 +9,7 @@ import {
   isNexaError,
 } from '@nexa/contracts';
 import type { PendingReply } from './replies.js';
-import { inlineLabel } from '../../../modules/commerce/messaging/application/inline-buttons.js';
-import { PHONE_VERIFY_CALLBACK_DATA } from './callbacks.js';
+import { phoneGatewayRequiredReply } from './phone-verify-flow.js';
 
 /**
  * A refusal the customer can be told about.
@@ -350,10 +349,13 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.GIFT_CARDS_DISABLED]: 'bot.wallet.gift_card_unavailable',
   [COMMERCE_ERROR_CODES.CAPTURE_NOT_OPEN]: 'bot.wallet.topup_expired',
   /*
-   * R11 B7: a route held back by its verified-phone rule. The one refusal here the customer
-   * lifts themselves, so `refusal` puts the «تأیید شماره تلفن» button under it.
+   * R11 B7 / NEXA v095 PR-4 C: the chosen route needs a verified number. The one refusal here
+   * the customer lifts themselves: `refusal` answers it with the contact keyboard, and the
+   * turn remembers the tap so the verification continues straight to that route.
    */
-  [COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED]: 'bot.payment.phone_required',
+  [COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED]: 'bot.phone.gateway_required',
+  // NEXA v095 PR-4 B: not reachable from a payment, listed so the code is never a 500.
+  [COMMERCE_ERROR_CODES.PHONE_NOT_IRANIAN]: 'bot.phone.iran_only',
 };
 
 /**
@@ -403,13 +405,7 @@ export function isExpectedRefreshRefusal(error: unknown): boolean {
 export function refusal(error: unknown): PendingReply {
   const key = isNexaError(error) ? REFUSAL_REPLIES[error.code] : undefined;
   if (key === undefined) throw error;
-  return {
-    key,
-    values: refusalValuesFor(key),
-    buttons:
-      key === 'bot.payment.phone_required'
-        ? [{ ...inlineLabel('phone.verify'), data: PHONE_VERIFY_CALLBACK_DATA }]
-        : [],
-    orderId: null,
-  };
+  // NEXA v095 PR-4 C: the contact keyboard, and the tap remembered (`phoneHold`).
+  if (key === 'bot.phone.gateway_required') return phoneGatewayRequiredReply();
+  return { key, values: refusalValuesFor(key), buttons: [], orderId: null };
 }

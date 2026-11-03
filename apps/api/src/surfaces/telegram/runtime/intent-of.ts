@@ -123,7 +123,9 @@ import {
   MEMBERSHIP_CHECK_CALLBACK_DATA,
   ORDER_CALLBACK_PREFIX,
   PHONE_VERIFY_CALLBACK_DATA,
+  PHONE_OTHER_GATEWAY_COMMAND,
   PHONE_VERIFY_CANCEL_COMMAND,
+  PHONE_VERIFY_START_PAYLOAD,
   REORDER_CATEGORY_CALLBACK_PREFIX,
   PAY_METHODS_CALLBACK_PREFIX,
   PAY_METHODS_CLOSE_CALLBACK_PREFIX,
@@ -1350,6 +1352,10 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      */
     const deepLink = supportAiStartCommandOf(startPayloadOf(update));
     if (deepLink !== null) return deepLink;
+    // NEXA v095 PR-4: the mini app's fallback link to the bot opens the contact prompt.
+    if (startPayloadOf(update) === PHONE_VERIFY_START_PAYLOAD) {
+      return { intent: 'PHONE_VERIFY', targetId: null, callbackQueryId: null };
+    }
     return { intent: 'START', targetId: null, callbackQueryId: null };
   }
   if (command === '/catalog') return { intent: 'CATALOG', targetId: null, callbackQueryId: null };
@@ -1369,6 +1375,10 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
   // R11 B7: the phone prompt's «🔙 انصراف و بازگشت به منو», through the shared label map.
   if (command === `/${PHONE_VERIFY_CANCEL_COMMAND}`) {
     return { intent: 'PHONE_VERIFY_CANCEL', targetId: null, callbackQueryId: null };
+  }
+  // NEXA v095 PR-4 C: «↩️ انتخاب درگاه دیگر», through the same label map.
+  if (command === `/${PHONE_OTHER_GATEWAY_COMMAND}`) {
+    return { intent: 'PHONE_OTHER_GATEWAY', targetId: null, callbackQueryId: null };
   }
   /*
    * `/paysupport` (Package A): Telegram requires a bot that sells for Stars to answer it.

@@ -163,7 +163,10 @@ export interface BotRuntimeDeps {
    * fixtures that build a runtime without it: absent, no verify button is drawn and a
    * contact or a stale button is answered as «not available», exactly as with the flag off.
    */
-  readonly phoneVerification?: Pick<PhoneVerificationService, 'enabled' | 'verifyOwnContact'>;
+  readonly phoneVerification?: Pick<
+    PhoneVerificationService,
+    'enabled' | 'verifyOwnContact' | 'rememberResume' | 'takeResume'
+  >;
   readonly messenger: CustomerMessenger;
   readonly products: ProductService;
   readonly commercial: CommercialActionService;

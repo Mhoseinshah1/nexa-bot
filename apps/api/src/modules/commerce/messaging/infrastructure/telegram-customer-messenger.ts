@@ -112,6 +112,7 @@ import type {
   CustomerSendConditionReader,
   CustomerSendResult,
 } from '../application/ports.js';
+import { PHONE_KEYBOARDS } from '../application/ports.js';
 
 /**
  * ONE condition per bot instance: "this bot is not replying to customers".
@@ -580,7 +581,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * gated one without its flag or trial offer read would be a promise nobody checked.
      */
     const customerRows: readonly (readonly MainMenuKeyboardButton[])[] | undefined =
-      message.keyboard === undefined || message.keyboard === 'PHONE_REQUEST'
+      message.keyboard === undefined || PHONE_KEYBOARDS.has(message.keyboard)
         ? undefined
         : this.menu !== undefined
           ? // R10 D2: the SENDING bot decides which custom buttons it draws.
@@ -613,13 +614,20 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * R11 B7: the phone prompt's keyboard — Telegram's contact button over the cancel label,
      * both from the shared catalogue, no style and no icon (so the plain retry is the same).
      */
+    const share: TelegramReplyKeyboardButton = {
+      text: CATALOGUE_FA['bot.phone.share_button'],
+      requestContact: true,
+    };
     const phoneRows: TelegramReplyKeyboardButton[][] | undefined =
       message.keyboard === 'PHONE_REQUEST'
-        ? [
-            [{ text: CATALOGUE_FA['bot.phone.share_button'], requestContact: true }],
-            [{ text: CATALOGUE_FA['bot.phone.cancel_button'] }],
-          ]
-        : undefined;
+        ? [[share], [{ text: CATALOGUE_FA['bot.phone.cancel_button'] }]]
+        : // NEXA v095 PR-4 A: the mandatory gate — the contact button alone.
+          message.keyboard === 'PHONE_REQUIRED'
+          ? [[share]]
+          : // NEXA v095 PR-4 C: a route that needs a verified number, or another route.
+            message.keyboard === 'PHONE_REQUEST_GATEWAY'
+            ? [[share], [{ text: CATALOGUE_FA['bot.phone.other_gateway_button'] }]]
+            : undefined;
     const keyboard =
       phoneRows ?? (iconKeyboard === undefined ? undefined : withAdminRow(iconKeyboard));
     const plainKeyboard =

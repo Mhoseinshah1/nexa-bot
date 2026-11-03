@@ -618,7 +618,10 @@ import {
   receiptReviewButtons,
   refundRequestReviewButtons,
 } from './surfaces/telegram/bot-runtime.js';
-import { PHONE_VERIFY_CANCEL_COMMAND } from './surfaces/telegram/runtime/callbacks.js';
+import {
+  PHONE_OTHER_GATEWAY_COMMAND,
+  PHONE_VERIFY_CANCEL_COMMAND,
+} from './surfaces/telegram/runtime/callbacks.js';
 import { DrizzleAdminAmountCaptureRepository } from './modules/commerce/payments/infrastructure/drizzle-admin-amount-capture.repository.js';
 import { DrizzleReceiptCreditRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-credit.repository.js';
 import { DrizzleRefundRepository } from './modules/commerce/payments/infrastructure/drizzle-refund.repository.js';
@@ -5432,6 +5435,8 @@ export function createContainer(
   const phoneVerificationService = new PhoneVerificationService({
     customers: customerRepository,
     features: featureFlagResolver,
+    // NEXA v095 PR-4 B: phone_verification.allowed_numbers, read in the write's transaction.
+    settings: settingsResolver,
     guard,
     audit,
     opsLog,
@@ -8762,6 +8767,8 @@ export function createContainer(
     terms: termsAcceptanceService,
     // R10 D5 (a): the bot's /start captcha, as a gate the mini app holds too.
     captcha: startCaptchaService,
+    // NEXA v095 PR-4 A: the bot-wide phone gate, the same switch the bot reads.
+    phoneGate: phoneVerificationService,
     telegramAdmins,
     uow,
     scopeActivity: tenants,
@@ -9117,6 +9124,11 @@ export function createContainer(
          * contact keyboard draws it from this catalogue, and a tap arrives as TEXT.
          */
         [CATALOGUE_FA['bot.phone.cancel_button'], `/${PHONE_VERIFY_CANCEL_COMMAND}`] as const,
+        // NEXA v095 PR-4 C: «↩️ انتخاب درگاه دیگر», drawn and matched the same way.
+        [
+          CATALOGUE_FA['bot.phone.other_gateway_button'],
+          `/${PHONE_OTHER_GATEWAY_COMMAND}`,
+        ] as const,
       ]),
       // R1: this tenant's own labels, matched BEFORE the shared ones above so a renamed
       // button routes under its new name — the same object the messenger draws from.
