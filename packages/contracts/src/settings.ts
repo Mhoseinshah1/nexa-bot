@@ -414,6 +414,17 @@ function unique<T>(of: (item: T) => string) {
 export const CONNECTION_FILE_CAPTION_MODES = ['PANEL_DEFAULT', 'CUSTOM', 'NONE'] as const;
 export type ConnectionFileCaptionMode = (typeof CONNECTION_FILE_CAPTION_MODES)[number];
 
+/**
+ * NEXA v095 PR-4 B: which numbers a phone verification accepts. `ALL` (the default, so an
+ * existing installation changes nothing) accepts any number Telegram reports for the
+ * customer's own account; `IRAN_ONLY` accepts only +98 numbers. Applied to every
+ * verification — the bot-wide gate, a payment route's verified-phone rule and the mini app —
+ * and never to a number already verified.
+ */
+export const PHONE_ALLOWED_NUMBERS = ['ALL', 'IRAN_ONLY'] as const;
+export type PhoneAllowedNumbers = (typeof PHONE_ALLOWED_NUMBERS)[number];
+export const PHONE_ALLOWED_NUMBERS_SETTING_KEY = 'phone_verification.allowed_numbers' as const;
+
 /** Track 3 §2: which of a delivery's files carry the caption. */
 export const CONNECTION_FILE_CAPTION_PLACEMENTS = ['LAST_FILE', 'EVERY_FILE'] as const;
 export type ConnectionFileCaptionPlacement = (typeof CONNECTION_FILE_CAPTION_PLACEMENTS)[number];
@@ -2624,6 +2635,28 @@ export const SETTINGS = [
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
     scope: 'PANEL',
+  },
+  /*
+   * NEXA v095 PR-4 B: the numbers a phone verification accepts. Drawn beside the
+   * phone_verification feature; read on every verification, whatever the feature's state,
+   * because a payment route's verified-phone rule verifies numbers with the feature off too.
+   */
+  {
+    key: PHONE_ALLOWED_NUMBERS_SETTING_KEY,
+    description:
+      'Which phone numbers a customer\u2019s own-contact verification accepts: ALL (any number ' +
+      'Telegram reports for the customer\u2019s own account) or IRAN_ONLY (only +98 numbers; ' +
+      'the number is normalised first, so 98\u2026 and 0098\u2026 are +98). Applies to every ' +
+      'verification — the bot-wide phone_verification gate, a payment route\u2019s verified-phone ' +
+      'rule and the mini app. A number verified before a change keeps its verification.',
+    schema: z.enum(PHONE_ALLOWED_NUMBERS),
+    // Nothing changes for an existing installation.
+    defaultValue: 'ALL',
+    configures: 'phone_verification',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
   },
 ] as const satisfies readonly SettingDefinition[];
 
