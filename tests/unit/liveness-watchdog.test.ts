@@ -96,9 +96,12 @@ describe('the liveness watchdog', () => {
       },
     });
     const fine: number[] = [];
+    // The watchdog thread measures real (hrtime) silence, so this role's allowance must dwarf
+    // what a loaded CI runner can starve the main thread for: 3 x 250 ms = 750 ms. At 30 ms
+    // (90 ms) one scheduling stall of the main thread made a SUCCEEDING role look silent.
     const working = startHeartbeat({
       path: join(dir, 'b'),
-      intervalMs: 30,
+      intervalMs: 250,
       now: () => Date.now(),
       logger,
       exitAfterMissed: 3,
@@ -106,7 +109,9 @@ describe('the liveness watchdog', () => {
       check: async () => true,
     });
     try {
-      await wait(600);
+      // The failing role leaves after ~90 ms of silence; the succeeding one is then watched
+      // for 1.5 s, six of its own beats and twice its allowance.
+      await wait(1_500);
       expect(exits.length).toBeGreaterThanOrEqual(1);
       expect(exits[0]).toBe(1);
       expect(fine).toEqual([]);
