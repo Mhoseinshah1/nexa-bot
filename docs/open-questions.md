@@ -4827,7 +4827,10 @@ live; the owner decides otherwise.
   `Telegram.WebApp.openInvoice` (Bot API 6.1+) from its own document, beside `openLink` and
   `openTelegramLink`; OQ-R11-A5-01's unverified origin rule applies to it the same way. A client
   without the method is told to pay the chat invoice.
-- **OQ-R11-B5-04 — a Stars charge that lands after the attempt's deadline is not credited.** The
+- **OQ-R11-B5-04 — CLOSED by the owner (NEXA v095 PR-4 G):** a late Stars charge is accepted and
+  credited once to the wallet through the late-credit path TonPays uses; see OQ-V095-P4-02 for
+  what is still open. The original question, for the record:
+  **a Stars charge that lands after the attempt's deadline is not credited.** The
   B5 brief describes a late `successful_payment` as going "through the late-credit path, exactly one
   credit". The code defines the Stars route with no late credit (`lateCreditSetting: null`;
   `settleRecorded` passes no late-credit input and treats a credit as impossible): a late charge is
@@ -5056,12 +5059,18 @@ live; the owner decides otherwise.
 
 ## Round 11 B7 — phone verification by the customer's own contact
 
-- **OQ-R11-B7-01 — an allowed-prefix list per route (e.g. only `+98`) was NOT built.** The brief
+- **OQ-R11-B7-01 — superseded (NEXA v095 PR-4 B):** the owner chose ONE installation-wide setting,
+  `phone_verification.allowed_numbers` (ALL | IRAN_ONLY), applied to every verification; no
+  per-route list. The original note: **an allowed-prefix list per route (e.g. only `+98`) was NOT
+  built.** The brief
   made it optional "if it falls out naturally"; it does not: it needs a column, a validated list
   on the route form, a second refusal reason and its own copy. A route's verified-phone switch
   is the whole rule today. To add it: a `text[]` on `payment_gateways`, a `PHONE_PREFIX_REFUSED`
   ineligibility reason after `PHONE_NOT_VERIFIED`, evaluated by the same `phoneRuleRefuses`.
-- **OQ-R11-B7-02 — the Mini App draws no «تأیید شماره تلفن».** Verification needs Telegram's
+- **OQ-R11-B7-02 — resolved (NEXA v095 PR-4 A/C):** the mini app asks with
+  `WebApp.requestContact()`; the contact arrives in the bot's chat as the customer's own message and
+  is verified there by the same own-account check, and the mini app waits for `/me.phoneVerified`.
+  The original note: **the Mini App draws no «تأیید شماره تلفن».** Verification needs Telegram's
   contact button, which only the bot's chat has. The Mini App inherits the route rule (its lists
   are `CheckoutService`'s) and answers a refused route in Persian, pointing to the bot. If the
   owner wants the Mini App to start the flow, `WebApp.requestContact` is the candidate; its
@@ -5071,3 +5080,28 @@ live; the owner decides otherwise.
   so an operator-verified number (R4 A6 showed it in full) is now `…1234` too. If the owner
   wants operator-verified numbers in full again, that is a per-source decision the audit row
   (`customer.phone.verify` vs `customer.phone.self_verify`) can support.
+
+## NEXA v095 PR-4 — phone verification, exemptions, late Stars
+
+- **OQ-V095-P4-01 — the mandatory gate holds support and help too.** The owner's text is "can do
+  nothing in the bot until they verify"; the gate therefore exempts only the verification's own
+  steps and the promotional opt-out/in (as the captcha does), not «پشتیبانی» or `/help` (which the
+  channel and terms gates let through). A customer who will not share a number cannot reach
+  support in the bot. Owner: should support/help stay reachable behind the phone gate?
+- **OQ-V095-P4-02 — a Stars charge for an attempt that can no longer pay its order.** G credits a
+  LATE Stars charge (after the deadline, or on an EXPIRED payment). A charge recorded for a
+  CANCELLED attempt, or for an order another payment already settled (R12 F1's `RETURNED` basis,
+  which inquiry routes return to the wallet whatever the switch says), stays a late completion
+  for an operator on the Stars route, as before — the reading that moves no money the owner did
+  not name. Owner: should those be returned to the wallet too?
+- **OQ-V095-P4-03 — the phone exemption does not move with an account transfer.** The channel
+  exemption is reported on the transfer preview; the new phone exemption is not carried or
+  reported. Owner: should it be?
+- **OQ-V095-P4-04 — the allowed numbers apply with the bot-wide switch off.** B says the setting
+  is shown only while A is on and applies to every verification, including a route's rule (C),
+  which works with A off. Built as: the stored value applies to every verification whatever A
+  says; the Settings page always lists it (with the "needs the feature" note) so it can be changed.
+- **OQ-V095-P4-05 — the mini app's contact lands in the bot's chat.** `requestContact()` sends the
+  contact to the bot as a message, so the bot answers there («شمارهٔ شما تأیید شد» and the main
+  menu, or the resumed action of a tap made in the bot) while the customer is in the mini app.
+  Owner: acceptable, or should a mini-app share be answered silently?
