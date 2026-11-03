@@ -8,6 +8,7 @@ import { ResellerTiersPage } from '../../apps/web/src/pages/reseller-tiers';
 import { changedFieldsOf } from '../../apps/web/src/pages/reseller-standing';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Api } from './harness';
+import { openResellerTab } from './reseller-helpers';
 
 /**
  * WP14 on the Web Admin (`docs/wp14-reseller-phase2-audit.md` D4): a reseller's balance,
@@ -137,6 +138,7 @@ describe('the reseller standing cards', () => {
     render();
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    await openResellerTab('credit');
     await waitFor(() => expect(gets(api, '/purchases?limit=10')).toHaveLength(1));
   });
 
@@ -145,6 +147,7 @@ describe('the reseller standing cards', () => {
     render();
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    await openResellerTab('credit');
 
     expect(await screen.findByText(LEGACY_DEBT)).toBeInTheDocument();
     const card = screen.getByText('کیف پول نماینده').closest('section') ?? document.body;
@@ -162,6 +165,7 @@ describe('the reseller standing cards', () => {
     expect(purchases.textContent).toContain('80,000');
     expect(purchases.textContent).not.toContain('margin');
 
+    await openResellerTab('expiry');
     const history = await screen.findByRole('table', { name: 'تاریخچهٔ تغییرات' });
     expect(history.textContent).toContain('ویرایش نماینده');
     expect(history.textContent).toContain('owner');
@@ -184,6 +188,7 @@ describe('the reseller standing cards', () => {
     render();
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    await openResellerTab('credit');
     const card = (await screen.findByText('کیف پول نماینده')).closest('section') ?? document.body;
     await waitFor(() => expect(card.textContent).toContain('5,000'));
     expect(card.textContent).not.toContain('بدهی پیشین (مانده منفی)');
@@ -196,8 +201,10 @@ describe('the reseller standing cards', () => {
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
     // The exact wallet sentence: the register form's customer picker names users.view too.
+    await openResellerTab('credit');
     expect(await screen.findByText(t('web.reseller_credit_denied'))).toBeInTheDocument();
     expect(screen.getByText(/orders\.view/u)).toBeInTheDocument();
+    await openResellerTab('expiry');
     expect(screen.getByText(/audit\.view/u)).toBeInTheDocument();
     expect(gets(api, '/credit')).toHaveLength(0);
     expect(gets(api, '/purchases')).toHaveLength(0);
@@ -247,6 +254,7 @@ describe('the reseller form offers no credit', () => {
     const api = stubApi(routes());
     render();
     await openEdit();
+    await openResellerTab('danger');
     expect(screen.queryByLabelText('سقف اعتبار اختصاصی')).toBeNull();
     expect(screen.queryByLabelText('سقف اعتبار (واحد خرد)')).toBeNull();
     fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
@@ -292,6 +300,10 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
     { key: 'audit.view', fragment: '/history', denial: /audit\.view/u },
   ] as const;
 
+  /** Each view lives in the tab of the section it belongs to. */
+  const tabOf = (key: (typeof VIEWS)[number]['key']) =>
+    key === 'audit.view' ? 'expiry' : 'credit';
+
   it('asks for none of the three views on resellers.view alone, and names each key', async () => {
     const api = stubApi(routes());
     open('/resellers', ['resellers.view']);
@@ -299,6 +311,7 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
     fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
 
     for (const view of VIEWS) {
+      await openResellerTab(tabOf(view.key));
       expect(await screen.findByText(view.denial), view.key).toBeInTheDocument();
       expect(gets(api, view.fragment), view.key).toHaveLength(0);
     }
@@ -311,9 +324,11 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
       await screen.findByText('Reza Reseller');
       fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
 
+      await openResellerTab(tabOf(held.key));
       await waitFor(() => expect(gets(api, held.fragment)).toHaveLength(1));
       expect(screen.queryByText(held.denial)).toBeNull();
       for (const other of VIEWS.filter((view) => view !== held)) {
+        await openResellerTab(tabOf(other.key));
         expect(screen.getByText(other.denial), other.key).toBeInTheDocument();
         expect(gets(api, other.fragment), other.key).toHaveLength(0);
       }
@@ -326,8 +341,10 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
 
+    await openResellerTab('credit');
     expect(await screen.findByText(LEGACY_DEBT)).toBeInTheDocument();
     expect(await screen.findByRole('table', { name: 'خریدهای نماینده' })).toBeInTheDocument();
+    await openResellerTab('expiry');
     expect(await screen.findByRole('table', { name: 'تاریخچهٔ تغییرات' })).toBeInTheDocument();
   });
 
@@ -337,6 +354,7 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
     open('/resellers', ['resellers.view', 'resellers.edit']);
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'ویرایش' }));
+    await openResellerTab('danger');
     fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'ذخیره' })).not.toBeDisabled());
@@ -349,6 +367,7 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
     open('/resellers', ['resellers.view', 'resellers.edit', 'users.view']);
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'ویرایش' }));
+    await openResellerTab('danger');
     fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'ذخیره' })).not.toBeDisabled());

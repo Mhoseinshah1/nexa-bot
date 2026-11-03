@@ -30,6 +30,7 @@ import {
 import { openFilterPanel } from './ui-helpers';
 import { openC360Tab } from './c360-helpers';
 import { sourceFilterAbsent, rowHasBadge } from './source-helpers';
+import { openResellerTab } from './reseller-helpers';
 
 /**
  * WP9-B on the Web Admin: the Resellers page, the Tiers page and its grants editor, the
@@ -404,6 +405,7 @@ describe('registering and editing a reseller', () => {
     renderList();
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'ویرایش' }));
+    await openResellerTab('danger');
     fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
     fireEvent.change(screen.getByLabelText('سطح', { selector: '#reseller-update-tier' }), {
       target: { value: OTHER_TIER_ID },
@@ -714,6 +716,7 @@ describe('unsaved edits on the reseller forms', () => {
     renderList();
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: t('web.rule_edit') }));
+    await openResellerTab('danger');
     fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
 
     fireEvent.click(screen.getByRole('button', { name: t('web.cb_reseller_new') }));
@@ -751,6 +754,7 @@ describe('unsaved edits on the reseller forms', () => {
     fireEvent.click(screen.getByRole('button', { name: t('web.rule_edit') }));
     const again = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
     fireEvent.click(within(again).getByRole('button', { name: t('web.discard') }));
+    await openResellerTab('danger');
     await waitFor(() => expect(document.getElementById('reseller-update-tier')).not.toBeNull());
   });
 
@@ -766,6 +770,7 @@ describe('unsaved edits on the reseller forms', () => {
     const row = (name: string) => screen.getAllByText(name)[0]?.closest('tr') as HTMLElement;
     await screen.findByText('Sara');
     fireEvent.click(within(row('Reza Reseller')).getByRole('button', { name: t('web.rule_edit') }));
+    await openResellerTab('danger');
     fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
 
     fireEvent.click(
@@ -1477,6 +1482,7 @@ describe('a reseller write whose answer was lost keeps its key across close and 
     await screen.findByText('Reza Reseller');
     const send = async (n: number) => {
       fireEvent.click(screen.getByRole('button', { name: t('web.rule_edit') }));
+      await openResellerTab('danger');
       fireEvent.change(await screen.findByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
       fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
       await waitFor(() => expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(n));

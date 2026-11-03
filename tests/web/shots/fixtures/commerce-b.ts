@@ -1480,5 +1480,27 @@ export const COMMERCE_B: readonly ShotFixture[] = [
     products: PRODUCTS,
     nextCursor: 'cursor-products-2',
   }),
+  // The second page: the reseller edit view follows the cursor to the end, and shows the
+  // imported products as one collapsed group of their own.
+  fixture(
+    '/products',
+    productListResponseSchema,
+    {
+      products: [
+        product(21, 'پلن قدیمی — ۲۰ گیگ', {
+          source: 'MIRZA',
+          categoryId: null,
+          status: 'INACTIVE',
+        }),
+        product(22, 'پلن قدیمی — ۴۰ گیگ', {
+          source: 'MIRZA',
+          categoryId: null,
+          status: 'INACTIVE',
+        }),
+      ],
+      nextCursor: null,
+    },
+    { query: { cursor: 'cursor-products-2' } },
+  ),
   fixture('/products/:id', productResponseSchema, { product: PRODUCTS[0] }),
 ];
