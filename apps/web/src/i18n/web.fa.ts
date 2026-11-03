@@ -10857,6 +10857,8 @@ export const WEB_FA = {
   'web.err_commerce_refund_not_permitted': 'بازپرداخت این پرداخت مجاز نیست.',
   'web.err_commerce_refund_state_invalid': 'این کار در وضعیت فعلی بازپرداخت ممکن نیست.',
   'web.err_commerce_request_invalid': 'بعضی از مقدارها درست نیست. فرم را بررسی کنید.',
+  'web.error_reseller_reason_required':
+    'برای تعلیق، تغییر سطح یا تغییر اعتبار نماینده، دلیل را بنویسید (۳ تا ۵۰۰ نویسه).',
   'web.err_commerce_service_action_in_progress':
     'کار دیگری روی این سرویس در جریان است. کمی صبر کنید.',
   'web.err_commerce_service_action_not_allowed': 'این کار برای این سرویس مجاز نیست.',
