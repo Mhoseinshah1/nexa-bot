@@ -78,7 +78,7 @@ export class Customer360Controller {
     return { overview: toOverview(result.overview), changed: result.changed };
   }
 
-  /** NEXA v095 PR-4 D: «معاف از تأیید شماره» (`users.phone_verification.exempt`). */
+  /** NEXA v095 PR-4 D: the phone-verification exemption (`users.phone_verification.exempt`). */
   @Post('users/:id/phone-exemption')
   async phoneExemption(
     @Req() request: FastifyRequest,

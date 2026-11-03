@@ -5224,7 +5224,7 @@ export function setCustomerChannelExemption(
   return post(CUSTOMER_360_ROUTES.channelExemption(id), body, customer360ControlResponseSchema);
 }
 
-/** NEXA v095 PR-4 D: «معاف از تأیید شماره» (`users.phone_verification.exempt`). */
+/** NEXA v095 PR-4 D: the phone-verification exemption (`users.phone_verification.exempt`). */
 export function setCustomerPhoneExemption(
   id: string,
   body: CustomerPhoneExemptionRequest,

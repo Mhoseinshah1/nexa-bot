@@ -145,6 +145,13 @@ export const NO_WAY_ON_ALLOWED: Readonly<Partial<Record<TemplateKey, string>>> =
     'sets the reply keyboard (phone-verify-flow.ts): the contact keyboard with its cancel label, or the main menu keyboard back',
   'bot.phone.cancelled':
     'sets the reply keyboard (phone-verify-flow.ts): the contact keyboard with its cancel label, or the main menu keyboard back',
+  // NEXA v095 PR-4: the same — a reply keyboard and inline buttons cannot share a message.
+  'bot.phone.required':
+    'sets the reply keyboard (phone-verify-flow.ts): the mandatory gate’s contact button, the one way on',
+  'bot.phone.gateway_required':
+    'sets the reply keyboard (phone-verify-flow.ts): the contact button over «↩️ انتخاب درگاه دیگر»',
+  'bot.phone.iran_only':
+    'sets the reply keyboard (phone-verify-flow.ts): the main menu keyboard back',
 };
 
 /**
