@@ -45,7 +45,11 @@ $C exec -T recovery sh -c 'ls -la /var/lib/nexa/recovery/cutover-*.json 2>/dev/n
 ```
 
 The journal (`cutover-<recovery id>.json`) names `liveDatabase`,
-`candidateDatabase`, `displacedDatabase` and the `phase` it reached. Match what
+`candidateDatabase`, `displacedDatabase` and the `phase` it reached. A
+`.cutover-*.tmp` beside it is an interrupted write and is not the journal. If
+the ops group reported «فایل ثبت جابه‌جایی بازیابی … خوانده نمی‌شود», the
+executor could not read that file and did nothing: read it here by hand and go
+by the database list above, never by a guess at a truncated name. Match what
 you see:
 
 | `nexa` | `nexa_pre_restore_<sid>` | `nexa_candidate_<sid>` | Journal phase          | State                                                                                                                                                                   | Go to |

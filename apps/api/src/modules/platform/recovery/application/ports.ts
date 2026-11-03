@@ -180,23 +180,59 @@ export interface CutoverJournal {
    * that would name it is inside the database the cutover renamed away, and the
    * restored database carries the backup's rows. Discovery has to come from the
    * one thing on the host a database rename cannot move.
+   *
+   * An absent directory is no journals — the ordinary case on an installation
+   * that never ran a recovery. ANY other failure to list it (permission, I/O)
+   * throws `CutoverJournalUnreadable`: an empty answer there would hide a
+   * cutover in progress behind the same `[]` as "nothing happened".
    */
   pending(): Promise<readonly string[]>;
   /** Removes a journal once its facts are recorded where an operator reads them. */
   clear(recoveryId: string): Promise<void>;
-  /** Reads a recovery's journal, for an executor that restarted mid-cutover. */
-  read(recoveryId: string): Promise<{
-    /**
-     * `RENAMED_OUT` is the state between the two renames: the outgoing database
-     * has moved aside and nothing bears the live name yet. It is written only on
-     * the failure path, because that is the only way to STAY there — and it is
-     * the one state where an operator has to act on the file rather than on a
-     * row, since no database is addressable to hold one.
-     */
-    readonly phase: 'ABOUT_TO_RENAME' | 'RENAMED_OUT' | 'RENAMED';
-    readonly displacedDatabase: string;
-    readonly candidateDatabase: string;
-  } | null>;
+  /**
+   * Reads a recovery's journal, for an executor that restarted mid-cutover.
+   *
+   * Three answers, not two. `ABSENT` is a fact — no cutover was begun, or its
+   * journal was already cleared. `UNREADABLE` is NOT absence: the file is there
+   * and cannot be opened, read, parsed or recognised, and the one thing it might
+   * say is which database holds the operator's previous data. The caller reports
+   * it for a person to look at and acts on nothing in it.
+   */
+  read(recoveryId: string): Promise<CutoverJournalRead>;
+}
+
+/** What a cutover journal says, when it can be read. */
+export interface CutoverJournalEntry {
+  /**
+   * `RENAMED_OUT` is the state between the two renames: the outgoing database
+   * has moved aside and nothing bears the live name yet. It is written only on
+   * the failure path, because that is the only way to STAY there — and it is
+   * the one state where an operator has to act on the file rather than on a
+   * row, since no database is addressable to hold one.
+   */
+  readonly phase: 'ABOUT_TO_RENAME' | 'RENAMED_OUT' | 'RENAMED';
+  readonly displacedDatabase: string;
+  readonly candidateDatabase: string;
+}
+
+export type CutoverJournalRead =
+  | { readonly status: 'PRESENT'; readonly entry: CutoverJournalEntry }
+  | { readonly status: 'ABSENT' }
+  /** `file` is the journal's path, for the operator; `reason` is for the log. */
+  | { readonly status: 'UNREADABLE'; readonly file: string; readonly reason: string };
+
+/**
+ * The journal directory itself could not be listed (anything but "it does not
+ * exist"). `location` is the directory, named in the operator's alert.
+ */
+export class CutoverJournalUnreadable extends Error {
+  constructor(
+    readonly location: string,
+    readonly reason: string,
+  ) {
+    super(`The cutover journal at ${location} could not be read: ${reason}`);
+    this.name = 'CutoverJournalUnreadable';
+  }
 }
 
 /** One recovery request row, as the application sees it. */
