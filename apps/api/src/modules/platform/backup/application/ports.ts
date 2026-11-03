@@ -23,6 +23,12 @@ import type {
 export interface DumpOutcome {
   readonly databaseName: string;
   readonly pgDumpVersion: string;
+  /**
+   * What the dump deliberately left out, with the reason — the manifest's `exclusions`,
+   * written by the adapter that built the `pg_dump` arguments so the two cannot disagree.
+   * Absent: nothing was left out.
+   */
+  readonly exclusions?: readonly { readonly object: string; readonly reason: string }[];
 }
 
 export interface VerifyOutcome {

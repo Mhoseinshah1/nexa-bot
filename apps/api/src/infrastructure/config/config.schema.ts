@@ -735,6 +735,15 @@ export const configSchema = z
     /** Where the PostgreSQL client tools live, when they are not on PATH. */
     BACKUP_PG_BIN_DIR: z.string().trim().default(''),
     /**
+     * v0.9.7: the host (and port) of the PostgreSQL server the backup's VERIFICATION restores
+     * into — the `backup-verify` compose service, which Docker caps at `backup.cpu_limit_percent`
+     * of one core and a memory limit sized from the host. Same credentials as `DATABASE_URL`.
+     * Empty: the verification restores into a scratch database on the live server (development
+     * and tests). `deploy/compose.yml` pins it for every application role, like `NODE_ENV`.
+     */
+    BACKUP_VERIFY_PGHOST: z.string().trim().default(''),
+    BACKUP_VERIFY_PGPORT: z.coerce.number().int().min(1).max(65_535).default(5432),
+    /**
      * E4: the 7-Zip console binary that seals and opens a password-protected backup
      * (`7z`; the image links Debian's `7zz` to it). Only used once a backup password is set.
      */
