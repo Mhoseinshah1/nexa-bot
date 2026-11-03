@@ -2150,6 +2150,13 @@
       "when": 1793624585566,
       "tag": "0306_payment_route_requires_verified_phone",
       "breakpoints": true
+    },
+    {
+      "idx": 307,
+      "version": "7",
+      "when": 1793691029544,
+      "tag": "0307_panel_health_announced_capabilities",
+      "breakpoints": true
     }
   ]
 }

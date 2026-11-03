@@ -370,6 +370,7 @@ export class PanelsController {
       providerVersion: view.health?.providerVersion ?? null,
       lastHealthyAt: view.health?.lastHealthyAt?.toISOString() ?? null,
       unusableStreak: view.health?.unusableStreak ?? null,
+      announcedCapabilities: [...(view.health?.announcedCapabilities ?? [])],
       stale: reading.stale,
     };
   }

@@ -472,6 +472,7 @@ export function toHealthRecord(
       failure: null,
       statusCode: null,
       providerVersion: outcome.providerVersion,
+      announcedCapabilities: outcome.announcedCapabilities ?? [],
       // A degraded panel authenticated, so it answered. It counts as having
       // worked — an operator watching `lastHealthyAt` freeze while the panel is
       // plainly responding would be reading a broken clock.
@@ -493,6 +494,8 @@ export function toHealthRecord(
     failure: outcome.failure,
     statusCode: outcome.status,
     providerVersion: null,
+    // A probe that failed announced nothing: no capability outlives the answer that named it.
+    announcedCapabilities: [],
     lastHealthyAt: context.previousLastHealthyAt ?? null,
   };
 }

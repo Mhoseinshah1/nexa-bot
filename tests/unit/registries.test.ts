@@ -572,8 +572,10 @@ describe('the provider registry', () => {
        * operation and failure mode against a mock bridge that enforces it — not a real
        * bridge. There is no feature flag in front of it.
        * `LIMIT_DEVICES` because the create carries the order's device limit and the
-       * protocol requires the bridge to enforce it or refuse; no `SUBSCRIPTION_FILES` and
-       * no `DELIVER_RAW_CONFIGS` (`links` is specified and not yet called, `OQ-C2-06`).
+       * protocol requires the bridge to enforce it or refuse; no `DELIVER_RAW_CONFIGS`
+       * (`links` is specified and not yet called, `OQ-C2-06`). v0.9.5 PR-3:
+       * `SUBSCRIPTION_FILES` (protocol v1.1's optional `files`), offered per panel only while
+       * its bridge's latest health check announces it (`announcedOnly`).
        */
       custom: [
         'HEALTH_CHECK',
@@ -588,6 +590,7 @@ describe('the provider registry', () => {
         'ADD_VOLUME',
         'ADD_TIME',
         'ROTATE_SUBSCRIPTION_LINK',
+        'SUBSCRIPTION_FILES',
       ],
     };
 

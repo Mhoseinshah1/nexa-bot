@@ -1,0 +1,2 @@
+ALTER TABLE "panel_health" ADD COLUMN "announced_capabilities" text[] DEFAULT '{}'::text[] NOT NULL;--> statement-breakpoint
+ALTER TABLE "panel_health" ADD CONSTRAINT "panel_health_announced_capabilities_check" CHECK (announced_capabilities <@ ARRAY['SUBSCRIPTION_FILES']::text[]);

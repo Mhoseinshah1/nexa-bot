@@ -128,7 +128,9 @@ describe('the capability registry', () => {
     ]);
     // 3X-UI is frozen at what it has (CLAUDE.md): creation and the usage read.
     expect(supportedRows(new SanaeiAdapter())).toEqual(['CREATE_SERVICE', 'USAGE_READ']);
-    // R10 C2: the bridge protocol has every operation RickPanel has but the files read.
+    // R10 C2: the bridge protocol has every operation RickPanel has. v0.9.5 PR-3: the files
+    // read too — supported by the TYPE; one panel offers it only while its bridge announces
+    // `files` (`panelOffersCapability`, asked by every reader of files).
     expect(supportedRows(new CustomPanelAdapter())).toEqual([
       'CREATE_SERVICE',
       'RENEW',
@@ -136,6 +138,7 @@ describe('the capability registry', () => {
       'ADD_TIME',
       'DISABLE_ENABLE',
       'ROTATE_SUBSCRIPTION',
+      'SUBSCRIPTION_FILES',
       'USAGE_READ',
       'TERMINATE',
     ]);

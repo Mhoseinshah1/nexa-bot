@@ -4602,6 +4602,18 @@ Defaults below are the readings that move no money and send no customer message.
 - **OQ-C2-08 — the type's display name.** `canonicalName` is «Custom (Nexa bridge v1)», shown
   Latin in the Persian admin like the other providers' names; the Features page calls the
   switch «پنل اختصاصی (پل Nexa)». Confirm or rename.
+- **OQ-C2-09 — «فقط فایل» when a bridge stops announcing `files` (v0.9.5 PR-3).** The panel
+  keeps «فقط فایل» as the operator set it, and Nexa stops fetching files the moment a health
+  check no longer announces `files` — so that panel's customers get neither link nor files
+  until the bridge announces again or the operator picks «فقط لینک ساب». The Web Admin says so
+  in a warning on the panel's delivery options; nothing switches it back automatically (that
+  would send customers a link the operator chose to withhold). Confirm, or decide that a lost
+  announcement shows the link.
+- **OQ-C2-10 — delivery options on the NEW custom-panel form (v0.9.5 PR-3).** The approved demo
+  draws the three options on the create form. A panel that has not been created has had no
+  health check, so the two file options would always be disabled there; they are on the
+  panel's own page (tab «فایل‌های اتصال»), enabled once the connection test announces `files`.
+  Confirm, or ask for the disabled options on the create form as well.
 
 ## The custom gateway (Round 10 C1, `docs/protocols/custom-gateway.md`, `docs/custom-gateway-audit.md`)
 

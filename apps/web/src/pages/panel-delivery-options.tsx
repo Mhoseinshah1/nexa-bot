@@ -1,20 +1,35 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PANEL_QR_KINDS,
   SINGBOX_INTERVAL_MAX_MINUTES,
   SINGBOX_INTERVAL_MIN_MINUTES,
   isSingboxInterval,
+  panelDeliversConnectionFiles,
   panelSupportsQrKind,
   providerDeliversConnectionFiles,
+  providerDescriptor,
+  type PanelAdvancedResponse,
   type PanelQrKind,
   type PanelSummaryResponse,
 } from '@nexa/contracts';
-import { updatePanel } from '../api/client';
+import { fetchPanelAdvanced, updatePanel, updatePanelPolicy } from '../api/client';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
-import { Banner, Button, Card, Field, Input, Select, ToggleRow, useToast } from '../ui/kit';
+import {
+  Banner,
+  Button,
+  Card,
+  Field,
+  Input,
+  Radio,
+  Select,
+  StateSwitch,
+  ToggleRow,
+  useToast,
+} from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
+import { advancedKey } from './panel-advanced';
 import { messageFor } from './settings';
 
 const QR_KIND_LABELS: Readonly<Record<PanelQrKind, WebKey>> = {
@@ -44,6 +59,18 @@ export function PanelDeliveryOptionsCard({
   const offersFilesOnly = providerDeliversConnectionFiles(panel.providerType);
   const offersQrKind = panelSupportsQrKind(panel.providerType);
   if (!offersFilesOnly && !offersQrKind) return null;
+  // v0.9.5 PR-3: a type whose files each panel must announce (the custom bridge) gets the
+  // three-way choice, with the two file options enabled only while the latest health
+  // check announced them.
+  if (filesAreAnnounced(panel.providerType)) {
+    return (
+      <AnnouncedChoiceCard
+        key={`${panel.id}:${String(panel.filesOnlyDelivery)}`}
+        panel={panel}
+        mayEdit={mayEdit}
+      />
+    );
+  }
   return (
     <Options
       key={`${panel.id}:${String(panel.filesOnlyDelivery)}:${panel.qrKind}:${String(panel.singboxIntervalMinutes)}`}
@@ -177,5 +204,197 @@ function Options({
         )}
       </div>
     </Card>
+  );
+}
+
+/** Whether this type's files are offered per panel, by its health check's announcement. */
+function filesAreAnnounced(providerType: string): boolean {
+  return providerDescriptor(providerType)?.announcedOnly?.includes('SUBSCRIPTION_FILES') ?? false;
+}
+
+type DeliveryChoice = 'BOTH' | 'FILES' | 'LINK';
+const CHOICES: readonly {
+  readonly value: DeliveryChoice;
+  readonly title: WebKey;
+  readonly hint: WebKey;
+}[] = [
+  { value: 'BOTH', title: 'web.delivery_choice_both', hint: 'web.delivery_choice_both_hint' },
+  { value: 'FILES', title: 'web.delivery_choice_files', hint: 'web.delivery_choice_files_hint' },
+  { value: 'LINK', title: 'web.delivery_choice_link', hint: 'web.delivery_choice_link_hint' },
+];
+
+/**
+ * v0.9.5 PR-3, the custom panel's «تحویل به مشتری» (approved demo, `panel()`): three
+ * options over the two settings that already exist, so nothing new decides delivery:
+ *
+ *   - «فقط فایل»           `filesOnlyDelivery` on;
+ *   - «لینک ساب + فایل‌ها» `filesOnlyDelivery` off, the policy's `SUBSCRIPTION_FILES` on;
+ *   - «فقط لینک ساب»       `filesOnlyDelivery` off, the policy's `SUBSCRIPTION_FILES` off —
+ *     the switch that already stops the files button and the files after a delivery.
+ *
+ * The two file options are disabled, with the reason, while the bridge's latest health
+ * check does not announce `files` (`panelDeliversConnectionFiles`, the question the server
+ * asks before accepting «فقط فایل» and before fetching any file). A save writes «فقط فایل»
+ * OFF before the policy and ON after it, so no moment has the link hidden and files off.
+ */
+function AnnouncedChoiceCard({
+  panel,
+  mayEdit,
+}: {
+  panel: PanelSummaryResponse;
+  mayEdit: boolean;
+}) {
+  const advanced = useQuery({
+    queryKey: advancedKey(panel.id),
+    queryFn: () => fetchPanelAdvanced(panel.id),
+  });
+  const data = advanced.data;
+  return (
+    <Card title={t('web.delivery_options_title')} hint={t('web.delivery_options_hint')}>
+      <StateSwitch query={advanced}>
+        {data !== undefined && (
+          <AnnouncedChoice
+            key={`${String(data.policy.revision)}:${String(data.policy.readable)}`}
+            panel={panel}
+            advanced={data}
+            mayEdit={mayEdit}
+          />
+        )}
+      </StateSwitch>
+    </Card>
+  );
+}
+
+function filesSwitchOf(advanced: PanelAdvancedResponse): boolean {
+  if (!advanced.policy.readable) return false;
+  return advanced.policy.policy.actions.SUBSCRIPTION_FILES?.customerEnabled ?? true;
+}
+
+function AnnouncedChoice({
+  panel,
+  advanced,
+  mayEdit,
+}: {
+  panel: PanelSummaryResponse;
+  advanced: PanelAdvancedResponse;
+  mayEdit: boolean;
+}) {
+  const client = useQueryClient();
+  const panelSubmission = useSubmissionKey();
+  const policySubmission = useSubmissionKey();
+  const toast = useToast();
+  const announced = panelDeliversConnectionFiles(
+    panel.providerType,
+    panel.health.announcedCapabilities,
+  );
+  const filesSwitch = filesSwitchOf(advanced);
+  const stored: DeliveryChoice = panel.filesOnlyDelivery ? 'FILES' : filesSwitch ? 'BOTH' : 'LINK';
+  const [choice, setChoice] = useState<DeliveryChoice>(stored);
+  const readable = advanced.policy.readable;
+
+  const wantFilesOnly = choice === 'FILES';
+  const wantFilesSwitch = choice !== 'LINK';
+  const policyChanges = wantFilesSwitch !== filesSwitch;
+  const dirty = choice !== stored;
+
+  const writePanel = (filesOnlyDelivery: boolean) => {
+    const body = { id: panel.id, filesOnlyDelivery };
+    return updatePanel({ ...body, idempotencyKey: panelSubmission.current(body) });
+  };
+  const writePolicy = () => {
+    if (!advanced.policy.readable) return Promise.resolve();
+    const policy = {
+      ...advanced.policy.policy,
+      actions: {
+        ...advanced.policy.policy.actions,
+        SUBSCRIPTION_FILES: { customerEnabled: wantFilesSwitch },
+      },
+    };
+    return updatePanelPolicy({
+      id: panel.id,
+      policy,
+      expectedRevision: advanced.policy.revision,
+      idempotencyKey: policySubmission.current({
+        command: 'panels.policy',
+        id: panel.id,
+        expectedRevision: advanced.policy.revision,
+        policy,
+      }),
+    }).then(() => undefined);
+  };
+
+  const save = useMutation({
+    mutationFn: async () => {
+      // «فقط فایل» OFF first, ON last: the link is never hidden while files are off.
+      if (!wantFilesOnly && panel.filesOnlyDelivery) await writePanel(false);
+      if (policyChanges) await writePolicy();
+      if (wantFilesOnly && !panel.filesOnlyDelivery) await writePanel(true);
+    },
+    onSuccess: async () => {
+      panelSubmission.settle();
+      policySubmission.settle();
+      toast({ tone: 'ok', message: t('web.saved') });
+      await client.invalidateQueries({ queryKey: ['panel', panel.id] });
+      await client.invalidateQueries({ queryKey: ['panels'] });
+    },
+    onError: async (error: unknown) => {
+      panelSubmission.settleOn(error);
+      policySubmission.settleOn(error);
+      toast({ tone: 'danger', message: messageFor(error), error });
+      // A half-applied save (the first write landed) is shown as the server now holds it.
+      await client.invalidateQueries({ queryKey: ['panel', panel.id] });
+      await client.invalidateQueries({ queryKey: ['panels'] });
+    },
+  });
+  const editable = mayEdit && readable && !save.isPending;
+
+  return (
+    <div className="stack-sm">
+      <fieldset className="stack-sm">
+        <legend className="small">{t('web.delivery_choice_label')}</legend>
+        {CHOICES.map((one) => (
+          <div key={one.value}>
+            <Radio
+              name={`panel-delivery-${panel.id}`}
+              value={one.value}
+              selected={choice}
+              disabled={!editable || (one.value !== 'LINK' && !announced)}
+              onChange={setChoice}
+              label={t(one.title)}
+            />
+            <p className="muted small">{t(one.hint)}</p>
+          </div>
+        ))}
+      </fieldset>
+      {!announced && <p className="muted small">{t('web.delivery_files_not_announced')}</p>}
+      {!announced && panel.filesOnlyDelivery && (
+        <Banner tone="warn" role="alert">
+          {t('web.delivery_files_only_stranded')}
+        </Banner>
+      )}
+      {!readable && (
+        <Banner tone="warn" role="alert">
+          {t('web.delivery_policy_unreadable')}
+        </Banner>
+      )}
+      {save.isError && (
+        <Banner tone="danger" role="alert">
+          {messageFor(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
+      {mayEdit && (
+        <div>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!dirty || !editable}
+            onClick={() => save.mutate()}
+          >
+            {save.isPending ? t('web.working') : t('web.save')}
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
