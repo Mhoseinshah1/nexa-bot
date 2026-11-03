@@ -49,7 +49,6 @@ M={
  'M4-ownership-tag-mismatch-accepted':(A,"    if (account.nexaRef !== ref.clientId) return failure('PROVIDER_REFUSED', 409);\n","",UNIT+[AD]),
  'M5-executor-omits-operation-id':(E,"    operationId: input.operationId,\n  });","  });",INT+[CI,'-t','provisions with the operation id']),
  'M5b-new-operation-id-per-attempt':(V,"await suspendCall(adapter, target, http, ref, { operationId: operation.id }),","await suspendCall(adapter, target, http, ref, { operationId: crypto.randomUUID() }),",INT+[CI,'-t','suspends, resumes']),
- 'M6-flag-gate-removed':(S,"          await this.assertProviderFeature(scope, providerType, tx);\n","",INT+[CI,'-t','is refused while custom_panel_provider is off']),
  'M7-https-gate-removed':(S,"    if (descriptor?.transport !== 'HTTPS_ONLY') return;","    if (descriptor !== null) return;",INT+[CI,'-t','refuses an http']),
  'M7b-adapter-https-check-removed':(A,"    if (!/^https:\\/\\//i.test(target.baseUrl)) return failure('BLOCKED_TARGET', null);\n","",UNIT+[AD,'-t','http:// base URL']),
  'M8-body-hash-dropped-from-canonical':(P,"    parts.nonce,\n    parts.bodySha256,\n  ].join('\\n');","    parts.nonce,\n  ].join('\\n');",UNIT+[DOC]),

@@ -98,23 +98,27 @@ describe('the feature flags page', () => {
 
     expect(await screen.findByText(OPS_TITLE)).toBeInTheDocument();
     expect(screen.getByText(t('web.feature_ops_notifications_summary'))).toBeInTheDocument();
-    expect(screen.getByText(t('web.enabled'))).toBeInTheDocument();
+    expect(
+      within(container.querySelector('.feature-row') as HTMLElement).getByText(t('web.enabled')),
+    ).toBeInTheDocument();
     // WP-A2: an operator never needs to read, let alone type, the flag identifier.
     expect(container.textContent).not.toContain('ops_notifications');
     // The server's English description is the fallback for an unknown key only.
     expect(container.textContent).not.toContain('Project operational events');
   });
 
-  it('shows ten whole rows and the rest behind one button, with no clipping pane', async () => {
-    const flags = FEATURE_FLAGS.slice(0, 13).map((definition) => flag({ key: definition.key }));
-    stubApi([{ url: '/features', body: { flags } }]);
+  it('is one page: no pager and no «show more», every category reachable at once', async () => {
+    const flags = FEATURE_FLAGS.map((definition) => flag({ key: definition.key }));
+    stubApi([{ url: '/features', body: { flags, total: flags.length } }]);
     const { container } = renderPage(<FeaturesPage mayEdit denied={false} />);
-    await screen.findByText(t('web.features_list_title'));
-    expect(container.querySelectorAll('.feature-row')).toHaveLength(10);
+    await screen.findByRole('tablist', { name: t('web.features_categories_label') });
+    expect(screen.queryByTestId('counted-pager-info')).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_next_aria') })).toBeNull();
+    // The first category shows ALL of its flags (more than ten would be clipped by a pager).
+    const first = FEATURE_FLAGS.filter((f) => FEATURE_PRESENTATION[f.key].category === 'reminders');
+    expect(first.length).toBeGreaterThan(10);
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(first.length);
     expect(container.querySelector('.feature-pane')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(t('web.features_show_all')) }));
-    expect(container.querySelectorAll('.feature-row')).toHaveLength(13);
-    expect(screen.getByRole('button', { name: t('web.features_show_first') })).toBeInTheDocument();
   });
 
   /**
@@ -132,8 +136,10 @@ describe('the feature flags page', () => {
     expect(toggle).toBeEnabled();
     expect(toggle).toHaveAttribute('aria-checked', 'true');
     // T32 — NO input at all, not "no input carrying one of two type values".
-    expect(container.querySelectorAll('input, textarea, select')).toHaveLength(0);
-    expect(screen.queryAllByRole('textbox')).toHaveLength(0);
+    // Inside the rows: the page's own search box is the only input outside them.
+    const list = container.querySelector('.feature-list') as HTMLElement;
+    expect(list.querySelectorAll('input, textarea, select')).toHaveLength(0);
+    expect(within(list).queryAllByRole('textbox')).toHaveLength(0);
     expect(screen.queryAllByRole('spinbutton')).toHaveLength(0);
     expect(screen.queryAllByRole('combobox')).toHaveLength(0);
   });
@@ -145,7 +151,9 @@ describe('the feature flags page', () => {
 
     // Absent, not disabled.
     expect(screen.queryByRole('switch')).toBeNull();
-    expect(screen.getByText(t('web.enabled'))).toBeInTheDocument();
+    expect(
+      within(document.querySelector('.feature-row') as HTMLElement).getByText(t('web.enabled')),
+    ).toBeInTheDocument();
   });
 
   it('turns a feature on with one click, sending no typed key and no reason', async () => {
@@ -337,7 +345,7 @@ describe('the feature flags page', () => {
         body: {
           flags: [
             flag({ enabled: true, version: 2 }),
-            flag({ key: 'template_overrides', enabled: true, version: 1 }),
+            flag({ key: 'service_expiry_reminders', enabled: true, version: 1 }),
           ],
         },
       },
@@ -359,12 +367,12 @@ describe('the feature flags page', () => {
     expect(cancel).toHaveFocus();
 
     // Focus moved out by any other route is pulled back in.
-    screen.getByRole('switch', { name: t('web.feature_template_overrides_title') }).focus();
+    screen.getByRole('switch', { name: t('web.feature_service_expiry_reminders_title') }).focus();
     expect(cancel).toHaveFocus();
 
     // A second sensitive switch behind the open dialog: no second dialog, no request.
     fireEvent.click(
-      screen.getByRole('switch', { name: t('web.feature_template_overrides_title') }),
+      screen.getByRole('switch', { name: t('web.feature_service_expiry_reminders_title') }),
     );
     expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
     expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
@@ -473,9 +481,12 @@ describe('the feature presentation catalogue', () => {
     ]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
     await screen.findAllByRole('switch');
-    // Ten rows first; every other flag is one button away, none is lost.
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(t('web.features_show_all')) }));
-    const switches = screen.getAllByRole('switch');
+    // One category at a time; walk every category, none is lost.
+    const switches: HTMLElement[] = [];
+    for (const tab of screen.getAllByRole('tab')) {
+      fireEvent.click(tab);
+      switches.push(...screen.getAllByRole('switch'));
+    }
     expect(switches).toHaveLength(FEATURE_FLAGS.length);
     for (const one of switches) {
       expect(one.getAttribute('aria-label') ?? one.textContent ?? '').not.toMatch(

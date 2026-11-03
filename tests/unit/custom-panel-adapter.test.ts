@@ -98,6 +98,8 @@ describe('probe — GET v1/health', () => {
       ok: true,
       providerVersion: '1.4.2',
       degraded: false,
+      // A v1.0 bridge (the fake's default) announces no optional operation (v1.1, §5.1).
+      announcedCapabilities: [],
     });
     expect(bridge.count('health')).toBe(1);
   });

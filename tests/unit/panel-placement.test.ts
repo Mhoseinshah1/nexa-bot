@@ -196,6 +196,7 @@ describe('PanelPlacementService.place', () => {
         failure: healthy ? null : 'TIMEOUT',
         statusCode: null,
         providerVersion: null,
+        announcedCapabilities: [],
         lastHealthyAt: NOW,
         unusableStreak: healthy ? 0 : 1,
         validatedIdentity: null,

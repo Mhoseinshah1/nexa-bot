@@ -18,6 +18,7 @@ import {
   type ProviderRotationOutcome,
   type ProviderServiceTarget,
   type ProviderStateChangeOutcome,
+  type ProviderSubscriptionFilesOutcome,
   type ProviderTarget,
   type ProviderUsage,
   type ProviderUsageOutcome,
@@ -39,6 +40,8 @@ import {
   formatBytes,
   formatTimestamp,
   parseAccount,
+  parseAccountFiles,
+  parseAnnouncedCapabilities,
   parseJsonObject,
   protocolPath,
   readSignedError,
@@ -260,7 +263,13 @@ export class CustomPanelAdapter implements ProviderAdapter {
       typeof bridge === 'object' && bridge !== null && !Array.isArray(bridge)
         ? safeBridgeVersion((bridge as Record<string, unknown>)['version'])
         : null;
-    return { ok: true, providerVersion: version, degraded: upstream !== 'OK' };
+    return {
+      ok: true,
+      providerVersion: version,
+      degraded: upstream !== 'OK',
+      // v1.1: what this bridge says it implements; absent or unreadable is none (§5.1).
+      announcedCapabilities: parseAnnouncedCapabilities(body['capabilities']),
+    };
   }
 
   /**
@@ -592,5 +601,47 @@ export class CustomPanelAdapter implements ProviderAdapter {
       return { ok: true, found: true, subscriptionUrl: read.account.subscriptionUrl };
     }
     return unresolved ?? failure('MALFORMED_RESPONSE', 200);
+  }
+
+  /**
+   * `GET v1/accounts/{username}/files` (§5.10, v1.1) — the account's connection files.
+   *
+   * Called by `SubscriptionFileService` only while the panel's latest health check
+   * announced `files` (`panelOffersCapability`); this method does not ask again, because
+   * the answer is the same either way for a bridge without it — a signed 501 is
+   * `UNSUPPORTED_CAPABILITY` and anything unsigned is never success.
+   *
+   * A READ, never retried here. The path is the service's OWN username, and the answer
+   * must echo it and carry the service's own `nexaRef`: an account bound to another ref,
+   * or to none, is `PROVIDER_REFUSED` (409) exactly as in `readAccount`, and not one of its
+   * files is returned — one customer never receives another account's files.
+   *
+   *   signed 200 + files       -> found, bounded by `parseAccountFiles` (refused entries
+   *                               are counted in `failed`, never sent)
+   *   signed 2xx, malformed    -> MALFORMED_RESPONSE, nothing sent
+   *   signed 404 NOT_FOUND     -> found: false
+   *   signed 429               -> RATE_LIMITED (the caller's default wait)
+   *   anything else            -> the table's reading; unsigned is never success
+   */
+  async fetchSubscriptionFiles(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderSubscriptionFilesOutcome> {
+    assertSendableProviderUsername(ref.username);
+    const answer = await this.exchange(target, http, {
+      method: 'GET',
+      path: accountPath(ref.username, ACCOUNT_SUFFIX.files),
+    });
+    if (!answer.ok) return answer;
+    if (!isSuccess(answer.status)) {
+      const reading = readSignedError(answer.status, answer.body);
+      if (reading === 'NOT_FOUND') return { ok: true, found: false };
+      return failure(reading, answer.status);
+    }
+    const parsed = parseAccountFiles(answer.body, ref.username);
+    if (parsed === null) return failure('MALFORMED_RESPONSE', answer.status);
+    if (parsed.nexaRef !== ref.clientId) return failure('PROVIDER_REFUSED', 409);
+    return { ok: true, found: true, files: parsed.files, failed: parsed.refused };
   }
 }

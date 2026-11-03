@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Drawer } from '../ui/overlays';
+import { ProtocolDocBox } from '../ui/protocol-doc-box';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PAYMENT_GATEWAY_DESCRIPTORS,
@@ -1129,7 +1130,10 @@ export function PaymentGatewaysPage({
               <Banner tone="info">{t('web.payment_gateway_rialit_hint')}</Banner>
             )}
             {keyedRow?.endpoint != null && (
-              <Banner tone="info">{t('web.payment_gateway_custom_hint')}</Banner>
+              <>
+                <Banner tone="info">{t('web.payment_gateway_custom_hint')}</Banner>
+                <ProtocolDocBox kind="gateway" />
+              </>
             )}
             <Field
               label={t(

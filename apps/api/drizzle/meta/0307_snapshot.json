@@ -1,5 +1,5 @@
 {
-  "id": "042c5d24-e0e5-4849-85d3-f3d71be7c215",
+  "id": "23ac6bbd-fc32-4285-8983-7d8d639b6c56",
   "prevId": "9a3340ef-52ea-4893-af11-7fdc63d352bb",
   "version": "7",
   "dialect": "postgresql",
@@ -10128,24 +10128,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "phone_verification_exempt_at": {
-          "name": "phone_verification_exempt_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "phone_resume": {
-          "name": "phone_resume",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "phone_resume_at": {
-          "name": "phone_resume_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "phone_number": {
           "name": "phone_number",
           "type": "text",
@@ -10362,10 +10344,6 @@
         "customers_phone_check": {
           "name": "customers_phone_check",
           "value": "(phone_number IS NULL) = (phone_verified_at IS NULL)"
-        },
-        "customers_phone_resume_check": {
-          "name": "customers_phone_resume_check",
-          "value": "(phone_resume IS NULL) = (phone_resume_at IS NULL) AND (phone_resume IS NULL OR char_length(phone_resume) <= 300)"
         },
         "customers_phone_format_check": {
           "name": "customers_phone_format_check",
@@ -24271,6 +24249,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "announced_capabilities": {
+          "name": "announced_capabilities",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
         "last_healthy_at": {
           "name": "last_healthy_at",
           "type": "timestamp with time zone",
@@ -24362,6 +24347,10 @@
         "panel_health_failure_check": {
           "name": "panel_health_failure_check",
           "value": "failure IS NULL OR failure IN ('AUTHENTICATION_FAILED', 'AUTHENTICATION_REQUIRES_INTERACTION', 'UNREACHABLE', 'TIMEOUT', 'TLS_FAILED', 'BLOCKED_TARGET', 'RATE_LIMITED', 'MALFORMED_RESPONSE', 'PROVIDER_ERROR', 'PROVIDER_REFUSED', 'UNSUPPORTED_CAPABILITY')"
+        },
+        "panel_health_announced_capabilities_check": {
+          "name": "panel_health_announced_capabilities_check",
+          "value": "announced_capabilities <@ ARRAY['SUBSCRIPTION_FILES']::text[]"
         },
         "panel_health_failure_presence_check": {
           "name": "panel_health_failure_presence_check",

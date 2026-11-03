@@ -815,17 +815,6 @@ export const PANEL_ERROR_CODES = {
    */
   PANEL_NOT_VALIDATED: 'panel.not_validated',
   /**
-   * The provider type is gated behind a feature flag that is off for this tenant (R10 C2).
-   *
-   * Raised only when a NEW panel of that type is created. A flag switched off after
-   * panels of the type exist does not stop them operating: the services on them were
-   * paid for, and stranding them is worse than the risk the flag guards. The `custom`
-   * provider is the first gated type (`custom_panel_provider`, off by default until its
-   * protocol is accepted against a real bridge). Which flag gates which type is declared
-   * on the descriptor (`requiresFeature`), never branched on by name.
-   */
-  PROVIDER_FEATURE_DISABLED: 'panel.provider_feature_disabled',
-  /**
    * The API token is shorter than the provider's declared minimum (R10 C2).
    *
    * The `custom` provider's API token is the HMAC key every request is signed with and

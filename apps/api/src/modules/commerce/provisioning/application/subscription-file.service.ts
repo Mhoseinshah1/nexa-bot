@@ -4,6 +4,7 @@ import {
   customerActionVerdict,
   isNexaError,
   isProviderType,
+  panelDeliversConnectionFiles,
   providerDescriptor,
   type ActorContext,
   type BotInstanceId,
@@ -147,6 +148,20 @@ export type SubscriptionFilesResult =
   | { readonly outcome: 'NOT_FOUND' };
 
 /**
+ * Whether the panel hands over files NOW: its type declares them and, for a type whose
+ * files are announced per panel, its latest health check announced them.
+ */
+function announcesFiles(view: {
+  readonly panel: { readonly providerType: string };
+  readonly health: { readonly announcedCapabilities: readonly string[] } | null;
+}): boolean {
+  return panelDeliversConnectionFiles(
+    view.panel.providerType,
+    view.health?.announcedCapabilities ?? null,
+  );
+}
+
+/**
  * A panel's ready-made connection files, fetched for their owner and sent to them
  * (Package E, `docs/package-e-rickpanel-files-audit.md`).
  *
@@ -174,6 +189,9 @@ export class SubscriptionFileService {
     ) {
       return false;
     }
+    // v0.9.5 PR-3: a capability the type has only when the panel announces it (a custom
+    // bridge's `files`) is offered only while the latest health check announced it.
+    if (!announcesFiles(view)) return false;
     return customerActionVerdict(
       await this.deps.panelPolicy.forPanel(scope, service.panelId),
       'SUBSCRIPTION_FILES',
@@ -275,6 +293,9 @@ export class SubscriptionFileService {
     }
     const adapter = this.deps.adapters(operable.providerType as ProviderType);
     if (!canFetchSubscriptionFiles(adapter)) return { outcome: 'UNAVAILABLE' };
+    // v0.9.5 PR-3: decided again here, so a bridge whose latest health check did not
+    // announce `files` is never sent a files request — by a tap or after a delivery.
+    if (view === null || !announcesFiles(view)) return { outcome: 'UNAVAILABLE' };
     // WP-A8: decided again on the tap, before the panel is asked for anything.
     if (
       !customerActionVerdict(

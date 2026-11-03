@@ -70,6 +70,7 @@ import {
   PRODUCT_CATEGORY_STATUSES,
   PRODUCT_CATEGORY_VISIBILITIES,
   PERMISSION_OVERRIDE_EFFECTS,
+  PROVIDER_ANNOUNCEABLE_CAPABILITIES,
   PROVIDER_FAILURE_KINDS,
   PROVIDER_TYPES,
   SOURCE_SURFACES,
@@ -2449,6 +2450,16 @@ export const panelHealth = pgTable(
     statusCode: integer('status_code'),
     providerVersion: text('provider_version'),
     /**
+     * v0.9.5 PR-3: the optional capabilities the probe this row records ANNOUNCED — a
+     * custom bridge's `capabilities: ["files"]` (`PROVIDER_ANNOUNCEABLE_CAPABILITIES`).
+     * Empty for a failed probe and for every provider whose capabilities are static.
+     * Replaced by every probe that is written, so it never outlives the answer naming it.
+     */
+    announcedCapabilities: text('announced_capabilities')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    /**
      * When this panel last answered successfully.
      *
      * Carried forward across failures on purpose: "unreachable, last worked
@@ -2512,6 +2523,10 @@ export const panelHealth = pgTable(
 
     check('panel_health_state_check', enumCheck('state', PANEL_HEALTH_STATES)),
     check('panel_health_failure_check', nullableEnumCheck('failure', PROVIDER_FAILURE_KINDS)),
+    check(
+      'panel_health_announced_capabilities_check',
+      enumArrayCheck('announced_capabilities', PROVIDER_ANNOUNCEABLE_CAPABILITIES),
+    ),
     /** A failing state names its failure; a succeeding one does not. */
     check(
       'panel_health_failure_presence_check',

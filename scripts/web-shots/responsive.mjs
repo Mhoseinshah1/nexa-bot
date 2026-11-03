@@ -103,6 +103,22 @@ const SCENARIOS = [
     clicks: ['[role=tab]:nth-of-type(2)'],
     expect: `document.querySelector('[role=tab][aria-selected="true"]') !== document.querySelector('[role=tab]')`,
   },
+  {
+    name: 'phone reseller standing, allowed-products tab',
+    device: 'phone',
+    route: '/resellers',
+    clicks: ['tbody tr:first-child td:last-child button', '[role=tab]:nth-child(5)'],
+    dialog: true,
+    expect: `document.querySelectorAll('.rs-pchip').length > 0`,
+  },
+  {
+    name: 'phone reseller standing, sensitive-actions tab',
+    device: 'phone',
+    route: '/resellers',
+    clicks: ['tbody tr:first-child td:last-child button', '[role=tab]:nth-child(6)'],
+    dialog: true,
+    expect: `!!document.querySelector('.danger-zone')`,
+  },
   /*
    * The list filters live in the «فیلترها» panel (`ListFilterBar`, W1.3), not in a
    * `.filter-row` of chips: the scenario opens the panel and presses a chip inside it. The

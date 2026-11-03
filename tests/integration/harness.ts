@@ -428,6 +428,7 @@ export async function validatePanelConnection(
         failure: null,
         statusCode: 200,
         providerVersion: null,
+        announcedCapabilities: [],
         lastHealthyAt: container.clock.now(),
       },
       identity,

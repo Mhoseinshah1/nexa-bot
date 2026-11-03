@@ -14,7 +14,6 @@ import {
   isSystemContext,
   type ActorContext,
   type AuditWriter,
-  type FeatureFlagKey,
   type Clock,
   type IdGenerator,
   type IdempotencyStore,
@@ -29,6 +28,7 @@ import {
   NexaError,
   shapeAcceptsCredential,
   providerDescriptor,
+  panelDeliversConnectionFiles,
   providerDeliversConnectionFiles,
   panelSupportsQrKind,
   DEFAULT_PANEL_QR_KIND,
@@ -225,14 +225,6 @@ export interface PanelServiceDeps {
   readonly ids: IdGenerator;
   readonly http: SafeHttpClient;
   readonly urlPolicy: UrlPolicyOptions;
-  /**
-   * Whether a feature is on for the tenant (R10 C2). Read for the ONE gate a provider
-   * descriptor may declare on creation, `requiresFeature`, inside the create's
-   * transaction — the same place scope activity is read, for the same reason.
-   */
-  readonly features: {
-    isEnabled(scope: ScopeContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean>;
-  };
   /**
    * Which adapter operates a provider type.
    *
@@ -772,10 +764,18 @@ export class PanelService {
    * the switch) AND the adapter must implement and declare it (the capability registry's
    * row), so a provider that declares files with no method behind them cannot be switched
    * into hiding the only thing a customer would have.
+   *
+   * v0.9.5 PR-3: and the PANEL must hand them over now — for a type whose files are
+   * announced per panel (a custom bridge's `files`), its latest health check announced
+   * them (`panelDeliversConnectionFiles`), read from the row held under the lock.
    */
-  private assertDeliversFiles(providerType: string): void {
+  private assertDeliversFiles(view: PanelView): void {
+    const providerType = view.panel.providerType;
     let supported = false;
-    if (providerDeliversConnectionFiles(providerType)) {
+    if (
+      providerDeliversConnectionFiles(providerType) &&
+      panelDeliversConnectionFiles(providerType, view.health?.announcedCapabilities ?? null)
+    ) {
       supported = deriveCapabilityRegistry(this.deps.adapters(providerType as ProviderType)).some(
         (entry) => entry.row === 'SUBSCRIPTION_FILES' && entry.supported,
       );
@@ -787,52 +787,6 @@ export class PanelService {
         { providerType },
       );
     }
-  }
-
-  /**
-   * `requiresFeature` — a NEW panel of a gated type needs the tenant's flag on.
-   *
-   * Creation only, by the lead's decision for R10 C2: a flag switched off after panels of
-   * the type exist does not stop them being operated, edited, tested or re-keyed — their
-   * services were paid for. Read inside the create's transaction, like scope activity:
-   * a switch-off that commits between the request arriving and this write still stops it.
-   */
-  private async assertProviderFeature(
-    scope: ScopeContext,
-    providerType: string,
-    tx: TransactionScope,
-  ): Promise<void> {
-    const key = providerDescriptor(providerType)?.requiresFeature;
-    if (key === undefined) return;
-    if (!(await this.deps.features.isEnabled(scope, key, tx))) {
-      throw errors.preconditionFailed(
-        PANEL_ERROR_CODES.PROVIDER_FEATURE_DISABLED,
-        'This provider type is switched off for this tenant. Turn its feature on to add a panel of it.',
-        { feature: key },
-      );
-    }
-  }
-
-  /**
-   * The provider types the panel form may OFFER this tenant (R10 C2): every type in
-   * `types` whose descriptor declares no `requiresFeature`, or whose feature is on.
-   *
-   * A courtesy for `GET /providers`, which authenticates and checks no permission — it
-   * is a catalogue of code — so this reads flags and nothing else. It is NOT the
-   * enforcement: `create` re-reads the flag inside its own transaction.
-   */
-  async offeredProviderTypes(
-    scope: TenantContext,
-    types: readonly ProviderType[],
-  ): Promise<ProviderType[]> {
-    const offered: ProviderType[] = [];
-    for (const type of types) {
-      const feature = providerDescriptor(type)?.requiresFeature;
-      if (feature === undefined || (await this.deps.features.isEnabled(scope, feature))) {
-        offered.push(type);
-      }
-    }
-    return offered;
   }
 
   async create(
@@ -1047,7 +1001,6 @@ export class PanelService {
         denial,
         async (tx) => {
           await this.requireActiveScope(scope, tx);
-          await this.assertProviderFeature(scope, providerType, tx);
           /*
            * The CRITICAL permission, re-checked INSIDE the transaction like the
            * edit permission above it. `runAuthorizedMutation` re-runs only the
@@ -1289,7 +1242,7 @@ export class PanelService {
          * Setting the value it already has changes nothing and is not an audit row.
          */
         if (command.filesOnlyDelivery !== undefined) {
-          if (command.filesOnlyDelivery) this.assertDeliversFiles(before.panel.providerType);
+          if (command.filesOnlyDelivery) this.assertDeliversFiles(before);
           if (command.filesOnlyDelivery !== before.panel.filesOnlyDelivery) {
             changes.filesOnlyDelivery = command.filesOnlyDelivery;
           }

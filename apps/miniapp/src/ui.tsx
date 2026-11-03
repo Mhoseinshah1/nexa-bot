@@ -55,19 +55,21 @@ export function Button({
   children,
   onClick,
   primary,
+  small,
   disabled,
   type = 'button',
 }: {
   children: ReactNode;
   onClick?: () => void;
   primary?: boolean;
+  small?: boolean;
   disabled?: boolean;
   type?: 'button' | 'submit';
 }) {
   return (
     <button
       type={type}
-      className={primary === true ? 'btn btn-primary' : 'btn'}
+      className={(primary === true ? 'btn btn-primary' : 'btn') + (small === true ? ' btn-sm' : '')}
       onClick={onClick}
       disabled={disabled}
     >

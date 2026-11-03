@@ -4583,11 +4583,11 @@ Defaults below are the readings that move no money and send no customer message.
 - **OQ-C2-02 — declare-after-acceptance.** The `custom` capabilities are declared on Nexa's
   own specification and a mock bridge, not a real one. Recommended: run §12 of the protocol
   document (Nexa's shipped adapter, env-configured URL and secret, failing rather than
-  skipping) against the first real bridge before `custom_panel_provider` is turned on for a
-  production tenant. Until then the flag stays OFF.
-- **OQ-C2-03 — the flag turned off while custom panels exist.** Built: it stops new custom
-  panels only; existing ones keep operating and selling. Alternative, if the owner wants the
-  switch to stop SALES too: an eligibility reason for gated types (a contract change).
+  skipping) against the first real bridge before a production tenant relies on a custom panel.
+  The type is always offered (the owner removed its feature flag, v0.9.5); until that run,
+  tell operators it is unaccepted — §12 of the protocol document says so.
+- **OQ-C2-03 — closed (v0.9.5).** This asked what turning the custom-panel feature flag off
+  should do to existing panels. The flag no longer exists; the type is always offered.
 - **OQ-C2-04 — `http://` bridges on a private network.** Refused everywhere (create, address
   change, the adapter itself): a subscription link is a bearer secret. Allowing plain HTTP on
   a private range is the owner's call.
@@ -4602,6 +4602,18 @@ Defaults below are the readings that move no money and send no customer message.
 - **OQ-C2-08 — the type's display name.** `canonicalName` is «Custom (Nexa bridge v1)», shown
   Latin in the Persian admin like the other providers' names; the Features page calls the
   switch «پنل اختصاصی (پل Nexa)». Confirm or rename.
+- **OQ-C2-09 — «فقط فایل» when a bridge stops announcing `files` (v0.9.5 PR-3).** The panel
+  keeps «فقط فایل» as the operator set it, and Nexa stops fetching files the moment a health
+  check no longer announces `files` — so that panel's customers get neither link nor files
+  until the bridge announces again or the operator picks «فقط لینک ساب». The Web Admin says so
+  in a warning on the panel's delivery options; nothing switches it back automatically (that
+  would send customers a link the operator chose to withhold). Confirm, or decide that a lost
+  announcement shows the link.
+- **OQ-C2-10 — delivery options on the NEW custom-panel form (v0.9.5 PR-3).** The approved demo
+  draws the three options on the create form. A panel that has not been created has had no
+  health check, so the two file options would always be disabled there; they are on the
+  panel's own page (tab «فایل‌های اتصال»), enabled once the connection test announces `files`.
+  Confirm, or ask for the disabled options on the create form as well.
 
 ## The custom gateway (Round 10 C1, `docs/protocols/custom-gateway.md`, `docs/custom-gateway-audit.md`)
 
@@ -5080,6 +5092,17 @@ live; the owner decides otherwise.
   so an operator-verified number (R4 A6 showed it in full) is now `…1234` too. If the owner
   wants operator-verified numbers in full again, that is a per-source decision the audit row
   (`customer.phone.verify` vs `customer.phone.self_verify`) can support.
+
+## v0.9.5 PR-6 — reseller edit page
+
+- **OQ-V095-01 — should suspending a reseller, demoting a reseller to a normal customer, and a
+  manual change of reseller credit each require a confirm dialog with a written reason?** The
+  owner's v0.9.5 brief describes them that way, but today none of the three has a confirm dialog
+  and the reseller update API takes no reason, so PR-6 (reseller edit page) kept the existing
+  behaviour and only regrouped them in the «عملیات حساس» box. Also note: the reseller API has no
+  credit cap, no separate manual-credit action and no separate demotion action (the demo drew
+  them); the demotion in the box is a tier change saved by the form's one Save. Adding a reason
+  means a field on the update command, an audit payload change and a contract decision.
 
 ## NEXA v095 PR-4 — phone verification, exemptions, late Stars
 

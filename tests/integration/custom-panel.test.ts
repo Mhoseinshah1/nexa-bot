@@ -148,7 +148,6 @@ describe('the custom (bridge protocol) provider', () => {
 
   /** A created custom panel that passed its connection test, so it may be sold. */
   async function readyPanel(): Promise<string> {
-    await setFlag('custom_panel_provider', true);
     const created = await createPanel();
     const tested = await ctx.container.panels.testConnection(
       tenantA,
@@ -252,15 +251,7 @@ describe('the custom (bridge protocol) provider', () => {
   }
 
   describe('creating one', () => {
-    it('is refused while custom_panel_provider is off — the default — and writes nothing', async () => {
-      await expect(createPanel()).rejects.toMatchObject({
-        code: 'panel.provider_feature_disabled',
-      });
-      expect(await panelRows()).toHaveLength(0);
-    });
-
-    it('is accepted once the flag is on; the secret goes one way and is never echoed', async () => {
-      await setFlag('custom_panel_provider', true);
+    it('needs no feature flag: a fresh tenant can create one, and the secret goes one way and is never echoed', async () => {
       const created = await createPanel();
       expect(created.view.panel.providerType).toBe('custom');
       expect(JSON.stringify(created.view)).not.toContain(BRIDGE_SECRET);
@@ -273,7 +264,6 @@ describe('the custom (bridge protocol) provider', () => {
     });
 
     it('refuses an http:// address, at create and at an address change', async () => {
-      await setFlag('custom_panel_provider', true);
       const plain = bridge.baseUrl.replace(/^https:/, 'http:');
       await expect(createPanel({ baseUrl: plain })).rejects.toMatchObject({
         code: 'panel.url_invalid',
@@ -288,7 +278,6 @@ describe('the custom (bridge protocol) provider', () => {
     });
 
     it('refuses a secret shorter than 32 characters, at create and at replacement', async () => {
-      await setFlag('custom_panel_provider', true);
       await expect(
         createPanel({ credentials: { apiToken: 'x'.repeat(31) } }),
       ).rejects.toMatchObject({ code: 'panel.credential_too_short' });
@@ -302,7 +291,6 @@ describe('the custom (bridge protocol) provider', () => {
     });
 
     it('accepts a per-panel timeout of 1..30 seconds and nothing else', async () => {
-      await setFlag('custom_panel_provider', true);
       await expect(createPanel({ activation: { requestTimeoutMs: 31_000 } })).rejects.toMatchObject(
         { code: 'panel.request_invalid' },
       );
@@ -314,7 +302,6 @@ describe('the custom (bridge protocol) provider', () => {
     });
 
     it('is refused for a stopped tenant inside the transaction', async () => {
-      await setFlag('custom_panel_provider', true);
       await ctx.container.database.db
         .update(tenants)
         .set({ status: 'STOPPED' })
@@ -543,7 +530,6 @@ describe('the custom (bridge protocol) provider', () => {
     });
 
     it('applies the per-panel timeout: a bridge that hangs is given up on in about a second', async () => {
-      await setFlag('custom_panel_provider', true);
       const created = await createPanel({ activation: { requestTimeoutMs: 1_000 } });
       await ctx.container.panels.testConnection(tenantA, owner, created.view.panel.id, {
         idempotencyKey: key(),
@@ -589,7 +575,6 @@ describe('the custom (bridge protocol) provider', () => {
 
     /** A sellable custom panel whose requests give up after one second. */
     async function quickPanel(): Promise<string> {
-      await setFlag('custom_panel_provider', true);
       const created = await createPanel({ activation: { requestTimeoutMs: 1_000 } });
       await ctx.container.panels.testConnection(tenantA, owner, created.view.panel.id, {
         idempotencyKey: key(),
@@ -689,30 +674,30 @@ describe('the custom (bridge protocol) provider', () => {
     });
   });
 
-  describe('turning the flag off later', () => {
-    it('stops NEW custom panels and leaves existing ones operating', async () => {
-      const panelId = await readyPanel();
-      await setFlag('custom_panel_provider', false);
+  describe('a flag row left over from the release that had the flag', () => {
+    /*
+     * `custom_panel_provider` was removed from the registry. A tenant that switched it on
+     * (or off) has a `feature_flag_states` row nobody reads any more: it must neither
+     * break the features list nor gate anything, whatever its value. The row is stored
+     * the way the flag service stores one.
+     */
+    for (const enabled of [true, false]) {
+      it(`is harmless with enabled=${String(enabled)}: the list, the resolver and creating a panel all work`, async () => {
+        await ctx.container.database.db.execute(
+          sql`INSERT INTO feature_flag_states (id, tenant_id, flag_key, enabled, version)
+              VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'custom_panel_provider', ${enabled}, 1)`,
+        );
+        const listed = await ctx.container.featureFlags.list(tenantA, owner);
+        expect(listed.length).toBeGreaterThan(0);
+        expect(listed.map((flag) => flag.key as string)).not.toContain('custom_panel_provider');
+        expect(await ctx.container.featureFlagResolver.resolveAll(tenantA)).toHaveLength(
+          listed.length,
+        );
 
-      await expect(createPanel({ name: 'Bridge 2' })).rejects.toMatchObject({
-        code: 'panel.provider_feature_disabled',
+        const panelId = await readyPanel();
+        const service = await deliveredService(panelId, 'old-flag-row');
+        expect(service.state).toBe('ACTIVE');
       });
-
-      // The existing one is still tested, re-keyed and sold onto, and its services operated.
-      await ctx.container.panels.setCredentials(tenantA, owner, panelId, {
-        credentials: { apiToken: BRIDGE_SECRET },
-        idempotencyKey: key(),
-      });
-      const tested = await ctx.container.panels.testConnection(tenantA, owner, panelId, {
-        idempotencyKey: key(),
-      });
-      expect(tested.view.health?.state).toBe('HEALTHY');
-      const service = await deliveredService(panelId, 'flag-off');
-      await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'SUSPEND', {
-        idempotencyKey: key(),
-      });
-      await ctx.container.provisionerLoop.tick();
-      expect((await reload(service.id)).state).toBe('SUSPENDED');
-    });
+    }
   });
 });

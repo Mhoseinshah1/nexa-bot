@@ -302,10 +302,6 @@ describe('the feature flag registry', () => {
       // R10 D2. Off by default; the custom main-menu buttons it switches on are reachable, and
       // with it off no custom button is drawn and a tap on a stale one is answered as unavailable.
       'custom_menu_buttons',
-      // R10 C2. Off by default; creating a `custom` (bridge-protocol) panel is refused and
-      // the type is hidden from the panel form while it is off. Custom panels that already
-      // exist keep operating either way.
-      'custom_panel_provider',
       // Package D. Off by default; the custom-service button, the typed volume and days and
       // the draft it switches on are reachable, and confirmation refuses while it is off.
       'custom_service',
@@ -574,10 +570,12 @@ describe('the provider registry', () => {
        * real-panel rule, recorded as `OQ-C2-02`: what backs these twelve is Nexa's own
        * specification (`docs/protocols/custom-panel.md`) and a contract test of every
        * operation and failure mode against a mock bridge that enforces it — not a real
-       * bridge. That is why the type ships behind `custom_panel_provider`, off by default.
+       * bridge. There is no feature flag in front of it.
        * `LIMIT_DEVICES` because the create carries the order's device limit and the
-       * protocol requires the bridge to enforce it or refuse; no `SUBSCRIPTION_FILES` and
-       * no `DELIVER_RAW_CONFIGS` (`links` is specified and not yet called, `OQ-C2-06`).
+       * protocol requires the bridge to enforce it or refuse; no `DELIVER_RAW_CONFIGS`
+       * (`links` is specified and not yet called, `OQ-C2-06`). v0.9.5 PR-3:
+       * `SUBSCRIPTION_FILES` (protocol v1.1's optional `files`), offered per panel only while
+       * its bridge's latest health check announces it (`announcedOnly`).
        */
       custom: [
         'HEALTH_CHECK',
@@ -592,6 +590,7 @@ describe('the provider registry', () => {
         'ADD_VOLUME',
         'ADD_TIME',
         'ROTATE_SUBSCRIPTION_LINK',
+        'SUBSCRIPTION_FILES',
       ],
     };
 

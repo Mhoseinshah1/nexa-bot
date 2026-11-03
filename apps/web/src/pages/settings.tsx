@@ -304,8 +304,6 @@ const FLAG_LABELS: Readonly<Record<string, WebKey>> = {
   phone_verification: 'web.flag_phone_verification',
   custom_service: 'web.flag_custom_service',
   panel_auto_balancing: 'web.flag_panel_auto_balancing',
-  // R10 C2.
-  custom_panel_provider: 'web.flag_custom_panel_provider',
 };
 
 /**

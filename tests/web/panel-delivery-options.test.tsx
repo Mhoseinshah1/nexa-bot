@@ -25,7 +25,7 @@ describe('the panel delivery options card', () => {
     expect(kindSelect()).toBeInTheDocument();
   });
 
-  it.each(['marzban', 'sanaei', 'custom'])('%s: draws neither control (nothing at all)', (type) => {
+  it.each(['marzban', 'sanaei'])('%s: draws neither control (nothing at all)', (type) => {
     stubApi([]);
     const { container } = renderPage(<PanelDeliveryOptionsCard panel={as(type)} mayEdit />);
     expect(filesOnlySwitch()).toBeNull();
@@ -93,5 +93,154 @@ describe('the panel delivery options card', () => {
     expect(screen.queryByRole('button', { name: t('web.save') })).toBeNull();
     expect(filesOnlySwitch()).toBeDisabled();
     expect(kindSelect()).toBeDisabled();
+  });
+});
+
+/**
+ * v0.9.5 PR-3: the custom panel's three delivery options (approved demo, `panel()`). The
+ * two file options are enabled only while the bridge's latest health check announced
+ * `files`; the choice is written over the two settings that already exist — «فقط فایل» and
+ * the policy's SUBSCRIPTION_FILES switch — with «فقط فایل» off first and on last.
+ */
+describe('the custom panel delivery options', () => {
+  const advanced = (filesSwitch: boolean | null, readable = true) => ({
+    panelId: ID,
+    providerType: 'custom',
+    providerName: 'Custom (Nexa bridge v1)',
+    status: 'ACTIVE',
+    health: 'HEALTHY',
+    registry: [],
+    policy: {
+      policy: {
+        delivery: { mode: 'CARD_WITH_QR' },
+        actions: {
+          RENEW: { customerEnabled: false },
+          ...(filesSwitch === null ? {} : { SUBSCRIPTION_FILES: { customerEnabled: filesSwitch } }),
+        },
+      },
+      readable,
+      revision: 4,
+      updatedAt: null,
+    },
+    providerRules: {
+      trafficReset: 'NEVER',
+      protocols: 'PANEL_ASSIGNED',
+      inbounds: 'PANEL_ASSIGNED',
+      subscriptionLink: 'PANEL_ISSUED',
+      deviceLimitOnCreate: 'NOT_SENT',
+    },
+    diagnostics: {
+      overall: 'OK',
+      checks: [],
+      failure: null,
+      httpStatus: 200,
+      providerVersion: null,
+      lastCheckedAt: null,
+      lastSuccessfulCheckAt: null,
+      stale: false,
+      requiredCapabilities: [],
+      missingActivationFields: [],
+    },
+  });
+  const custom = (announced: boolean, extra: Record<string, unknown> = {}) => {
+    const base = panel({ id: ID, providerType: 'custom' }) as unknown as Record<string, unknown>;
+    return {
+      ...base,
+      health: {
+        ...(base['health'] as Record<string, unknown>),
+        announcedCapabilities: announced ? ['SUBSCRIPTION_FILES'] : [],
+      },
+      ...extra,
+    } as unknown as PanelSummaryResponse;
+  };
+  const option = (key: Parameters<typeof t>[0]) => screen.findByRole('radio', { name: t(key) });
+
+  it('WITHOUT `files` announced: both file options disabled with the reason; «فقط لینک ساب» stays', async () => {
+    stubApi([{ url: '/advanced', body: advanced(null) }]);
+    renderPage(<PanelDeliveryOptionsCard panel={custom(false)} mayEdit />);
+    expect(await option('web.delivery_choice_both')).toBeDisabled();
+    expect(await option('web.delivery_choice_files')).toBeDisabled();
+    expect(await option('web.delivery_choice_link')).toBeEnabled();
+    expect(screen.getByText(t('web.delivery_files_not_announced'))).toBeInTheDocument();
+    expect(filesOnlySwitch()).toBeNull();
+    expect(kindSelect()).toBeNull();
+  });
+
+  it('WITH `files` announced: all three enabled, the stored choice selected, no reason', async () => {
+    stubApi([{ url: '/advanced', body: advanced(null) }]);
+    renderPage(<PanelDeliveryOptionsCard panel={custom(true)} mayEdit />);
+    expect(await option('web.delivery_choice_both')).toBeEnabled();
+    expect(await option('web.delivery_choice_both')).toBeChecked();
+    expect(await option('web.delivery_choice_files')).toBeEnabled();
+    expect(screen.queryByText(t('web.delivery_files_not_announced'))).toBeNull();
+  });
+
+  it('a stranded «فقط فایل» (announcement lost) says so', async () => {
+    stubApi([{ url: '/advanced', body: advanced(null) }]);
+    renderPage(
+      <PanelDeliveryOptionsCard panel={custom(false, { filesOnlyDelivery: true })} mayEdit />,
+    );
+    expect(await option('web.delivery_choice_files')).toBeChecked();
+    expect(screen.getByText(t('web.delivery_files_only_stranded'))).toBeInTheDocument();
+  });
+
+  it('«فقط فایل» from «فقط لینک ساب»: the policy switch ON first, then files only ON', async () => {
+    const api = stubApi([
+      { url: '/advanced', body: advanced(false) },
+      {
+        url: `/panels/${ID}/policy`,
+        method: 'POST',
+        body: { advanced: advanced(true), changed: true },
+      },
+      { url: `/panels/${ID}`, method: 'POST', body: { panel: custom(true) } },
+    ]);
+    renderPage(<PanelDeliveryOptionsCard panel={custom(true)} mayEdit />);
+    expect(await option('web.delivery_choice_link')).toBeChecked();
+    fireEvent.click(await option('web.delivery_choice_files'));
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(2));
+    const posts = api.calls.filter((call) => call.method === 'POST');
+    expect(posts[0]?.url).toContain('/policy');
+    expect(posts[0]?.body).toMatchObject({
+      expectedRevision: 4,
+      policy: {
+        actions: {
+          RENEW: { customerEnabled: false },
+          SUBSCRIPTION_FILES: { customerEnabled: true },
+        },
+      },
+    });
+    expect(posts[1]?.body).toMatchObject({ filesOnlyDelivery: true });
+  });
+
+  it('«فقط لینک ساب» from «فقط فایل»: files only OFF first, then the policy switch OFF', async () => {
+    const api = stubApi([
+      { url: '/advanced', body: advanced(null) },
+      {
+        url: `/panels/${ID}/policy`,
+        method: 'POST',
+        body: { advanced: advanced(false), changed: true },
+      },
+      { url: `/panels/${ID}`, method: 'POST', body: { panel: custom(true) } },
+    ]);
+    renderPage(
+      <PanelDeliveryOptionsCard panel={custom(true, { filesOnlyDelivery: true })} mayEdit />,
+    );
+    fireEvent.click(await option('web.delivery_choice_link'));
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(2));
+    const posts = api.calls.filter((call) => call.method === 'POST');
+    expect(posts[0]?.body).toMatchObject({ filesOnlyDelivery: false });
+    expect(posts[1]?.url).toContain('/policy');
+    expect(posts[1]?.body).toMatchObject({
+      policy: { actions: { SUBSCRIPTION_FILES: { customerEnabled: false } } },
+    });
+  });
+
+  it('an unreadable stored policy: nothing editable, and the reason', async () => {
+    stubApi([{ url: '/advanced', body: advanced(null, false) }]);
+    renderPage(<PanelDeliveryOptionsCard panel={custom(true)} mayEdit />);
+    expect(await option('web.delivery_choice_link')).toBeDisabled();
+    expect(screen.getByText(t('web.delivery_policy_unreadable'))).toBeInTheDocument();
   });
 });
