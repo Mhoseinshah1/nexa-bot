@@ -1,0 +1,435 @@
+<title>Nexa Admin Changes</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800&display=swap">
+<style>
+/* Layout: Nexa Web Admin shell — glass sidebar + content column; 4 screens switched from the sidebar (black-and-white, Latin digits). */
+:root{
+  --bg:#f4f4f5; --panel:rgba(255,255,255,.86); --row:rgba(10,10,11,.035); --line:rgba(10,10,11,.09);
+  --fg:#0a0a0b; --muted:#6b6b73; --accent:#0a0a0b; --accent-fg:#fff; --soft:rgba(10,10,11,.06);
+  --ok:#14804a; --ok-soft:rgba(20,128,74,.12); --warn:#a86a00; --warn-soft:rgba(168,106,0,.12);
+  --danger:#c0303a; --danger-soft:rgba(192,48,58,.1); --tg:#e7ecf2; --tg-msg:#fff; --tg-btn:#f1f3f6;
+  --shadow:0 18px 40px -24px rgba(0,0,0,.35);
+  --ff:'Vazirmatn',Tahoma,system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0a0a0b; --panel:rgba(22,22,24,.92); --row:rgba(255,255,255,.035); --line:rgba(255,255,255,.09);
+  --fg:#f4f4f5; --muted:#a1a1aa; --accent:#f4f4f5; --accent-fg:#0a0a0b; --soft:rgba(255,255,255,.08);
+  --ok:#6ee7a8; --ok-soft:rgba(110,231,168,.15); --warn:#f5c56b; --warn-soft:rgba(245,197,107,.16);
+  --danger:#f8848c; --danger-soft:rgba(248,132,140,.16); --tg:#17212b; --tg-msg:#182533; --tg-btn:#22303e;
+  --shadow:0 30px 60px -30px rgba(0,0,0,.85); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0a0a0b; --panel:rgba(22,22,24,.92); --row:rgba(255,255,255,.035); --line:rgba(255,255,255,.09);
+  --fg:#f4f4f5; --muted:#a1a1aa; --accent:#f4f4f5; --accent-fg:#0a0a0b; --soft:rgba(255,255,255,.08);
+  --ok:#6ee7a8; --ok-soft:rgba(110,231,168,.15); --warn:#f5c56b; --warn-soft:rgba(245,197,107,.16);
+  --danger:#f8848c; --danger-soft:rgba(248,132,140,.16); --tg:#17212b; --tg-msg:#182533; --tg-btn:#22303e;
+  --shadow:0 30px 60px -30px rgba(0,0,0,.85); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--ff);direction:rtl;font-variant-numeric:tabular-nums;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:16px}
+button,input,select{font:inherit;color:inherit}
+.shell{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px;max-width:1240px;margin:0 auto}
+.side{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:14px;display:flex;flex-direction:column;gap:4px;height:max-content;position:sticky;top:16px;box-shadow:var(--shadow)}
+.brand{font-weight:800;font-size:17px;padding:6px 10px 12px}
+.brand small{display:block;font-weight:500;font-size:12px;color:var(--muted)}
+.nav{background:none;border:0;text-align:right;padding:9px 12px;border-radius:12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.nav:hover{background:var(--soft)}
+.nav[aria-current="true"]{background:var(--accent);color:var(--accent-fg);font-weight:600}
+.nav .n{font-size:11px;opacity:.7}
+.main{min-width:0;display:flex;flex-direction:column;gap:14px}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+h1{font-size:22px;margin:0;font-weight:800;text-wrap:balance}
+.sub{color:var(--muted);margin:4px 0 0;font-size:13px;max-width:70ch;line-height:1.8}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px;box-shadow:var(--shadow);min-width:0}
+.card h2{font-size:15px;margin:0 0 4px}
+.chg{display:inline-flex;gap:6px;align-items:center;font-size:12px;background:var(--warn-soft);color:var(--warn);padding:3px 10px;border-radius:99px;font-weight:600}
+.btn{border:1px solid var(--line);background:var(--soft);padding:8px 14px;border-radius:12px;cursor:pointer;font-weight:600;font-size:13px}
+.btn.pri{background:var(--accent);color:var(--accent-fg);border-color:transparent}
+.btn:focus-visible,.nav:focus-visible,.sw:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.search{flex:1;min-width:180px;background:var(--row);border:1px solid var(--line);border-radius:12px;padding:9px 12px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:none;border-radius:99px;padding:5px 12px;cursor:pointer;font-size:12.5px}
+.chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:transparent}
+.muted{color:var(--muted)}
+.pill{font-size:11.5px;padding:2px 9px;border-radius:99px;font-weight:600;white-space:nowrap}
+.pill.on{background:var(--ok-soft);color:var(--ok)} .pill.off{background:var(--soft);color:var(--muted)}
+.sw{width:40px;height:23px;border-radius:99px;border:0;background:var(--line);position:relative;cursor:pointer;flex:none;transition:background .15s}
+.sw::after{content:"";position:absolute;top:3px;right:3px;width:17px;height:17px;border-radius:50%;background:var(--panel);box-shadow:0 1px 3px rgba(0,0,0,.3);transition:right .15s}
+.sw[aria-checked="true"]{background:var(--accent)} .sw[aria-checked="true"]::after{right:20px;background:var(--accent-fg)}
+/* features */
+.grp{border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.grp>summary{list-style:none;cursor:pointer;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--row);font-weight:700}
+.grp>summary::-webkit-details-marker{display:none}
+.grp>summary .c{font-weight:500;font-size:12.5px;color:var(--muted)}
+.fgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.feat{display:flex;gap:12px;align-items:flex-start;padding:11px 14px;border-top:1px solid var(--line)}
+.fgrid .feat:nth-child(odd){border-left:1px solid var(--line)}
+.feat .t{font-weight:600;font-size:13.5px}
+.feat .d{font-size:12px;color:var(--muted);line-height:1.7;margin-top:2px}
+.feat .tx{flex:1;min-width:0}
+.stack{display:flex;flex-direction:column;gap:12px}
+/* forms */
+.form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.fld{display:flex;flex-direction:column;gap:5px;min-width:0}
+.fld label{font-size:12.5px;font-weight:600}
+.fld .h{font-size:11.5px;color:var(--muted);line-height:1.7}
+.inp{background:var(--row);border:1px solid var(--line);border-radius:12px;padding:9px 12px;width:100%}
+.full{grid-column:1/-1}
+.opts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.opt{border:1px solid var(--line);border-radius:14px;padding:11px 12px;cursor:pointer;background:none;text-align:right;display:flex;flex-direction:column;gap:3px}
+.opt[aria-pressed="true"]{border-color:var(--fg);box-shadow:inset 0 0 0 1px var(--fg)}
+.opt b{font-size:13px} .opt span{font-size:11.5px;color:var(--muted);line-height:1.6}
+.note{font-size:12.5px;background:var(--row);border:1px dashed var(--line);border-radius:12px;padding:10px 12px;line-height:1.8}
+.doc{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid var(--line);border-radius:14px;padding:12px}
+.doc code{direction:ltr;font-size:12px;background:var(--soft);padding:2px 6px;border-radius:6px;word-break:break-all}
+/* phone */
+.two{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px;align-items:start}
+.phone{background:var(--tg);border-radius:22px;padding:12px;display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);box-shadow:var(--shadow)}
+.phone .cap{font-size:11.5px;color:var(--muted);text-align:center}
+.msg{background:var(--tg-msg);border-radius:14px;padding:10px 12px;font-size:12.5px;line-height:1.85}
+.kb{display:flex;flex-direction:column;gap:6px}
+.kbb{background:var(--tg-btn);border-radius:10px;padding:9px;text-align:center;font-size:12.5px;font-weight:600}
+.seg{display:inline-flex;background:var(--row);border:1px solid var(--line);border-radius:12px;padding:3px;gap:3px}
+.seg button{border:0;background:none;padding:7px 16px;border-radius:9px;cursor:pointer;font-weight:600;font-size:13px}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
+.check{display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:14px;cursor:pointer}
+.check input{margin-top:4px;accent-color:var(--fg);width:16px;height:16px}
+.gw{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;border-top:1px solid var(--line)}
+.gw:first-child{border-top:0}
+/* reseller */
+.sumbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.meter{flex:1;min-width:160px;height:6px;background:var(--soft);border-radius:99px;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--accent)}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px;padding:10px 12px;border-top:1px solid var(--line)}
+.pchip{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:7px 10px;cursor:pointer;background:none;text-align:right;font-size:12.5px;min-width:0}
+.pchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pchip[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:transparent}
+.pchip .k{font-size:11px;opacity:.75;flex:none}
+.gh{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.gh .r{display:flex;gap:8px;align-items:center}
+.mini{font-size:12px;padding:4px 10px;border-radius:9px}
+.foot{position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--line);margin:0 -16px -16px;padding:12px 16px;border-radius:0 0 18px 18px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--accent);color:var(--accent-fg);padding:9px 16px;border-radius:12px;font-size:13px;font-weight:600;z-index:20}
+@media (max-width:860px){
+  .shell{grid-template-columns:minmax(0,1fr)} .side{position:static;flex-direction:row;flex-wrap:wrap} .brand{width:100%;padding-bottom:4px}
+  .two{grid-template-columns:minmax(0,1fr)} .fgrid,.form{grid-template-columns:minmax(0,1fr)} .fgrid .feat:nth-child(odd){border-left:0}
+  .opts{grid-template-columns:minmax(0,1fr)}
+}
+
+/* features variants */
+.fa{display:grid;grid-template-columns:210px minmax(0,1fr);gap:14px;align-items:start}
+.fa-cats{display:flex;flex-direction:column;gap:4px;position:sticky;top:16px}
+.fa-cat{display:flex;justify-content:space-between;gap:8px;border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:9px 12px;cursor:pointer;text-align:right}
+.fa-cat:hover{background:var(--soft)}
+.fa-cat[aria-selected="true"]{background:var(--panel);border-color:var(--line);font-weight:700;box-shadow:var(--shadow)}
+.fa-cat .n{font-size:12px;color:var(--muted)}
+.fa-row{display:flex;gap:14px;align-items:flex-start;padding:14px 0;border-top:1px solid var(--line)}
+.fa-row .tx{flex:1;min-width:0}.fa-row .t{font-weight:700;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.fa-row .d{font-size:12.8px;line-height:1.9;margin-top:4px}
+.meta{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:6px}
+.lnk{color:var(--fg);text-decoration:underline;text-underline-offset:3px;font-size:12px}
+.fb-h{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.fb-h h2{margin:0;font-size:16px}
+.fb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.fb-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.fb-card.is-on{border-color:var(--fg)}
+.fb-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.fb-card p{margin:0;font-size:12.8px;line-height:1.9}
+.fb-card dl{margin:0;display:grid;gap:6px;background:var(--row);border-radius:10px;padding:8px 10px}
+.fb-card dl div{display:grid;gap:1px}.fb-card dt{font-size:11px;color:var(--muted)}.fb-card dd{margin:0;font-size:12px}
+.fc{display:grid;grid-template-columns:280px minmax(0,1fr);gap:14px;align-items:start}
+.fc-list{padding:8px;max-height:640px;overflow:auto}
+.fc-g{font-size:11.5px;color:var(--muted);font-weight:700;padding:10px 8px 4px;letter-spacing:.02em}
+.fc-item{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;border:0;background:none;border-radius:10px;padding:8px 10px;cursor:pointer;text-align:right;font-size:13px}
+.fc-item:hover{background:var(--soft)}.fc-item[aria-current="true"]{background:var(--accent);color:var(--accent-fg)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--line);flex:none}.dot.on{background:var(--ok)}
+.fc-detail{position:sticky;top:16px}
+.fc-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:14px}
+.fc-facts div{background:var(--row);border-radius:12px;padding:10px 12px;display:grid;gap:3px}
+.fc-facts span{font-size:11.5px;color:var(--muted)}.fc-facts b{font-size:13px;font-weight:600;line-height:1.7}
+@media (max-width:860px){.fa,.fc{grid-template-columns:minmax(0,1fr)}.fa-cats{position:static;flex-direction:row;flex-wrap:wrap}.fc-detail{position:static}.fc-list{max-height:300px}.fc-facts{grid-template-columns:minmax(0,1fr)}.seg{flex-wrap:wrap}}
+
+.rs-sum{display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:space-between}
+.rs-id{display:flex;gap:12px;align-items:center}.av{width:44px;height:44px;border-radius:14px;background:var(--accent);color:var(--accent-fg);display:grid;place-items:center;font-weight:800;font-size:18px}
+.rs-kv{display:grid;grid-template-columns:repeat(6,auto);gap:6px 22px}.rs-kv div{display:grid;gap:2px}.rs-kv span{font-size:11.5px;color:var(--muted)}.rs-kv b{font-size:13px;font-weight:600}
+.rs-tabs{display:flex;gap:6px;flex-wrap:wrap}
+.rs-tab{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:8px 14px;cursor:pointer;font-weight:600;font-size:13px}
+.rs-tab[aria-selected="true"]{background:var(--accent);color:var(--accent-fg);border-color:transparent}
+.rs-tab.dz{color:var(--danger)}.rs-tab.dz[aria-selected="true"]{background:var(--danger);color:var(--accent-fg)}
+.rs-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;bottom:calc(10px + env(safe-area-inset-bottom,0px))}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:14px}
+.tw table{width:100%;border-collapse:collapse;font-size:13px}.tw th,.tw td{padding:9px 12px;text-align:right;border-top:1px solid var(--line)}.tw th{background:var(--row);font-size:12px;color:var(--muted);border-top:0}
+.rs-meter{display:grid;gap:8px;background:var(--row);border-radius:12px;padding:12px}
+.dz-box{border:1px solid var(--danger);border-radius:14px;overflow:hidden}
+.dz-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;border-top:1px solid var(--line);flex-wrap:wrap}.dz-row:first-child{border-top:0}
+.dz-btn{color:var(--danger);border-color:var(--danger);background:var(--danger-soft)}
+@media (max-width:860px){.rs-kv{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="shell">
+  <nav class="side" aria-label="صفحه‌ها">
+    <div class="brand">Nexa Admin<small>دموی ۴ تغییر برای تأیید</small></div>
+    <button class="nav" data-go="features">قابلیت‌ها <span class="n">۱</span></button>
+    <button class="nav" data-go="panel">افزودن پنل کاستوم <span class="n">۲</span></button>
+    <button class="nav" data-go="phone">تأیید شماره <span class="n">۳</span></button>
+    <button class="nav" data-go="reseller">ویرایش نماینده <span class="n">۴</span></button>
+  </nav>
+  <main class="main" id="view"></main>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const fa=s=>s;
+const $=s=>document.querySelector(s);
+function toast(t){const e=$('#toast');e.textContent=t;e.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>e.hidden=true,1800)}
+
+/* ---------- 1. features (3 variants) ---------- */
+// [title, full description, where the customer/operator sees it, what happens when switched off, related settings, on?]
+const FEATS=[
+ ['اعلان‌ها و یادآوری‌ها','پیام‌هایی که ربات خودکار برای مشتری یا گروه گزارش می‌فرستد',[
+  ['یادآوری انقضای سرویس','چند روز مانده به پایان سرویس، به مشتری پیام می‌دهد که تمدید کند. تعداد روزها را در تنظیمات یادآوری تعیین می‌کنید. پیام دکمهٔ «تمدید» دارد.','ربات مشتری','مشتری تا روز آخر پیامی نمی‌گیرد؛ تمدیدها معمولاً کم می‌شود.','تنظیمات یادآوری ← روزهای قبل از انقضا',1],
+  ['پیام پایان سرویس','لحظه‌ای که سرویس تمام می‌شود (زمان یا حجم)، به مشتری خبر می‌دهد و دکمهٔ خرید یا تمدید می‌گذارد.','ربات مشتری','مشتری فقط وقتی متوجه می‌شود که اتصالش قطع شود.','متن‌ها ← پیام پایان سرویس',1],
+  ['یادآوری مصرف حجم','وقتی مصرف سرویس به آستانهٔ تعیین‌شده رسید (مثلاً ۸۰٪)، پیام می‌دهد که حجم اضافه بگیرد.','ربات مشتری','هشدار حجم ارسال نمی‌شود.','تنظیمات یادآوری ← آستانهٔ حجم',1],
+  ['یادآوری روز انقضا','در روز آخر سرویس یک پیام دیگر، جدا از یادآوری چند روز قبل، می‌فرستد.','ربات مشتری','فقط یادآوری چند روز قبل می‌ماند.','—',0],
+  ['هشدار کم بودن موجودی','وقتی موجودی کیف پول مشتری کمتر از حد تعیین‌شده شد، پیام می‌دهد که شارژ کند.','ربات مشتری','هشدار موجودی فرستاده نمی‌شود.','تنظیمات کیف پول ← حداقل موجودی',0],
+  ['یادآوری پیش‌فاکتور پرداخت‌نشده','اگر مشتری پیش‌فاکتور ساخت و پرداخت نکرد، یک بار یادآوری می‌کند.','ربات مشتری','سفارش‌های نیمه‌کاره بی‌یادآوری منقضی می‌شوند.','—',1],
+  ['ساعت سکوت','در ساعت‌هایی که تعیین می‌کنید (مثلاً ۱ تا ۸ صبح) هیچ یادآوری‌ای نمی‌فرستد و آن‌ها را برای بعد نگه می‌دارد.','ربات مشتری','یادآوری‌ها هر ساعتی ارسال می‌شوند.','تنظیمات یادآوری ← بازهٔ سکوت',0],
+  ['خاموش کردن یادآوری توسط مشتری','مشتری از تنظیمات خودش در ربات یا مینی‌اپ، یادآوری‌ها را خاموش می‌کند. پیام‌های مهم پرداخت همچنان ارسال می‌شوند.','ربات و مینی‌اپ','همهٔ مشتری‌ها یادآوری می‌گیرند.','—',0],
+  ['گزارش‌های گروه','رویدادهای فروش، پرداخت، خطا و گزارش شبانه به گروه تلگرام شما ارسال می‌شود.','گروه گزارش','هیچ گزارشی به گروه نمی‌رود.','گروه گزارش ← نوع لاگ‌ها',1],
+  ['مرکز اعلان‌ها','آیکون زنگ در مینی‌اپ که پیام‌های خرید، تمدید، پرداخت و اطلاعیه‌ها را یکجا نشان می‌دهد.','مینی‌اپ','زنگ از مینی‌اپ برداشته می‌شود؛ پیام‌ها در ربات می‌مانند.','—',1]]],
+ ['فروش و پرداخت','قیمت، تخفیف، تمدید و کیف پول',[
+  ['تخفیف شخصی','برای هر مشتری درصد تخفیف جدا می‌گذارید. روی دکمه‌های خرید و تمدید و پیش‌فاکتور اعمال می‌شود.','ربات، مینی‌اپ، Web Admin','تخفیف‌های شخصی ذخیره می‌مانند ولی اعمال نمی‌شوند.','مشتری ← محدودیت‌ها و کنترل‌ها',1],
+  ['کارت هدیه','کد هدیه با مبلغ یا سرویس می‌سازید؛ مشتری در ربات یا مینی‌اپ واردش می‌کند.','ربات، مینی‌اپ','بخش کارت هدیه پنهان می‌شود؛ کدهای ساخته‌شده باقی می‌مانند.','کارت‌های هدیه',1],
+  ['تمدید خودکار','اگر مشتری روشن کرده باشد، در پایان سرویس از کیف پولش تمدید می‌شود.','ربات، مینی‌اپ','هیچ تمدید خودکاری انجام نمی‌شود.','—',0],
+  ['سرویس دلخواه','مشتری حجم و زمان را خودش انتخاب می‌کند و قیمت بر اساس نرخ هر گیگ و هر روز حساب می‌شود.','ربات، مینی‌اپ','گزینهٔ «دلخواه» از فروشگاه حذف می‌شود.','سرویس دلخواه ← نرخ‌ها',1],
+  ['افزودن زمان در منوی تمدید','در منوی تمدید، گزینهٔ «فقط زمان» هم کنار تمدید کامل نمایش داده می‌شود.','ربات','فقط تمدید کامل می‌ماند.','بسته‌های اضافه',0],
+  ['نرخ ارز مرکزی','قیمت‌های ارزی (مثل TonPays و NowPayments) با نرخ به‌روز از منابع نرخ ارز حساب می‌شوند.','پرداخت','نرخ دستی ثابت استفاده می‌شود.','نرخ ارز ← منابع',1],
+  ['درخواست بازگشت وجه','مشتری از صفحهٔ سرویس درخواست بازپرداخت می‌دهد و شما در Web Admin تأیید یا رد می‌کنید.','ربات، Web Admin','دکمهٔ درخواست برداشته می‌شود.','—',0],
+  ['پیام شارژ دستی کیف پول','وقتی شما دستی موجودی اضافه کردید، به مشتری پیام می‌رود.','ربات مشتری','شارژ دستی بی‌صدا انجام می‌شود.','—',1],
+  ['پیام کسر دستی کیف پول','وقتی شما دستی از موجودی کم کردید، به مشتری پیام می‌رود.','ربات مشتری','کسر دستی بی‌صدا انجام می‌شود.','—',1]]],
+ ['مشتری و حساب','ورود، قوانین و امنیت حساب مشتری',[
+  ['تأیید شماره تلفن','روشن باشد، مشتری قبل از هر کاری در ربات (استارت، خرید، هر دکمه) باید با «Share Contact» شمارهٔ خودش را تأیید کند. شمارهٔ دیگران پذیرفته نمی‌شود.','ربات مشتری','ربات بدون شماره کار می‌کند. شرط شمارهٔ درگاه‌ها جداگانه کار می‌کند.','روش‌های پرداخت ← شرط شماره',0],
+  ['کپچای شروع','موقع /start یک سؤال جمع ساده با ۴ دکمه می‌پرسد تا ربات‌های اسپم وارد نشوند.','ربات مشتری','همه بدون سؤال وارد می‌شوند.','—',1],
+  ['پذیرش قوانین','مشتری قبل از استفاده باید متن قوانین را قبول کند.','ربات مشتری','قوانین نمایش داده نمی‌شود.','متن‌ها ← قوانین',1],
+  ['پرسش دوباره با نسخهٔ جدید قوانین','وقتی متن قوانین را عوض کردید، از همه دوباره پذیرش می‌خواهد.','ربات مشتری','پذیرش قبلی کافی است.','—',0],
+  ['تغییر لینک سرویس','مشتری خودش لینک اشتراک جدید می‌گیرد و لینک قبلی باطل می‌شود.','ربات، مینی‌اپ','دکمهٔ تغییر لینک برداشته می‌شود.','پنل‌ها ← تحویل',1],
+  ['لغو پیام‌های تبلیغاتی','مشتری پیام‌های همگانی تبلیغاتی را برای خودش خاموش می‌کند.','ربات مشتری','همه پیام همگانی می‌گیرند.','—',0]]],
+ ['دعوت و پاداش','لینک دعوت، پورسانت و هدیه',[
+  ['دعوت دوستان','هر مشتری لینک دعوت دارد و از خرید دوستانش پورسانت می‌گیرد.','ربات، مینی‌اپ','لینک دعوت کار نمی‌کند؛ پورسانت‌های قبلی می‌مانند.','دعوت ← درصد پورسانت',1],
+  ['هدیهٔ ثبت‌نام با دعوت','به کسی که با لینک دعوت وارد شد، یک هدیه (موجودی یا تست) می‌دهد.','ربات مشتری','دوست دعوت‌شده هدیه نمی‌گیرد.','دعوت ← هدیهٔ ثبت‌نام',0],
+  ['محافظت از سوءاستفادهٔ دعوت','حساب‌های تازه و مشکوک را در پورسانت حساب نمی‌کند.','پشت صحنه','همهٔ دعوت‌ها شمرده می‌شوند.','—',1],
+  ['فهرست دوستان دعوت‌شده','مشتری در مینی‌اپ فهرست کسانی که دعوت کرده و خریدشان را می‌بیند.','مینی‌اپ','فقط تعداد نمایش داده می‌شود.','—',1]]],
+ ['مینی‌اپ','بخش‌های مینی‌اپ تلگرام',[
+  ['مینی‌اپ','فروشگاه، سرویس‌ها، کیف پول و پروفایل داخل تلگرام، با دکمهٔ «مینی‌اپ» کنار کادر پیام.','تلگرام','دکمهٔ مینی‌اپ برداشته می‌شود؛ ربات کار می‌کند.','مینی‌اپ ← ظاهر',1],
+  ['پرداخت Stars در مینی‌اپ','مشتری داخل مینی‌اپ با Telegram Stars پرداخت می‌کند. هر پرداخت فقط یک بار حساب می‌شود.','مینی‌اپ','Stars فقط از ربات ممکن است.','روش‌های پرداخت ← Stars',0],
+  ['نمودار مصرف','نمودار مصرف روزانهٔ هر سرویس در صفحهٔ سرویس.','مینی‌اپ','نمودار نمایش داده نمی‌شود.','—',1],
+  ['باقی‌ماندهٔ تغییر لوکیشن','تعداد دفعات باقی‌ماندهٔ تغییر لوکیشن را نشان می‌دهد؛ فقط وقتی تغییر لوکیشن سقف دارد.','مینی‌اپ، ربات','عدد نمایش داده نمی‌شود.','لوکیشن‌ها ← سقف تغییر',0]]],
+ ['ربات و پیام‌ها','ظاهر پیام‌ها و دکمه‌های ربات',[
+  ['پیام‌های غنی','پیام‌های مهم به‌شکل کارت با ساختار مرتب نمایش داده می‌شوند.','ربات مشتری','پیام‌ها متن ساده می‌شوند.','—',1],
+  ['جدول پلن‌ها','قیمت پلن‌ها به‌صورت جدول مقایسه‌ای نمایش داده می‌شود.','ربات مشتری','لیست ساده نمایش داده می‌شود.','—',0],
+  ['ایموجی پریمیوم','ایموجی‌های سفارشی تلگرام در دکمه‌ها و پیام‌ها.','ربات مشتری','ایموجی معمولی استفاده می‌شود.','ظاهر ربات ← آیکون‌ها',1],
+  ['دکمه‌های منوی سفارشی','دکمه‌های دلخواه شما در منوی اصلی ربات.','ربات مشتری','دکمه‌های سفارشی پنهان می‌شوند.','دکمه‌های ربات',1],
+  ['متن‌های سفارشی','متن‌هایی که در Web Admin ویرایش کرده‌اید به‌جای متن پیش‌فرض نمایش داده می‌شوند.','ربات مشتری','متن‌های پیش‌فرض برمی‌گردند (ویرایش‌ها پاک نمی‌شوند).','متن‌ها',1]]],
+ ['پنل و سرویس','ساخت سرویس روی پنل‌ها',[
+  ['تقسیم خودکار بین پنل‌ها','سرویس جدید روی پنلِ خلوت‌ترِ همان گروه ساخته می‌شود.','پشت صحنه','همیشه پنل پیش‌فرض محصول استفاده می‌شود.','پنل‌ها ← گروه‌ها',0]]]
+];
+let fv='a', fq='', ff='all', fcat=0, fsel=[0,0];
+function fitems(gi){return FEATS[gi][2].map((f,i)=>[f,i]).filter(([f])=>(!fq||(f[0]+f[1]).includes(fq))&&(ff=='all'||(ff=='on')==!!f[5]))}
+function sw(f,gi,i){return `<button class="sw" role="switch" aria-checked="${!!f[5]}" aria-label="${f[0]}" data-g="${gi}" data-i="${i}"></button>`}
+function features(){
+  const total=FEATS.reduce((a,g)=>a+g[2].length,0), on=FEATS.reduce((a,g)=>a+g[2].filter(f=>f[5]).length,0);
+  let body='';
+  if(fv==='a'){ // two-pane settings
+    body=`<div class="fa"><div class="fa-cats" role="tablist">${FEATS.map((g,gi)=>`<button role="tab" class="fa-cat" aria-selected="${fcat==gi}" data-cat="${gi}"><span>${g[0]}</span><span class="n">${g[2].filter(f=>f[5]).length}/${g[2].length}</span></button>`).join('')}</div>
+     <div class="card fa-pane"><h2>${FEATS[fcat][0]}</h2><p class="sub" style="margin:0 0 6px">${FEATS[fcat][1]}</p>
+     ${fitems(fcat).map(([f,i])=>`<div class="fa-row"><div class="tx"><div class="t">${f[0]} <span class="pill ${f[5]?'on':'off'}">${f[5]?'روشن':'خاموش'}</span></div><div class="d">${f[1]}</div>
+       <div class="meta"><span>👁 ${f[2]}</span>${f[4]!=='—'?`<a href="#features" class="lnk">⚙ ${f[4]}</a>`:''}</div></div>${sw(f,fcat,i)}</div>`).join('')||'<p class="muted">موردی نیست.</p>'}</div></div>`;
+  } else if(fv==='b'){ // card grid by category
+    body=FEATS.map((g,gi)=>{const it=fitems(gi);if(!it.length)return'';return `<section class="stack"><div class="fb-h"><h2>${g[0]}</h2><span class="muted" style="font-size:12.5px">${g[1]}</span></div>
+     <div class="fb-grid">${it.map(([f,i])=>`<article class="fb-card ${f[5]?'is-on':''}"><div class="fb-top"><b>${f[0]}</b>${sw(f,gi,i)}</div><p>${f[1]}</p>
+     <dl><div><dt>کجا</dt><dd>${f[2]}</dd></div><div><dt>اگر خاموش شود</dt><dd>${f[3]}</dd></div></dl>${f[4]!=='—'?`<a href="#features" class="lnk">⚙ ${f[4]}</a>`:''}</article>`).join('')}</div></section>`}).join('');
+  } else { // master-detail
+    const [sg,si]=fsel, s=FEATS[sg][2][si];
+    body=`<div class="fc"><div class="card fc-list">${FEATS.map((g,gi)=>{const it=fitems(gi);if(!it.length)return'';return `<div class="fc-g">${g[0]}</div>${it.map(([f,i])=>`<button class="fc-item" aria-current="${sg==gi&&si==i}" data-sel="${gi},${i}"><span>${f[0]}</span><span class="dot ${f[5]?'on':''}" aria-label="${f[5]?'روشن':'خاموش'}"></span></button>`).join('')}`}).join('')}</div>
+     <div class="card fc-detail"><div class="gh"><div><div class="muted" style="font-size:12px">${FEATS[sg][0]}</div><h2 style="font-size:19px">${s[0]}</h2></div><div class="row"><span class="pill ${s[5]?'on':'off'}">${s[5]?'روشن':'خاموش'}</span>${sw(s,sg,si)}</div></div>
+     <p style="line-height:2;margin:4px 0 0">${s[1]}</p>
+     <div class="fc-facts"><div><span>کجا دیده می‌شود</span><b>${s[2]}</b></div><div><span>اگر خاموش شود</span><b>${s[3]}</b></div><div><span>تنظیمات مرتبط</span><b>${s[4]}</b></div><div><span>آخرین تغییر</span><b>1405/08/11 · 22:30</b></div></div></div></div>`;
+  }
+  $('#view').innerHTML=`
+  <div class="head"><div><h1>قابلیت‌ها</h1><p class="sub">سه مدل برای انتخاب. توضیح هر قابلیت کامل‌تر شده: چه می‌کند، کجا دیده می‌شود، اگر خاموش شود چه می‌شود، و تنظیمات مرتبطش کجاست. «پنل کاستوم» از اینجا حذف شده است.</p></div><span class="chg">تغییر ۱</span></div>
+  <div class="seg" role="group" aria-label="مدل نمایش"><button data-fv="a" aria-pressed="${fv=='a'}">مدل ۱ · دسته‌ها کنار</button><button data-fv="b" aria-pressed="${fv=='b'}">مدل ۲ · کارت‌ها</button><button data-fv="c" aria-pressed="${fv=='c'}">مدل ۳ · فهرست و جزئیات</button></div>
+  <div class="row"><input id="fq" class="search" placeholder="جستجوی قابلیت…" value="${fq}">
+    <div class="chips" role="group" aria-label="فیلتر"><button class="chip" data-f="all" aria-pressed="${ff=='all'}">همه ${total}</button><button class="chip" data-f="on" aria-pressed="${ff=='on'}">روشن ${on}</button><button class="chip" data-f="off" aria-pressed="${ff=='off'}">خاموش ${total-on}</button></div></div>
+  ${body}`;
+  $('#fq').oninput=e=>{fq=e.target.value.trim();features();const i=$('#fq');i.focus();i.setSelectionRange(i.value.length,i.value.length)};
+  document.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{ff=b.dataset.f;features()});
+  document.querySelectorAll('[data-fv]').forEach(b=>b.onclick=()=>{fv=b.dataset.fv;features()});
+  document.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{fcat=+b.dataset.cat;features()});
+  document.querySelectorAll('[data-sel]').forEach(b=>b.onclick=()=>{fsel=b.dataset.sel.split(',').map(Number);features()});
+  document.querySelectorAll('.lnk').forEach(a=>a.onclick=e=>{e.preventDefault();toast('در پنل واقعی به همان صفحهٔ تنظیمات می‌رود')});
+  document.querySelectorAll('#view .sw').forEach(s=>s.onclick=()=>{const f=FEATS[s.dataset.g][2][s.dataset.i];f[5]=f[5]?0:1;toast(f[0]+(f[5]?' روشن شد':' خاموش شد'));features()});
+}
+
+/* ---------- 2. custom panel ---------- */
+let pd='both';
+function panel(){
+  $('#view').innerHTML=`
+  <div class="head"><div><h1>افزودن پنل</h1><p class="sub">«پنل کاستوم» یکی از نوع‌های پنل است و سوئیچ جدا در قابلیت‌ها ندارد. هر کس بخواهد اضافه‌اش می‌کند. مثل ریک‌پنل، فایل‌های اتصال هم پشتیبانی می‌شود.</p></div><span class="chg">تغییر ۲</span></div>
+  <div class="card stack">
+    <div class="form">
+      <div class="fld"><label for="ptype">نوع پنل</label>
+        <select id="ptype" class="inp"><option>Marzban</option><option>RickPanel</option><option>Sanaei (3X-UI)</option><option selected>پنل کاستوم</option></select></div>
+      <div class="fld"><label for="pname">نام پنل</label><input id="pname" class="inp" value="پنل آلمان ۲"></div>
+      <div class="fld full"><label for="purl">آدرس پل (Bridge)</label><input id="purl" class="inp" dir="ltr" value="https://bridge.example.com/nexa/"><span class="h">فقط https. سرویسی که سازندهٔ پنل طبق مستند Nexa نوشته است.</span></div>
+      <div class="fld"><label for="psec">کلید مشترک</label><input id="psec" class="inp" dir="ltr" type="password" value="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"><span class="h">حداقل ۳۲ کاراکتر. بعد از ذخیره دیگر نمایش داده نمی‌شود.</span></div>
+      <div class="fld"><label for="pto">مهلت پاسخ (ثانیه)</label><input id="pto" class="inp" dir="ltr" value="10"></div>
+      <div class="fld full"><label>تحویل به مشتری</label>
+        <div class="opts" role="group" aria-label="تحویل">
+          ${[['both','لینک ساب + فایل‌ها','لینک و QR آن، به‌اضافهٔ فایل‌های اتصال'],['files','فقط فایل','بدون لینک ساب؛ «تغییر لینک» می‌شود «دریافت فایل‌های جدید»'],['link','فقط لینک ساب','بدون فایل']].map(o=>`<button class="opt" data-pd="${o[0]}" aria-pressed="${pd==o[0]}"><b>${o[1]}</b><span>${o[2]}</span></button>`).join('')}
+        </div><span class="h">فایل‌ها را پل می‌فرستد. این بخش به مستند پروتکل اضافه می‌شود (عملیات تازهٔ «دریافت فایل‌های اکانت»).</span></div>
+    </div>
+    <div class="doc"><div><b>مستند پروتکل پنل کاستوم</b><div class="muted" style="font-size:12px;margin-top:3px">برای سازندهٔ پل: مسیرها، امضای درخواست، کدهای خطا و تست‌های پذیرش.</div></div>
+      <a class="btn" href="https://github.com/Mhoseinshah1/nexa-bot/blob/main/docs/protocols/custom-panel.md" target="_blank" rel="noopener">باز کردن مستند</a></div>
+    <div class="note">پنل فقط بعد از یک «تست اتصال» موفق فعال می‌شود. این پروتکل هنوز با هیچ پل واقعی آزموده نشده؛ اولین پل واقعی را با دقت تست کنید.</div>
+    <div class="row" style="justify-content:flex-end"><button class="btn" id="ptest">تست اتصال</button><button class="btn pri" id="psave">ذخیره</button></div>
+  </div>`;
+  document.querySelectorAll('[data-pd]').forEach(b=>b.onclick=()=>{pd=b.dataset.pd;panel()});
+  $('#ptest').onclick=()=>toast('اتصال برقرار شد · پاسخ در 240ms');
+  $('#psave').onclick=()=>toast('پنل ذخیره شد');
+}
+
+/* ---------- 3. phone ---------- */
+let pm='off', gwRule={'تون‌پی':1,'کارت به کارت':0,'تتراپی':0,'NowPayments':0}, sim='start';
+function phone(){
+  const bot = pm==='on' && sim==='start'
+   ? `<div class="msg"><b>📱 تأیید شماره</b><br>برای استفاده از ربات، اول شمارهٔ خودتان را تأیید کنید. دکمهٔ پایین را بزنید. فقط شمارهٔ همین حساب تلگرام پذیرفته می‌شود.</div>
+      <div class="kb"><div class="kbb">📞 Share Contact</div></div>`
+   : sim==='start'
+   ? `<div class="msg">💰 موجودی: 71,170,767 تومان<br>🛒 سرویس‌های خریداری‌شده: 46<br>👥 زیرمجموعه‌ها: 2,063</div>
+      <div class="kb"><div class="kbb">💰 افزایش موجودی</div><div class="kbb">🎁 کارت هدیه</div><div class="kbb">🏠 بازگشت به منوی اصلی</div></div>
+      <div class="cap">«تراکنش‌ها» و «تأیید شماره تلفن» از صفحهٔ حساب حذف شدند.</div>`
+   : `<div class="msg">روش پرداخت را انتخاب کنید:</div>
+      <div class="kb">${Object.keys(gwRule).map(g=>`<div class="kbb">${g}${gwRule[g]?' 📱':''}</div>`).join('')}</div>
+      <div class="msg">✅ <b>تون‌پی</b> را انتخاب کردید.<br>برای پرداخت با این درگاه باید شماره‌تان را تأیید کنید. دکمهٔ پایین را بزنید؛ بعد از تأیید، مستقیم به پرداخت می‌روید.</div>
+      <div class="kb"><div class="kbb">📞 Share Contact</div><div class="kbb">↩️ انتخاب درگاه دیگر</div></div>`;
+  $('#view').innerHTML=`
+  <div class="head"><div><h1>تأیید شماره</h1><p class="sub">دو تنظیم جدا: یکی برای کل ربات (خاموش یا اجباری) و یکی روی هر درگاه. شرط درگاه حتی وقتی تأیید کل ربات خاموش است کار می‌کند.</p></div><span class="chg">تغییر ۳</span></div>
+  <div class="two">
+   <div class="stack">
+    <div class="card stack">
+      <div><h2>تأیید شمارهٔ کل ربات</h2><p class="sub" style="margin:0">اجباری یعنی مشتری قبل از هر کاری (استارت، خرید، هر دکمه‌ای) باید شماره‌اش را تأیید کند.</p></div>
+      <div class="seg" role="group" aria-label="تأیید شماره"><button data-pm="off" aria-pressed="${pm=='off'}">خاموش</button><button data-pm="on" aria-pressed="${pm=='on'}">اجباری</button></div>
+      ${pm=='on'?'<div class="note">مشتری‌هایی که قبلاً شماره داده‌اند چیزی نمی‌بینند. بقیه در پیام بعدی‌شان به صفحهٔ تأیید می‌روند.</div>':''}
+    </div>
+    <div class="card stack">
+      <div><h2>ویرایش درگاه · تون‌پی</h2><p class="sub" style="margin:0">روش‌های پرداخت ← ویرایش ← بخش شرط‌ها</p></div>
+      <label class="check"><input type="checkbox" id="gwc" ${gwRule['تون‌پی']?'checked':''}><span><b>برای پرداخت با این درگاه، تأیید شماره لازم است</b><br><span class="muted" style="font-size:12px;line-height:1.8">درگاه به همهٔ مشتری‌ها نمایش داده می‌شود. وقتی مشتری انتخابش کرد و شماره‌اش تأیید نشده بود، همان‌جا شماره را می‌گیرد و بعد به پرداخت می‌رود.</span></span></label>
+    </div>
+    <div class="card"><h2 style="margin-bottom:8px">درگاه‌ها</h2>
+      ${Object.keys(gwRule).map(g=>`<div class="gw"><span>${g}</span>${gwRule[g]?'<span class="pill on">📱 نیاز به تأیید شماره</span>':'<span class="pill off">بدون شرط شماره</span>'}</div>`).join('')}
+    </div>
+   </div>
+   <div class="stack">
+    <div class="seg" role="group" aria-label="پیش‌نمایش"><button data-sim="start" aria-pressed="${sim=='start'}">صفحهٔ حساب / استارت</button><button data-sim="pay" aria-pressed="${sim=='pay'}">انتخاب درگاه</button></div>
+    <div class="phone" aria-label="پیش‌نمایش ربات">${bot}</div>
+   </div>
+  </div>`;
+  document.querySelectorAll('[data-pm]').forEach(b=>b.onclick=()=>{pm=b.dataset.pm;phone()});
+  document.querySelectorAll('[data-sim]').forEach(b=>b.onclick=()=>{sim=b.dataset.sim;phone()});
+  $('#gwc').onchange=e=>{gwRule['تون‌پی']=e.target.checked?1:0;sim='pay';phone()};
+}
+
+/* ---------- 4. reseller products ---------- */
+const P=[];
+[['یک‌ماهه',['20 گیگ 30 روز','30 گیگ 30 روز','40 گیگ 30 روز','50 گیگ 30 روز','80 گیگ 30 روز','100 گیگ 30 روز']],
+ ['سه‌ماهه',['100 گیگ 90 روز','150 گیگ 90 روز','200 گیگ 90 روز']],
+ ['مولتی لوکیشن',['یکماهه مولتی لوکیشن ویژه','سه‌ماهه مولتی لوکیشن']],
+ ['دلخواه',['حجم و زمان دلخواه']]].forEach(([c,l])=>l.forEach(n=>P.push({c,n,a:1})));
+const legacy=[[120,150],[150,150],[250,150],[30,150],[60,150],[90,150],[300,1500],[500,1500],[550,1500],[31,158],[90,160],[360,1600],[90,170],[40,18],[60,180],[90,180],[80,190],[15,20],[20,20],[30,20]];
+for(let i=0;i<148;i++){const[g,p]=legacy[i%legacy.length];P.push({c:'محصولات قدیمی',n:`${p} · ${g+Math.floor(i/legacy.length)} روز`,a:1})}
+let rq='',rf='all',openG={'محصولات قدیمی':false};
+function products(){
+  const allowed=P.filter(p=>p.a).length, groups=[...new Set(P.map(p=>p.c))];
+  $('#rtab').innerHTML=`
+  <div class="stack"><h2>محصولات مجاز</h2>
+    <div class="sumbar"><b>${allowed} از ${P.length} مجاز</b><div class="meter"><i style="width:${allowed/P.length*100}%"></i></div>
+      <div class="row"><button class="btn mini" id="rall">همه مجاز</button><button class="btn mini" id="rnone">همه غیرمجاز</button><button class="btn mini" id="rcur">فقط محصولات فعلی</button></div></div>
+    <div class="row"><input id="rq" class="search" placeholder="جستجوی محصول…" value="${rq}">
+      <div class="chips" role="group" aria-label="فیلتر"><button class="chip" data-rf="all" aria-pressed="${rf=='all'}">همه</button><button class="chip" data-rf="on" aria-pressed="${rf=='on'}">مجاز</button><button class="chip" data-rf="off" aria-pressed="${rf=='off'}">غیرمجاز</button></div></div>
+    <div class="stack">${groups.map(g=>{
+      const items=P.map((p,i)=>[p,i]).filter(([p])=>p.c==g&&(!rq||p.n.includes(rq))&&(rf=='all'||(rf=='on')==!!p.a));
+      if(!items.length)return'';
+      const all=P.filter(p=>p.c==g), on=all.filter(p=>p.a).length, isOpen=rq||rf!='all'?true:(openG[g]!==false);
+      return `<details class="grp" ${isOpen?'open':''} data-g="${g}"><summary><div class="gh" style="flex:1"><span>${g} <span class="muted" style="font-weight:500;font-size:12.5px">· ${on} از ${all.length} مجاز</span></span>
+        <span class="r"><button class="sw" role="switch" aria-checked="${on==all.length}" aria-label="کل گروه ${g}" data-gall="${g}"></button></span></div></summary>
+        <div class="pgrid">${items.map(([p,i])=>`<button class="pchip" aria-pressed="${!!p.a}" data-p="${i}"><span>${p.n}</span><span class="k">${p.a?'مجاز':'—'}</span></button>`).join('')}</div></details>`}).join('')}</div>
+    <div class="foot" hidden><span class="muted" style="font-size:12.5px">تغییرات بعد از ذخیره اعمال می‌شود.</span><div class="row"><button class="btn">انصراف</button><button class="btn pri" id="rsave">ذخیره</button></div></div>
+  </div>`;
+  $('#rq').oninput=e=>{rq=e.target.value.trim();products();const i=$('#rq');i.focus();i.setSelectionRange(i.value.length,i.value.length)};
+  document.querySelectorAll('[data-rf]').forEach(b=>b.onclick=()=>{rf=b.dataset.rf;products()});
+  document.querySelectorAll('details[data-g]').forEach(d=>d.addEventListener('toggle',()=>{if(!rq&&rf=='all')openG[d.dataset.g]=d.open}));
+  $('#rtab').onclick=e=>{
+    const s=e.target.closest('[data-gall]');
+    if(s){e.preventDefault();const g=s.dataset.gall,v=s.getAttribute('aria-checked')!=='true';P.forEach(p=>{if(p.c==g)p.a=v?1:0});products();return}
+    const c=e.target.closest('[data-p]');if(c){P[c.dataset.p].a^=1;products()}
+  };
+  $('#rall').onclick=()=>{P.forEach(p=>p.a=1);products()};
+  $('#rnone').onclick=()=>{P.forEach(p=>p.a=0);products()};
+  $('#rcur').onclick=()=>{P.forEach(p=>p.a=p.c=='محصولات قدیمی'?0:1);products()};
+  $('#rsave').onclick=()=>toast('محصولات مجاز ذخیره شد');
+}
+
+
+let rtab='profile', R={tier:'نقره‌ای',status:'active',pricing:'tier',pct:15,credit:5000000,min:2000000,exp:'1405/12/29',expOn:true};
+const TABS=[['profile','مشخصات'],['pricing','قیمت‌گذاری'],['credit','اعتبار و حداقل خرید'],['expiry','انقضا و وضعیت'],['products','محصولات مجاز'],['danger','عملیات حساس']];
+function money(n){return Number(n).toLocaleString('en-US')}
+function reseller(){
+  const stPill={active:['on','فعال'],suspended:['off','تعلیق دستی'],expired:['off','منقضی']}[R.status];
+  $('#view').innerHTML=`
+  <div class="head"><div><h1>ویرایش نماینده</h1><p class="sub">کل صفحهٔ ویرایش مرتب شد: خلاصهٔ نماینده بالا، هر بخش در یک تب، بدون اسکرول طولانی. عملیات حساس در کادر جدا. «محصولات مجاز» همان طراحی تأییدشده است.</p></div><span class="chg">تغییر ۴</span></div>
+  <div class="card rs-sum">
+    <div class="rs-id"><div class="av">ز</div><div><b>پشتیبانی زِد پروکسی</b><div class="muted" style="font-size:12px" dir="ltr">@zedproxy_support · 5973087728</div></div></div>
+    <div class="rs-kv"><div><span>وضعیت</span><b><span class="pill ${stPill[0]}">${stPill[1]}</span></b></div><div><span>سطح</span><b>${R.tier}</b></div><div><span>موجودی</span><b>71,170,767 تومان</b></div><div><span>اعتبار</span><b>${money(R.credit)} تومان</b></div><div><span>انقضا</span><b>${R.expOn?R.exp:'ندارد'}</b></div><div><span>محصولات مجاز</span><b>${P.filter(p=>p.a).length} از ${P.length}</b></div></div>
+  </div>
+  <div class="rs-tabs" role="tablist">${TABS.map(t=>`<button role="tab" class="rs-tab ${t[0]=='danger'?'dz':''}" aria-selected="${rtab==t[0]}" data-rt="${t[0]}">${t[1]}</button>`).join('')}</div>
+  <div class="card stack" id="rtab"></div>
+  <div class="card rs-foot"><span class="muted" style="font-size:12.5px">تغییرات همهٔ تب‌ها با یک «ذخیره» ثبت می‌شود.</span><div class="row"><button class="btn">انصراف</button><button class="btn pri" id="rsv">ذخیره</button></div></div>`;
+  document.querySelectorAll('[data-rt]').forEach(b=>b.onclick=()=>{rtab=b.dataset.rt;reseller()});
+  $('#rsv').onclick=()=>toast('تغییرات نماینده ذخیره شد');
+  const el=$('#rtab');
+  if(rtab==='products'){products();return}
+  if(rtab==='profile') el.innerHTML=`<h2>مشخصات</h2>
+    <div class="form"><div class="fld"><label>مشتری</label><div class="inp" style="display:flex;justify-content:space-between;gap:8px"><span>پشتیبانی زِد پروکسی</span><button class="btn mini">تغییر</button></div><span class="h">نماینده همان حساب مشتری است؛ موجودی کیف پولش جدا از اعتبار نمایندگی است.</span></div>
+    <div class="fld"><label for="rt">سطح نمایندگی</label><select id="rt" class="inp">${['برنزی','نقره‌ای','طلایی'].map(x=>`<option ${x==R.tier?'selected':''}>${x}</option>`).join('')}</select><span class="h">قیمت و محصولات پیش‌فرض از سطح می‌آید.</span></div>
+    <div class="fld"><label for="rn">یادداشت داخلی</label><input id="rn" class="inp" value="نمایندهٔ اصلی"><span class="h">فقط ادمین‌ها می‌بینند.</span></div>
+    <div class="fld"><label>تاریخ ثبت</label><div class="inp muted">1404/03/12</div></div></div>`;
+  if(rtab==='pricing') el.innerHTML=`<h2>قیمت‌گذاری</h2>
+    <div class="opts" role="group" aria-label="روش قیمت" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+      <button class="opt" data-pr="tier" aria-pressed="${R.pricing=='tier'}"><b>قیمت سطح</b><span>قیمت هر محصول از جدول قیمت سطح «${R.tier}» می‌آید.</span></button>
+      <button class="opt" data-pr="pct" aria-pressed="${R.pricing=='pct'}"><b>درصد تخفیف ثابت</b><span>از قیمت لیست، یک درصد ثابت کم می‌شود.</span></button></div>
+    ${R.pricing=='pct'?`<div class="fld" style="max-width:260px"><label for="rp">درصد تخفیف</label><input id="rp" class="inp" dir="ltr" value="${R.pct}"></div>`:''}
+    <div class="tw"><table><thead><tr><th>محصول</th><th>قیمت لیست</th><th>قیمت نماینده</th></tr></thead><tbody>
+    ${[['30 گیگ 30 روز',125000],['40 گیگ 30 روز',135000],['50 گیگ 30 روز',145000],['یکماهه مولتی لوکیشن ویژه',260000]].map(([n,v])=>{const r=R.pricing=='pct'?Math.round(v*(100-R.pct)/100):Math.round(v*0.82/1000)*1000;return `<tr><td>${n}</td><td>${money(v)}</td><td><b>${money(r)}</b></td></tr>`}).join('')}
+    </tbody></table></div><div class="note">قیمت نماینده هیچ‌وقت از قیمت لیست بیشتر نمی‌شود.</div>`;
+  if(rtab==='credit') el.innerHTML=`<h2>اعتبار و حداقل خرید</h2>
+    <div class="form"><div class="fld"><label for="rc">سقف اعتبار نمایندگی (تومان)</label><input id="rc" class="inp" dir="ltr" value="${money(R.credit)}"><span class="h">اعتبار نمایندگی جدا از کیف پول است و هرگز به موجودی تبدیل نمی‌شود.</span></div>
+    <div class="fld"><label for="rm">حداقل خرید ماهانه (تومان)</label><input id="rm" class="inp" dir="ltr" value="${money(R.min)}"><span class="h">اگر نرسد، یادآوری می‌رود.</span></div></div>
+    <div class="rs-meter"><div class="row" style="justify-content:space-between"><span>خرید این ماه</span><b>1,340,000 از ${money(R.min)}</b></div><div class="meter"><i style="width:67%"></i></div></div>`;
+  if(rtab==='expiry') el.innerHTML=`<h2>انقضا و وضعیت</h2>
+    <div class="fld"><label>وضعیت</label><div class="seg" role="group" aria-label="وضعیت">${[['active','فعال'],['suspended','تعلیق دستی']].map(x=>`<button data-st="${x[0]}" aria-pressed="${R.status==x[0]}">${x[1]}</button>`).join('')}</div><span class="h">«منقضی» خودکار است و دستی انتخاب نمی‌شود.</span></div>
+    <label class="check"><input type="checkbox" id="rxe" ${R.expOn?'checked':''}><span><b>تاریخ انقضا دارد</b><br><span class="muted" style="font-size:12px">بعد از این تاریخ نمایندگی خودکار تعلیق می‌شود، گزارش به گروه می‌رود و هیچ پولی جابه‌جا نمی‌شود.</span></span></label>
+    ${R.expOn?`<div class="fld" style="max-width:260px"><label for="rx">تاریخ انقضا</label><input id="rx" class="inp" dir="ltr" value="${R.exp}"></div>`:''}`;
+  if(rtab==='danger') el.innerHTML=`<h2>عملیات حساس</h2><p class="sub" style="margin:0">هر کدام قبل از انجام، یک پنجرهٔ تأیید با دلیل می‌خواهد و در گزارش ثبت می‌شود.</p>
+    <div class="dz-box">${[['تعلیق فوری نمایندگی','خرید با قیمت نماینده و اعتبار متوقف می‌شود.'],['تغییر دستی اعتبار','افزایش یا کاهش اعتبار با ذکر دلیل.'],['تنزل به مشتری عادی','نمایندگی حذف می‌شود؛ کیف پول و سرویس‌ها می‌مانند.']].map(x=>`<div class="dz-row"><div><b>${x[0]}</b><div class="muted" style="font-size:12px">${x[1]}</div></div><button class="btn dz-btn">${x[0]}</button></div>`).join('')}</div>`;
+  document.querySelectorAll('[data-pr]').forEach(b=>b.onclick=()=>{R.pricing=b.dataset.pr;reseller()});
+  document.querySelectorAll('[data-st]').forEach(b=>b.onclick=()=>{R.status=b.dataset.st;reseller()});
+  const xe=$('#rxe');if(xe)xe.onchange=e=>{R.expOn=e.target.checked;reseller()};
+  document.querySelectorAll('.dz-btn').forEach(b=>b.onclick=()=>toast('در پنل واقعی پنجرهٔ تأیید باز می‌شود'));
+}
+
+const VIEWS={features,panel,phone,reseller};
+function go(v){if(!VIEWS[v])v='features';$('#view').onclick=null;document.querySelectorAll('.nav').forEach(b=>b.setAttribute('aria-current',b.dataset.go==v));VIEWS[v]();}
+document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>{location.hash=b.dataset.go});
+addEventListener('hashchange',()=>go(location.hash.slice(1)));
+go(location.hash.slice(1));
+</script>
