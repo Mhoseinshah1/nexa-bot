@@ -145,6 +145,11 @@ export interface InventoryHold {
   readonly keys: ReadonlySet<string>;
   readonly given: boolean;
   readonly unheld: number;
+  /**
+   * The invoices `unheld` counts (empty for a dry run). NEXA v096 PR-1: an apply accepts them
+   * only as DEMOTIONS of services the approved dry run adopted (`demotions.ts`).
+   */
+  readonly unheldKeys: ReadonlySet<string>;
   /** `inventoryHoldDigest(keys)`. */
   readonly digest: string;
 }
@@ -727,10 +732,12 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
   );
   const given = input.review?.inventoryHold;
   const holdKeys: ReadonlySet<string> = given ?? unresolved;
+  const unheldKeys = new Set([...unresolved].filter((key) => !holdKeys.has(key)));
   const inventoryHold: InventoryHold = {
     keys: holdKeys,
     given: given !== undefined,
-    unheld: [...unresolved].filter((key) => !holdKeys.has(key)).length,
+    unheld: unheldKeys.size,
+    unheldKeys,
     digest: inventoryHoldDigest(holdKeys),
   };
   const realLive = snapshot.liveInvoices.filter((i) => i.isTest?.trim() === '0');
@@ -791,12 +798,24 @@ export function planTalliesDigest(
   // The inventory hold is bound beside the decisions: WHICH `INVENTORY_INCOMPLETE` invoices are
   // quarantined is part of what the owner approved. An empty (or absent) hold adds nothing, so
   // the digest of every plan without one is the v2 digest it always was.
-  const hold = plan.inventoryHold;
+  return planDigestOf(plan.tallies, servicesDecisionDigest(plan.services), plan.inventoryHold);
+}
+
+/**
+ * `planTalliesDigest` from its three parts, the services already digested
+ * (`servicesDecisionDigestOfRows`): what `demotions.ts` recomputes for the plan as the approved
+ * dry run would have had it.
+ */
+export function planDigestOf(
+  tallies: PlanTallies,
+  servicesDigest: string,
+  hold: Pick<InventoryHold, 'keys' | 'digest'> | undefined,
+): string {
   return sha256Hex(
     stableJson({
       format: 'nexa-legacy-plan-tallies/v2',
-      tallies: plan.tallies,
-      services: servicesDecisionDigest(plan.services),
+      tallies,
+      services: servicesDigest,
       inventoryHold: hold === undefined || hold.keys.size === 0 ? undefined : hold.digest,
     }),
   );
@@ -820,25 +839,30 @@ export const PLAN_DIGEST_FORMAT_OUTDATED = 'plan:digest_format_outdated';
  * name or id leaves the importer through it.
  */
 export function servicesDecisionDigest(services: readonly PlannedService[]): string {
-  const rows = services
-    .map(({ invoice, decision }) =>
-      decision.category === 'ADOPTION_ELIGIBLE'
-        ? [
-            invoice.idInvoice,
-            decision.category,
-            decision.panelId,
-            decision.providerUsername,
-            decision.product.kind,
-            decision.product.kind === 'NAMED_PRODUCT'
-              ? decision.product.productId
-              : decision.product.shapeKey,
-            decision.telegramUserId,
-          ]
-        : [invoice.idInvoice, decision.category],
-    )
-    .map(stableJson)
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return sha256Hex(`[${rows.join(',')}]`);
+  return servicesDecisionDigestOfRows(services.map(serviceDecisionRow));
+}
+
+/** One live invoice's row of `servicesDecisionDigest`. */
+export function serviceDecisionRow({ invoice, decision }: PlannedService): readonly string[] {
+  return decision.category === 'ADOPTION_ELIGIBLE'
+    ? [
+        invoice.idInvoice,
+        decision.category,
+        decision.panelId,
+        decision.providerUsername,
+        decision.product.kind,
+        decision.product.kind === 'NAMED_PRODUCT'
+          ? decision.product.productId
+          : decision.product.shapeKey,
+        decision.telegramUserId,
+      ]
+    : [invoice.idInvoice, decision.category];
+}
+
+/** `servicesDecisionDigest` over rows already made (`serviceDecisionRow`). */
+export function servicesDecisionDigestOfRows(rows: readonly (readonly string[])[]): string {
+  const sorted = rows.map(stableJson).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return sha256Hex(`[${sorted.join(',')}]`);
 }
 
 /**

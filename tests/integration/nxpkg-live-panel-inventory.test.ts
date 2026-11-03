@@ -6,6 +6,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMPTY_PRODUCT_DISPLAY,
+  LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS,
   LEGACY_MIGRATION_APPROVAL_PHRASE,
   LEGACY_MIGRATION_HTTP_ERROR_CODES,
   money,
@@ -1095,7 +1096,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expectReadsOnly(panelB);
   }, 600_000);
 
-  it('Q: a name ELIGIBLE at approval is unresolved at the apply — FAILED DRY_RUN_MISMATCH, nothing written', async () => {
+  it('Q (NEXA v096 PR-1): a name ELIGIBLE at approval is unresolved at the apply — DEMOTED and held: COMPLETED, an OPEN INVENTORY_INCOMPLETE candidate, listed in the import result', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await withSvcA3());
     panelA.seedUser('svc_a3', ACCOUNT);
@@ -1116,21 +1117,37 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     });
     await page.executor.tick();
     panelA.beforeListPage = null;
-    const failed = await detail(id);
-    expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
-    expect(failed.applyLegacyRunId).toBeNull();
-    const refusal = codes(failed.progress.refusalCounts);
-    expect(refusal['apply:inventory_hold:unheld']).toBe(1);
-    expect(refusal['dryrun:inventory_hold:unheld']).toBe(0);
-    for (const table of [
-      'customers',
-      'wallet_entries',
-      'legacy_wallet_debts',
-      'services',
-      'orders',
-    ]) {
-      expect(await count(table), table).toBe(0);
-    }
+    const done = await detail(id);
+    expect(done.status, JSON.stringify(done.progress.refusalCounts)).toBe('COMPLETED');
+    expect(done.applyReport?.demotions).toEqual({
+      count: 1,
+      cap: 50,
+      approvedAdoptable: BASELINE_SERVICES.length,
+      entries: [
+        {
+          legacyInvoiceId: SVC_A1_INVOICE,
+          panelId: panelAId,
+          panelUsername: 'svc_a1',
+          to: 'INVENTORY_INCOMPLETE',
+        },
+      ],
+    });
+    // Held exactly as the approved hold holds svc_a3: history and an OPEN review, no service.
+    expect(await services()).toEqual(BASELINE_SERVICES.filter((s) => s.username !== 'svc_a1'));
+    const decided = await candidates();
+    expect(decided[SVC_A1_INVOICE]?.outcome).toBe('INVENTORY_INCOMPLETE');
+    expect(decided['b0000003']?.outcome).toBe('INVENTORY_INCOMPLETE');
+    const state = await ctx.container.database.db.execute<{ k: string; review_state: string }>(
+      sql`SELECT invoice_key AS k, review_state FROM legacy_service_candidates
+           WHERE tenant_id = ${TENANT} AND invoice_key IN (${SVC_A1_INVOICE}, 'b0000003')
+           ORDER BY 1`,
+    );
+    expect(state.rows).toEqual([
+      { k: SVC_A1_INVOICE, review_state: 'OPEN' },
+      { k: 'b0000003', review_state: 'OPEN' },
+    ]);
+    expect(done.progress.reconcileVerdict).toBe('RECONCILED');
+    expect(await count('customer_notifications')).toBe(0);
     expectReadsOnly(panelA);
   }, 600_000);
 
@@ -1286,7 +1303,31 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
 
   // ── I ──────────────────────────────────────────────────────────────────────────────────
 
-  it('I: a candidate account deleted between the dry run and the apply — FAILED DRY_RUN_MISMATCH, nothing written', async () => {
+  /** The owner's demotion cap (`LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS`), set through the settings page's service. */
+  async function setDemotionCap(minServices: number, basisPoints: number): Promise<void> {
+    for (const [settingKey, value] of [
+      [LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.minServices, minServices],
+      [LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.basisPoints, basisPoints],
+    ] as const) {
+      let version: number | null;
+      try {
+        version = (await ctx.container.settingsService.get(tenantA, owner, settingKey)).version;
+      } catch {
+        version = null;
+      }
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: settingKey,
+        value,
+        expectedVersion: version,
+        idempotencyKey: key(),
+      });
+    }
+  }
+
+  /** svc_a1's invoice: adopted by the approved plan of the baseline package. */
+  const SVC_A1_INVOICE = 'a0000001';
+
+  it('I (NEXA v096 PR-1): a candidate account deleted between the dry run and the apply is DEMOTED — COMPLETED, imported as an ended service, listed in the import result; every customer and wallet as approved', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await writePackage());
     manualAccountMidWalk();
@@ -1298,12 +1339,84 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // The eligible candidate's account is deleted on the panel before the apply reads it.
     panelA.removeUser('svc_a1');
     await page.executor.tick();
+    const done = await detail(id);
+    expect(done.status, JSON.stringify(done.progress.refusalCounts)).toBe('COMPLETED');
+    expect(done.applyReport?.demotions).toEqual({
+      count: 1,
+      cap: 50,
+      approvedAdoptable: BASELINE_SERVICES.length,
+      entries: [
+        {
+          legacyInvoiceId: SVC_A1_INVOICE,
+          panelId: panelAId,
+          panelUsername: 'svc_a1',
+          to: 'PROVIDER_MISSING',
+        },
+      ],
+    });
+    // Imported exactly as a dry-run PROVIDER_MISSING: an ended service, never attached.
+    expect(await services()).toEqual(BASELINE_SERVICES.filter((s) => s.username !== 'svc_a1'));
+    expect((await candidates())[SVC_A1_INVOICE]?.outcome).toBe('PROVIDER_MISSING');
+    // Money as approved: every non-zero balance one opening, the wallets the Mirza sum.
+    const openings = SYNTHETIC_EXPECTED.users.opening;
+    expect(await count('wallet_entries')).toBe(openings.POSITIVE + openings.NEGATIVE);
+    // Reconcile counts the demotion as an ended service, never as a difference.
+    expect(done.progress.reconcileVerdict).toBe('RECONCILED');
+    expect(
+      { holds: done.applyReport?.reportHolds, failed: done.applyReport?.failedSections },
+      JSON.stringify(done.applyReport?.failedInvariants),
+    ).toEqual({ holds: true, failed: [] });
+    // The apply run recorded what it accepted; the dry run recorded what it approved.
+    const inputs = await ctx.container.database.db.execute<{ n: number }>(
+      sql`SELECT jsonb_array_length(demotions->'entries') AS n FROM legacy_import_run_inputs
+           WHERE tenant_id = ${TENANT} AND run_id = ${done.applyLegacyRunId}`,
+    );
+    expect(inputs.rows).toEqual([{ n: 1 }]);
+    // No customer is told anything by an import.
+    expect(await count('customer_notifications')).toBe(0);
+    expectReadsOnly(panelA);
+  }, 600_000);
+
+  it('I (NEXA v096 PR-1): more demotions than the cap — FAILED DRY_RUN_MISMATCH, nothing written', async () => {
+    // A cap of 0 (both halves): the one demotion below is over it.
+    await setDemotionCap(0, 0);
+    const page = productionLikePage();
+    const id = await page.toVerified(await writePackage());
+    await page.dryRun(id);
+    expect((await page.approve(id)).status).toBe('APPROVED');
+    panelA.removeUser('svc_a1');
+    await page.executor.tick();
     const failed = await detail(id);
     expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
     expect(failed.applyLegacyRunId).toBeNull();
     const refusal = codes(failed.progress.refusalCounts);
+    expect(refusal['demotions:count']).toBe(1);
+    expect(refusal['demotions:cap']).toBe(0);
     expect(refusal['dryrun:services:PROVIDER_MISSING']).toBe(2);
     expect(refusal['apply:services:PROVIDER_MISSING']).toBe(3);
+    for (const table of ['customers', 'wallet_entries', 'services', 'orders']) {
+      expect(await count(table), table).toBe(0);
+    }
+    expectReadsOnly(panelA);
+  }, 600_000);
+
+  it('I (NEXA v096 PR-1): a PROMOTION — an account missing at approval is back at the apply — FAILED DRY_RUN_MISMATCH, nothing written', async () => {
+    const page = productionLikePage();
+    const id = await page.toVerified(await writePackage());
+    panelA.removeUser('svc_a1');
+    const dry = await page.dryRun(id);
+    expect(dry.status, JSON.stringify(dry.errorCode)).toBe('DRY_RUN_DONE');
+    expect((await page.approve(id)).status).toBe('APPROVED');
+    // The account is (re)created before the apply reads the panel: eligible now.
+    panelA.seedUser('svc_a1', ACCOUNT);
+    await page.executor.tick();
+    const failed = await detail(id);
+    expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
+    expect(failed.applyLegacyRunId).toBeNull();
+    const refusal = codes(failed.progress.refusalCounts);
+    expect(refusal['dryrun:services:PROVIDER_MISSING']).toBe(3);
+    expect(refusal['apply:services:PROVIDER_MISSING']).toBe(2);
+    expect(refusal['demotions:count']).toBeUndefined();
     for (const table of ['customers', 'wallet_entries', 'services', 'orders']) {
       expect(await count(table), table).toBe(0);
     }

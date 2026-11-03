@@ -327,10 +327,11 @@ Residual risks, stated rather than hidden:
   from one deleted and created again under its name in the SAME second as the original. Only an
   account created during the read itself can be re-created that quickly; one the backup names
   predates the read by far.
-- **Survival to the end of the read.** A sighting in a later walk proves an account survived the decision walk's end, never that it survived the later walk too: that would need yet another walk, and so on. Like any read, this one is a statement about a past moment; the import's own read is a second, later look, and a changed decision fails it (`DRY_RUN_MISMATCH`, nothing written).
+- **Survival to the end of the read.** A sighting in a later walk proves an account survived the decision walk's end, never that it survived the later walk too: that would need yet another walk, and so on. Like any read, this one is a statement about a past moment; the import's own read is a second, later look. A changed decision fails it (`DRY_RUN_MISMATCH`, nothing written) — except a demotion: an approved adoption whose account the later look finds gone or unresolved is imported as an ended service or held, and listed, up to the demotion cap (NEXA v096 PR-1, `docs/legacy-migration/nxpkg-importer.md` §4a).
 - **After the read.** A variant created after the decision walk ended is outside this read, as it
   is outside a complete read; the import's own read is a second, later look, and a changed
-  decision fails it (`DRY_RUN_MISMATCH`, nothing written).
+  decision fails it (`DRY_RUN_MISMATCH`, nothing written) — a new variant is never a demotion:
+  it is an account the approval never saw.
 - **Visibility is the admin's.** Every list is scoped to the accounts the credential's admin can
   see. An account owned by another admin is invisible, and is also one this installation could
   never operate.

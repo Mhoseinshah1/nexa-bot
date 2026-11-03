@@ -841,6 +841,19 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'referral',
     control: { kind: 'integer', unit: 'web.unit_percent', optional: true },
   },
+  // NEXA v096 PR-1: the legacy import's demotion cap (owner-only on the server).
+  'legacy_import.apply_demotion_cap_min_services': {
+    title: 'web.setting_import_demotion_cap_min',
+    description: 'web.setting_import_demotion_cap_min_desc',
+    group: 'ops',
+    control: { kind: 'integer' },
+  },
+  'legacy_import.apply_demotion_cap_basis_points': {
+    title: 'web.setting_import_demotion_cap_bps',
+    description: 'web.setting_import_demotion_cap_bps_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_bps' },
+  },
   // NEXA v095 PR-4 B.
   'phone_verification.allowed_numbers': {
     title: 'web.setting_phone_allowed_numbers',

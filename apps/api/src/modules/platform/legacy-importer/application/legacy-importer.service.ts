@@ -113,7 +113,17 @@ import type {
   LegacyReadSetRunRepository,
   LegacyRunInputs,
   LegacyRunInputsRepository,
+  StoredDemotions,
 } from './ports.js';
+import {
+  DEFAULT_DEMOTION_CAP,
+  approvedAdoptionsOf,
+  demotionCap,
+  demotionsAgainst,
+  demotionsSection,
+  type ApprovedAdoption,
+  type DemotionCapSetting,
+} from './demotions.js';
 import { buildFinalReport } from './final-report.js';
 import { buildFinalReportV2 } from './final-report-v2.js';
 import type { LegacyInventory } from './legacy-inventory.js';
@@ -260,6 +270,11 @@ export interface LegacyImporterDeps {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly codeVersion: string | null;
+  /**
+   * NEXA v096 PR-1: the demotion cap setting (`LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS`), read
+   * only by an apply whose fresh read demoted approved adoptions. Absent: the registry default.
+   */
+  readonly demotionCap?: (scope: TenantContext) => Promise<DemotionCapSetting>;
   /** Per-section timing lines (`section-timing.ts`): counts and milliseconds only. */
   readonly logger?: SectionTimingLogger;
 }
@@ -574,6 +589,16 @@ function inventoryHoldMismatch(runId: string, purpose: string) {
     `INVENTORY_HOLD_MISMATCH: run ${runId} was started under a different inventory hold ` +
       `(another approved dry run); ${purpose} needs the same one.`,
   );
+}
+
+/**
+ * NEXA v096 PR-1: `sections.demotions` of an apply or report — the demotions the apply run
+ * accepted, as its run inputs recorded them. Absent when it demoted nothing. Operator-only.
+ */
+function storedDemotionsSection(stored: StoredDemotions | null) {
+  return stored === null
+    ? {}
+    : { demotions: demotionsSection(stored.entries, stored.cap, stored.approvedAdoptable) };
 }
 
 /** `sections.inventoryHold` of a report: how many invoices are held, and the digest of which. */
@@ -969,6 +994,13 @@ export class LegacyImporterService {
         tx,
         undefined,
         prepared.plan.inventoryHold,
+        // NEXA v096 PR-1: what an apply bound to this digest compares a demotion with.
+        {
+          approval: {
+            planTalliesDigest: planTalliesDigest(prepared.plan),
+            adoptions: approvedAdoptionsOf(prepared.plan.services),
+          },
+        },
       );
       await this.auditRun(scope, actor, 'legacy_import.run.start', outcome.run, mapping, tx);
     });
@@ -1073,7 +1105,7 @@ export class LegacyImporterService {
       });
     }
     const inventoryHold = await this.inventoryHoldKeys(scope, input);
-    const prepared = await timedSection(
+    let prepared = await timedSection(
       this.deps.logger,
       'apply.prepare',
       () =>
@@ -1108,13 +1140,41 @@ export class LegacyImporterService {
     // or any at all when no hold was given) is a plan the owner never saw.
     const unread = prepared.plan.inventories.filter(inventoryReadFailed).length;
     const hold = prepared.plan.inventoryHold;
-    const unheld = hold.given ? hold.unheld : hold.keys.size;
-    if (
+    const unheldAll = hold.given ? hold.unheld : hold.keys.size;
+    const bound =
       input.mode === 'IMPORT' &&
       input.productionLikeTarget !== false &&
-      (input.dryRunTalliesDigest !== undefined || snapshot.descriptor.engine === 'NXPKG') &&
-      (unread > 0 || unheld > 0)
+      (input.dryRunTalliesDigest !== undefined || snapshot.descriptor.engine === 'NXPKG');
+    // NEXA v096 PR-1: the approved dry run's adoptions, read once and only when a demotion could
+    // explain a difference (`demotions.ts`). Null: none recorded under the approved digest.
+    let approvedAdoptions: readonly ApprovedAdoption[] | null | undefined;
+    const approvedOf = async (digest: string) => {
+      approvedAdoptions ??= await this.deps.runInputs.findApprovedAdoptions(
+        scope,
+        snapshot.fingerprint,
+        digest,
+      );
+      return approvedAdoptions;
+    };
+    // An unresolved name the approved hold does not cover may be a DEMOTION — but only of an
+    // invoice the approved dry run adopted, and only under the approved hold (whose digest the
+    // plan binds, unchanged). Every other one is still a plan the owner never saw. Whether the
+    // demotions are ALL that moved is the digest's question, below.
+    let unheld = unheldAll;
+    if (
+      bound &&
+      unread === 0 &&
+      unheld > 0 &&
+      hold.given &&
+      input.dryRunTalliesDigest !== undefined
     ) {
+      const approved = await approvedOf(input.dryRunTalliesDigest);
+      if (approved !== null) {
+        const adopted = new Set(approved.map((a) => a[0]));
+        unheld = [...hold.unheldKeys].filter((key) => !adopted.has(key)).length;
+      }
+    }
+    if (bound && (unread > 0 || unheld > 0)) {
       throw new NxpkgImportRefused(
         'DRY_RUN_MISMATCH',
         [
@@ -1127,23 +1187,62 @@ export class LegacyImporterService {
     }
     // `.nxpkg`: an import starts only from the plan the owner approved in its dry run. A
     // resume is not compared: its own earlier writes are part of NEXA's state now.
+    let demotions: StoredDemotions | null = null;
     if (input.mode === 'IMPORT' && input.dryRunTalliesDigest !== undefined) {
+      const approvedDigest = input.dryRunTalliesDigest;
       const now = planTalliesDigest(prepared.plan);
-      if (now !== input.dryRunTalliesDigest) {
+      if (now !== approvedDigest) {
         // A dry run approved before v2 carries the v1 digest of the same tallies: said as
         // that, not as a plan that moved. The owner runs and approves a new dry run.
-        const outdated = planTalliesDigestV1(prepared.plan) === input.dryRunTalliesDigest;
-        // The import's own tallies go with the refusal (counts only): which one moved is
-        // the diagnosis, and the message itself is never shown past the adapter (L3).
-        throw new NxpkgImportRefused(
-          'DRY_RUN_MISMATCH',
-          [
+        const outdated = planTalliesDigestV1(prepared.plan) === approvedDigest;
+        // NEXA v096 PR-1: a plan that differs from the approved one by DEMOTIONS only (an
+        // approved adoption whose account the live panel lost since, or whose name is now
+        // unresolved) is applied with them, up to the cap. Anything else refuses below.
+        const approved = outdated ? null : await approvedOf(approvedDigest);
+        const verdict =
+          approved === null ? null : demotionsAgainst(prepared.plan, approved, approvedDigest);
+        if (approved !== null && verdict?.kind === 'DEMOTED') {
+          const cap = demotionCap(approved.length, await this.demotionCapSetting(scope));
+          if (verdict.demotions.length > cap) {
+            throw new NxpkgImportRefused(
+              'DRY_RUN_MISMATCH',
+              [
+                `${String(verdict.demotions.length)} approved adoptable service(s) are gone from the live panel or unresolved since the approved dry run — more than the demotion cap of ${String(cap)}: the panel or its read is probably broken, not just moving. Nothing was written; run and approve a new dry run.`,
+              ],
+              {
+                ...planTalliesRefusalCounts(prepared.plan),
+                'demotions:count': verdict.demotions.length,
+                'demotions:cap': cap,
+              },
+            );
+          }
+          prepared = { ...prepared, plan: verdict.plan };
+          demotions = { cap, approvedAdoptable: approved.length, entries: verdict.demotions };
+          // The one summary line (counts only): the list is the operator's, in the report.
+          this.deps.logger?.info(
+            { demotions: verdict.demotions.length, cap, approvedAdoptable: approved.length },
+            'the import demoted approved adoptable services the live panel lost since the approved dry run',
+          );
+        } else {
+          // The import's own tallies go with the refusal (counts only): which one moved is
+          // the diagnosis, and the message itself is never shown past the adapter (L3).
+          throw new NxpkgImportRefused(
+            'DRY_RUN_MISMATCH',
+            [
+              outdated
+                ? 'the approved dry run carries a digest of an earlier format; run and approve a new dry run. Nothing was written.'
+                : `the plan's tallies digest is ${now}, not the approved dry run's ${approvedDigest}: NEXA's state or the input changed since the dry run, beyond any demotion. Nothing was written.`,
+            ],
             outdated
-              ? 'the approved dry run carries a digest of an earlier format; run and approve a new dry run. Nothing was written.'
-              : `the plan's tallies digest is ${now}, not the approved dry run's ${input.dryRunTalliesDigest}: NEXA's state or the input changed since the dry run. Nothing was written.`,
-          ],
-          outdated ? { [PLAN_DIGEST_FORMAT_OUTDATED]: 1 } : planTalliesRefusalCounts(prepared.plan),
-        );
+              ? { [PLAN_DIGEST_FORMAT_OUTDATED]: 1 }
+              : {
+                  ...planTalliesRefusalCounts(prepared.plan),
+                  ...(verdict?.kind === 'NOT_DEMOTIONS' && verdict.demotions > 0
+                    ? { 'demotions:beside_other_changes': verdict.demotions }
+                    : {}),
+                },
+          );
+        }
       }
     }
     const holdDigest = holdDigestOf(input);
@@ -1152,6 +1251,7 @@ export class LegacyImporterService {
       excludeOpenings: true,
     });
     const runId = this.deps.ids.uuid();
+    let recordedDemotions: StoredDemotions | null = null;
     const run = await this.mutate(scope, actor, 'legacy_import.run.start', runId, async (tx) => {
       const cutover = gate === null ? null : await this.requireCutover(input, gate, tx);
       // aud6 F2: the freeze is measured in the import window itself, inside the transaction
@@ -1215,7 +1315,10 @@ export class LegacyImporterService {
         tx,
         preImport,
         inventoryHold === undefined ? null : prepared.plan.inventoryHold,
+        { demotions },
       );
+      // A resume reports what its first start accepted (insert-or-nothing keeps that row).
+      recordedDemotions = stored.demotions;
       if (stored.panelMappingFingerprint !== mapping.fingerprint) {
         throw errors.conflict(
           LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
@@ -1415,6 +1518,7 @@ export class LegacyImporterService {
         provider: this.providerSection(prepared),
         plan: prepared.plan.tallies,
         ...ownershipHoldSection(input, prepared.plan),
+        ...storedDemotionsSection(recordedDemotions),
         applied: tallies,
         attention,
       },
@@ -3541,6 +3645,7 @@ export class LegacyImporterService {
         final,
         usersWallets,
         serviceOutcomes,
+        ...storedDemotionsSection(inputs.demotions),
       };
     }
     const finalV2 = buildFinalReportV2({
@@ -3561,6 +3666,8 @@ export class LegacyImporterService {
       finalV2,
       usersWallets,
       serviceOutcomes,
+      // NEXA v096 PR-1: beside the closed documents, never inside them (they carry no name).
+      ...storedDemotionsSection(inputs.demotions),
     };
   }
 
@@ -3870,6 +3977,13 @@ export class LegacyImporterService {
     );
   }
 
+  /** The demotion cap setting; the registry default when no reader is wired. */
+  private async demotionCapSetting(scope: TenantContext): Promise<DemotionCapSetting> {
+    return this.deps.demotionCap === undefined
+      ? DEFAULT_DEMOTION_CAP
+      : this.deps.demotionCap(scope);
+  }
+
   private async recordInputs(
     scope: TenantContext,
     runId: string,
@@ -3880,6 +3994,15 @@ export class LegacyImporterService {
     tx: TransactionScope,
     preImport?: { readonly totalMinor: bigint; readonly customers: number },
     inventoryHold?: { readonly keys: ReadonlySet<string>; readonly digest: string } | null,
+    extra: {
+      /** A dry run's own plan digest and adoptions (NEXA v096 PR-1). */
+      readonly approval?: {
+        readonly planTalliesDigest: string;
+        readonly adoptions: readonly ApprovedAdoption[];
+      };
+      /** An apply's accepted demotions. */
+      readonly demotions?: StoredDemotions | null;
+    } = {},
   ): Promise<LegacyRunInputs> {
     const totals =
       preImport ??
@@ -3901,6 +4024,9 @@ export class LegacyImporterService {
           inventoryHold === undefined || inventoryHold === null
             ? null
             : [...inventoryHold.keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+        planTalliesDigest: extra.approval?.planTalliesDigest ?? null,
+        approvedAdoptions: extra.approval?.adoptions ?? null,
+        demotions: extra.demotions ?? null,
       },
       tx,
     );

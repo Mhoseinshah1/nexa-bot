@@ -196,8 +196,11 @@ every customer, wallet opening, legacy debt and decided service still imports.
   to it). The hold only DEMOTES: a held invoice whose category the inventory decides is
   `INVENTORY_INCOMPLETE` whatever the apply's read says, so a name that resolves now is still
   not adopted and the digest stays the approved one. An invoice the apply's read leaves
-  unresolved that the approval did NOT hold — one that was eligible, missing, or anything else
-  at approval — refuses `DRY_RUN_MISMATCH` before any write. The hold is recorded on the APPLY
+  unresolved that the approval did NOT hold is a DEMOTION when the approval ADOPTED it (NEXA v096
+  PR-1, `nxpkg-importer.md` §4a "Demotions at apply"): it is held as `INVENTORY_INCOMPLETE` like a
+  held invoice (an OPEN review candidate, never adopted) and listed in the import result, up to the
+  demotion cap. One that was missing, or anything else, at approval still refuses
+  `DRY_RUN_MISMATCH` before any write, as does more demotions than the cap. The hold is recorded on the APPLY
   run's inputs; resume, reconcile and report under another hold are refused
   (`INVENTORY_HOLD_MISMATCH`).
 

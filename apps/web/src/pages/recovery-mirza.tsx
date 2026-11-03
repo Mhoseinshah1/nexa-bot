@@ -12,6 +12,8 @@ import {
   legacyMigrationDryRunInventoryIncomplete,
   validInventoryHold,
   type LegacyBotLinkOutcome,
+  type LegacyImportDemotionTarget,
+  type LegacyImportDemotions,
   type LegacyExactMatchRow,
   type LegacyMaterializeOutcome,
   type LegacyMigrationBackupOutcome,
@@ -1598,6 +1600,9 @@ function ResultStep({ row }: { row: LegacyMigrationImportView }) {
             <BotLinkSummary link={report.botLink} />
           )}
           {report.materialize !== undefined && <MaterializeTable rows={report.materialize} />}
+          {report.demotions !== undefined && report.demotions.count > 0 && (
+            <DemotionsTable demotions={report.demotions} />
+          )}
           <SectionTable rows={report.sections} />
           <CodeCounts title={t('web.lmg_history')} rows={report.history} />
         </>
@@ -1743,6 +1748,53 @@ export function BotLinkSummary({
           [t('web.mrz_bot_link_eligible'), <Num key="e" value={link.eligible} />],
           [t('web.mrz_bot_link_linked_count'), <Num key="l" value={link.linked} />],
         ]}
+      />
+    </div>
+  );
+}
+
+const DEMOTION_LABELS: Readonly<Record<LegacyImportDemotionTarget, WebKey>> = {
+  PROVIDER_MISSING: 'web.mrz_demotion_provider_missing',
+  INVENTORY_INCOMPLETE: 'web.mrz_demotion_inventory_incomplete',
+};
+
+/**
+ * NEXA v096 PR-1: the approved adoptable services the apply demoted because the live panel
+ * moved after the approved dry run — each legacy invoice and the panel account it named.
+ */
+export function DemotionsTable({ demotions }: { demotions: LegacyImportDemotions }) {
+  return (
+    <div className="stack">
+      <h3>{t('web.mrz_demotions_title')}</h3>
+      <Banner tone="warn">{t('web.mrz_demotions_hint')}</Banner>
+      <KV
+        items={[
+          [t('web.mrz_demotions_count'), <Num key="n" value={demotions.count} />],
+          [t('web.mrz_demotions_cap'), <Num key="c" value={demotions.cap} />],
+          [t('web.mrz_demotions_approved'), <Num key="a" value={demotions.approvedAdoptable} />],
+        ]}
+      />
+      <DataTable
+        columns={[
+          {
+            key: 'invoice',
+            header: t('web.mrz_demotions_col_invoice'),
+            render: (row) => <Ltr>{row.legacyInvoiceId}</Ltr>,
+          },
+          {
+            key: 'username',
+            header: t('web.mrz_demotions_col_username'),
+            render: (row) => <Ltr>{row.panelUsername}</Ltr>,
+          },
+          {
+            key: 'to',
+            header: t('web.mrz_demotions_col_to'),
+            render: (row) => t(DEMOTION_LABELS[row.to]),
+          },
+        ]}
+        caption={t('web.mrz_demotions_title')}
+        rows={demotions.entries.map((row) => ({ ...row, id: row.legacyInvoiceId }))}
+        rowKey={(row) => row.id}
       />
     </div>
   );

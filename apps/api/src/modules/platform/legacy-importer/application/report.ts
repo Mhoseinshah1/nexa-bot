@@ -4,7 +4,9 @@
  * One machine-readable JSON document and its human rendering. Aggregates only: counts,
  * sums, digests, panel UUIDs and legacy panel codes. Never a Telegram id, a username, a
  * phone, a subscription link, a credential or one person's balance — the builders below
- * receive tallies, not rows, so there is nothing of that kind to leak.
+ * receive tallies, not rows, so there is nothing of that kind to leak. The one exception is
+ * the operator-only `demotions` list (NEXA v096 PR-1): legacy invoice id → panel username of
+ * each approved adoption the apply demoted, which the owner must be able to check by hand.
  */
 
 export const LEGACY_REPORT_FORMAT = 'nexa-legacy-import-report/v1';
@@ -64,6 +66,14 @@ export interface LegacyImportReport {
    * `--format json` prints it (`--report-schema 1` prints `final` instead).
    */
   readonly finalV2?: unknown;
+  /**
+   * `report` mode only (NEXA v096 PR-1): the demotions the apply run accepted
+   * (`demotions.ts`, `demotionsSection`) — the one place a report names a legacy invoice and
+   * a panel username, for the OPERATOR (the restore page's import result, the CLI). Never in
+   * `final` or `finalV2`, which stay free of names; an import or resume carries the same
+   * object as `sections.demotions`. Absent when the apply demoted nothing.
+   */
+  readonly demotions?: unknown;
 }
 
 export interface LegacyReportInvocation {
@@ -176,6 +186,7 @@ export function reportMarkdown(report: LegacyImportReport): string {
   if (report.serviceOutcomes !== undefined) {
     renderValue('serviceOutcomes', report.serviceOutcomes, 0, out);
   }
+  if (report.demotions !== undefined) renderValue('demotions', report.demotions, 0, out);
   if (report.finalV2 !== null && typeof report.finalV2 === 'object') {
     // The v2 document without `core` (rendered above as the sections) and without the two
     // sections already rendered: the verdict, the new sections and the invariants.

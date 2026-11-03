@@ -765,4 +765,101 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     expect((await importer.reconcile(input)).verdict).toBe('RECONCILED');
     expectOnlyReads();
   });
+
+  it('NEXA v096 PR-1 (the CLI path botctl cutover rehearse takes): a demotion beside a BALANCE change refuses DRY_RUN_MISMATCH, nothing written; the demotion alone COMPLETES and every report lists it', async () => {
+    const { connector: c, binding, holdFor, argv, importer, context } = await setup();
+    const session = await c.open();
+    let snapshot: LegacySnapshot;
+    try {
+      snapshot = await readFromSession(c.label, session);
+    } finally {
+      await session.close();
+    }
+    const hold = await holdFor(snapshot);
+    const mapping = parsePanelMapping(binding.text, TENANT);
+    const input = {
+      scope: tenantA,
+      actor: job('apply'),
+      snapshot,
+      mapping,
+      productionLikeTarget: false,
+      ownershipHold: hold,
+      ownershipDecisionsDigest: null,
+    };
+    // The approved dry run, through the CLI as an operator runs it.
+    const dry = await runMode(importer, argv('dry-run'), c, binding.text, 'corr-dry', context);
+    const digest = (dry?.sections as Record<string, any>)['planTalliesDigest'] as string;
+    expect(digest).toMatch(/^[0-9a-f]{64}$/u);
+
+    // Between the approval and the apply the panel deletes svc_a1 on its own …
+    panelA.removeUser('svc_a1');
+    // … and, in this attempt, one Mirza balance reads otherwise (the same source fingerprint).
+    const index = snapshot.users.findIndex((u) => /^[0-9]+$/u.test(u.balance ?? ''));
+    const moved: LegacySnapshot = {
+      ...snapshot,
+      users: snapshot.users.map((u, i) =>
+        i === index ? { ...u, balance: String(BigInt(u.balance ?? '0') + 1000n) } : u,
+      ),
+    };
+    await expect(
+      importer.apply({
+        ...input,
+        snapshot: moved,
+        mode: 'IMPORT',
+        freshTarget: true,
+        dryRunTalliesDigest: digest,
+      }),
+    ).rejects.toMatchObject({
+      code: 'DRY_RUN_MISMATCH',
+      counts: expect.objectContaining({ 'demotions:beside_other_changes': 1 }),
+    });
+    expect(await count('legacy_import_runs', "mode = 'APPLY'")).toBe(0);
+    for (const table of ['customers', 'wallet_entries', 'services', 'orders']) {
+      expect(await count(table), table).toBe(0);
+    }
+
+    // The demotion alone: the CLI's import COMPLETES, the account an ended service.
+    const applied = await runMode(
+      importer,
+      argv('import', '--expected-plan-tallies-digest', digest),
+      c,
+      binding.text,
+      'corr-imp',
+      context,
+    );
+    expect(applied?.verdict).toBe('COMPLETED');
+    const demotions = (applied?.sections as Record<string, any>)['demotions'];
+    expect(demotions).toMatchObject({
+      count: 1,
+      cap: 50,
+      approvedAdoptable: 3,
+      entries: [{ panelId: panelAId, panelUsername: 'svc_a1', to: 'PROVIDER_MISSING' }],
+    });
+    const adopted = await ctx.container.database.db.execute<{ provider_username: string }>(
+      sql`SELECT provider_username FROM services WHERE tenant_id = ${TENANT} AND state <> 'TERMINATED'`,
+    );
+    expect(adopted.rows.map((r) => r.provider_username).sort()).toEqual([
+      'svc_b1',
+      'svc_nullmatch',
+    ]);
+    expect(
+      await count('legacy_service_candidates', "outcome = 'PROVIDER_MISSING'"),
+    ).toBeGreaterThan(0);
+    // Reconcile counts it as ended, never as a difference.
+    expect((await importer.reconcile(input)).verdict).toBe('RECONCILED');
+    // The final report carries the list BESIDE its closed documents, never inside them.
+    const report = await runMode(
+      importer,
+      argv('report', '--report-schema', '2'),
+      c,
+      binding.text,
+      'corr-rep',
+      context,
+    );
+    expect(report?.demotions).toEqual(demotions);
+    expect(JSON.stringify(report?.finalV2)).not.toContain('svc_a1');
+    expect(JSON.stringify(report?.final)).not.toContain('svc_a1');
+    expect(await count('customer_notifications')).toBe(0);
+    expectOnlyReads();
+  });
 });

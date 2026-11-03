@@ -638,6 +638,21 @@ sets (every table classified, each fingerprint as approved) and, inside its star
 transaction, requires an unrevoked approval matching all seven values; its run-start audit
 row names the approval id it ran under.
 
+**Accounts the panel lost since the dry run (NEXA v096 PR-1).** The import re-reads the live
+RickPanel too. An account the approved dry run would have adopted that the panel has since
+deleted or expired is imported as an ENDED service (one whose name the read leaves unresolved
+is held for review), and the import continues: a demotion, never a reason to start over. The
+report lists them in `sections.demotions` (the count, the cap, each legacy invoice id → panel
+username; the restore page shows the same under «سرویس‌های تنزل‌یافته هنگام واردکردن»).
+Record the count in the cutover report and check the list by hand against the panel; no
+customer is told. More than the cap — the larger of 50 and 0.5 % of the approved adoptable
+services (owner-only settings `legacy_import.apply_demotion_cap_min_services`,
+`legacy_import.apply_demotion_cap_basis_points`) — or ANY other change (a promotion, an account
+the approval never saw, another owner, a customer, wallet, debt or reseller (agent) figure) is
+`DRY_RUN_MISMATCH` before any write, exactly as before: **STOP**, nothing was written; find out
+why the panel moved that much before a new dry run and approval
+([`nxpkg-importer.md`](nxpkg-importer.md) §4a "Demotions at apply").
+
 **After the import, before anything else — the approval check.** What ran must be what was
 approved; a mismatch is a rollback trigger (T3), whatever the import's exit code:
 

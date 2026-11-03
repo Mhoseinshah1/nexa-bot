@@ -14668,6 +14668,21 @@ export const legacyImportRunInputs = pgTable(
      */
     inventoryHoldDigest: text('inventory_hold_digest'),
     inventoryHoldKeys: jsonb('inventory_hold_keys'),
+    /**
+     * NEXA v096 PR-1 (demotions at apply): a DRY RUN's own `planTalliesDigest` and its adoptions
+     * (`ApprovedAdoption` rows: invoice, panel, panel spelling, product path, customer), so an
+     * apply bound to that digest can tell an account the live panel lost since from any other
+     * change. Read only through the restored digest, never trusted alone. NULL for an apply and
+     * for a run recorded before them. Operator data, never in a report.
+     */
+    planTalliesDigest: text('plan_tallies_digest'),
+    approvedAdoptions: jsonb('approved_adoptions'),
+    /**
+     * NEXA v096 PR-1: the demotions an APPLY accepted when it started (`StoredDemotions`: cap,
+     * approved adoptable services, rows `[invoice, panel, panel spelling, to]`). NULL for a dry
+     * run and for an apply that demoted nothing.
+     */
+    demotions: jsonb('demotions'),
   },
   (table) => [
     primaryKey({ name: 'legacy_import_run_inputs_pk', columns: [table.tenantId, table.runId] }),
@@ -14693,6 +14708,14 @@ export const legacyImportRunInputs = pgTable(
     check(
       'legacy_import_run_inputs_inventory_hold_check',
       sql`((inventory_hold_digest IS NULL) = (inventory_hold_keys IS NULL)) AND (inventory_hold_digest IS NULL OR inventory_hold_digest ~ '^[0-9a-f]{64}$') AND (inventory_hold_keys IS NULL OR jsonb_typeof(inventory_hold_keys) = 'array')`,
+    ),
+    check(
+      'legacy_import_run_inputs_approved_adoptions_check',
+      sql`((plan_tallies_digest IS NULL) = (approved_adoptions IS NULL)) AND (plan_tallies_digest IS NULL OR plan_tallies_digest ~ '^[0-9a-f]{64}$') AND (approved_adoptions IS NULL OR jsonb_typeof(approved_adoptions) = 'array')`,
+    ),
+    check(
+      'legacy_import_run_inputs_demotions_check',
+      sql`demotions IS NULL OR (jsonb_typeof(demotions) = 'object' AND jsonb_typeof(demotions->'entries') = 'array')`,
     ),
   ],
 );
