@@ -86,11 +86,18 @@ describe('the one central gate', () => {
     );
   }
 
-  it('reaches `act` only through the terms gate, which only the membership gate reaches', () => {
+  it('reaches `act` only through the phone gate, behind the terms gate, behind the membership gate', () => {
     // A handler that called `act` directly would be a customer action behind no gate.
-    expect(new Set(callersOf('this.act('))).toEqual(new Set(['termsGatedAct', 'acceptTerms']));
+    // NEXA v095 PR-4 A: the bot-wide phone gate is the chain's last link.
+    expect(new Set(callersOf('this.act('))).toEqual(new Set(['phoneGatedAct']));
+    expect(new Set(callersOf('this.phoneGatedAct('))).toEqual(
+      new Set(['termsGatedAct', 'acceptTerms']),
+    );
     expect(new Set(callersOf('this.termsGatedAct('))).toEqual(new Set(['guardedAct']));
-    expect(new Set(callersOf('this.guardedAct('))).toEqual(new Set(['handle']));
+    // The action a phone gate held is resumed through the WHOLE guard again, never past it.
+    expect(new Set(callersOf('this.guardedAct('))).toEqual(
+      new Set(['handle', 'afterPhoneVerified']),
+    );
   });
 
   it('asks the /start captcha FIRST, inside the one gate, before membership and terms (R10 D5)', () => {

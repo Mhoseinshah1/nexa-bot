@@ -2201,7 +2201,7 @@ export const WEB_FA = {
   // NEXA v095 PR-4 D: the label says what the control does (the owner could not find it).
   'web.c360_channel_exemption': 'معاف از عضویت اجباری کانال',
   'web.c360_channel_required': 'خیر — عضویت در کانال‌های اجباری لازم است',
-  'web.c360_channel_exempt': 'معاف است',
+  'web.c360_channel_exempt': 'معاف از عضویت کانال',
   'web.c360_channel_exempt_action': 'معاف کردن',
   'web.c360_channel_unexempt_action': 'لغو معافیت',
   // NEXA v095 PR-4 D: never asked for a phone — by the bot-wide gate nor by any route rule.

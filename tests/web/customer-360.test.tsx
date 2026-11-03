@@ -40,6 +40,7 @@ const overview = (overrides: Record<string, unknown> = {}) => ({
   overview: {
     customerId: ID,
     channelMembershipExemptAt: null,
+    phoneVerificationExemptAt: null,
     phone: null,
     locationOverride: null,
     marketingOptOutAt: null,
@@ -222,7 +223,44 @@ describe('Customer 360 — the customer page', () => {
     expect(sent?.body).toMatchObject({ exempt: true, reason: 'VIP' });
     expect(typeof (sent?.body as { idempotencyKey?: unknown }).idempotencyKey).toBe('string');
     // The page now shows the stored state the server answered with.
-    expect((await screen.findAllByText('معاف از عضویت')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('معاف از عضویت کانال')).length).toBeGreaterThan(0);
+  });
+
+  it('NEXA v095 PR-4 D: «معاف از تأیید شماره» beside «معاف از عضویت اجباری کانال», only with a reason', async () => {
+    const api = stubApi(
+      routes([
+        {
+          url: `/users/${ID}/phone-exemption`,
+          body: {
+            ...overview({ phoneVerificationExemptAt: '2026-11-03T10:00:00.000Z' }),
+            changed: true,
+          },
+        },
+      ]),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} mayExemptPhone denied={false} />);
+    await openC360Tab('controls');
+    // Both exemptions are on the card, each under a label that says what it does.
+    expect(await screen.findByText('معاف از عضویت اجباری کانال')).toBeTruthy();
+    expect(screen.getByText('معاف از تأیید شماره')).toBeTruthy();
+    // Only the control this administrator holds is offered.
+    const exempt = screen.getAllByRole('button', { name: 'معاف کردن' });
+    expect(exempt).toHaveLength(1);
+    fireEvent.click(exempt[0] as HTMLElement);
+    const confirm = screen.getByRole('button', { name: 'تأیید' });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('دلیل (اجباری)'), { target: { value: 'پشتیبانی' } });
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.url.includes('/phone-exemption'))).toBe(true),
+    );
+    const sent = api.calls.find((call) => call.url.includes('/phone-exemption'));
+    expect(sent?.method).toBe('POST');
+    expect(sent?.body).toMatchObject({ exempt: true, reason: 'پشتیبانی' });
+    expect(typeof (sent?.body as { idempotencyKey?: unknown }).idempotencyKey).toBe('string');
+    expect(
+      (await screen.findAllByText('معاف است (نه ربات، نه درگاه‌ها شماره نمی‌خواهند)')).length,
+    ).toBeGreaterThan(0);
   });
 
   it('R10 D3: sets a personal discount — a whole percent 0..100 and a reason, Persian errors', async () => {

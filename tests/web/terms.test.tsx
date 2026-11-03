@@ -260,6 +260,7 @@ describe('Customer 360’s terms line', () => {
   const base = {
     customerId: 'c',
     channelMembershipExemptAt: null,
+    phoneVerificationExemptAt: null,
     phone: null,
     locationOverride: null,
     marketingOptOutAt: null,
