@@ -3259,6 +3259,30 @@ describe('the new-panel form — a custom bridge', () => {
     expect((screen.getByLabelText(t('web.api_token_signing')) as HTMLInputElement).value).toBe('');
   });
 
+  it('calls the type «پنل کاستوم» in the picker and shows the framed protocol-document box', async () => {
+    stubApi([{ url: '/providers', body: CATALOGUE }]);
+    renderPage(<NewPanelPage denied={false} mayRotate mayView />);
+    await screen.findByLabelText('ارائه‌دهنده');
+    // The picker reads «پنل کاستوم», not the catalogue's English name.
+    expect(screen.getByRole('option', { name: 'پنل کاستوم' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Custom \(Nexa bridge/ })).toBeNull();
+    // No box for another provider.
+    fireEvent.change(screen.getByLabelText('ارائه‌دهنده'), { target: { value: 'marzban' } });
+    expect(screen.queryByTestId('protocol-doc-panel')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('ارائه‌دهنده'), { target: { value: 'custom' } });
+    const box = screen.getByTestId('protocol-doc-panel');
+    expect(box.textContent).toContain('مستند پروتکل پنل کاستوم');
+    const link = within(box).getByRole('link', { name: 'باز کردن مستند' });
+    expect(link).toHaveAttribute(
+      'href',
+      'https://github.com/Mhoseinshah1/nexa-bot/blob/main/docs/protocols/custom-panel.md',
+    );
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link.getAttribute('rel')).toContain('noopener');
+    expect(box.getAttribute('style')).toBeNull();
+  });
+
   it('sends the secret and the timeout in milliseconds, from Persian digits too', async () => {
     const api = stubApi([
       { url: '/providers', body: CATALOGUE },

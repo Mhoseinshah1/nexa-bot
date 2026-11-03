@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { providerDisplayName } from '../provider-labels';
 import { Drawer } from '../ui/overlays';
 import { useConfirmedClose } from '../ui/unsaved';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -405,7 +406,9 @@ export function ExtraDevicesPage({
         <Banner tone="info">
           {t('web.extra_devices_capable_panels').replace(
             '{providers}',
-            CAPABLE_PROVIDERS.map((one) => one.canonicalName).join(', '),
+            CAPABLE_PROVIDERS.map((one) => providerDisplayName(one.key, one.canonicalName)).join(
+              ', ',
+            ),
           )}
         </Banner>
       )}

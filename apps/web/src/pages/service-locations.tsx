@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { providerDisplayName } from '../provider-labels';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PROVIDER_DESCRIPTORS,
@@ -446,7 +447,9 @@ export function ServiceLocationsPage({
         <Banner tone="info">
           {t('web.service_locations_capable_panels').replace(
             '{providers}',
-            CAPABLE_PROVIDERS.map((one) => one.canonicalName).join(', '),
+            CAPABLE_PROVIDERS.map((one) => providerDisplayName(one.key, one.canonicalName)).join(
+              ', ',
+            ),
           )}
         </Banner>
       )}
