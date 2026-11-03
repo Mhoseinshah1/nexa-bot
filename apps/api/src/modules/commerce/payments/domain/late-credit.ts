@@ -109,6 +109,30 @@ export function lateCreditAmountMatches(input: {
   return input.providerRequestAmount === null || input.providerRequestAmount === input.sentAmount;
 }
 
+/**
+ * NEXA v095 PR-4 G (owner decision, closes OQ-R11-B5-04): a route whose approval is a RECORDED
+ * payment (Telegram Stars) credits a LATE charge to the wallet, always — there is no switch,
+ * because the owner decided it, and no provider to ask again: the charge Telegram reported,
+ * recorded once under its unique `telegram_payment_charge_id` after every identity check, IS
+ * the approval. Only a LATE approval: money returned for an attempt that can no longer pay its
+ * order (`RETURNED`) stays a late completion for an operator on such a route, as before.
+ *
+ * Whether the recorded charge still stands as an approval: a charge id is on the invoice,
+ * `provider_paid` is still true (a refund Telegram reported clears it), and the status is the
+ * one a successful payment records.
+ */
+export function recordedChargeApproves(invoice: {
+  readonly providerChargeId: string | null;
+  readonly providerPaid: boolean | null;
+  readonly providerStatus: string | null;
+}): boolean {
+  return (
+    invoice.providerChargeId !== null &&
+    invoice.providerPaid === true &&
+    invoice.providerStatus === 'successful_payment'
+  );
+}
+
 /** The idempotency identity of a payment's late credit: the ledger reference and the replay key. */
 export function lateCreditReference(paymentId: string): string {
   return `${paymentId}:late-credit`;

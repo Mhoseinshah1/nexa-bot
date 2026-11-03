@@ -4,17 +4,19 @@ import {
   type PaymentGatewayStatus,
 } from '@nexa/contracts';
 
-/** R11 B7: the switch that makes a route's verified-phone rule, and the bot's flow, exist. */
+/**
+ * R11 B7: the bot-wide phone switch. NEXA v095 PR-4 A: on, it is MANDATORY — a customer with
+ * no verified number and no exemption can do nothing in the bot until they verify. It no
+ * longer governs a route's verified-phone rule (C): that rule stands on its own.
+ */
 export const PHONE_VERIFICATION_FLAG = 'phone_verification' as const;
 
 /**
- * R11 B7: what the verified-phone rule may know about the customer.
- *
- * `NOT_ENFORCED` while the `phone_verification` flag is off: the rule is then treated as
- * not configured on any route, whatever the customer's number. Otherwise whether their
- * phone number is verified.
+ * What a route's verified-phone rule may know about the customer (NEXA v095 PR-4 C/D):
+ * `EXEMPT` — an operator exempted them («معاف از تأیید شماره»), so no rule asks them;
+ * otherwise whether their phone number is verified. Independent of `phone_verification`.
  */
-export type GatewayPhoneStanding = 'NOT_ENFORCED' | 'VERIFIED' | 'UNVERIFIED';
+export type GatewayPhoneStanding = 'EXEMPT' | 'VERIFIED' | 'UNVERIFIED';
 
 /** What the evaluator is told about the customer, and nothing else. */
 export interface GatewayAudience {
@@ -23,22 +25,26 @@ export interface GatewayAudience {
   /** Whole days between the customer being first seen and now, floored. */
   readonly accountAgeDays: number;
   /**
-   * R11 B7. Absent is `NOT_ENFORCED`, so a caller that never heard of the rule changes no
-   * answer; the production audience (`PaymentGatewayService.audienceFor`) always sets it.
+   * R11 B7. NOT an eligibility input any more (NEXA v095 PR-4 C: a route with the rule is
+   * SHOWN to every customer); it is what `phoneRuleRefuses` decides from where a payment is
+   * about to be opened, and what an operator's `explain` reports. Absent refuses nothing.
    */
   readonly phone?: GatewayPhoneStanding;
 }
 
-/** R11 B7: the standing the flag and the customer row give. */
-export function phoneStandingOf(enforced: boolean, verified: boolean): GatewayPhoneStanding {
-  if (!enforced) return 'NOT_ENFORCED';
+/** NEXA v095 PR-4 C/D: the standing the customer row gives — an exemption wins. */
+export function phoneStandingOf(verified: boolean, exempt: boolean): GatewayPhoneStanding {
+  if (exempt) return 'EXEMPT';
   return verified ? 'VERIFIED' : 'UNVERIFIED';
 }
 
 /**
- * R11 B7: whether the route's verified-phone rule refuses this customer — the ONE predicate,
- * used by the evaluator below and by the order card-to-card path, which applies no other
- * threshold (`OQ-5C-01`) but does apply this one.
+ * THE gate of a route's verified-phone rule (NEXA v095 PR-4 C): whether this route refuses
+ * this customer a payment now. True only when the route has the rule AND the customer is
+ * UNVERIFIED — never for an exempt or a verified customer, and whatever `phone_verification`
+ * says. Asked inside the transaction that would open the payment, BEFORE any payment row
+ * exists (every gateway attempt, every card-to-card transfer, for an order and a top-up), and
+ * by the checkout before a draft is confirmed, so a refused tap holds no reservation.
  */
 export function phoneRuleRefuses(
   eligibility: Pick<PaymentGatewayEligibility, 'requiresVerifiedPhone'>,
@@ -105,12 +111,10 @@ export function evaluateGatewayEligibility(
     return { eligible: false, reason: 'ACCOUNT_TOO_NEW' };
   }
   /*
-   * R11 B7, LAST: the one refusal the customer can lift themselves, so an operator reading
-   * the reasons sees their own thresholds first.
+   * NEXA v095 PR-4 C: the verified-phone rule is NOT checked here. A route that has it is
+   * shown to every customer, and an unverified one is asked for their number when they pick
+   * it (`phoneRuleRefuses`, at the payment's creation).
    */
-  if (phoneRuleRefuses(eligibility, audience.phone)) {
-    return { eligible: false, reason: 'PHONE_NOT_VERIFIED' };
-  }
   return { eligible: true };
 }
 

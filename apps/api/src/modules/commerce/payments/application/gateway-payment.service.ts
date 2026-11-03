@@ -239,6 +239,13 @@ export const NO_PAYMENT_LINK_CODE = 'nexa.no_payment_link';
 
 /** How long a claimed row is held before another replica may take it (at least). */
 export const GATEWAY_CLAIM_LEASE_MS = 60_000;
+
+/**
+ * NEXA v095 PR-4 G (owner decision, closes OQ-R11-B5-04): what a RECORDED payment (Stars)
+ * offers the late-credit path. A recorded charge has no request amount echoed back (Telegram
+ * charged exactly the invoice it was sent, checked when it was recorded), so none is compared.
+ */
+const RECORDED_CHARGE_LATE_CREDIT = { providerRequestAmount: null } as const;
 /**
  * FIX10 R1: the longest ONE row of a lane may take — a provider call at its full timeout and
  * the Telegram calls around it (a receipt's two downloads, the invoice screen's edit). This is
@@ -2495,9 +2502,10 @@ export class GatewayPaymentService {
       dueAt: invoice.nextInquiryAt,
     },
     /**
-     * R5A item 4: set only by the INQUIRY path, whose answer re-verified the approval. A late
-     * approval is offered to the wallet credit with it; a recorded payment (Stars) passes none
-     * and is never credited this way.
+     * R5A item 4: set by the INQUIRY path, whose answer re-verified the approval, and (NEXA
+     * v095 PR-4 G) by a RECORDED payment (Stars), whose recorded charge is the approval. A
+     * late approval is offered to the wallet credit with it; the credit decides again under
+     * the payment's lock (`PaymentService.creditLateGatewayApproval`).
      */
     lateCreditInput: { readonly providerRequestAmount: bigint | null } | null = null,
   ): Promise<'SETTLED' | 'LATE' | 'CREDITED' | 'ERROR' | 'HELD'> {
@@ -2815,9 +2823,11 @@ export class GatewayPaymentService {
       now,
       null,
       { trigger: 'STARS_RECOVERY', dueAt: invoice.nextInquiryAt },
+      // NEXA v095 PR-4 G: a LATE recorded charge goes to the one late-credit path (no echo).
+      RECORDED_CHARGE_LATE_CREDIT,
     );
-    // A recorded payment passes no late-credit input, so it is never credited this way.
-    if (settled === 'CREDITED') throw new Error('a recorded payment is never a late credit');
+    // The late credit IS this row's decision (`LATE_CREDITED`, schedule cleared with it).
+    if (settled === 'CREDITED') return 'SETTLED';
     return settled === 'HELD' ? 'ERROR' : settled;
   }
 
@@ -2829,7 +2839,7 @@ export class GatewayPaymentService {
   async settleRecorded(
     scope: TenantContext,
     paymentId: PaymentId,
-  ): Promise<'SETTLED' | 'LATE' | 'ERROR' | 'NOT_RECORDED'> {
+  ): Promise<'SETTLED' | 'LATE' | 'CREDITED' | 'ERROR' | 'NOT_RECORDED'> {
     const invoice = await this.deps.invoices.findByPayment(scope, paymentId);
     const payment = await this.deps.paymentRecords.findById(scope, paymentId);
     if (
@@ -2841,9 +2851,12 @@ export class GatewayPaymentService {
     ) {
       return 'NOT_RECORDED';
     }
-    // Already decided (settled, or recorded late): the transition is exactly-once anyway,
-    // and a redelivered update must not write a second late-completion notice.
-    if (invoice.outcome !== null) return invoice.outcome === 'LATE_COMPLETION' ? 'LATE' : 'SETTLED';
+    // Already decided (settled, credited late, or recorded late): the transition is
+    // exactly-once anyway, and a redelivered update must not write a second notice.
+    if (invoice.outcome !== null) {
+      if (invoice.outcome === 'LATE_COMPLETION') return 'LATE';
+      return invoice.outcome === 'LATE_CREDITED' ? 'CREDITED' : 'SETTLED';
+    }
     const now = this.deps.clock.now();
     // Eligibility is the settlement path's to decide, under the payment's lock (FIX10 BUG-2).
     const settled = await this.settleApproved(
@@ -2854,13 +2867,13 @@ export class GatewayPaymentService {
       now,
       null,
       { trigger: 'STARS_UPDATE', dueAt: null },
+      // NEXA v095 PR-4 G: a LATE recorded charge goes to the one late-credit path (no echo).
+      RECORDED_CHARGE_LATE_CREDIT,
     );
     // Audit P2-b on #260: the worker's pass is not the only one that decides a recorded payment.
-    if (settled === 'SETTLED' || settled === 'LATE') {
+    if (settled === 'SETTLED' || settled === 'LATE' || settled === 'CREDITED') {
       await this.settlementDecided(scope, paymentId);
     }
-    // A recorded payment passes no late-credit input, so it is never credited this way.
-    if (settled === 'CREDITED') throw new Error('a recorded payment is never a late credit');
     return settled === 'HELD' ? 'ERROR' : settled;
   }
 

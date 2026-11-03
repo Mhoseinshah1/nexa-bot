@@ -63,9 +63,10 @@ export interface PaymentGatewayRecord {
   readonly allowServicePurchase: boolean;
   readonly allowWalletTopup: boolean;
   /**
-   * R11 B7: offered only to a customer with a verified phone number, and only while the
-   * `phone_verification` flag is on. Optional so a narrow test fake need not carry it;
-   * absent is false.
+   * R11 B7 / NEXA v095 PR-4 C: «برای پرداخت با این درگاه، تأیید شماره لازم است» — the route
+   * is shown to every customer, and an unverified, non-exempt one is asked for their number
+   * before any payment through it exists; enforced whatever `phone_verification` says.
+   * Optional so a narrow test fake need not carry it; absent is false.
    */
   readonly requiresVerifiedPhone?: boolean;
   /**
@@ -240,4 +241,11 @@ export interface GatewayAudienceReader {
    * verified number is refused to them.
    */
   phoneVerified(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<boolean>;
+
+  /**
+   * NEXA v095 PR-4 D: whether an operator exempted this customer from phone verification
+   * (`phone_verification_exempt_at` is set) — then no route's verified-phone rule asks them.
+   * Optional so a narrow fake need not carry it; absent is not exempt.
+   */
+  phoneExempt?(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<boolean>;
 }
