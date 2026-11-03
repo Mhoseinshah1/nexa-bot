@@ -210,7 +210,7 @@ function Invoice({
           )}
           {order.usernameModes.includes('CUSTOM') && (
             <form
-              className="inline-form"
+              className="inline-form stack-form"
               onSubmit={(event) => {
                 event.preventDefault();
                 void chooseUsername({ mode: 'CUSTOM', username });

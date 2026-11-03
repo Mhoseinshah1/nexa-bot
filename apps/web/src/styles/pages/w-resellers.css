@@ -1,0 +1,160 @@
+/* w-resellers — the reseller edit view: summary, tabs, allowed products (v0.9.5, PR-6). */
+
+/* The panel under the tab strip: its cards stack with the page's gap. */
+.rs-panel {
+  margin-block-start: var(--gap);
+}
+
+/*
+ * The one Save/Cancel of the edit form. It sticks to the bottom of the drawer's scroll area
+ * (the body pads 18px / 20px, so the offsets cancel that padding and the bar spans the sheet).
+ */
+.rs-foot {
+  position: sticky;
+  inset-block-end: -18px;
+  z-index: 2;
+  margin-inline: -20px;
+  padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px));
+  border-block-start: 1px solid var(--line);
+  /* Opaque: the form fields scroll beneath this bar and must not show through it. */
+  background: var(--bg-1);
+  display: grid;
+  gap: 8px;
+}
+
+/* --- the allowed-products tab --------------------------------------------------------- */
+
+.rs-products {
+  display: grid;
+  gap: 12px;
+}
+.rs-products-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.rs-products-bar .search {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+.rs-products-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rs-group {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
+}
+.rs-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 12px;
+}
+.rs-group-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+  min-height: var(--ctl-h);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.rs-group-chevron {
+  transition: transform 0.15s ease;
+}
+.rs-group-toggle[aria-expanded='true'] .rs-group-chevron {
+  transform: rotate(-90deg);
+}
+.rs-pgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 6px;
+  padding: 4px 12px 12px;
+}
+.rs-pchip {
+  display: flex;
+  align-items: center;
+  min-height: var(--ctl-h);
+  padding-inline: 12px;
+  padding-block: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.rs-pchip:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--accent-soft);
+}
+.rs-pchip.on,
+.rs-pchip[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--fg);
+  font-weight: 700;
+}
+.rs-pchip:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.rs-products-save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.rs-products-save .spacer {
+  flex: 1 1 auto;
+}
+
+@media (max-width: 820px) {
+  .rs-pgrid {
+    grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rs-group-chevron {
+    transition: none;
+  }
+}
+
+/* --- the summary strip: equal cells that fill every row, so no row ends in a hole ------- */
+.resellers-standing .head-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  gap: 0;
+}
+.resellers-standing .head-stats > div {
+  min-width: 0;
+  border-inline-end: 0;
+  border-block-end: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.resellers-standing .head-stats .nowrap {
+  white-space: normal;
+}
+
+/* The override choices (inherit / own) are real touch targets inside the standing. */
+.resellers-standing fieldset.field > label.nowrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--ctl-h);
+}
