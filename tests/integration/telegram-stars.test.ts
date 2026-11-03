@@ -1527,6 +1527,195 @@ describe('Telegram Stars (Package A)', () => {
     });
   });
 
+  /*
+   * NEXA v096 (owner, closes OQ-V095-P4-02): a Stars charge recorded for an attempt that can no
+   * longer pay its order — a CANCELLED attempt, or an order another payment already settled —
+   * is RETURNED to the wallet exactly once, through the late-credit path every gateway's
+   * returned money takes (R12 F1): `GATEWAY_LATE_CREDIT` under `<paymentId>:late-credit`, the
+   * same customer notice and the same `ops.financial.late_credit_returned` log. Idempotent per
+   * `telegram_payment_charge_id`: the charge is recorded once on its attempt, a redelivery is a
+   * no-op, and a second charge for the same attempt goes to the operator.
+   *
+   * Mutation-checked (this block run, restored; recorded in the PR):
+   *  - the recorded-route refusal of a RETURNED basis put back in `creditLateGatewayApproval`
+   *    -> all three "P4-02" tests go red (a late completion, nothing credited);
+   *  - once-only: the decided-outcome return in `settleRecorded`, the `existing` return and the
+   *    `inserted` guard in `creditLateGatewayApproval` removed together -> "returns a charge
+   *    recorded for a CANCELLED attempt" goes red on its event, audit and notice counts.
+   */
+  describe('money returned for an attempt that can no longer pay its order (P4-02)', () => {
+    async function invoicedOrder() {
+      await enableStars();
+      const orderId = await draftOrder(260_000n);
+      await tapAs(MARYAM, `gp:${orderId}.TELEGRAM_STARS`);
+      const [payment] = await rows<{ id: string; amount: string }>(
+        sql`SELECT id, amount::text AS amount FROM payments
+             WHERE order_id = ${orderId} AND method = 'GATEWAY'`,
+      );
+      if (payment === undefined) throw new Error('no Stars attempt');
+      await worker();
+      const invoice = await invoiceOf(payment.id);
+      return { orderId, paymentId: payment.id, amount: payment.amount, invoice };
+    }
+
+    const orderState = async (orderId: string) =>
+      (await rows<{ state: string }>(sql`SELECT state FROM orders WHERE id = ${orderId}`))[0]
+        ?.state;
+
+    const lateCredits = (paymentId: string) =>
+      rows<{ reason: string; direction: string; amount: string; reference: string }>(
+        sql`SELECT reason, direction, amount::text AS amount, reference FROM wallet_entries
+             WHERE tenant_id = ${tenantA.tenantId} AND payment_id = ${paymentId}
+               AND reason = 'GATEWAY_LATE_CREDIT'`,
+      );
+
+    const countOf = async (query: ReturnType<typeof sql>) =>
+      Number((await rows<{ n: string }>(query))[0]?.n ?? '0');
+
+    /** What every route's returned money leaves behind, once (gateway-money-returned.test.ts). */
+    async function expectReturnedOnce(paymentId: string, amount: string) {
+      expect(await lateCredits(paymentId)).toEqual([
+        {
+          reason: 'GATEWAY_LATE_CREDIT',
+          direction: 'CREDIT',
+          amount,
+          reference: `${paymentId}:late-credit`,
+        },
+      ]);
+      expect((await invoiceOf(paymentId)).outcome).toBe('LATE_CREDITED');
+      expect(
+        await countOf(
+          sql`SELECT count(*)::text AS n FROM customer_notifications
+               WHERE tenant_id = ${tenantA.tenantId} AND subject_id = ${paymentId}
+                 AND kind = 'GATEWAY_LATE_PAYMENT_CREDITED'`,
+        ),
+      ).toBe(1);
+      const events = await rows<{ payload: Record<string, unknown> }>(
+        sql`SELECT payload FROM outbox_messages
+             WHERE tenant_id = ${tenantA.tenantId} AND event_type = 'PaymentLateCredited'
+               AND aggregate_id = ${paymentId}`,
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]!.payload).toMatchObject({ basis: 'RETURNED', amountMinor: amount });
+      const audits = await rows<{ after: Record<string, unknown> }>(
+        sql`SELECT after FROM audit_logs
+             WHERE action = 'payment.gateway_late_credit' AND entity_id = ${paymentId}`,
+      );
+      expect(audits).toHaveLength(1);
+      expect(audits[0]!.after).toMatchObject({ basis: 'RETURNED', credited: true });
+      // Accounted for: not an operator's late completion.
+      expect((await invoiceOf(paymentId)).late_completion_observed_at).toBeNull();
+      expect(await opsCodes()).not.toContain('payments.gateway_late_completion');
+    }
+
+    async function opsLogOn() {
+      const flagKey = () => `p402-log-${String((updateId += 1))}`;
+      await api.container.featureFlags.set(tenantA, owner, {
+        key: 'ops_notifications',
+        enabled: true,
+        expectedVersion: null,
+        idempotencyKey: flagKey(),
+        confirmKey: 'ops_notifications',
+        reason: 'OQ-V095-P4-02 financial log.',
+      });
+      await api.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.telegram_chat_id',
+        value: '-1001234567890',
+        expectedVersion: null,
+        idempotencyKey: flagKey(),
+      });
+    }
+
+    async function financialLogs() {
+      for (let round = 0; round < 20; round += 1) {
+        if ((await api.container.relay.processBatch()).claimed === 0) break;
+      }
+      return (
+        await rows<{ template_key: string }>(
+          sql`SELECT template_key FROM notifications
+               WHERE tenant_id = ${tenantA.tenantId} AND template_key LIKE 'ops.financial.late%'`,
+        )
+      ).map((row) => row.template_key);
+    }
+
+    it('returns a charge recorded for a CANCELLED attempt to the wallet, once however often it arrives (P4-02)', async () => {
+      await opsLogOn();
+      const { orderId, paymentId, amount, invoice } = await invoicedOrder();
+      await api.container.orders.cancelByCustomer(inBot(), systemActor('p402-cancel'), {
+        idempotencyKey: 'p402-cancel',
+        customerId: maryam,
+        orderId,
+      });
+      expect(await paymentState(paymentId)).toBe('CANCELLED');
+
+      // The customer had the invoice open and paid it anyway; Telegram delivers it three times.
+      for (let delivery = 0; delivery < 3; delivery += 1) {
+        const answered = await successfulPayment(
+          invoice.provider_order_id,
+          Number(invoice.sent_amount),
+          'p402-cancelled',
+        );
+        expect(answered.statusCode).toBeLessThan(300);
+      }
+      await worker();
+      await expectReturnedOnce(paymentId, amount);
+      // Nothing else moved: the attempt stays CANCELLED, the order stays cancelled.
+      expect(await paymentState(paymentId)).toBe('CANCELLED');
+      expect(await orderState(orderId)).toBe('CANCELLED');
+      // The same operator log as every route's returned money.
+      expect(await financialLogs()).toEqual(['ops.financial.late_credit_returned']);
+
+      // A DIFFERENT charge for the same attempt is a second payment: the operator's, never a credit.
+      await successfulPayment(
+        invoice.provider_order_id,
+        Number(invoice.sent_amount),
+        'p402-second',
+      );
+      expect(await lateCredits(paymentId)).toHaveLength(1);
+      expect((await invoiceOf(paymentId)).provider_charge_id).toBe('p402-cancelled');
+      expect(await opsCodes()).toContain('payments.gateway_identity_mismatch');
+    });
+
+    it('returns a charge for an order the wallet paid after the attempt was opened (P4-02)', async () => {
+      const { orderId, paymentId, amount, invoice } = await invoicedOrder();
+      await api.container.wallet.adjust(tenantA, owner, maryam, {
+        idempotencyKey: 'p402-fund',
+        direction: 'CREDIT',
+        amountMinor: 260_000n,
+        currency: 'IRT',
+        note: 'موجودی آزمایشی',
+      });
+      await api.container.payments.settleFromWallet(inBot(), systemActor('p402-wallet'), maryam, {
+        idempotencyKey: 'p402-wallet',
+        orderId,
+      });
+      // `settleFromWallet` withdrew the open Stars attempt; the order is the wallet's.
+      expect(await paymentState(paymentId)).toBe('CANCELLED');
+      expect(await orderState(orderId)).toBe('PAID');
+
+      await successfulPayment(invoice.provider_order_id, Number(invoice.sent_amount), 'p402-w');
+      await expectReturnedOnce(paymentId, amount);
+      expect(await paymentState(paymentId)).toBe('CANCELLED');
+      expect(await orderState(orderId)).toBe('PAID');
+    });
+
+    it('returns a charge for an order another payment settled while this attempt was still PENDING (P4-02)', async () => {
+      const { orderId, paymentId, amount, invoice } = await invoicedOrder();
+      /*
+       * The order left AWAITING_PAYMENT while this attempt stayed PENDING — what a sibling close
+       * that skipped a held row leaves (gateway-money-returned.test.ts builds it with two
+       * providers); here the order is moved directly, the Stars attempt left as it was.
+       */
+      await api.container.database.db.execute(
+        sql`UPDATE orders SET state = 'PAID', settled_at = now() WHERE id = ${orderId}`,
+      );
+      await successfulPayment(invoice.provider_order_id, Number(invoice.sent_amount), 'p402-p');
+      await expectReturnedOnce(paymentId, amount);
+      // It can never settle the order: one confirmed payment per order.
+      expect(await paymentState(paymentId)).toBe('PENDING');
+    });
+  });
+
   describe('refunds (A6)', () => {
     it('has no code path that asks Telegram to refund Stars', () => {
       const offenders: string[] = [];
