@@ -908,6 +908,36 @@ them), and the only cost of the longer interval is a longer replay after a crash
 `max_wal_size` of WAL. `pg_wal` can now grow to about `max_wal_size` on disk, which is why
 it is bounded by the host's memory and capped at 8 GB.
 
+### The backup's verification server: `backup-verify` (v0.9.7)
+
+A backup is proven by restoring it, and the restore's index builds are the server's work, not
+the client's: the SIGSTOP/SIGCONT quota (`backup.cpu_limit_percent`) throttled 7-Zip, `pg_dump`
+and `pg_restore`, and the owner still saw 150–200 % CPU on a 4-vCPU server while the live
+`postgres` rebuilt the scratch copy's indexes. The verification now restores into its own
+compose service, `backup-verify`:
+
+- the same `postgres:16-alpine` image digest as `postgres`, on the internal `data` network only,
+  no published port, the same five capabilities;
+- **Docker limits** from deploy.env: `cpus: ${NEXA_BACKUP_VERIFY_CPUS}` — the backup CPU setting
+  divided by 100, of ONE core (70 → `0.70`) — and `mem_limit`/`memswap_limit:
+${NEXA_BACKUP_VERIFY_MEMORY}` — 1/8 of the host's RAM, at least 512 MB, at most 2 GB;
+- **ephemeral**: its data directory (volume `backupverify`) is removed and initialised afresh at
+  every start; it holds only the scratch database of a verification in flight, which the
+  pipeline drops when the check ends;
+- reached with postgres.env's credentials by `BACKUP_VERIFY_PGHOST=backup-verify`, which the
+  compose file pins for every application role. The dump still runs against `postgres`,
+  throttled as before; the operator's restore and a recovery's candidate stay there too.
+  Verification is still mandatory: a `backup-verify` that does not answer fails the run, and
+  nothing falls back to the live server.
+
+The installer, `botctl update` and `botctl restart` write both values into deploy.env (the
+percent read from the database's stored `backup.cpu_limit_percent`, the default 70 before
+there is one). Docker applies a container's limits when it is created, so a change of the
+setting in the Web Admin reaches the client tools at once and `backup-verify` at the next
+`botctl restart`. `botctl status` prints, under `backup verification`, the recorded values,
+the setting, and the limits the running container was created with, and warns when the setting
+and the record disagree. `botctl logs backup-verify` follows it.
+
 ## What one installation can keep fresh
 
 Panel health carries a freshness window (`PANEL_HEALTH_FRESH_FOR_MS`, fifteen

@@ -17,8 +17,16 @@ path and restored into a real, empty PostgreSQL database, and the restore
 produced tables. A run that fails verification deletes its archive instead of
 delivering it.
 
-The dump is the whole database. Nothing is excluded — not by table name, not by
-prefix, not because a table looks transient.
+The dump is the whole database's SCHEMA, and its data except a closed list (v0.9.7):
+`backup-exclusions.ts` names each table whose ROWS are left out with the reason losing them on a
+restore is harmless — `admin_login_throttle` (login rate-limit counters) and `panel_probe_claims`
+(when a panel test last started) — and the manifest's `exclusions` carries every entry, so a
+restorer reads what is missing and why. Nothing is excluded by prefix or because a table looks
+transient. `pg_dump` cannot filter rows, so the short-lived tables whose rows are partly work
+or re-run safety — `outbox_messages` (unpublished messages), `request_idempotency` (job and
+importer keys), the notification attempts and released claims (the dispatcher's invariant),
+`processed_messages` (the dedupe ledger) — stay in, and are bounded at the source instead: the
+retention jobs below keep only their window.
 
 ## The archive: 7-Zip with the owner's password, in ≤ 45 MiB parts (Round 4 PR-E)
 
@@ -134,9 +142,11 @@ installation:
 | Setting                                  | Default | Removes                                                     | Never removes                                                            |
 | ---------------------------------------- | ------- | ----------------------------------------------------------- | ------------------------------------------------------------------------ |
 | `retention.outbox_published_days`        | 7       | outbox messages PUBLISHED before the cutoff                 | an unpublished, failing or exhausted message; `processed_messages`       |
-| `retention.idempotency_interactive_days` | 30      | `WEB` and `TELEGRAM` idempotency keys older than the cutoff | `WORKER`/`SCHEDULER`/`API` keys (importer and money jobs' re-run safety) |
+| `retention.idempotency_interactive_days` | 7       | `WEB` and `TELEGRAM` idempotency keys older than the cutoff | `WORKER`/`SCHEDULER`/`API` keys (importer and money jobs' re-run safety) |
 
-Audit logs are never deleted by any job.
+Audit logs are never deleted by any job. (v0.9.7: the interactive keys' default went from 30
+to 7 days; the round's "audit log: 90 days" is OQ-V097-P2-01 — the audit table is append-only
+by trigger, so nothing deletes it until the owner answers.)
 
 ### Data compaction (Round 9 C3)
 
@@ -147,9 +157,12 @@ built from the prompt's description, beside E3 above and the legacy compaction
 the protected tables is `application/allow-list.ts`, held by
 `tests/unit/data-compaction-allow-list.test.ts` and `tests/integration/data-compaction.test.ts`.
 
-**Dry run is the default.** `retention.compaction_mode` starts at `DRY_RUN`: the worker's daily
-pass (SYSTEM_JOB, `maintenance.run`) records what it WOULD remove and removes nothing until the
-owner sets `APPLY` on the settings page. The Web Admin («بکاپ و بازیابی» → «فشرده‌سازی داده‌های
+**Removing is the default (v0.9.7).** `retention.compaction_mode` starts at `APPLY` («حذف»): the
+worker's daily pass (SYSTEM_JOB, `maintenance.run`) removes what is past its retention. The
+v0.9.7 migration moved an installation that had stored `DRY_RUN` to `APPLY` too, with one
+`settings.set` audit row per tenant and no message to anyone; a stored day value was left as
+the operator set it. `DRY_RUN` («فقط شمارش») stays a choice: it records what the pass WOULD
+remove and removes nothing. Until v0.9.7 the default was `DRY_RUN`. The Web Admin («بکاپ و بازیابی» → «فشرده‌سازی داده‌های
 قدیمی») shows the same dry run on request; the owner's CLI applies with a counted confirmation:
 
 ```bash
@@ -159,11 +172,11 @@ pnpm data-compaction --apply --confirm-rows <n>    # n = the total the dry run r
 
 | Setting                                 | Default | Removes (strictly older than the cutoff)                                                                                                                 | Never removes                                                                                       |
 | --------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `retention.ops_notifications_days`      | 90      | a SENT or FAILED operations-lane notification, WITH its delivery attempts and released claims (0279 lets the delete through only in an APPLY pass)       | a PENDING notification or its evidence                                                              |
-| `retention.customer_notifications_days` | 180     | a DELIVERED/FAILED/SUPERSEDED customer notification of a reminder, low-balance or reseller-minimum kind, or of an operation already stamped announced_at | PENDING and UNCONFIRMED; every payment, order, refund, wallet, ticket, direct-message and bulk kind |
-| `retention.receipt_windows_days`        | 90      | a CLOSED `receipt_captures` window; a CLOSED `gateway_receipt_captures` window that no provider receipt names                                            | an open window; `payment_receipts`; `gateway_receipt_submissions`                                   |
+| `retention.ops_notifications_days`      | 7       | a SENT or FAILED operations-lane notification, WITH its delivery attempts and released claims (0279 lets the delete through only in an APPLY pass)       | a PENDING notification or its evidence                                                              |
+| `retention.customer_notifications_days` | 30      | a DELIVERED/FAILED/SUPERSEDED customer notification of a reminder, low-balance or reseller-minimum kind, or of an operation already stamped announced_at | PENDING and UNCONFIRMED; every payment, order, refund, wallet, ticket, direct-message and bulk kind |
+| `retention.receipt_windows_days`        | 30      | a CLOSED `receipt_captures` window; a CLOSED `gateway_receipt_captures` window that no provider receipt names                                            | an open window; `payment_receipts`; `gateway_receipt_submissions`                                   |
 
-Every days setting is 30 to 3650. A pass runs in keyset batches of 5000, each its own
+Every days setting is 7 to 3650 (v0.9.7; until then 30 to 3650, with defaults 90 / 180 / 90). A pass runs in keyset batches of 5000, each its own
 unit-of-work transaction (so the recovery quiesce refuses it) that re-checks scope activity,
 removes one batch with its children, adds its counts to the `data_compaction_runs` row and
 writes one `data.compaction.batch` audit row. Nothing starts while a recovery is in any active
@@ -193,6 +206,8 @@ and the environment values are then only their defaults.
 | `BACKUP_RESTORE_TIMEOUT_MS`  | 2 h                     |                                                                                |
 | `BACKUP_DELIVERY_TIMEOUT_MS` | 10 min                  |                                                                                |
 | `BACKUP_PG_BIN_DIR`          | empty                   | Where `pg_dump`/`pg_restore`/`psql` live, if not on `PATH`.                    |
+| `BACKUP_VERIFY_PGHOST`       | empty                   | v0.9.7: the verification's server; compose pins `backup-verify`. Empty: live.  |
+| `BACKUP_VERIFY_PGPORT`       | 5432                    | Its port. Same credentials as `DATABASE_URL`.                                  |
 
 The chat id and the bot token are refused unless BOTH are set or NEITHER is.
 Neither set is a real configuration: the archive is verified and kept on the
@@ -477,8 +492,16 @@ other). The production container has no systemd, a read-only cgroup tree and no
 `cpulimit`, so the limit is the one `cpulimit` implements: a 100 ms duty cycle of
 SIGSTOP/SIGCONT on the child (`infrastructure/cpu-quota.ts`), read at each spawn. 7-Zip
 also runs with `-mmt=1` by default (`BACKUP_SEVEN_ZIP_THREADS=1`). The cost is wall time,
-about 100/percent times the unlimited time; memory is not reduced, and the PostgreSQL
-server's own work for the restore is bounded by `VERIFY_RESTORE_PGOPTIONS`, not by this.
+about 100/percent times the unlimited time; memory is not reduced.
+
+**The verification's server is capped too (v0.9.7).** The quota above bounds the CLIENT; the
+restore's index builds are the SERVER's work, and on the live `postgres` they ran uncapped
+(150–200 % CPU on a 4-vCPU server). The verification now restores on the `backup-verify`
+compose service (`docs/deployment.md`), which Docker caps at the same percent of ONE core
+(`cpus`) and a memory limit from the host's RAM, with `VERIFY_RESTORE_PGOPTIONS` still on its
+session. The dump stays on the live server, throttled as before. Without `BACKUP_VERIFY_PGHOST`
+(development, tests) the verification restores on the live server as it always did. A
+`backup-verify` that does not answer fails the verification — never a fallback.
 
 **Archive files.** Two settings, on the generic settings page under the
 operations group:
