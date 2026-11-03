@@ -966,7 +966,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.payment.phone_required': [
     'روش پرداخت فقط برای شمارهٔ تأییدشده',
-    'در مینی‌اپ، وقتی کاربر بدون شمارهٔ تأییدشده درگاهی را انتخاب می‌کند که تأیید شماره لازم دارد؛ بالای مرحلهٔ تأیید شماره نشان داده می‌شود. ربات به‌جای آن «نیاز درگاه به تأیید شماره» را می‌فرستد.',
+    'دیگر فرستاده نمی‌شود: ربات و مینی‌اپ به‌جای آن «نیاز درگاه به تأیید شماره» را نشان می‌دهند.',
   ],
   // --- NEXA v095 PR-4: the bot-wide phone gate, the gateway rule, the allowed numbers -----
   'bot.phone.required': [

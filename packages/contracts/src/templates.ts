@@ -13847,9 +13847,9 @@ export const TEMPLATES = [
     key: 'bot.payment.phone_required',
     description:
       'R11 B7: the payment method the customer chose is only for customers with a verified ' +
-      'phone number. Nothing was charged. Since NEXA v095 PR-4 C the bot answers that refusal ' +
-      'with bot.phone.gateway_required instead; the mini app still shows this sentence above ' +
-      'its own verification step.',
+      'phone number. Nothing was charged. Retired by NEXA v095 PR-4 C: the bot and the mini ' +
+      'app answer that refusal with bot.phone.gateway_required (and the mini app with its own ' +
+      'phone step); kept so a stored override still parses.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
