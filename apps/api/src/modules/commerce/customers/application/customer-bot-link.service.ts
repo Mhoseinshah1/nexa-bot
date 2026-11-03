@@ -23,7 +23,8 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
  * customer notification drops a NULL. This service fills it, for customers that
  *   (a) have a NULL link, AND
  *   (b) have a `legacy_import_map` row (`entity_type = 'CUSTOMER'`, `status = 'IMPORTED'`)
- *       pointing at them — i.e. the importer created them.
+ *       pointing at them — i.e. the importer created them — or, once the v0.9.7 cleanup
+ *       emptied the map, the import's own `source = 'MIRZA'` mark on those same customers.
  * It never overwrites a link and never touches a customer the importer did not create.
  *
  * It turns reminders and notices ON for every customer it links, so it runs only on the

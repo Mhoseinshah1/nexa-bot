@@ -23,6 +23,7 @@ import {
 import { LegacyCompactionExecutor } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-compaction.executor';
 import { LegacyCleanupScheduler } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-cleanup.scheduler';
 import { DrizzleLegacyCompactionRepository } from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
+import { DrizzleCustomerBotLinkRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer-bot-link.repository';
 import { DrizzleTermsRepository } from '../../apps/api/src/modules/control/terms/infrastructure/drizzle-terms.repository';
 import { DrizzleLegacyRecordsRepository } from '../../apps/api/src/modules/platform/legacy-history/infrastructure/drizzle-legacy-records.repository';
 import type { BackupRunPartRow } from '../../apps/api/src/modules/platform/backup/application/ports';
@@ -590,6 +591,8 @@ describe('the automatic cleanup after an import (v0.9.7)', () => {
     expect(
       await new DrizzleLegacyRecordsRepository(db()).invoiceKeysOfService(tenantA, service),
     ).toEqual(['a1b2']);
+    // An imported customer nobody linked to a bot yet is still eligible for the link.
+    expect(await new DrizzleCustomerBotLinkRepository(db()).countEligible(tenantA)).toBe(1);
     // An imported customer stays exempt from the rules (`source = 'MIRZA'`).
     expect(await new DrizzleTermsRepository(db()).exemption(tenantA, customer)).toBe('IMPORTED');
   });
