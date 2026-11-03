@@ -83,6 +83,7 @@ describe('shop cards', () => {
     ).toBeTruthy();
     expect(title.parentElement?.className).toBe('card-head');
     expect(card.querySelector('.card-head .price')).not.toBeNull();
+    expect(title.className).toBe('plan-title');
     // Volume and days share one muted line.
     expect(card.querySelector('.plan-figures.muted')?.children).toHaveLength(2);
   });
@@ -138,5 +139,13 @@ describe('the username rule list', () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('a long plan title wraps the price to its own row instead of overflowing the card', () => {
+    // Codex: nowrap on the head plus a min-content title overflowed narrow phones.
+    expect(rule('.plan .card-head')).not.toMatch(/flex-wrap:\s*nowrap/u);
+    const title = rule('.plan-title');
+    expect(title).toMatch(/min-inline-size:\s*0/u);
+    expect(title).toMatch(/overflow-wrap:\s*anywhere/u);
   });
 });

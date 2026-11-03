@@ -129,7 +129,7 @@ function Category({ categoryId }: { categoryId: string }) {
       {plans.map((product) => (
         <Card key={product.id} className="plan">
           <div className="card-head">
-            <strong>{product.title}</strong>
+            <strong className="plan-title">{product.title}</strong>
             {product.personalDiscount === null ? (
               <strong className="price">{money(product.price)}</strong>
             ) : (

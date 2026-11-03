@@ -418,8 +418,13 @@ h2 {
   padding: 12px 14px;
 }
 .plan .card-head {
-  flex-wrap: nowrap;
   align-items: baseline;
+}
+/* An operator-written title may hold an unbreakable run: it shrinks to the row and breaks anywhere,
+   and the head wraps (price to its own row) when title and price do not fit together. */
+.plan-title {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
 }
 .plan-foot {
   display: flex;
