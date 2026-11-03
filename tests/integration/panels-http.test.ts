@@ -162,6 +162,8 @@ describe('panel HTTP surface', () => {
     // Phase 3B implemented it, so it is listed now — and it is listed because
     // the adapter exists, not because the name does.
     expect(body.providers.map((provider) => provider.key).sort()).toEqual([
+      // R10 C2: always listed — there is no feature flag in front of it.
+      'custom',
       'marzban',
       // Listed because `RickpanelAdapter` exists and is registered, not because
       // the contract names the type: a provider with no adapter is a provider
@@ -196,38 +198,10 @@ describe('panel HTTP surface', () => {
   });
 
   /*
-   * R10 C2: the `custom` provider is in the registry and offered only to a tenant whose
-   * `custom_panel_provider` flag is on — off by default. The list is a courtesy; the
-   * create is refused by the service either way.
+   * R10 C2: the `custom` provider is in the registry and always offered — there is no
+   * feature flag in front of it.
    */
-  it('offers the custom provider only while custom_panel_provider is on', async () => {
-    const before = providerListResponseSchema.parse(
-      (await get(PANEL_ROUTES.providers, ownerCookie)).json(),
-    );
-    expect(before.providers.map((provider) => provider.key)).not.toContain('custom');
-    const refused = await createPanel(ownerCookie, {
-      providerType: 'custom',
-      baseUrl: 'https://bridge.example.test/nexa/',
-    });
-    expect(refused.statusCode).toBe(412);
-    expect(refused.json()).toMatchObject({ error: { code: 'panel.provider_feature_disabled' } });
-
-    const flagOwner = adminActorFor(
-      await createAdmin(api.container, tenantA, { username: 'flag-owner', roleKeys: ['owner'] }),
-    );
-    const flag = (await api.container.featureFlags.list(tenantA, flagOwner)).find(
-      (one) => one.key === 'custom_panel_provider',
-    );
-    expect(flag?.enabled).toBe(false);
-    await api.container.featureFlags.set(tenantA, flagOwner, {
-      idempotencyKey: idempotencyKey(),
-      key: 'custom_panel_provider',
-      enabled: true,
-      expectedVersion: flag?.version ?? null,
-      confirmKey: 'custom_panel_provider',
-      reason: 'panels-http custom provider case',
-    });
-
+  it('always offers the custom provider and creates one with no flag set', async () => {
     const after = providerListResponseSchema.parse(
       (await get(PANEL_ROUTES.providers, ownerCookie)).json(),
     );
@@ -315,6 +289,25 @@ describe('panel HTTP surface', () => {
           'DELIVER_SUBSCRIPTION_LINK',
           'LIMIT_DEVICES',
         ],
+        /*
+         * R10 C2: Nexa's own bridge. Always offered now (no feature flag), so it is checked
+         * here like the others. Twelve, against a mock bridge written from the protocol
+         * document (`OQ-C2-02`); no `SUBSCRIPTION_FILES` and no `DELIVER_RAW_CONFIGS`.
+         */
+        custom: [
+          'HEALTH_CHECK',
+          'CREATE_USER',
+          'READ_USAGE',
+          'DELIVER_SUBSCRIPTION_LINK',
+          'LIMIT_DEVICES',
+          'DISABLE_USER',
+          'ENABLE_USER',
+          'DELETE_USER',
+          'RENEW_USER',
+          'ADD_VOLUME',
+          'ADD_TIME',
+          'ROTATE_SUBSCRIPTION_LINK',
+        ],
       };
       for (const provider of body.providers) {
         expect(PUBLISHED[provider.key], `${provider.key} has no expected list`).toBeDefined();
@@ -337,7 +330,7 @@ describe('panel HTTP surface', () => {
          * here on the two sides that still lack it — for the reason the management
          * three are named below.
          */
-        if (provider.key !== 'rickpanel') {
+        if (provider.key !== 'rickpanel' && provider.key !== 'custom') {
           expect(provider.capabilities, `${provider.key}.ROTATE_SUBSCRIPTION_LINK`).not.toContain(
             'ROTATE_SUBSCRIPTION_LINK',
           );

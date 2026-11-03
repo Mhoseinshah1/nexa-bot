@@ -3307,7 +3307,7 @@ describe('the new-panel form — a custom bridge', () => {
     expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
   });
 
-  it('shows the server’s refusals in Persian: flag off, secret too short', async () => {
+  it('shows the server’s refusal in Persian: secret too short', async () => {
     stubApi([
       { url: '/providers', body: CATALOGUE },
       {
@@ -3316,8 +3316,8 @@ describe('the new-panel form — a custom bridge', () => {
         body: {
           error: {
             kind: 'PRECONDITION_FAILED',
-            code: 'panel.provider_feature_disabled',
-            message: 'This provider type is switched off for this tenant.',
+            code: 'panel.credential_too_short',
+            message: 'The secret is shorter than the minimum.',
             correlationId: 'test',
           },
         },
@@ -3331,11 +3331,9 @@ describe('the new-panel form — a custom bridge', () => {
       target: { value: 'https://bridge.example/' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
-    expect(
-      await screen.findByText(t('web.err_panel_provider_feature_disabled')),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(t('web.err_panel_credential_too_short'))).toBeInTheDocument();
     // The server's English is never what the operator reads.
-    expect(screen.queryByText(/switched off for this tenant/)).toBeNull();
+    expect(screen.queryByText(/shorter than the minimum/)).toBeNull();
     expect(t('web.err_panel_credential_too_short')).toMatch(/[\u0600-\u06FF]/);
   });
 });

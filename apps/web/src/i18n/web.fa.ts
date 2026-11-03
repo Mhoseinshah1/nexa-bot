@@ -1989,10 +1989,6 @@ export const WEB_FA = {
   'web.panel_request_timeout': 'مهلت پاسخ (ثانیه)',
   'web.panel_request_timeout_hint':
     'اختیاری، از 1 تا 30 ثانیه. هرگز بیشتر از مهلت کلی این نصب منتظر نمی‌ماند؛ کمتر از 5 ثانیه ممکن است پاسخ‌های کُند را «نامعلوم» کند.',
-  'web.flag_custom_panel_provider': 'پنل اختصاصی (پل Nexa)',
-  'web.feature_custom_panel_provider_title': 'پنل اختصاصی (پل Nexa)',
-  'web.feature_custom_panel_provider_summary':
-    'افزودن پنلی که Nexa مستقیماً پشتیبانی نمی‌کند، از راه یک «پل» که پروتکل امضاشدهٔ Nexa را پیاده می‌کند. هنوز با هیچ پل واقعی آزموده نشده است. خاموش‌کردن فقط افزودن پنل تازه از این نوع را متوقف می‌کند؛ پنل‌های موجود و سرویس‌هایشان به کار ادامه می‌دهند.',
   'web.api_token_hint':
     'برای دسترسی بدون دخالت انسان، توکن بر گذرواژه ترجیح دارد: پنلی که کد دومرحله‌ای می‌خواهد با گذرواژه قابل استفاده نیست.',
   'web.capability': 'قابلیت',
@@ -10934,8 +10930,6 @@ export const WEB_FA = {
   'web.err_panel_policy_capability_unsupported': 'این پنل از این قابلیت پشتیبانی نمی‌کند.',
   'web.err_panel_policy_stale': 'سیاست پنل در همین فاصله تغییر کرده است. صفحه را تازه کنید.',
   'web.err_panel_probe_limited': 'آزمون‌های اتصال زیاد شد. کمی بعد دوباره تلاش کنید.',
-  'web.err_panel_provider_feature_disabled':
-    'افزودن این نوع پنل خاموش است. نخست قابلیت «پنل اختصاصی (پل Nexa)» را در بخش قابلیت‌ها روشن کنید.',
   'web.err_panel_provider_type_unsupported': 'این نوع پنل پشتیبانی نمی‌شود.',
   'web.err_panel_request_invalid': 'بعضی از مقدارهای پنل درست نیست. فرم را بررسی کنید.',
   'web.err_panel_target_blocked': 'این نشانی برای پنل مجاز نیست.',
