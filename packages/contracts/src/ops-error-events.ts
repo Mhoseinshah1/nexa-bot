@@ -342,6 +342,17 @@ export interface OpsErrorEventDefinition {
   readonly recovers?: string;
 }
 
+/**
+ * v0.9.7: the operational-event codes of the automatic cleanup (below). Under
+ * the catalogued `maintenance.` family; a code is part of the schema and is never renamed.
+ */
+export const LEGACY_CLEANUP_AWAITING_DESTINATION_CODE =
+  'maintenance.legacy_cleanup_awaiting_backup_destination';
+export const LEGACY_CLEANUP_DESTINATION_READY_CODE =
+  'maintenance.legacy_cleanup_backup_destination_ready';
+export const LEGACY_CLEANUP_RECONCILIATION_DIFFERS_CODE =
+  'maintenance.legacy_cleanup_reconciliation_differs';
+
 const failure = (
   code: string,
   area: OpsErrorArea,
@@ -536,6 +547,18 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   // --- Incidents and the platform -------------------------------------------------
   fact('incident.', 'SYSTEM', 'CONDITION', { prefix: true }),
   fact('maintenance.', 'SYSTEM', 'CONDITION', { prefix: true }),
+  // v0.9.7: the automatic cleanup after an import deletes nothing until a backup destination
+  // exists (its archive must reach Telegram first). One condition per tenant, re-checked
+  // daily; a destination appearing is the recovery.
+  failure(LEGACY_CLEANUP_AWAITING_DESTINATION_CODE, 'SYSTEM', 'CONDITION'),
+  recovery(
+    LEGACY_CLEANUP_DESTINATION_READY_CODE,
+    'SYSTEM',
+    LEGACY_CLEANUP_AWAITING_DESTINATION_CODE,
+  ),
+  // v0.9.7: the finished import's balance reconciliation is missing or names a difference;
+  // the cleanup waits for a person and deletes nothing.
+  failure(LEGACY_CLEANUP_RECONCILIATION_DIFFERS_CODE, 'SYSTEM', 'CONDITION'),
   fact('system.ping', 'SYSTEM', 'PER_OCCURRENCE'),
 ];
 

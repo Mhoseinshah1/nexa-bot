@@ -92,6 +92,12 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
   'payments.refund_request_push_failed':
     'درخواست بازگشت وجه به مدیر در تلگرام فرستاده نشد؛ هنوز باز است.',
   'payments.refund_request_push_ok': 'درخواست‌های بازگشت وجه دوباره به این مدیر در تلگرام می‌رسد.',
+  'maintenance.legacy_cleanup_awaiting_backup_destination':
+    'پاک‌سازی داده‌های انتقال تا تنظیم مقصد بکاپ چیزی حذف نمی‌کند؛ روزانه دوباره بررسی می‌شود.',
+  'maintenance.legacy_cleanup_backup_destination_ready':
+    'مقصد بکاپ تنظیم شد؛ پاک‌سازی داده‌های انتقال آغاز می‌شود.',
+  'maintenance.legacy_cleanup_reconciliation_differs':
+    'تطبیق موجودی‌های انتقال ثبت نشده یا اختلاف دارد؛ داده‌های انتقال نگه داشته می‌شوند.',
   'notification.reminder_burst': 'در یک ساعت یادآور خودکار بیش از حد معمول ساخته شد.',
   'notification.reminder_burst_cleared': 'تعداد یادآورهای خودکار دوباره زیر آستانه است.',
   'telegram.rich_message_refused':
