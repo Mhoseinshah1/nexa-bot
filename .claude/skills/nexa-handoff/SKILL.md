@@ -7,7 +7,10 @@ description: Write or read a short, structured NEXA session handoff — branch a
 
 Cloud containers are reclaimed; the conversation is not available to the next
 session. A handoff is the minimum the next session needs to act correctly,
-not a transcript. Target: under ~40 lines. `nexa-round-pipeline` requires one at
+not a transcript. **Capped at 120 lines; current state only.** On every
+refresh, move the older parts to `docs/r11-handoff/ARCHIVE.md` (on the handoff
+branch, like the handoff itself). The archive is never read by default; read it
+only when the handoff points to a specific section. `nexa-round-pipeline` requires one at
 the end of every round, and as soon as the session budget runs low.
 
 ## When

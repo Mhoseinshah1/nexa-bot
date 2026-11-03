@@ -49,6 +49,12 @@ Binding in a round (`nexa-round-pipeline` §1a): every test, typecheck, lint,
 format, `db:check` or verify run goes through it, in the foreground; max 2 at once, `--integration` one at a time; waits resume by themselves; exit 75 =
 gave up waiting (re-run later). Outside a round `test-summary.sh` suffices.
 
+**Local integration scope** (`nexa-round-pipeline` §1a): only the test files
+the PR added or changed, plus the suites the selector names for the touched
+modules; everything else is CI's job. A mutation check runs only for money,
+guard or policy code, and on a unit test whenever the rule can be reached from
+one.
+
 Trap: `pnpm test:integration -- <files>` ignores the file list and runs the
 WHOLE suite; use `pnpm exec vitest run --project integration <files>` (same for
 `unit`, `web`). Split long lists to fit Bash's 600000 ms limit.
@@ -66,7 +72,7 @@ tier 3 locally. When unsure, it is a money PR.
 - `apps/api/drizzle`, `schema.ts`, `online-indexes.ts` → `pnpm db:check` +
   `tests/integration/migration-*` (`nexa-migrations`).
 - identity, access, auth controllers, crypto, redaction → auth/admin-security
-  suites. Backup, recovery, `main.recovery.ts` → backup-* and recovery-*.
+  suites. Backup, recovery, `main.recovery.ts` → `backup-*` and `recovery-*`.
 - `platform/legacy-*`, `infrastructure/nxpkg`, `main.migration.ts` →
   `legacy-migration*` suites (CI adds MySQL/MariaDB and the rehearsal).
 - `deploy/`, `scripts/*.sh`, `Dockerfile` → `pnpm check:shell && pnpm test:deploy`.
