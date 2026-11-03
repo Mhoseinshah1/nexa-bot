@@ -6528,8 +6528,8 @@ export const WEB_FA = {
   'web.rs_effect_tier':
     'سطح نماینده عوض می‌شود؛ از خریدهای بعدی قیمت و دسترسی‌ها طبق سطح جدید است؛ سفارش‌های تأییدشده و کیف پول دست نمی‌خورند.',
   'web.rs_reason_label': 'دلیل (اجباری)',
-  'web.rs_reason_hint': 'بین ۳ تا ۵۰۰ نویسه. در تاریخچهٔ تغییرات ثبت می‌شود.',
-  'web.rs_reason_invalid': 'دلیل باید بین ۳ تا ۵۰۰ نویسه باشد.',
+  'web.rs_reason_hint': 'بین 3 تا 500 نویسه. در تاریخچهٔ تغییرات ثبت می‌شود.',
+  'web.rs_reason_invalid': 'دلیل باید بین 3 تا 500 نویسه باشد.',
   'web.history_reason': 'دلیل',
   'web.rs_danger_readonly': 'برای تغییر وضعیت یا سطح، ابتدا ویرایش را شروع کنید.',
   'web.reseller_policy_can_sell': 'خرید سرویس تازه',
@@ -10870,7 +10870,7 @@ export const WEB_FA = {
   'web.err_commerce_refund_state_invalid': 'این کار در وضعیت فعلی بازپرداخت ممکن نیست.',
   'web.err_commerce_request_invalid': 'بعضی از مقدارها درست نیست. فرم را بررسی کنید.',
   'web.error_reseller_reason_required':
-    'برای تعلیق، تغییر سطح یا تغییر اعتبار نماینده، دلیل را بنویسید (۳ تا ۵۰۰ نویسه).',
+    'برای تعلیق، تغییر سطح یا تغییر اعتبار نماینده، دلیل را بنویسید (3 تا 500 نویسه).',
   'web.err_commerce_service_action_in_progress':
     'کار دیگری روی این سرویس در جریان است. کمی صبر کنید.',
   'web.err_commerce_service_action_not_allowed': 'این کار برای این سرویس مجاز نیست.',

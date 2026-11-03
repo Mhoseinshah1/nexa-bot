@@ -8,7 +8,6 @@ import {
   SESSION_COOKIE_NAME,
   COMMERCE_ERROR_CODES,
   resellerHistoryResponseSchema,
-  resellerResponseSchema,
   resellerTierResponseSchema,
   type ActorContext,
   type BotInstanceId,
@@ -40,7 +39,6 @@ describe('reseller sensitive changes need a written reason', () => {
   let api: ApiApp;
   let ownerCookie: string;
   let customerA: UserId;
-  let customerA2: UserId;
   let n = 0;
   const key = (): string => `reseller-http-${(n += 1)}`;
 
@@ -74,7 +72,6 @@ describe('reseller sensitive changes need a written reason', () => {
     ownerCookie = await cookieFor('owner');
 
     customerA = await customer('950001', 'نیلوفر');
-    customerA2 = await customer('950002', 'Behnam');
   });
 
   async function cookieFor(username: string): Promise<string> {
@@ -138,19 +135,6 @@ describe('reseller sensitive changes need a written reason', () => {
     creditLimit: null,
     ...overrides,
   });
-
-  const EVERYTHING = [
-    { kind: 'OPERATION', subject: null },
-    { kind: 'PRODUCT', subject: null },
-    { kind: 'PANEL', subject: null },
-    { kind: 'BOT', subject: null },
-  ];
-
-  async function createdTier(overrides: Record<string, unknown> = {}): Promise<string> {
-    const response = await post(RESELLER_TIER_ROUTES.create, tierBody(overrides));
-    expect(response.statusCode, response.body).toBe(201);
-    return resellerTierResponseSchema.parse(response.json()).tier.id;
-  }
 
   const REASON_REFUSAL = {
     error: { code: COMMERCE_ERROR_CODES.RESELLER_REASON_REQUIRED },
