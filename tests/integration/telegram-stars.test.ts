@@ -1094,7 +1094,8 @@ describe('Telegram Stars (Package A)', () => {
       expect(await paymentState(paymentId)).toBe('CANCELLED');
     });
 
-    it('keeps a recorded late charge due until its late credit commits (C3, v095 G)', async () => {
+    // v095 G: the late outcome is now the late CREDIT (`LATE_CREDITED`); the rule is the same.
+    it('keeps a recorded late charge due until its late outcome commits (C3)', async () => {
       await enableStars();
       const { attempt, invoice, stars } = await invoicedTopup();
       await api.container.database.db.execute(
