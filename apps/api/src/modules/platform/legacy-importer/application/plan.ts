@@ -1,5 +1,6 @@
 import {
   LEGACY_USER_STATUS_CLASSES,
+  type LegacyImportDemotionTarget,
   type LegacyTrialDecision,
   type LegacyUserStatusClass,
 } from '@nexa/contracts';
@@ -16,6 +17,7 @@ import {
   INVENTORY_DERIVED_CATEGORIES,
   INVOICE_MAP_DECISIONS,
   SERVICE_CANDIDATE_CATEGORIES,
+  demotedDecision,
   inventoryHeldDecision,
   decideLegacyUser,
   decideServiceCandidate,
@@ -358,6 +360,15 @@ export interface ServiceReviewInputs {
    * owner did not approve, and the plan's digest stays the approved one. Absent for a dry run.
    */
   readonly inventoryHold?: ReadonlySet<string>;
+  /**
+   * NEXA v096 PR-1 (Codex review on #392): the demotions an APPLY run accepted when it started
+   * (`legacy_import_run_inputs.demotions`, invoice key → target), given back to its resume,
+   * reconcile and report. Like the inventory hold it only DEMOTES: such an invoice whose
+   * category the inventory decides is decided as accepted (`demotedDecision`) whatever this
+   * read says — a name resolvable again, or an account back on the panel, is still not
+   * adopted. Absent for a dry run and for an apply's first start.
+   */
+  readonly demoted?: ReadonlyMap<string, LegacyImportDemotionTarget>;
 }
 
 export function decideAllServices(
@@ -399,10 +410,15 @@ export function decideAllServices(
     if (fresh.category === 'INVENTORY_INCOMPLETE') undecidable.add(invoice.idInvoice);
     // The inventory hold first, before the ownership rule: a held invoice is no claim on an
     // account, exactly as it was none when the approved dry run found it unresolved.
-    const decision =
-      inventoryHold.has(invoice.idInvoice) && INVENTORY_DERIVED_CATEGORIES.has(fresh.category)
-        ? inventoryHeldDecision()
-        : fresh;
+    // A demotion the run accepted at its start is kept on every later plan of that run.
+    const demotedTo = review.demoted?.get(invoice.idInvoice);
+    const decision = !INVENTORY_DERIVED_CATEGORIES.has(fresh.category)
+      ? fresh
+      : demotedTo !== undefined
+        ? demotedDecision(demotedTo)
+        : inventoryHold.has(invoice.idInvoice)
+          ? inventoryHeldDecision()
+          : fresh;
     decided.push({ invoice, decision });
   }
   const ruled = withOwnershipRule(decided, review.keptAsHistory ?? new Set());

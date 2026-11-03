@@ -303,7 +303,18 @@ PLAN_DIGEST_MISSING`), and the TARGET precheck refuses one approved earlier
   `namedProductCandidates`) and requires the plan digest of that RESTORED plan to be the approved
   digest exactly. The digest binds every decision and every tally, so only a plan that differs
   from the approval in the demotions alone meets it. A dry run recorded before `0310` has no
-  adoptions: its apply refuses as before.
+  adoptions: its apply refuses as before. The digest does NOT bind the panel mapping, so the
+  approving dry run must also have been recorded under the apply's own mapping
+  (`legacy_import_run_inputs.panel_mapping_fingerprint`, Codex review on #392): under another
+  one (a code moved to another panel) a "gone" account is the remap's doing, not the panel's, and
+  no demotion is considered — `DRY_RUN_MISMATCH`, nothing written.
+
+  **A resume keeps them** (Codex review on #392). A run interrupted after its start accepted
+  demotions plans its resume, reconcile and report with those stored demotions: a demoted
+  invoice whose category the inventory decides is decided as accepted whatever the later read
+  says — `INVENTORY_INCOMPLETE` stays held when its name resolves again, `PROVIDER_MISSING` stays
+  the ended service when the account is back on the panel. Never adopted by its own run. A resume
+  whose start transaction finds other stored demotions than it planned with is `RUN_CONFLICT`.
 
   **The cap.** More demotions than the larger of
   `legacy_import.apply_demotion_cap_min_services` (default 50) and
@@ -314,7 +325,7 @@ PLAN_DIGEST_MISSING`), and the TARGET precheck refuses one approved earlier
   demotion found beside another change records `demotions:beside_other_changes`.
 
   **Reported, never announced.** The apply records its demotions on its run inputs
-  (`demotions`, a resume keeps the first start's); its report carries `sections.demotions`, the
+  (`demotions`, a resume keeps — and plans with — the first start's); its report carries `sections.demotions`, the
   `report` mode a top-level `demotions` (never inside `final` / `finalV2`, which stay free of
   names), and the restore page's import result (`applyReport.demotions`) lists the count, the cap,
   the approved adoptable services and each legacy invoice id → panel username. OPERATOR-ONLY: no

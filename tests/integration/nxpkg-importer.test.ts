@@ -862,4 +862,108 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     expect(await count('customer_notifications')).toBe(0);
     expectOnlyReads();
   });
+
+  it('Codex review on #392: a RESUME keeps the demotion its start accepted — an account back on the panel is still the ended service, never adopted', async () => {
+    const { connector: c, binding, holdFor, argv, importer, context } = await setup();
+    const session = await c.open();
+    let snapshot: LegacySnapshot;
+    try {
+      snapshot = await readFromSession(c.label, session);
+    } finally {
+      await session.close();
+    }
+    const hold = await holdFor(snapshot);
+    const mapping = parsePanelMapping(binding.text, TENANT);
+    const input = {
+      scope: tenantA,
+      actor: job('apply'),
+      snapshot,
+      mapping,
+      productionLikeTarget: false,
+      ownershipHold: hold,
+      ownershipDecisionsDigest: null,
+    };
+    const dry = await runMode(importer, argv('dry-run'), c, binding.text, 'corr-dry', context);
+    const digest = (dry?.sections as Record<string, any>)['planTalliesDigest'] as string;
+
+    // The start accepts svc_a1 as gone and is interrupted before the adoption phase …
+    panelA.removeUser('svc_a1');
+    await expect(
+      importer.apply({
+        ...input,
+        mode: 'IMPORT',
+        freshTarget: true,
+        dryRunTalliesDigest: digest,
+        afterPhase: (phase) => {
+          if (phase === 'customers') throw new Error('simulated crash');
+        },
+      }),
+    ).rejects.toThrow(/interrupted in the customers phase/u);
+    expect(await count('services')).toBe(0);
+
+    // … and the account is back on the panel when the run resumes.
+    panelA.seedUser('svc_a1', {
+      expire: Math.floor(Date.UTC(2027, 0, 1) / 1000),
+      dataLimit: 30 * 1024 ** 3,
+      usedTraffic: 1024 ** 3,
+    });
+    const resumed = await importer.apply({ ...input, mode: 'RESUME', freshTarget: true });
+    expect(resumed.verdict).toBe('COMPLETED');
+    expect((resumed.sections as Record<string, any>)['demotions']).toMatchObject({
+      count: 1,
+      entries: [{ panelId: panelAId, panelUsername: 'svc_a1', to: 'PROVIDER_MISSING' }],
+    });
+    const adopted = await ctx.container.database.db.execute<{ provider_username: string }>(
+      sql`SELECT provider_username FROM services WHERE tenant_id = ${TENANT} AND state <> 'TERMINATED'`,
+    );
+    expect(adopted.rows.map((r) => r.provider_username).sort()).toEqual([
+      'svc_b1',
+      'svc_nullmatch',
+    ]);
+    expect((await importer.reconcile(input)).verdict).toBe('RECONCILED');
+    expectOnlyReads();
+  });
+
+  it('Codex review on #392: a demotion needs the approving dry run’s OWN panel mapping — under another one the same demotion is DRY_RUN_MISMATCH, nothing written', async () => {
+    const { connector: c, binding, holdFor, argv, importer, context } = await setup();
+    const session = await c.open();
+    let snapshot: LegacySnapshot;
+    try {
+      snapshot = await readFromSession(c.label, session);
+    } finally {
+      await session.close();
+    }
+    const hold = await holdFor(snapshot);
+    const dry = await runMode(importer, argv('dry-run'), c, binding.text, 'corr-dry', context);
+    const digest = (dry?.sections as Record<string, any>)['planTalliesDigest'] as string;
+
+    // The apply is handed ANOTHER panel mapping than the approving dry run's (here only one
+    // more declared test code, so every decision but the demotion below stays the approved
+    // one; a code moved to another panel is the case that matters) …
+    const file = JSON.parse(binding.text) as Record<string, any>;
+    const other = { ...file, testPanels: [...(file['testPanels'] as string[]), 'tst_other'] };
+    const mapping = parsePanelMapping(JSON.stringify(other), TENANT);
+    // … and the panel lost an approved adoption: under the approved mapping a demotion.
+    panelA.removeUser('svc_a1');
+    expect(mapping.fingerprint).not.toBe(parsePanelMapping(binding.text, TENANT).fingerprint);
+    await expect(
+      importer.apply({
+        scope: tenantA,
+        actor: job('apply'),
+        snapshot,
+        mapping,
+        productionLikeTarget: false,
+        ownershipHold: hold,
+        ownershipDecisionsDigest: null,
+        mode: 'IMPORT',
+        freshTarget: true,
+        dryRunTalliesDigest: digest,
+      }),
+    ).rejects.toMatchObject({ code: 'DRY_RUN_MISMATCH' });
+    expect(await count('legacy_import_runs', "mode = 'APPLY'")).toBe(0);
+    for (const table of ['customers', 'wallet_entries', 'services', 'orders']) {
+      expect(await count(table), table).toBe(0);
+    }
+    expectOnlyReads();
+  });
 });
