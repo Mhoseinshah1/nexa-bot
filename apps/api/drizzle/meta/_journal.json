@@ -2150,6 +2150,20 @@
       "when": 1793624585566,
       "tag": "0306_payment_route_requires_verified_phone",
       "breakpoints": true
+    },
+    {
+      "idx": 307,
+      "version": "7",
+      "when": 1793687726458,
+      "tag": "0307_customer_phone_exemption_and_resume",
+      "breakpoints": true
+    },
+    {
+      "idx": 308,
+      "version": "7",
+      "when": 1793687769010,
+      "tag": "0308_phone_exemption_grant",
+      "breakpoints": true
     }
   ]
 }

@@ -395,6 +395,70 @@ export class DrizzleCustomerRepository implements CustomerRepository {
     return rows.length > 0;
   }
 
+  async setPhoneVerificationExemption(
+    scope: TenantContext,
+    id: UserId,
+    exempt: boolean,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(customers)
+      .set({ phoneVerificationExemptAt: exempt ? now : null, updatedAt: now })
+      .where(
+        and(
+          eq(customers.tenantId, tenantId),
+          eq(customers.id, id),
+          exempt
+            ? sql`${customers.phoneVerificationExemptAt} IS NULL`
+            : sql`${customers.phoneVerificationExemptAt} IS NOT NULL`,
+        ),
+      )
+      .returning({ id: customers.id });
+    return rows.length > 0;
+  }
+
+  async setPhoneResume(
+    scope: TenantContext,
+    id: UserId,
+    resume: string,
+    now: Date,
+    tx?: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    // UI state, not a fact about the customer: `updated_at` is the row's, and is not touched.
+    await this.exec(tx)
+      .update(customers)
+      .set({ phoneResume: resume, phoneResumeAt: now })
+      .where(and(eq(customers.tenantId, tenantId), eq(customers.id, id)));
+  }
+
+  async takePhoneResume(
+    scope: TenantContext,
+    id: UserId,
+    _now: Date,
+    tx?: unknown,
+  ): Promise<{ readonly resume: string; readonly at: Date } | null> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * Read and cleared in ONE statement: the row's previous values come back through a
+     * self-join on the same row, taken under the UPDATE's own row lock, so two contacts
+     * racing resume the action once.
+     */
+    const result = await this.exec(tx).execute(sql`
+      UPDATE customers AS c
+         SET phone_resume = NULL, phone_resume_at = NULL
+        FROM customers AS before
+       WHERE c.tenant_id = ${tenantId} AND c.id = ${id}
+         AND before.tenant_id = c.tenant_id AND before.id = c.id
+         AND c.phone_resume IS NOT NULL
+      RETURNING before.phone_resume AS resume, before.phone_resume_at AS at`);
+    const row = result.rows[0] as { resume: string; at: Date | string } | undefined;
+    if (row === undefined) return null;
+    return { resume: row.resume, at: row.at instanceof Date ? row.at : new Date(row.at) };
+  }
+
   async setVerifiedPhone(
     scope: TenantContext,
     id: UserId,
@@ -444,6 +508,7 @@ function toRecord(row: typeof customers.$inferSelect): CustomerRecord {
     marketingOptOutAt: row.marketingOptOutAt,
     remindersOptOutAt: row.remindersOptOutAt,
     channelMembershipExemptAt: row.channelMembershipExemptAt,
+    phoneVerificationExemptAt: row.phoneVerificationExemptAt,
     phoneNumber: row.phoneNumber,
     phoneVerifiedAt: row.phoneVerifiedAt,
     createdAt: row.createdAt,
