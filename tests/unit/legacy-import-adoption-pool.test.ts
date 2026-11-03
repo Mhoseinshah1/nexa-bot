@@ -7,7 +7,7 @@ import {
 /**
  * NEXA v096 PR-2 — the apply's adoptions run a few at a time per panel (`adoption-pool.ts`).
  * The cap is the rule: never more than `perPanel` adoptions on one panel at once, never more
- * than `total` overall, results in input order, and a failure stops new work and is thrown
+ * than `overall` in all, results in input order, and a failure stops new work and is thrown
  * only after the running ones settled.
  */
 
@@ -49,7 +49,7 @@ describe('legacy import adoption pool (v096 PR-2)', () => {
   it('never runs more than the per-panel cap on one panel, and uses it', async () => {
     const m = meter();
     const items = jobs(['p1', 'p2'], 20);
-    const results = await runPerPanel(items, (j) => j.panel, { perPanel: 4, total: 9 }, m.work);
+    const results = await runPerPanel(items, (j) => j.panel, { perPanel: 4, overall: 9 }, m.work);
     expect(results).toEqual(items.map((j) => j.id * 10));
     expect(m.peak.get('p1')).toBe(4);
     expect(m.peak.get('p2')).toBe(4);
@@ -60,7 +60,7 @@ describe('legacy import adoption pool (v096 PR-2)', () => {
   it('keeps the overall cap below the per-panel caps summed', async () => {
     const m = meter();
     const items = jobs(['p1', 'p2', 'p3'], 10);
-    await runPerPanel(items, (j) => j.panel, { perPanel: 4, total: 5 }, m.work);
+    await runPerPanel(items, (j) => j.panel, { perPanel: 4, overall: 5 }, m.work);
     expect(m.peakAll()).toBe(5);
     for (const panel of ['p1', 'p2', 'p3']) expect(m.peak.get(panel)).toBeLessThanOrEqual(4);
   });
@@ -68,7 +68,7 @@ describe('legacy import adoption pool (v096 PR-2)', () => {
   it('a cap of 1 is the one-at-a-time loop, in input order', async () => {
     const m = meter();
     const items = jobs(['p1', 'p2'], 6);
-    await runPerPanel(items, (j) => j.panel, { perPanel: 1, total: 1 }, m.work);
+    await runPerPanel(items, (j) => j.panel, { perPanel: 1, overall: 1 }, m.work);
     expect(m.peakAll()).toBe(1);
     expect(m.started).toEqual(items.map((j) => j.id));
   });
@@ -80,7 +80,7 @@ describe('legacy import adoption pool (v096 PR-2)', () => {
     const run = runPerPanel(
       items,
       (j) => j.panel,
-      { perPanel: 4, total: 9 },
+      { perPanel: 4, overall: 9 },
       async (job) => {
         started.push(job.id);
         running += 1;
@@ -105,15 +105,15 @@ describe('legacy import adoption pool (v096 PR-2)', () => {
       runPerPanel(
         [],
         () => 'p',
-        { perPanel: 4, total: 9 },
+        { perPanel: 4, overall: 9 },
         () => Promise.resolve(1),
       ),
     ).resolves.toEqual([]);
   });
 
   it('the effective bounds keep a pool connection free and never fall below 1', () => {
-    expect(adoptionConcurrency(4, 10)).toEqual({ perPanel: 4, total: 9 });
-    expect(adoptionConcurrency(4, 1)).toEqual({ perPanel: 4, total: 1 });
-    expect(adoptionConcurrency(0, 2)).toEqual({ perPanel: 1, total: 1 });
+    expect(adoptionConcurrency(4, 10)).toEqual({ perPanel: 4, overall: 9 });
+    expect(adoptionConcurrency(4, 1)).toEqual({ perPanel: 4, overall: 1 });
+    expect(adoptionConcurrency(0, 2)).toEqual({ perPanel: 1, overall: 1 });
   });
 });

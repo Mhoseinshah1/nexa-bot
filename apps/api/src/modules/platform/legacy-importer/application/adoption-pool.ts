@@ -8,14 +8,14 @@
  * map row, audit, outbox, the idempotency row), all of it round trips run one after another.
  *
  * So the adoptions themselves overlap, never more than `perPanel` at once on one panel and never
- * more than `total` at once overall. Each one is still exactly the transaction it was — its own
+ * more than `overall` at once in all. Each one is still exactly the transaction it was — its own
  * idempotency key, its own invoice advisory lock taken first, its own panel row lock — so
  * nothing about what is written, or about a resume, changes: a crash leaves each adoption either
  * committed or not, as before, and a resume re-decides the uncommitted ones under their locks.
  *
  * The panel's row lock (`lockPanel`, FOR UPDATE) still serialises the write half of adoptions on
  * the same panel; the cap only lets the read half of the next ones run meanwhile. `perPanel` is
- * the owner-only setting `legacy_import.adoption_concurrency_per_panel` (default 4); `total`
+ * the owner-only setting `legacy_import.adoption_concurrency_per_panel` (default 4); `overall`
  * keeps a connection free in the role's pool (`DATABASE_POOL_MAX - 1`, at least 1), so a step
  * that takes a second connection inside its transaction can never starve the pool.
  */
@@ -24,20 +24,20 @@ export interface AdoptionConcurrency {
   /** At most this many adoptions on one panel at once (>= 1). */
   readonly perPanel: number;
   /** At most this many adoptions at once, whatever their panel (>= 1). */
-  readonly total: number;
+  readonly overall: number;
 }
 
 /** One at a time: the importer's behaviour before PR-2, and a caller that wires no setting. */
-export const SEQUENTIAL_ADOPTION: AdoptionConcurrency = { perPanel: 1, total: 1 };
+export const SEQUENTIAL_ADOPTION: AdoptionConcurrency = { perPanel: 1, overall: 1 };
 
 /** The effective bounds from the setting and the role's pool size; never below 1. */
 export function adoptionConcurrency(perPanelSetting: number, poolMax: number): AdoptionConcurrency {
   const perPanel = Math.max(1, Math.floor(perPanelSetting));
-  return { perPanel, total: Math.max(1, Math.floor(poolMax) - 1) };
+  return { perPanel, overall: Math.max(1, Math.floor(poolMax) - 1) };
 }
 
 /**
- * Runs `work` over `items`, at most `cap.perPanel` per `panelOf` key and `cap.total` overall,
+ * Runs `work` over `items`, at most `cap.perPanel` per `panelOf` key and `cap.overall` in all,
  * starting them in the given order (an item whose panel is at its cap waits; a later item of
  * another panel may start before it). Results come back in the input order.
  *
@@ -52,7 +52,7 @@ export async function runPerPanel<T, R>(
   work: (item: T) => Promise<R>,
 ): Promise<R[]> {
   const perPanel = Math.max(1, Math.floor(cap.perPanel));
-  const total = Math.max(1, Math.floor(cap.total));
+  const overall = Math.max(1, Math.floor(cap.overall));
   const results = new Array<R>(items.length);
   const running = new Map<string, number>();
   // One queue per panel, each in input order; the next item started is the earliest queued one
@@ -75,7 +75,7 @@ export async function runPerPanel<T, R>(
       else if (remaining === 0) resolve(results);
     };
     const pump = (): void => {
-      while (failure === null && active < total) {
+      while (failure === null && active < overall) {
         let panel: string | null = null;
         let index = Number.POSITIVE_INFINITY;
         for (const [key, queue] of queues) {
