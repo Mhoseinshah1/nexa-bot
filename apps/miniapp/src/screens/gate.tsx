@@ -2,7 +2,13 @@ import { useState } from 'react';
 import { MINIAPP_ROUTES, miniAppMeResponseSchema, type MiniAppMeResponse } from '@nexa/contracts';
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
-import { openTelegram } from '../telegram.js';
+import {
+  botPhonePromptLink,
+  contactRequestAvailable,
+  openTelegram,
+  requestOwnContact,
+} from '../telegram.js';
+import { PHONE_POLL_ATTEMPTS, PHONE_POLL_INTERVAL_MS } from '../phone.js';
 import { Button, Card, Ltr, Message, errorText } from '../ui.js';
 
 /**
@@ -102,6 +108,52 @@ export function Gate({ gate }: { gate: NonNullable<MiniAppMeResponse['gate']> })
         </button>
         {error !== null && <p className="error">{error}</p>}
       </main>
+    );
+  }
+
+  /*
+   * NEXA v095 PR-4 A: the mandatory phone verification. Where the client has it,
+   * `requestContact()` shares the customer's own contact with the bot, which verifies it in the
+   * chat; the server is then asked until it no longer holds them. Elsewhere, the bot is opened
+   * on its contact prompt.
+   */
+  if (gate.kind === 'PHONE') {
+    const share = () =>
+      act(async () => {
+        const asked = await requestOwnContact();
+        if (asked !== 'shared') return;
+        for (let attempt = 0; attempt < PHONE_POLL_ATTEMPTS; attempt += 1) {
+          const fresh = await api.get(MINIAPP_ROUTES.me, {}, miniAppMeResponseSchema);
+          if (fresh.gate?.kind !== 'PHONE') return;
+          await new Promise((resolve) => {
+            setTimeout(resolve, PHONE_POLL_INTERVAL_MS);
+          });
+        }
+        setError(t('miniapp.gate_phone_pending'));
+      });
+    return (
+      <Message
+        text={t('miniapp.gate_phone')}
+        action={
+          <>
+            {contactRequestAvailable() ? (
+              <Button primary disabled={busy} onClick={() => void share()}>
+                {t('miniapp.gate_phone_share')}
+              </Button>
+            ) : (
+              me.botLink !== null && (
+                <Button
+                  primary
+                  onClick={() => openTelegram(botPhonePromptLink(me.botLink as string))}
+                >
+                  {t('miniapp.gate_phone_open_bot')}
+                </Button>
+              )
+            )}
+            {error !== null && <p className="error">{error}</p>}
+          </>
+        }
+      />
     );
   }
 

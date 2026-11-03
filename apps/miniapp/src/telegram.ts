@@ -23,6 +23,13 @@ export interface TelegramWebApp {
   openTelegramLink(url: string): void;
   /** Absent on a Telegram client older than Bot API 6.1. */
   openInvoice?(url: string, callback?: (status: InvoiceStatus) => void): void;
+  /**
+   * NEXA v095 PR-4: asks the customer to share their own phone number with the bot (Bot API
+   * 6.9). Telegram then sends their contact to the bot's chat as an ordinary message from
+   * them, which the bot verifies; `shared` only says what the client saw. Absent on older
+   * clients.
+   */
+  requestContact?(callback?: (shared: boolean) => void): void;
   onEvent(event: 'themeChanged', handler: () => void): void;
 }
 
@@ -77,4 +84,31 @@ export function openStarsInvoice(url: string): Promise<InvoiceStatus | 'unsuppor
   return new Promise((resolve) => {
     open(url, (status) => resolve(status));
   });
+}
+
+/**
+ * NEXA v095 PR-4 A/C: asks for the customer's own contact (`Telegram.WebApp.requestContact`).
+ * `shared` is what the CLIENT saw and proves nothing: the contact arrives in the bot's chat and
+ * the server decides — the caller polls `/me` for it. `unsupported` where there is no method.
+ */
+export function requestOwnContact(): Promise<'shared' | 'cancelled' | 'unsupported'> {
+  const app = webApp();
+  if (app === null || typeof app.requestContact !== 'function') {
+    return Promise.resolve('unsupported');
+  }
+  const request = app.requestContact.bind(app);
+  return new Promise((resolve) => {
+    request((shared) => resolve(shared ? 'shared' : 'cancelled'));
+  });
+}
+
+/** Whether this client can ask for the contact in place (`requestContact`, Bot API 6.9). */
+export function contactRequestAvailable(): boolean {
+  const app = webApp();
+  return app !== null && typeof app.requestContact === 'function';
+}
+
+/** The bot's chat, opened on its contact prompt (`/start verify_phone`), for a client without it. */
+export function botPhonePromptLink(botLink: string): string {
+  return `${botLink}?start=verify_phone`;
 }

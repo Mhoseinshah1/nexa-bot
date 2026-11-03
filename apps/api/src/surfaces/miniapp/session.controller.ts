@@ -111,12 +111,15 @@ export class MiniAppSessionController {
         ? `https://t.me/${bot.username}`
         : null;
     const customer = { firstName: context.customer.firstName, username: context.customer.username };
+    // NEXA v095 PR-4 C: what the mini app polls after `requestContact()`.
+    const phoneVerified = context.customer.phoneVerifiedAt !== null;
     if (gate !== null) {
       return {
         customer,
         botLink,
+        phoneVerified,
         gate:
-          gate.kind === 'BLOCKED' || gate.kind === 'CAPTCHA'
+          gate.kind === 'BLOCKED' || gate.kind === 'CAPTCHA' || gate.kind === 'PHONE'
             ? { kind: gate.kind }
             : gate.kind === 'CHANNELS'
               ? {
@@ -153,6 +156,7 @@ export class MiniAppSessionController {
     return {
       customer,
       botLink,
+      phoneVerified,
       gate: null,
       wallet: { balance: wire(money(balance.amountMinor, balance.currency)) },
       reseller: standing === null ? null : { tierName: standing.tier.name },

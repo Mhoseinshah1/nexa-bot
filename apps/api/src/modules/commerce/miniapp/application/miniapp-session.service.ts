@@ -21,6 +21,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import type { CustomerRecord } from '../../customers/application/ports.js';
+import { phoneGateHolds } from '../../customers/application/phone-verification.service.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import { verifyInitData } from '../domain/init-data.js';
 import type { MiniAppSessionRecord, MiniAppSessionRepository } from './ports.js';
@@ -70,6 +71,8 @@ export type MiniAppGateState =
       readonly kind: 'TERMS';
       readonly terms: { readonly id: string; readonly title: string; readonly body: string };
     }
+  /** NEXA v095 PR-4 A: `phone_verification` is on; no verified number and no exemption. */
+  | { readonly kind: 'PHONE' }
   | null;
 
 export interface MiniAppSessionServiceDeps {
@@ -125,6 +128,11 @@ export interface MiniAppSessionServiceDeps {
       customerId: string,
     ): Promise<{ readonly id: string; readonly title: string; readonly body: string } | null>;
   };
+  /**
+   * NEXA v095 PR-4 A: whether the bot-wide `phone_verification` gate is on. Absent (a narrow
+   * fixture), nobody is held by it.
+   */
+  readonly phoneGate?: { enabled(scope: TenantContext): Promise<boolean> };
   readonly telegramAdmins?: {
     resolve(
       scope: TenantContext,
@@ -330,7 +338,7 @@ export class MiniAppSessionService {
    * The gate this customer is held at, asked exactly as the bot's router asks it: BLOCKED
    * first (the turn never reaches `act`), then the `/start` captcha (R10 D5), then the
    * REQUIRED channels (skipped for an operator's per-customer exemption), then the CURRENT
-   * published terms. A bound administrator is never held by the last three, and the binding
+   * published terms, then (NEXA v095 PR-4 A) the mandatory phone verification. A bound administrator is never held by the last three, and the binding
    * is asked only when something would hold them. `fresh` re-asks Telegram, as «عضو شدم»
    * does. The captcha is never ANSWERED here: the mini app says so and links to the bot.
    */
@@ -355,6 +363,7 @@ export class MiniAppSessionService {
     ) {
       return { kind: 'CAPTCHA' };
     }
+    // Customer 360 (§11.4): an operator's channel exemption skips this check, as in the bot.
     if (this.deps.membership !== undefined && customer.channelMembershipExemptAt === null) {
       const missing = await this.deps.membership.missingRequired(scope, {
         botInstanceId: context.botInstanceId,
@@ -371,6 +380,20 @@ export class MiniAppSessionService {
           terms: { id: required.id, title: required.title, body: required.body },
         };
       }
+    }
+    /*
+     * NEXA v095 PR-4 A: the phone gate, LAST, as in the bot — no verified number and no
+     * exemption («معاف از تأیید شماره») while `phone_verification` is on. The contact is shared
+     * with `WebApp.requestContact()` (it arrives in the bot's chat and is verified there) or in
+     * the bot itself.
+     */
+    if (
+      this.deps.phoneGate !== undefined &&
+      phoneGateHolds(customer) &&
+      (await this.deps.phoneGate.enabled(scope)) &&
+      !(await isAdmin())
+    ) {
+      return { kind: 'PHONE' };
     }
     return null;
   }
