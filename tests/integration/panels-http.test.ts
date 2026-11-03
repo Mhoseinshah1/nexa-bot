@@ -292,7 +292,11 @@ describe('panel HTTP surface', () => {
         /*
          * R10 C2: Nexa's own bridge. Always offered now (no feature flag), so it is checked
          * here like the others. Twelve, against a mock bridge written from the protocol
-         * document (`OQ-C2-02`); no `SUBSCRIPTION_FILES` and no `DELIVER_RAW_CONFIGS`.
+         * document (`OQ-C2-02`), and `SUBSCRIPTION_FILES` as a thirteenth (v0.9.5 PR-3,
+         * protocol v1.1's optional `files`). It is DECLARED here but announced-only
+         * (`announcedOnly` on the descriptor, not carried by this response): a panel is offered
+         * it only while its bridge's health check announces it — pinned in
+         * `custom-panel-files.test.ts`. No `DELIVER_RAW_CONFIGS`.
          */
         custom: [
           'HEALTH_CHECK',
@@ -307,6 +311,7 @@ describe('panel HTTP surface', () => {
           'ADD_VOLUME',
           'ADD_TIME',
           'ROTATE_SUBSCRIPTION_LINK',
+          'SUBSCRIPTION_FILES',
         ],
       };
       for (const provider of body.providers) {
