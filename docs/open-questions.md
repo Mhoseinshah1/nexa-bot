@@ -5095,7 +5095,7 @@ live; the owner decides otherwise.
 
 ## v0.9.5 PR-6 — reseller edit page
 
-- **OQ-V095-01 — ANSWERED: YES (owner, NEXA-FIX-V096; PR: (this PR)).**
+- **OQ-V095-01 — ANSWERED: YES (owner, NEXA-FIX-V096; PR: https://github.com/Mhoseinshah1/nexa-bot/pull/391).**
   Suspending a reseller, demoting one to a normal customer and a manual change of reseller credit
   each require a written reason of 3 to 500 characters. Built: `reason` on the reseller update
   command (`commerce.reseller_reason_required` without one, decided against the locked row after the
@@ -5120,7 +5120,7 @@ live; the owner decides otherwise.
   the bot-wide phone verification mandatory, «پشتیبانی» and `/help` (and `/paysupport`, which
   opens the same screen) stay reachable exactly as the channel and terms gates allow them —
   `PHONE_GATE_EXEMPT_INTENTS` is the verification's own steps plus `MEMBERSHIP_EXEMPT_INTENTS`;
-  everything else stays held until the customer verifies. PR: (this PR). The original question,
+  everything else stays held until the customer verifies. PR: https://github.com/Mhoseinshah1/nexa-bot/pull/393. The original question,
   for the record: the gate exempted only the verification's own steps and the promotional
   opt-out/in, not «پشتیبانی» or `/help`, so a customer who would not share a number could not
   reach support in the bot.
@@ -5131,14 +5131,14 @@ live; the owner decides otherwise.
   `<paymentId>:late-credit`, the `GATEWAY_LATE_PAYMENT_CREDITED` notice and
   `ops.financial.late_credit_returned`), idempotent per `telegram_payment_charge_id`; a second
   charge for the same attempt stays the operator's identity mismatch. No new ledger reason or
-  setting. PR: (this PR). The original question, for the record: such a charge stayed a late
+  setting. PR: https://github.com/Mhoseinshah1/nexa-bot/pull/393. The original question, for the record: such a charge stayed a late
   completion for an operator on the Stars route.
 - **OQ-V095-P4-03 — CLOSED by the owner (NEXA v096): it follows the channel exemption.** On an
   account transfer the phone exemption does exactly what the channel exemption does: it stays
   with the source (the source's own setting; nothing of the destination is written), the
   preview reports it (`stays.phoneExemption`, the `SOURCE_OVERRIDES_STAY` warning, and a row
   on the Web Admin preview) and both transfer audit rows record it
-  (`sourceKeeps.phoneExemption`, beside `channelExemption`). PR: (this PR). The original
+  (`sourceKeeps.phoneExemption`, beside `channelExemption`). PR: https://github.com/Mhoseinshah1/nexa-bot/pull/393. The original
   question, for the record: the new phone exemption was not carried or reported.
 - **OQ-V095-P4-04 — CLOSED, owner: keep.** The allowed numbers (B) apply to every verification
   whatever the bot-wide switch says, including a route's rule (C), and the Settings page always
