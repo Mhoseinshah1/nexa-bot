@@ -357,6 +357,11 @@ export const customerTransferPreviewSchema = z.object({
     trialOverride: z.boolean(),
     locationOverride: z.boolean(),
     channelExemption: z.boolean(),
+    /**
+     * NEXA v096 (owner, closes OQ-V095-P4-03): the phone-verification exemption stays with the
+     * source exactly as the channel exemption does — shown here and in the transfer's audit.
+     */
+    phoneExemption: z.boolean(),
     verifiedPhone: z.boolean(),
   }),
   blockers: z.array(z.enum(CUSTOMER_TRANSFER_BLOCKERS)),
