@@ -509,10 +509,9 @@ describe('a customer pays through the approved screens', () => {
         /🔖 گروه کاربری: کاربر عادی\n\n📅 تاریخ: 14\d\d\/\d\d\/\d\d\n🕒 ساعت: \d\d:\d\d$/u,
       );
       // R8-C2: no separate «کپی شناسه» button — the id is tap-to-copy in the text above.
-      // R12 F3 item 7: «📜 تراکنش‌ها» sits before the main menu.
+      // NEXA v095 PR-4 F (owner): «📜 تراکنش‌ها» is no longer on this page.
       expect(labelsOf(lastMarkup())).toEqual([
         '💰 افزایش موجودی',
-        '📜 تراکنش‌ها',
         '🏠 بازگشت به منوی اصلی',
       ]);
       expect(lastMarkup()).not.toContain('copy_text');
