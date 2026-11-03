@@ -190,7 +190,7 @@ export function Sparkline({
               className="area"
               d={`${d} L${x(last).toFixed(1)},${h} L${x(first).toFixed(1)},${h} Z`}
             />
-            <path className="line" d={d} />
+            <path className="line" pathLength={1} d={d} />
           </g>
         );
       })}
@@ -291,7 +291,7 @@ export function AreaSpark({
               fill={`url(#${gradientId})`}
               d={`${d} L${x(last).toFixed(1)},${h} L${x(first).toFixed(1)},${h} Z`}
             />
-            <path className="line" d={d} />
+            <path className="line" pathLength={1} d={d} />
           </g>
         );
       })}
@@ -421,7 +421,11 @@ export function LineChart({
                         {...(gradient ? { fill: `url(#${gradientId}-${index})` } : {})}
                       />
                     )}
-                    <path className={one.dashed === true ? 'line dashed' : 'line'} d={d} />
+                    <path
+                      className={one.dashed === true ? 'line dashed' : 'line'}
+                      pathLength={one.dashed === true ? undefined : 1}
+                      d={d}
+                    />
                   </g>
                 );
               })}
@@ -540,6 +544,7 @@ export function BarChart({
                   <rect
                     key={one.name}
                     className={`bar s${one.tone ?? (index % 6) + 1}`}
+                    data-i={i}
                     x={left}
                     y={top}
                     width={Math.max(0, bw - (stacked ? 0 : 2))}

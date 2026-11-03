@@ -529,6 +529,29 @@ export function ButtonGroup({
 export const PageTrailContext = createContext<readonly Crumb[]>([]);
 
 /**
+ * Explanatory text that stays out of the way: a long string shows its first two lines and a
+ * «بیشتر» toggle; a short one renders as plain text. Nothing is removed, only folded.
+ */
+export function MoreText({ className, children }: { className: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const long = typeof children === 'string' && children.length > 140;
+  if (!long) return <p className={className}>{children}</p>;
+  return (
+    <p className={`${className} more-text${open ? ' is-open' : ''}`}>
+      <span className="more-body">{children}</span>
+      <button
+        type="button"
+        className="more-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? t('web.more_less') : t('web.more_more')}
+      </button>
+    </p>
+  );
+}
+
+/**
  * The page header (demo parity X1, X3, X4): the breadcrumb, the large title, the subtitle and
  * an optional line under it (a page's «آخرین به‌روزرسانی»); on the opposite side, the page's
  * controls — its freshness line and refresh, its primary buttons — aligned with the BOTTOM of
@@ -567,7 +590,7 @@ export function PageHead({
           {badge}
           {maturity !== undefined && <MaturityBadge value={maturity} />}
         </h1>
-        {subtitle !== undefined && <p className="sub">{subtitle}</p>}
+        {subtitle !== undefined && <MoreText className="sub">{subtitle}</MoreText>}
         {meta !== undefined && <div className="head-meta">{meta}</div>}
       </div>
       {actions !== undefined && <div className="actions">{actions}</div>}
@@ -619,7 +642,7 @@ export function Card({
         <header className="card-head">
           <div className="titles">
             {title !== undefined && <h2>{title}</h2>}
-            {hint !== undefined && <p className="hint">{hint}</p>}
+            {hint !== undefined && <MoreText className="hint">{hint}</MoreText>}
           </div>
           {actions !== undefined && <div className="actions">{actions}</div>}
         </header>

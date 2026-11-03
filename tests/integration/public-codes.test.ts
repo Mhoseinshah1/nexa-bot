@@ -270,6 +270,15 @@ describe('short public codes', () => {
     await ctx.container.database.withClient(async (client) => {
       await client.query('BEGIN');
       try {
+        // Not a planner test: on a table the statistics call small (the reset above leaves it
+        // nearly empty) a sequential scan is the cheaper plan and a correct one, and whether
+        // the planner chose it or an index depended on what the shard had written before this
+        // test and when the table was last analysed (CI, #393: 319,140 rows read). What is
+        // asserted is that the code key CAN serve the lookup, so the sequential scan is taken
+        // off the table for this transaction: a lookup the code key serves reads nothing, one
+        // that names the tenant takes the tenant-leading index and reads about rows²/2 whatever
+        // the statistics say.
+        await client.query('SET LOCAL enable_seqscan = off');
         await client.query(
           `INSERT INTO payments (id, tenant_id, customer_id, state, method, amount, currency,
                                  reference, resolved_at)

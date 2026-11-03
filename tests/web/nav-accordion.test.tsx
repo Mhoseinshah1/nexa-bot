@@ -202,12 +202,15 @@ const BEFORE: readonly [
 ];
 
 const GROUPS: readonly [string, readonly string[]][] = [
-  ['web.navgroup_dashboard', ['dashboard']],
-  ['web.navgroup_customers', ['users', 'services', 'tickets', 'support']],
+  ['web.navgroup_dashboard', ['dashboard', 'reports']],
+  ['web.navgroup_customers', ['users', 'services', 'orders']],
+  ['web.navgroup_finance', ['payments', 'compensations', 'payment-gateways']],
   [
     'web.navgroup_support_ai',
     [
+      'tickets',
       'business-chats',
+      'support',
       'support-ai',
       'support-knowledge',
       'learning-candidates',
@@ -218,47 +221,33 @@ const GROUPS: readonly [string, readonly string[]][] = [
   [
     'web.navgroup_sales',
     [
-      'orders',
       'products',
       'product-categories',
       'custom-service',
       'extra-devices',
       'service-locations',
       'trials',
-      'discounts',
-      'campaigns',
-      'referrals',
-      // R10 D4: gift cards (wallet top-up codes), beside the other sales programmes.
-      'gift-cards',
-      'reports',
     ],
   ],
-  ['web.navgroup_finance', ['payments', 'compensations', 'payment-gateways', 'bulk-operations']],
-  ['web.navgroup_resellers', ['resellers', 'reseller-tiers', 'reseller-plans']],
   [
-    'web.navgroup_bot',
-    [
-      'bots',
-      'bot-buttons',
-      'appearance',
-      'content',
-      'broadcasts',
-      'reminders',
-      'client-apps',
-      'terms',
-    ],
+    'web.navgroup_marketing',
+    ['discounts', 'campaigns', 'broadcasts', 'reminders', 'referrals', 'gift-cards'],
   ],
+  ['web.navgroup_resellers', ['resellers', 'reseller-tiers', 'reseller-plans']],
+  ['web.navgroup_bot', ['bots', 'bot-buttons', 'appearance', 'content', 'terms', 'client-apps']],
   ['web.navgroup_infra', ['panels', 'panel-health', 'providers']],
-  ['web.navgroup_config', ['settings', 'features']],
   [
     'web.navgroup_system',
     [
-      'inbox',
-      'audit-log',
-      'incidents',
-      'alerts',
-      'notifications',
+      'settings',
+      'features',
       'ops-group',
+      'inbox',
+      'notifications',
+      'alerts',
+      'incidents',
+      'audit-log',
+      'bulk-operations',
       'system',
       'recovery',
     ],
@@ -267,15 +256,15 @@ const GROUPS: readonly [string, readonly string[]][] = [
 
 const LABELS: Readonly<Record<string, string>> = {
   'web.navgroup_dashboard': 'داشبورد',
-  'web.navgroup_customers': 'مشتریان و پشتیبانی',
-  'web.navgroup_support_ai': 'هوش مصنوعی پشتیبانی',
-  'web.navgroup_sales': 'فروش و محصولات',
-  'web.navgroup_finance': 'مالی و پرداخت',
+  'web.navgroup_customers': 'مشتریان',
+  'web.navgroup_finance': 'پرداخت‌ها',
+  'web.navgroup_support_ai': 'پشتیبانی',
+  'web.navgroup_sales': 'محصولات',
+  'web.navgroup_marketing': 'بازاریابی',
   'web.navgroup_resellers': 'نمایندگان',
-  'web.navgroup_bot': 'ربات و ارتباط با مشتری',
-  'web.navgroup_infra': 'زیرساخت و پنل‌ها',
-  'web.navgroup_config': 'تنظیمات',
-  'web.navgroup_system': 'مدیریت سیستم',
+  'web.navgroup_bot': 'ربات',
+  'web.navgroup_infra': 'پنل‌ها',
+  'web.navgroup_system': 'سیستم و تنظیمات',
 };
 
 const ALL = [...PERMISSION_KEYS];
@@ -346,7 +335,7 @@ describe('the navigation’s information architecture', () => {
     expect(NAV_STANDALONE_GROUP).toBe('web.navgroup_dashboard');
   });
 
-  it('puts the six support-AI pages under «هوش مصنوعی پشتیبانی»', () => {
+  it('puts the support-AI pages under «پشتیبانی»', () => {
     for (const path of [
       '/business-chats',
       '/support-ai',
@@ -362,7 +351,7 @@ describe('the navigation’s information architecture', () => {
   it('names the group that owns a path, a detail page included, and none for an unlisted one', () => {
     expect(navGroupOf(NAV, '/')).toBe('web.navgroup_dashboard');
     expect(navGroupOf(NAV, '/orders/019400ab-cdef-7012-8345-6789abcdef01')).toBe(
-      'web.navgroup_sales',
+      'web.navgroup_customers',
     );
     expect(navGroupOf(NAV, '/business-chats/x')).toBe('web.navgroup_support_ai');
     expect(navGroupOf(NAV, '/payment-gateways/tonpays')).toBe('web.navgroup_finance');
@@ -376,12 +365,12 @@ describe('the single-open accordion', () => {
     expect(openGroups()).toEqual([LABELS['web.navgroup_infra']]);
     expect(head('web.navgroup_infra').getAttribute('aria-expanded')).toBe('true');
     expect(head('web.navgroup_infra').getAttribute('aria-controls')).toBeTruthy();
-    expect(drawnHrefs()).toEqual(['/', '/panels', '/panel-health', '/providers']);
+    expect(drawnHrefs()).toEqual(['/', '/reports', '/panels', '/panel-health', '/providers']);
   });
 
   it('opens the owning group of a deep link, and highlights its page', () => {
     sidebar('/orders/019400ab-cdef-7012-8345-6789abcdef01');
-    expect(openGroups()).toEqual([LABELS['web.navgroup_sales']]);
+    expect(openGroups()).toEqual([LABELS['web.navgroup_customers']]);
     const orders = within(nav()).getByRole('link', { name: t('web.nav_orders') });
     expect(orders.getAttribute('aria-current')).toBe('page');
     expect(
@@ -396,7 +385,7 @@ describe('the single-open accordion', () => {
     expect(openGroups()).toEqual([]);
     fireEvent.click(head('web.navgroup_customers'));
     expect(openGroups()).toEqual([LABELS['web.navgroup_customers']]);
-    expect(drawnHrefs()).toEqual(['/', '/users', '/services', '/tickets', '/support']);
+    expect(drawnHrefs()).toEqual(['/', '/reports', '/users', '/services', '/orders']);
     fireEvent.click(head('web.navgroup_system'));
     expect(openGroups()).toEqual([LABELS['web.navgroup_system']]);
     expect(drawnHrefs()).not.toContain('/users');
@@ -449,11 +438,11 @@ describe('the single-open accordion', () => {
     const { goTo } = sidebar('/users');
     fireEvent.click(head('web.navgroup_customers'));
     expect(openGroups()).toEqual([]);
-    goTo('/tickets');
+    goTo('/orders');
     expect(openGroups()).toEqual([LABELS['web.navgroup_customers']]);
     expect(
       within(nav())
-        .getByRole('link', { name: t('web.nav_tickets') })
+        .getByRole('link', { name: t('web.nav_orders') })
         .getAttribute('aria-current'),
     ).toBe('page');
   });
@@ -482,17 +471,19 @@ describe('the single-open accordion', () => {
       counters: { tickets: { count: 3, tone: 'warn' }, services: { count: 2, atLeast: true } },
     });
     const customers = head('web.navgroup_customers');
+    const support = head('web.navgroup_support_ai');
     // Seen as the reference's amber dot (demo parity A3), never a number on the header.
+    expect(support.querySelector('.gdot')).not.toBeNull();
+    expect(support.querySelector('.cnt')).toBeNull();
     expect(customers.querySelector('.gdot')).not.toBeNull();
-    expect(customers.querySelector('.cnt')).toBeNull();
     // Heard: the header's name carries the sum, a capped one as a floor.
     expect(customers).toHaveAccessibleName(
-      `${LABELS['web.navgroup_customers']}${t('web.nav_counter_at_least_spoken').replace('{count}', '5')}`,
+      `${LABELS['web.navgroup_customers']}${t('web.nav_counter_at_least_spoken').replace('{count}', '2')}`,
     );
     // A group with nothing waiting has no dot.
     expect(head('web.navgroup_resellers').querySelector('.gdot')).toBeNull();
-    fireEvent.click(customers);
-    expect(customers.querySelector('.gdot')).toBeNull();
+    fireEvent.click(support);
+    expect(support.querySelector('.gdot')).toBeNull();
     expect(
       within(nav())
         .getByRole('link', { name: new RegExp(t('web.nav_tickets')) })
@@ -501,7 +492,9 @@ describe('the single-open accordion', () => {
   });
 
   it('sums counters with the most severe tone, and draws none for zero', () => {
-    const members = NAV.filter((entry) => entry.group === 'web.navgroup_customers');
+    const members = NAV.filter(
+      (entry) => entry.group === 'web.navgroup_customers' || entry.id === 'tickets',
+    );
     expect(sumCounters(members, {})).toBeUndefined();
     expect(sumCounters(members, { users: { count: 0 } })).toBeUndefined();
     expect(
@@ -523,8 +516,10 @@ describe('the single-open accordion', () => {
 describe('permissions in the accordion', () => {
   it('hides an unauthorized child and a group with no authorized child, header included', () => {
     sidebar('/users', ['users.view', 'tickets.view'], []);
-    expect(drawnHrefs()).toEqual(['/', '/users', '/tickets']);
-    expect(navGroupHeader('web.navgroup_support_ai')).toBeNull();
+    expect(drawnHrefs()).toEqual(['/', '/users']);
+    fireEvent.click(head('web.navgroup_support_ai'));
+    expect(drawnHrefs()).toEqual(['/', '/tickets']);
+    expect(navGroupHeader('web.navgroup_support_ai')).not.toBeNull();
     expect(screen.queryByRole('group', { name: t('web.navgroup_resellers') })).toBeNull();
     // `users.view` alone admits /trials (one of its four keys), so sales is drawn with it;
     // session-only entries keep infra (providers) and system drawn.
@@ -535,6 +530,7 @@ describe('permissions in the accordion', () => {
     );
     expect(drawnGroups).toEqual([
       LABELS['web.navgroup_customers'],
+      LABELS['web.navgroup_support_ai'],
       LABELS['web.navgroup_sales'],
       LABELS['web.navgroup_infra'],
       LABELS['web.navgroup_system'],
