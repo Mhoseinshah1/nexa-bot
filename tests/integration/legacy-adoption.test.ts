@@ -1384,6 +1384,33 @@ describe('Migration P6: legacy service adoption', () => {
     expect(await mapRow((commands[2] as LegacyAdoptionCommand).legacyInvoiceKey)).toBeUndefined();
   });
 
+  it('adoptMany waits for its turn once, before it takes the panel, and writes nothing before', async () => {
+    const commands: LegacyAdoptionCommand[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const telegramUserId = tg();
+      await fx.customer({ telegramUserId });
+      commands.push(command({ telegramUserId }));
+    }
+    let turns = 0;
+    let open = false;
+    const writesBeforeTurn: string[] = [];
+    const service = batchService((ref) => {
+      if (!open) writesBeforeTurn.push(ref);
+    });
+    const outcomes = await withoutNetwork(() =>
+      service.adoptMany(tenantA, actor(), commands, {
+        beforePanelLock: async () => {
+          turns += 1;
+          await new Promise((r) => setTimeout(r, 30));
+          open = true;
+        },
+      }),
+    );
+    expect(outcomes.map((o) => o.kind)).toEqual(['ADOPTED', 'ADOPTED', 'ADOPTED']);
+    expect(turns).toBe(1);
+    expect(writesBeforeTurn).toEqual([]);
+  });
+
   it('adoptMany refuses an administrator without maintenance.run before writing anything', async () => {
     const telegramUserId = tg();
     await fx.customer({ telegramUserId });

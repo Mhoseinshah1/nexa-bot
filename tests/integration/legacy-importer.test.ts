@@ -1699,16 +1699,19 @@ describe('Migration P7: the legacy importer', () => {
       let all = 0;
       let peakAll = 0;
       const adoption: LegacyAdoptionPort = {
-        adopt: async (_scope, _actor, candidate) => {
-          const panel = candidate.panelId;
+        adopt: () => Promise.reject(new Error('the batch path is expected')),
+        // A batch is "running" from its call to its answer, its wait for the panel included.
+        adoptMany: async (_scope, _actor, candidates, options) => {
+          const panel = (candidates[0] as LegacyAdoptionCandidate).panelId;
           running.set(panel, (running.get(panel) ?? 0) + 1);
           peak.set(panel, Math.max(peak.get(panel) ?? 0, running.get(panel) ?? 0));
           all += 1;
           peakAll = Math.max(peakAll, all);
           await new Promise((r) => setTimeout(r, 25));
+          await options?.beforePanelLock?.();
           running.set(panel, (running.get(panel) ?? 1) - 1);
           all -= 1;
-          return { kind: 'ADOPTED' } as LegacyAdoptionOutcome;
+          return candidates.map(() => ({ kind: 'ADOPTED' }) as LegacyAdoptionOutcome);
         },
       };
       // One invoice per batch, so every adoption could run at once if nothing held it back.
@@ -1727,6 +1730,43 @@ describe('Migration P7: the legacy importer', () => {
     expect(two.adopted).toBe(one.adopted);
     expect(Math.max(...two.peak.values())).toBe(2);
     for (const p of two.peak.values()) expect(p).toBeLessThanOrEqual(2);
+  });
+
+  it("v096 PR-2: one panel's batches take the panel in input order, however they overlap", async () => {
+    const snap = await snapshot();
+    const called = new Map<string, string[]>();
+    const locked = new Map<string, string[]>();
+    let calls = 0;
+    const adoption: LegacyAdoptionPort = {
+      adopt: () => Promise.reject(new Error('the batch path is expected')),
+      adoptMany: async (_scope, _actor, candidates, options) => {
+        const first = candidates[0] as LegacyAdoptionCandidate;
+        const order = calls;
+        calls += 1;
+        (called.get(first.panelId) ?? called.set(first.panelId, []).get(first.panelId))?.push(
+          first.legacyInvoiceId,
+        );
+        // The read half: an earlier batch is slower, so a later one would reach the panel first.
+        await new Promise((r) => setTimeout(r, Math.max(1, 40 - order * 10)));
+        await options?.beforePanelLock?.();
+        (locked.get(first.panelId) ?? locked.set(first.panelId, []).get(first.panelId))?.push(
+          first.legacyInvoiceId,
+        );
+        await new Promise((r) => setTimeout(r, 5));
+        return candidates.map(() => ({ kind: 'ADOPTED' }) as LegacyAdoptionOutcome);
+      },
+    };
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId},
+              'legacy_import.adoption_concurrency_per_panel', '4'::jsonb, 1, now())
+      ON CONFLICT (tenant_id, setting_key) DO UPDATE SET value = EXCLUDED.value`);
+    await ctx.container
+      .legacyImporter({ adoption, inventoryPageSize: 3, adoptionBatch: 1 })
+      .apply({ ...input('panel-order', snap), mode: 'IMPORT' });
+    expect(calls).toBeGreaterThan(2);
+    expect([...called.values()].some((invoices) => invoices.length >= 2)).toBe(true);
+    expect(locked).toEqual(called);
   });
 
   // REHEARSE against 9942263f: `resume` printed pg's "client is already executing a query"

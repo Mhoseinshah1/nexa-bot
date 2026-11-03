@@ -518,6 +518,11 @@ export interface LegacyAdoptionPort {
     scope: TenantContext,
     actor: ActorContext,
     candidates: readonly LegacyAdoptionCandidate[],
+    /**
+     * Awaited inside the batch's transaction just before it first locks the panel's row, so
+     * the importer can keep one panel's batches writing in input order while they overlap.
+     */
+    options?: { readonly beforePanelLock?: () => Promise<void> },
   ): Promise<LegacyAdoptionOutcome[]>;
 }
 

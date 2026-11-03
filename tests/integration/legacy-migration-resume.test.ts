@@ -155,6 +155,10 @@ describe('legacy migration: interrupt, resume and rerun over a real package', ()
       sql.raw(`
       CREATE OR REPLACE FUNCTION lmig_test_crash_${table}() RETURNS trigger AS $$
       BEGIN
+        -- One inserting transaction at a time (held to its commit), so the count includes every
+        -- row another transaction wrote: the crash point stays exact when the importer writes
+        -- batches concurrently (NEXA v096 PR-2, adoptions of two panels at once).
+        PERFORM pg_advisory_xact_lock(4242);
         IF (SELECT count(*) FROM ${table} WHERE tenant_id = NEW.tenant_id) >= ${String(after)} THEN
           RAISE EXCEPTION 'lmig test: simulated crash inside a ${table} batch';
         END IF;

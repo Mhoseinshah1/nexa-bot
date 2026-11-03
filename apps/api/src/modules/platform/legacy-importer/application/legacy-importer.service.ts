@@ -2818,6 +2818,25 @@ export class LegacyImporterService {
     }
     const adopted = new Array<LegacyAdoptionOutcome>(jobs.length);
     const port = this.deps.adoption;
+    // One panel's batches take the panel in input order: batch k waits, just before its panel
+    // row lock, until batch k-1 of the same panel settled (`AdoptManyOptions.beforePanelLock`).
+    // So what each adoption records (the capacity after it) is what the one-at-a-time loop
+    // recorded, however many batches overlap.
+    const settled = batches.map(() => {
+      let done: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        done = resolve;
+      });
+      return { promise, done };
+    });
+    const previousOfPanel = new Map<string, number>();
+    const turnAfter = batches.map((batch, index) => {
+      const panel = (batch[0] as (typeof jobs)[number]).decision.panelId;
+      const previous = previousOfPanel.get(panel);
+      previousOfPanel.set(panel, index);
+      return previous;
+    });
+    const batchIndex = new Map(batches.map((batch, index) => [batch, index]));
     await runPerPanel(
       batches,
       (batch) => (batch[0] as (typeof jobs)[number]).decision.panelId,
@@ -2826,32 +2845,43 @@ export class LegacyImporterService {
         : await this.adoptionConcurrencyOf(scope),
       async (batch) => {
         if (port === null) throw new Error('unreachable: the adoption step is not wired');
-        const candidates = batch.map((job) =>
-          this.candidateOf(
-            runId,
-            job.invoice,
-            job.decision,
-            job.who,
-            shapes,
-            prepared.inventories,
-            soldAt.get(job.invoice.idInvoice) ?? null,
-          ),
-        );
-        let outcomes: LegacyAdoptionOutcome[];
-        if (port.adoptMany === undefined) {
-          outcomes = [];
-          for (const candidate of candidates) {
-            outcomes.push(await port.adopt(scope, actor, candidate));
+        const index = batchIndex.get(batch) as number;
+        const previous = turnAfter[index];
+        const turn = (): Promise<void> =>
+          previous === undefined
+            ? Promise.resolve()
+            : (settled[previous] as (typeof settled)[number]).promise;
+        try {
+          const candidates = batch.map((job) =>
+            this.candidateOf(
+              runId,
+              job.invoice,
+              job.decision,
+              job.who,
+              shapes,
+              prepared.inventories,
+              soldAt.get(job.invoice.idInvoice) ?? null,
+            ),
+          );
+          let outcomes: LegacyAdoptionOutcome[];
+          if (port.adoptMany === undefined) {
+            await turn();
+            outcomes = [];
+            for (const candidate of candidates) {
+              outcomes.push(await port.adopt(scope, actor, candidate));
+            }
+          } else {
+            outcomes = await port.adoptMany(scope, actor, candidates, { beforePanelLock: turn });
           }
-        } else {
-          outcomes = await port.adoptMany(scope, actor, candidates);
+          if (outcomes.length !== batch.length) {
+            throw new Error('the adoption step answered a batch with the wrong number of outcomes');
+          }
+          batch.forEach((job, i) => {
+            adopted[job.job] = outcomes[i] as LegacyAdoptionOutcome;
+          });
+        } finally {
+          (settled[index] as (typeof settled)[number]).done();
         }
-        if (outcomes.length !== batch.length) {
-          throw new Error('the adoption step answered a batch with the wrong number of outcomes');
-        }
-        batch.forEach((job, i) => {
-          adopted[job.job] = outcomes[i] as LegacyAdoptionOutcome;
-        });
       },
     );
     for (const step of steps) {

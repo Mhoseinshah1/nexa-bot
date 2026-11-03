@@ -9470,8 +9470,8 @@ export function createContainer(
                 adopt: (scope, actor, candidate) =>
                   legacyAdoption.adoptCandidate(scope, actor, candidate),
                 // NEXA v096 PR-2: one panel's eligible invoices, a batch per transaction.
-                adoptMany: (scope, actor, candidates) =>
-                  legacyAdoption.adoptCandidates(scope, actor, candidates),
+                adoptMany: (scope, actor, candidates, batchOptions) =>
+                  legacyAdoption.adoptCandidates(scope, actor, candidates, batchOptions),
               }
             : options.adoption,
         serviceCandidates: legacyServiceCandidateRepository,

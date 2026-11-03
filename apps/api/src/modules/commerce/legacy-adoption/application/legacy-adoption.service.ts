@@ -255,13 +255,14 @@ export class LegacyAdoptionService {
     scope: TenantContext,
     actor: ActorContext,
     candidates: readonly LegacyAdoptionCandidate[],
+    options: AdoptManyOptions = {},
   ): Promise<LegacyAdoptionOutcome[]> {
     const commands: LegacyAdoptionCommand[] = [];
     const lookups: CommandLookups = { shapeProducts: new Map(), productExists: new Map() };
     for (const candidate of candidates) {
       commands.push(await this.commandOf(scope, candidate, lookups));
     }
-    return this.adoptMany(scope, actor, commands);
+    return this.adoptMany(scope, actor, commands, options);
   }
 
   /** The candidate as a command: the translation `adoptCandidate` documents. */
@@ -353,6 +354,7 @@ export class LegacyAdoptionService {
     scope: TenantContext,
     actor: ActorContext,
     commands: readonly LegacyAdoptionCommand[],
+    options: AdoptManyOptions = {},
   ): Promise<LegacyAdoptionOutcome[]> {
     for (const command of commands) assertAdoptionCommand(command);
     if (commands.length === 0) return [];
@@ -417,6 +419,9 @@ export class LegacyAdoptionService {
           const memo: AdoptionBatchMemo = {
             reminders: {},
             invoicesLocked: new Set(keys),
+            ...(options.beforePanelLock === undefined
+              ? {}
+              : { beforePanelLock: options.beforePanelLock }),
             panels: new Map(),
           };
           for (const index of pending) {
@@ -706,6 +711,10 @@ export class LegacyAdoptionService {
     // row it read then is the row (`AdoptionBatchMemo.panels`).
     let panel = memo?.panels.get(match.panelId);
     if (panel === undefined) {
+      // A batch waits for its turn on the panel first (`AdoptManyOptions.beforePanelLock`).
+      const turn = memo?.beforePanelLock;
+      if (memo !== undefined) delete memo.beforePanelLock;
+      if (turn !== undefined) await turn();
       panel = await this.deps.store.lockPanel(scope, match.panelId, tx);
       memo?.panels.set(match.panelId, panel);
     }
@@ -945,7 +954,22 @@ interface CommandLookups {
 }
 
 /** One batch transaction's reads, made once (`adoptMany`); never outlives that transaction. */
+/**
+ * NEXA v096 PR-2: what the caller of `adoptMany` may ask of one batch.
+ *
+ * `beforePanelLock` is awaited inside the batch's transaction just before its first panel row
+ * lock (never when no command reaches the panel). The importer uses it to let the next batch
+ * of a panel do its read half (replays, invoice locks, first lookups) while the previous batch
+ * holds the panel, yet take the panel only after that batch settled — so one panel's writes,
+ * and the capacity each records, happen in input order whatever the concurrency.
+ */
+export interface AdoptManyOptions {
+  readonly beforePanelLock?: () => Promise<void>;
+}
+
 interface AdoptionBatchMemo {
+  /** Awaited once, before this transaction's first panel row lock (`AdoptManyOptions`). */
+  beforePanelLock?: () => Promise<void>;
   currency?: SalesCurrencyCode;
   readonly reminders: ReminderSeedMemo;
   /** The invoice locks this transaction already holds. */
