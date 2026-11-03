@@ -492,7 +492,14 @@ export async function runCutoverRehearsal(
           importView.status === 'COMPLETED' ? 'PASS' : 'FAIL',
           `${importView.status}${importView.errorCode === null ? '' : ` ${importView.errorCode}`}; ` +
             `protective backup ${importView.preImportBackupRunId === null ? 'none' : 'taken'}; ` +
-            `post-import backup ${importView.backupRunId === null ? 'none' : 'taken'}`,
+            `post-import backup ${importView.backupRunId === null ? 'none' : 'taken'}` +
+            // NEXA v096 PR-1: approved adoptions the live panel lost since the dry run (a count;
+            // the list is the restore page's import result).
+            (importView.applyReport?.demotions === undefined
+              ? ''
+              : `; demoted ${String(importView.applyReport.demotions.count)} of ` +
+                `${String(importView.applyReport.demotions.approvedAdoptable)} approved adoption(s), cap ` +
+                `${String(importView.applyReport.demotions.cap)}`),
         );
       } catch (error) {
         proceed = fail('04', 'import', error);

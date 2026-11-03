@@ -15,6 +15,7 @@ import type {
   LegacyAdoptionOutcome,
 } from '../../../commerce/legacy-adoption/application/legacy-adoption-ports.js';
 import type { FreshTargetCheck, FreshTargetOptions } from './fresh-target.js';
+import type { ApprovedAdoption, PlanDemotion } from './demotions.js';
 import type { PanelFacts } from './panel-mapping.js';
 import type { LegacySourceEngine } from './source-port.js';
 
@@ -167,13 +168,36 @@ export interface LegacyRunInputs {
    */
   readonly inventoryHoldDigest: string | null;
   readonly inventoryHoldKeys: readonly string[] | null;
+  /**
+   * NEXA v096 PR-1: a DRY RUN's own `planTalliesDigest`, under which an apply finds its approved
+   * adoptions (`findApprovedAdoptions`). Null for an apply and for a run recorded before it.
+   */
+  readonly planTalliesDigest: string | null;
+  /**
+   * NEXA v096 PR-1: the demotions an APPLY accepted when it started (`demotions.ts`): the cap
+   * it was held to, the approved adoptable services, and each demotion. Null for a dry run and
+   * for an apply that demoted nothing. A resume keeps what its first start recorded.
+   */
+  readonly demotions: StoredDemotions | null;
+}
+
+/** What an apply records of its accepted demotions (`legacy_import_run_inputs.demotions`). */
+export interface StoredDemotions {
+  readonly cap: number;
+  readonly approvedAdoptable: number;
+  readonly entries: readonly PlanDemotion[];
+}
+
+/** What `record` is given beyond the row read back: a dry run's adoptions (never read back). */
+export interface LegacyRunInputsRecord extends LegacyRunInputs {
+  readonly approvedAdoptions?: readonly ApprovedAdoption[] | null;
 }
 
 export interface LegacyRunInputsRepository {
   /** Insert-or-nothing; returns what is stored, which a resume compares. */
   record(
     scope: TenantContext,
-    inputs: LegacyRunInputs,
+    inputs: LegacyRunInputsRecord,
     tx: TransactionScope,
   ): Promise<LegacyRunInputs>;
   find(scope: TenantContext, runId: string): Promise<LegacyRunInputs | null>;
@@ -186,6 +210,19 @@ export interface LegacyRunInputsRepository {
     sourceFingerprint: string,
     digest: string,
   ): Promise<readonly string[] | null>;
+  /**
+   * NEXA v096 PR-1: the adoptions a DRY RUN of THIS source recorded under `planTalliesDigest`
+   * (the approved one, as a rule) AND under `panelMappingFingerprint` (the apply's mapping:
+   * Codex review on #392 — a dry run decided under another code → panel mapping approved
+   * nothing this apply can be demoted from), or null when none did. The caller trusts them
+   * only through the restored digest (`demotionsAgainst`).
+   */
+  findApprovedAdoptions(
+    scope: TenantContext,
+    sourceFingerprint: string,
+    planTalliesDigest: string,
+    panelMappingFingerprint: string,
+  ): Promise<readonly ApprovedAdoption[] | null>;
 }
 
 /**

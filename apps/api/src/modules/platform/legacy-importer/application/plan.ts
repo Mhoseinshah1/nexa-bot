@@ -1,5 +1,6 @@
 import {
   LEGACY_USER_STATUS_CLASSES,
+  type LegacyImportDemotionTarget,
   type LegacyTrialDecision,
   type LegacyUserStatusClass,
 } from '@nexa/contracts';
@@ -16,6 +17,7 @@ import {
   INVENTORY_DERIVED_CATEGORIES,
   INVOICE_MAP_DECISIONS,
   SERVICE_CANDIDATE_CATEGORIES,
+  demotedDecision,
   inventoryHeldDecision,
   decideLegacyUser,
   decideServiceCandidate,
@@ -145,6 +147,11 @@ export interface InventoryHold {
   readonly keys: ReadonlySet<string>;
   readonly given: boolean;
   readonly unheld: number;
+  /**
+   * The invoices `unheld` counts (empty for a dry run). NEXA v096 PR-1: an apply accepts them
+   * only as DEMOTIONS of services the approved dry run adopted (`demotions.ts`).
+   */
+  readonly unheldKeys: ReadonlySet<string>;
   /** `inventoryHoldDigest(keys)`. */
   readonly digest: string;
 }
@@ -353,6 +360,15 @@ export interface ServiceReviewInputs {
    * owner did not approve, and the plan's digest stays the approved one. Absent for a dry run.
    */
   readonly inventoryHold?: ReadonlySet<string>;
+  /**
+   * NEXA v096 PR-1 (Codex review on #392): the demotions an APPLY run accepted when it started
+   * (`legacy_import_run_inputs.demotions`, invoice key → target), given back to its resume,
+   * reconcile and report. Like the inventory hold it only DEMOTES: such an invoice whose
+   * category the inventory decides is decided as accepted (`demotedDecision`) whatever this
+   * read says — a name resolvable again, or an account back on the panel, is still not
+   * adopted. Absent for a dry run and for an apply's first start.
+   */
+  readonly demoted?: ReadonlyMap<string, LegacyImportDemotionTarget>;
 }
 
 export function decideAllServices(
@@ -394,10 +410,15 @@ export function decideAllServices(
     if (fresh.category === 'INVENTORY_INCOMPLETE') undecidable.add(invoice.idInvoice);
     // The inventory hold first, before the ownership rule: a held invoice is no claim on an
     // account, exactly as it was none when the approved dry run found it unresolved.
-    const decision =
-      inventoryHold.has(invoice.idInvoice) && INVENTORY_DERIVED_CATEGORIES.has(fresh.category)
-        ? inventoryHeldDecision()
-        : fresh;
+    // A demotion the run accepted at its start is kept on every later plan of that run.
+    const demotedTo = review.demoted?.get(invoice.idInvoice);
+    const decision = !INVENTORY_DERIVED_CATEGORIES.has(fresh.category)
+      ? fresh
+      : demotedTo !== undefined
+        ? demotedDecision(demotedTo)
+        : inventoryHold.has(invoice.idInvoice)
+          ? inventoryHeldDecision()
+          : fresh;
     decided.push({ invoice, decision });
   }
   const ruled = withOwnershipRule(decided, review.keptAsHistory ?? new Set());
@@ -727,10 +748,12 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
   );
   const given = input.review?.inventoryHold;
   const holdKeys: ReadonlySet<string> = given ?? unresolved;
+  const unheldKeys = new Set([...unresolved].filter((key) => !holdKeys.has(key)));
   const inventoryHold: InventoryHold = {
     keys: holdKeys,
     given: given !== undefined,
-    unheld: [...unresolved].filter((key) => !holdKeys.has(key)).length,
+    unheld: unheldKeys.size,
+    unheldKeys,
     digest: inventoryHoldDigest(holdKeys),
   };
   const realLive = snapshot.liveInvoices.filter((i) => i.isTest?.trim() === '0');
@@ -791,12 +814,24 @@ export function planTalliesDigest(
   // The inventory hold is bound beside the decisions: WHICH `INVENTORY_INCOMPLETE` invoices are
   // quarantined is part of what the owner approved. An empty (or absent) hold adds nothing, so
   // the digest of every plan without one is the v2 digest it always was.
-  const hold = plan.inventoryHold;
+  return planDigestOf(plan.tallies, servicesDecisionDigest(plan.services), plan.inventoryHold);
+}
+
+/**
+ * `planTalliesDigest` from its three parts, the services already digested
+ * (`servicesDecisionDigestOfRows`): what `demotions.ts` recomputes for the plan as the approved
+ * dry run would have had it.
+ */
+export function planDigestOf(
+  tallies: PlanTallies,
+  servicesDigest: string,
+  hold: Pick<InventoryHold, 'keys' | 'digest'> | undefined,
+): string {
   return sha256Hex(
     stableJson({
       format: 'nexa-legacy-plan-tallies/v2',
-      tallies: plan.tallies,
-      services: servicesDecisionDigest(plan.services),
+      tallies,
+      services: servicesDigest,
       inventoryHold: hold === undefined || hold.keys.size === 0 ? undefined : hold.digest,
     }),
   );
@@ -820,25 +855,30 @@ export const PLAN_DIGEST_FORMAT_OUTDATED = 'plan:digest_format_outdated';
  * name or id leaves the importer through it.
  */
 export function servicesDecisionDigest(services: readonly PlannedService[]): string {
-  const rows = services
-    .map(({ invoice, decision }) =>
-      decision.category === 'ADOPTION_ELIGIBLE'
-        ? [
-            invoice.idInvoice,
-            decision.category,
-            decision.panelId,
-            decision.providerUsername,
-            decision.product.kind,
-            decision.product.kind === 'NAMED_PRODUCT'
-              ? decision.product.productId
-              : decision.product.shapeKey,
-            decision.telegramUserId,
-          ]
-        : [invoice.idInvoice, decision.category],
-    )
-    .map(stableJson)
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return sha256Hex(`[${rows.join(',')}]`);
+  return servicesDecisionDigestOfRows(services.map(serviceDecisionRow));
+}
+
+/** One live invoice's row of `servicesDecisionDigest`. */
+export function serviceDecisionRow({ invoice, decision }: PlannedService): readonly string[] {
+  return decision.category === 'ADOPTION_ELIGIBLE'
+    ? [
+        invoice.idInvoice,
+        decision.category,
+        decision.panelId,
+        decision.providerUsername,
+        decision.product.kind,
+        decision.product.kind === 'NAMED_PRODUCT'
+          ? decision.product.productId
+          : decision.product.shapeKey,
+        decision.telegramUserId,
+      ]
+    : [invoice.idInvoice, decision.category];
+}
+
+/** `servicesDecisionDigest` over rows already made (`serviceDecisionRow`). */
+export function servicesDecisionDigestOfRows(rows: readonly (readonly string[])[]): string {
+  const sorted = rows.map(stableJson).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return sha256Hex(`[${sorted.join(',')}]`);
 }
 
 /**

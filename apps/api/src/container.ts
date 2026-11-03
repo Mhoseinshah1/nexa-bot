@@ -32,6 +32,7 @@ import {
   BACKUP_LOCAL_COPIES_DEFAULT,
   BACKUP_LOCAL_COPIES_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
+  LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS,
   REMINDER_RATE_SETTING_KEYS,
   CUSTOM_GATEWAY_MAX_RESPONSE_BYTES,
   CUSTOM_GATEWAY_TIMEOUT_MS,
@@ -9479,6 +9480,17 @@ export function createContainer(
         ids,
         codeVersion: config.BUILD_VERSION,
         logger,
+        // NEXA v096 PR-1: the demotion cap an apply holds a moved live panel to (owner-only).
+        demotionCap: async (scope) => ({
+          minServices: await settingsResolver.valueOf<number>(
+            scope,
+            LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.minServices,
+          ),
+          basisPoints: await settingsResolver.valueOf<number>(
+            scope,
+            LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.basisPoints,
+          ),
+        }),
       });
     },
     async shutdown() {

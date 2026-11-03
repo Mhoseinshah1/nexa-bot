@@ -1,0 +1,5 @@
+ALTER TABLE "legacy_import_run_inputs" ADD COLUMN "plan_tallies_digest" text;--> statement-breakpoint
+ALTER TABLE "legacy_import_run_inputs" ADD COLUMN "approved_adoptions" jsonb;--> statement-breakpoint
+ALTER TABLE "legacy_import_run_inputs" ADD COLUMN "demotions" jsonb;--> statement-breakpoint
+ALTER TABLE "legacy_import_run_inputs" ADD CONSTRAINT "legacy_import_run_inputs_approved_adoptions_check" CHECK (((plan_tallies_digest IS NULL) = (approved_adoptions IS NULL)) AND (plan_tallies_digest IS NULL OR plan_tallies_digest ~ '^[0-9a-f]{64}$') AND (approved_adoptions IS NULL OR jsonb_typeof(approved_adoptions) = 'array'));--> statement-breakpoint
+ALTER TABLE "legacy_import_run_inputs" ADD CONSTRAINT "legacy_import_run_inputs_demotions_check" CHECK (demotions IS NULL OR (jsonb_typeof(demotions) = 'object' AND jsonb_typeof(demotions->'entries') = 'array'));

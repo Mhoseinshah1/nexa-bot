@@ -3,6 +3,7 @@ import {
   isLegacyImportKey,
   PAYMENT_AMOUNT_MAX_MINOR,
   telegramUserIdSchema,
+  type LegacyImportDemotionTarget,
   type LegacyImportReasonCode,
   type LegacyUserStatusClass,
 } from '@nexa/contracts';
@@ -474,4 +475,24 @@ export function inventoryHeldDecision(): ServiceCandidateDecision {
     category: 'INVENTORY_INCOMPLETE',
     map: decisionForLegacyMatch({ kind: 'UNDECIDABLE', reason: 'INVENTORY_INCOMPLETE' }),
   };
+}
+
+/**
+ * NEXA v096 PR-1 (Codex review on #392) — the decision an apply run ACCEPTED for an approved
+ * adoption it demoted at its start (`demotions.ts`), given back to its resume, reconcile and
+ * report: an unresolved name stays held (`inventoryHeldDecision`), a gone account stays the
+ * `PROVIDER_MISSING` an ended service is imported as — whatever a later read says. Only ever
+ * away from adoption: a resume never adopts what the run's own start accepted as demoted.
+ */
+export function demotedDecision(to: LegacyImportDemotionTarget): ServiceCandidateDecision {
+  return to === 'INVENTORY_INCOMPLETE'
+    ? inventoryHeldDecision()
+    : {
+        category: 'PROVIDER_MISSING',
+        map: decisionForLegacyMatch({
+          kind: 'MANUAL_REVIEW',
+          reason: 'PROVIDER_MISSING',
+          candidatePanels: 0,
+        }),
+      };
 }

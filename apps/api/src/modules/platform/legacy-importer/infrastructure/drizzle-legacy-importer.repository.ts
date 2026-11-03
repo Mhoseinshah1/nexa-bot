@@ -1,5 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
 import {
+  LEGACY_IMPORT_DEMOTION_TARGETS,
   money,
   type CurrencyCode,
   type LegacyProductReviewState,
@@ -24,9 +25,16 @@ import type {
   LegacyReadSetRun,
   LegacyReadSetRunRepository,
   LegacyRunInputs,
+  LegacyRunInputsRecord,
   LegacyRunInputsRepository,
+  StoredDemotions,
 } from '../application/ports.js';
 import type { LegacySourceEngine } from '../application/source-port.js';
+import {
+  isApprovedAdoptions,
+  type ApprovedAdoption,
+  type PlanDemotion,
+} from '../application/demotions.js';
 import type { FreshTargetCheck, FreshTargetOptions } from '../application/fresh-target.js';
 import { freshTargetCounts } from './nxpkg-fresh-target.js';
 
@@ -499,7 +507,7 @@ export class DrizzleLegacyImporterRepository
 
   async record(
     scope: TenantContext,
-    inputs: LegacyRunInputs,
+    inputs: LegacyRunInputsRecord,
     tx: TransactionScope,
   ): Promise<LegacyRunInputs> {
     const tenantId = requireTenantId(scope);
@@ -507,13 +515,17 @@ export class DrizzleLegacyImporterRepository
       INSERT INTO legacy_import_run_inputs (
         tenant_id, run_id, source_engine, source_schema_hash, panel_mapping_fingerprint,
         wallet_currency, pre_import_wallet_total_minor, pre_import_customers, recorded_at,
-        ownership_hold_digest, inventory_hold_digest, inventory_hold_keys)
+        ownership_hold_digest, inventory_hold_digest, inventory_hold_keys,
+        plan_tallies_digest, approved_adoptions, demotions)
       VALUES (${tenantId}, ${inputs.runId}, ${inputs.sourceEngine}, ${inputs.sourceSchemaHash},
               ${inputs.panelMappingFingerprint}, ${inputs.walletCurrency},
               ${inputs.preImportWalletTotalMinor.toString()}::bigint, ${inputs.preImportCustomers},
               ${inputs.recordedAt.toISOString()}::timestamptz, ${inputs.ownershipHoldDigest},
               ${inputs.inventoryHoldDigest},
-              ${inputs.inventoryHoldKeys === null ? null : JSON.stringify(inputs.inventoryHoldKeys)}::jsonb)
+              ${inputs.inventoryHoldKeys === null ? null : JSON.stringify(inputs.inventoryHoldKeys)}::jsonb,
+              ${inputs.planTalliesDigest},
+              ${inputs.approvedAdoptions == null ? null : JSON.stringify(inputs.approvedAdoptions)}::jsonb,
+              ${inputs.demotions === null ? null : JSON.stringify(storedDemotionsJson(inputs.demotions))}::jsonb)
       ON CONFLICT (tenant_id, run_id) DO NOTHING
     `);
     const stored = await this.find(scope, inputs.runId, tx);
@@ -535,10 +547,13 @@ export class DrizzleLegacyImporterRepository
       ownership_hold_digest: string | null;
       inventory_hold_digest: string | null;
       inventory_hold_keys: unknown;
+      plan_tallies_digest: string | null;
+      demotions: unknown;
     }>(sql`
       SELECT run_id, source_engine, source_schema_hash, panel_mapping_fingerprint,
              wallet_currency, pre_import_wallet_total_minor::text AS pre, pre_import_customers,
-             recorded_at, ownership_hold_digest, inventory_hold_digest, inventory_hold_keys
+             recorded_at, ownership_hold_digest, inventory_hold_digest, inventory_hold_keys,
+             plan_tallies_digest, demotions
         FROM legacy_import_run_inputs WHERE tenant_id = ${tenantId} AND run_id = ${runId}
     `);
     const row = result.rows[0];
@@ -555,6 +570,8 @@ export class DrizzleLegacyImporterRepository
       ownershipHoldDigest: row.ownership_hold_digest,
       inventoryHoldDigest: row.inventory_hold_digest,
       inventoryHoldKeys: holdKeys(row.inventory_hold_keys),
+      planTalliesDigest: row.plan_tallies_digest,
+      demotions: storedDemotions(row.demotions),
     };
   }
 
@@ -576,6 +593,40 @@ export class DrizzleLegacyImporterRepository
     `);
     const row = result.rows[0];
     return row === undefined ? null : holdKeys(row.inventory_hold_keys);
+  }
+
+  async findApprovedAdoptions(
+    scope: TenantContext,
+    sourceFingerprint: string,
+    planTalliesDigest: string,
+    panelMappingFingerprint: string,
+  ): Promise<readonly ApprovedAdoption[] | null> {
+    const tenantId = requireTenantId(scope);
+    // The approving dry run: the latest DRY_RUN run of this source that recorded this digest
+    // under the apply's own panel mapping (Codex review on #392).
+    const result = await this.exec(undefined).execute<{ approved_adoptions: unknown }>(sql`
+      SELECT i.approved_adoptions
+        FROM legacy_import_run_inputs i
+        JOIN legacy_import_runs r ON r.tenant_id = i.tenant_id AND r.id = i.run_id
+       WHERE i.tenant_id = ${tenantId}
+         AND r.mode = 'DRY_RUN'
+         AND r.source_fingerprint = ${sourceFingerprint}
+         AND i.plan_tallies_digest = ${planTalliesDigest}
+         AND i.panel_mapping_fingerprint = ${panelMappingFingerprint}
+         AND i.approved_adoptions IS NOT NULL
+       ORDER BY i.recorded_at DESC, i.run_id DESC
+       LIMIT 1
+    `);
+    const row = result.rows[0];
+    if (row === undefined) return null;
+    const parsed: unknown =
+      typeof row.approved_adoptions === 'string'
+        ? JSON.parse(row.approved_adoptions)
+        : row.approved_adoptions;
+    if (!isApprovedAdoptions(parsed)) {
+      throw new Error('legacy_import_run_inputs.approved_adoptions is not a list of adoptions');
+    }
+    return parsed;
   }
 
   // --- read set runs (Mirza migration PR1) -------------------------------------------------
@@ -809,6 +860,51 @@ const CUSTOMER_READ_CHUNK = 10_000;
  * null. Anything else is refused rather than read as "no hold": a hold is what keeps an
  * invoice from being adopted, so a value nobody can read is never an empty one.
  */
+/** The stored shape: compact rows `[invoice, panelId, providerUsername, to]`. */
+function storedDemotionsJson(d: StoredDemotions) {
+  return {
+    cap: d.cap,
+    approvedAdoptable: d.approvedAdoptable,
+    entries: d.entries.map((e) => [e.invoice, e.panelId, e.providerUsername, e.to]),
+  };
+}
+
+function storedDemotions(value: unknown): StoredDemotions | null {
+  if (value === null || value === undefined) return null;
+  const parsed = (typeof value === 'string' ? JSON.parse(value) : value) as {
+    cap?: unknown;
+    approvedAdoptable?: unknown;
+    entries?: unknown;
+  };
+  if (
+    typeof parsed.cap !== 'number' ||
+    typeof parsed.approvedAdoptable !== 'number' ||
+    !Array.isArray(parsed.entries)
+  ) {
+    throw new Error('legacy_import_run_inputs.demotions is not a demotions record');
+  }
+  const targets: readonly string[] = LEGACY_IMPORT_DEMOTION_TARGETS;
+  const entries: PlanDemotion[] = [];
+  for (const row of parsed.entries as unknown[]) {
+    if (
+      !Array.isArray(row) ||
+      row.length !== 4 ||
+      !row.every((c: unknown) => typeof c === 'string') ||
+      !targets.includes(row[3] as string)
+    ) {
+      throw new Error('legacy_import_run_inputs.demotions holds a malformed demotion');
+    }
+    const [invoice, panelId, providerUsername, to] = row as string[];
+    entries.push({
+      invoice: invoice ?? '',
+      panelId: panelId ?? '',
+      providerUsername: providerUsername ?? '',
+      to: to as PlanDemotion['to'],
+    });
+  }
+  return { cap: parsed.cap, approvedAdoptable: parsed.approvedAdoptable, entries };
+}
+
 function holdKeys(value: unknown): readonly string[] | null {
   if (value === null || value === undefined) return null;
   const parsed: unknown = typeof value === 'string' ? JSON.parse(value) : value;

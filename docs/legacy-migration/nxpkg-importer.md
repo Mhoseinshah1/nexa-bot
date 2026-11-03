@@ -71,6 +71,11 @@ COMPLETED, COMPLETED_WITH_DISCREPANCY, FAILED, CANCELLED`.
   the dry run's warnings for a production panel that changed while read and was decided one needed
   name at a time (informational), and for the needed names that stayed undecided (§4a). The rule
   above is unchanged. No state, error code or permission was added.
+- NEXA v096 PR-1 (§4a "Demotions at apply"): the owner-only settings
+  `legacy_import.apply_demotion_cap_min_services` / `legacy_import.apply_demotion_cap_basis_points`
+  (`LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS`), and `LEGACY_IMPORT_DEMOTION_TARGETS`,
+  `legacyImportDemotionsSchema` and the optional `demotions` of the apply report. No state, error
+  code, permission or template key was added.
 
 ## 3. Source adapter
 
@@ -273,9 +278,62 @@ PLAN_DIGEST_MISSING`), and the TARGET precheck refuses one approved earlier
   the import adopts from its own read.
 - **The digest binds only the backup candidates' decisions**, never the panel's whole account
   list. An account an operator creates by hand, or a new Mirza sale, during or between the dry
-  run's read and the import's does not move it. A candidate's account deleted or renamed between
-  the dry run and the apply changes that candidate's decision, and the apply is refused
-  `DRY_RUN_MISMATCH` before any write — nothing is written; dry-run again.
+  run's read and the import's does not move it. A candidate's account RENAMED between the dry run
+  and the apply changes that candidate's decision, and the apply is refused `DRY_RUN_MISMATCH`
+  before any write — nothing is written; dry-run again. One DELETED (or expired off the panel), or
+  whose name the apply's read leaves unresolved, is a demotion (below).
+- **Demotions at apply (NEXA v096 PR-1).** Incident 2026-11-03 (v0.9.4, a real RickPanel): one
+  account disappeared from the live panel between the approved dry run and the apply
+  (`services:ADOPTION_ELIGIBLE` 12 123 → 12 122, `services:PROVIDER_MISSING` 74 246 → 74 247), and
+  the whole import was refused. The panel expires and deletes accounts on its own, on cutover day
+  too, so the apply now accepts a difference in the SAFE direction only (`demotions.ts`):
+  - an invoice the APPROVED dry run adopted (`ADOPTION_ELIGIBLE`) that the apply finds gone is
+    `PROVIDER_MISSING` and is imported as an ENDED service, exactly as a dry-run `PROVIDER_MISSING`;
+  - one whose name the apply's read (a read that held) leaves unresolved is `INVENTORY_INCOMPLETE`
+    and is held exactly as the inventory hold holds its own invoices (history and an OPEN review
+    candidate, never adopted) — only under the approved hold, whose digest stays the approved one.
+
+  Anything else still refuses `DRY_RUN_MISMATCH` **before any write**: a promotion (approved
+  `PROVIDER_MISSING` now eligible), an adoption of an account the approval never saw, another
+  owner, panel, spelling or product, any other category, and every customer, wallet, debt, trial
+  and shape figure. How it is decided, without trusting a stored list: the dry run records its own
+  digest and its adoptions (`legacy_import_run_inputs.plan_tallies_digest`, `approved_adoptions`,
+  migration `0310`); the apply puts every demoted invoice back as the approved adoption it came
+  from, moves back the tallies it moved (`ADOPTION_ELIGIBLE`, the demoted category,
+  `namedProductCandidates`) and requires the plan digest of that RESTORED plan to be the approved
+  digest exactly. The digest binds every decision and every tally, so only a plan that differs
+  from the approval in the demotions alone meets it. A dry run recorded before `0310` has no
+  adoptions: its apply refuses as before. The digest does NOT bind the panel mapping, so the
+  approving dry run must also have been recorded under the apply's own mapping
+  (`legacy_import_run_inputs.panel_mapping_fingerprint`, Codex review on #392): under another
+  one (a code moved to another panel) a "gone" account is the remap's doing, not the panel's, and
+  no demotion is considered — `DRY_RUN_MISMATCH`, nothing written.
+
+  **A resume keeps them** (Codex review on #392). A run interrupted after its start accepted
+  demotions plans its resume, reconcile and report with those stored demotions: a demoted
+  invoice whose category the inventory decides is decided as accepted whatever the later read
+  says — `INVENTORY_INCOMPLETE` stays held when its name resolves again, `PROVIDER_MISSING` stays
+  the ended service when the account is back on the panel. Never adopted by its own run. A resume
+  whose start transaction finds other stored demotions than it planned with is `RUN_CONFLICT`.
+
+  **The cap.** More demotions than the larger of
+  `legacy_import.apply_demotion_cap_min_services` (default 50) and
+  `legacy_import.apply_demotion_cap_basis_points` (default 50 = 0.5 %, rounded down) of the
+  approved adoptable services is `DRY_RUN_MISMATCH` before any write: the panel or the read is
+  then probably broken, not just moving. Both settings are owner-only (`settings.destructive`).
+  The refusal records `demotions:count` and `demotions:cap` beside the moved categories; a
+  demotion found beside another change records `demotions:beside_other_changes`.
+
+  **Reported, never announced.** The apply records its demotions on its run inputs
+  (`demotions`, a resume keeps — and plans with — the first start's); its report carries `sections.demotions`, the
+  `report` mode a top-level `demotions` (never inside `final` / `finalV2`, which stay free of
+  names), and the restore page's import result (`applyReport.demotions`) lists the count, the cap,
+  the approved adoptable services and each legacy invoice id → panel username. OPERATOR-ONLY: no
+  customer message, no ops-group message; one server log line with the counts. Reconcile and the
+  final report re-read the panel and count each demoted service as what it is (ended, or held) —
+  never as a difference. The same importer path serves the CLI and `botctl cutover rehearse`
+  (`cutover-rehearse-import.ts` drives the restore page's own executor), so the rule is one.
+
 - **Upgrading**: a dry run approved before v0.5.7 carries the v1 digest. Its apply is refused
   `DRY_RUN_MISMATCH` with `plan:digest_format_outdated` (the importer recognises the v1 digest of
   the same plan — it is never accepted). Upgrade with no import APPROVED, and dry-run again.

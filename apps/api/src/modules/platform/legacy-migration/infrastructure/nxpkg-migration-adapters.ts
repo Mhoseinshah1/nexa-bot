@@ -13,6 +13,7 @@ import {
   LEGACY_MIGRATION_PROVIDER_INVENTORY_QUARANTINED,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
   LEGACY_NXPKG_ERROR_CODES,
+  legacyImportDemotionsSchema,
   legacyInventoryPanelDiagnosticsSchema,
   legacyMigrationDryRunInventoryIncomplete,
   validInventoryHold,
@@ -680,7 +681,14 @@ export class NxpkgMigrationAdapters
         ?.sections?.usersWallets;
       const strings = (value: unknown): string[] =>
         Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+      // NEXA v096 PR-1: the demotions the apply run accepted, for the operator's import result.
+      // Checked against the contract's shape: a malformed one is a report that does not hold.
+      const demotions =
+        run.report.demotions === undefined
+          ? undefined
+          : legacyImportDemotionsSchema.safeParse(run.report.demotions);
       const holds =
+        (demotions === undefined || demotions.success) &&
         v2?.verdict?.holds === true &&
         typeof run.report.verdict === 'string' &&
         !run.report.verdict.endsWith('_WITH_DISCREPANCY');
@@ -699,6 +707,7 @@ export class NxpkgMigrationAdapters
           quarantined: 0,
         })),
         history: [...input.history],
+        ...(demotions?.success === true ? { demotions: demotions.data } : {}),
         // The exact-match report's core rows (every Mirza user, every unit of Balance), from
         // the importer's own users-and-wallets section; the executor adds the history steps'.
         ...(usersWallets === undefined
@@ -1827,6 +1836,12 @@ export function mismatchCounts(
   for (const [code, value] of Object.entries(applyCounts).sort(([a], [b]) =>
     a < b ? -1 : a > b ? 1 : 0,
   )) {
+    // NEXA v096 PR-1: the demotion counts have no dry-run side (the dry run demotes nothing):
+    // how many demotions the apply found, and the cap they exceeded, are kept as they are.
+    if (code.startsWith('demotions:')) {
+      out.push({ code, count: value });
+      continue;
+    }
     if (!code.startsWith('apply:')) continue;
     const key = code.slice('apply:'.length);
     const before = dry.get(key);
