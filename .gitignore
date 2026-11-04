@@ -45,3 +45,6 @@ scripts/visual/node_modules
 *.replay.json
 support-ai-replay*.json
 support-ai-replay*.jsonl
+
+# Output of scripts/load/run.mjs
+load-results/
