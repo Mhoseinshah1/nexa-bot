@@ -61,6 +61,7 @@ import {
   Select,
   StateSwitch,
   Timeline,
+  ToggleRow,
   useToast,
   type Tone,
 } from '../ui/kit';
@@ -251,9 +252,20 @@ export function CustomerControlsCard({
   mayEditLocation,
   mayEditNotifications,
   mayEditPersonalDiscount = false,
+  account,
 }: {
   customerId: string;
   overview: CustomerOverviewResponse | undefined;
+  /**
+   * Block / unblock, owned by the page (its own confirm dialog and mandatory reason): the
+   * access card only offers the button that opens it.
+   */
+  account?: {
+    status: 'ACTIVE' | 'BLOCKED';
+    mayBlock: boolean;
+    busy: boolean;
+    onToggle: () => void;
+  };
   mayExemptChannel: boolean;
   /** `users.phone_verification.exempt` (NEXA v095 PR-4 D). */
   mayExemptPhone?: boolean;
@@ -422,221 +434,287 @@ export function CustomerControlsCard({
             : `${t('web.c360_location_limit')}: ${String(location.maxChanges)} / ${String(location.periodDays)}`,
         ].join(' — ');
 
-  return (
-    <Card
-      title={t('web.c360_controls_title')}
-      hint={t('web.c360_controls_hint')}
-      id="c360-controls"
-    >
-      {overview === undefined ? (
-        <Dash />
-      ) : (
-        <KV
-          items={[
-            row(
-              t('web.c360_channel_exemption'),
-              exempt === null ? (
-                t('web.c360_channel_required')
-              ) : (
-                <Badge tone="violet">{t('web.c360_channel_exempt')}</Badge>
-              ),
-              exempt === null
-                ? { label: t('web.c360_channel_exempt_action'), kind: 'EXEMPT' }
-                : { label: t('web.c360_channel_unexempt_action'), kind: 'UNEXEMPT' },
-              mayExemptChannel,
-            ),
-            // NEXA v095 PR-4 D: never asked for a phone — by the bot gate nor by any route rule.
-            row(
-              t('web.c360_phone_exemption'),
-              phoneExempt === null ? (
-                t('web.c360_phone_exemption_none')
-              ) : (
-                <Badge tone="violet">{t('web.c360_phone_exempt')}</Badge>
-              ),
-              phoneExempt === null
-                ? { label: t('web.c360_phone_exempt_action'), kind: 'PHONE_EXEMPT' }
-                : { label: t('web.c360_phone_unexempt_action'), kind: 'PHONE_UNEXEMPT' },
-              mayExemptPhone,
-            ),
-            row(
-              t('web.c360_phone'),
-              verified === null ? (
-                t('web.c360_phone_none')
-              ) : (
-                // R11 B7: the full number to a holder of `users.phone.verify`, masked otherwise.
-                <Ltr>{verified.number ?? verified.masked}</Ltr>
-              ),
-              verified === null
-                ? { label: t('web.c360_phone_verify_action'), kind: 'PHONE' }
-                : { label: t('web.c360_phone_revoke_action'), kind: 'UNPHONE' },
-              mayVerifyPhone,
-            ),
-            row(
-              t('web.c360_location_override'),
-              limitText,
-              { label: t('web.c360_location_set_action'), kind: 'LOCATION' },
-              mayEditLocation,
-            ),
-            ...(location !== null && mayEditLocation
-              ? [
-                  row(
-                    '',
-                    '',
-                    { label: t('web.c360_location_remove_action'), kind: 'UNLOCATION' },
-                    true,
-                  ),
-                ]
-              : []),
-            row(
-              t('web.c360_notifications'),
-              optedOut === null ? t('web.user_marketing_in') : t('web.user_marketing_out'),
-              optedOut === null
-                ? { label: t('web.c360_notifications_off_action'), kind: 'MKT_OUT' }
-                : { label: t('web.c360_notifications_on_action'), kind: 'MKT_IN' },
-              mayEditNotifications,
-            ),
-            row(
-              t('web.c360_reminders'),
-              reminders === null || reminders.optOutAt === null ? (
-                t('web.c360_reminders_on')
-              ) : (
-                <span>
-                  {t('web.c360_reminders_off')}{' '}
-                  {!reminders.enabled && (
-                    <Badge tone="warn">{t('web.c360_reminders_feature_off')}</Badge>
-                  )}
-                </span>
-              ),
-              reminders === null || reminders.optOutAt === null
-                ? { label: t('web.c360_reminders_off_action'), kind: 'REMIND_OUT' }
-                : { label: t('web.c360_reminders_on_action'), kind: 'REMIND_IN' },
-              mayEditNotifications,
-            ),
-            row(
-              t('web.c360_personal_discount'),
-              personal === null || personal.percent === 0 ? (
-                t('web.c360_personal_discount_none')
-              ) : (
-                <span>
-                  <Num value={String(personal.percent)} />
-                  {t('web.c360_personal_discount_unit')}{' '}
-                  {!personal.enabled && (
-                    <Badge tone="warn">{t('web.c360_personal_discount_feature_off')}</Badge>
-                  )}
-                </span>
-              ),
-              { label: t('web.c360_personal_discount_set_action'), kind: 'DISCOUNT' },
-              mayEditPersonalDiscount,
-            ),
-          ]}
-        />
-      )}
-      <p className="muted small">{t('web.c360_controls_permission_hint')}</p>
+  const phoneNotAccepted = overview?.phoneNotAccepted ?? null;
 
-      <Modal
-        open={open !== null}
-        onClose={() => {
-          if (!write.isPending) close();
-        }}
-        title={t('web.c360_control_confirm_title')}
-        foot={
-          <>
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={!ready}
-              onClick={() => open !== null && write.mutate(open)}
-            >
-              {t('web.c360_confirm')}
-            </Button>
-            <Button size="sm" disabled={write.isPending} onClick={close}>
-              {t('web.user_action_cancel')}
-            </Button>
-          </>
-        }
+  return (
+    <>
+      {/*
+        The access card: always drawn, whatever the bot-wide phone setting says — the owner
+        could not find the exemption. Every change below opens the SAME confirm dialog with a
+        mandatory reason and calls the SAME endpoint as before; only the control's shape changed.
+      */}
+      <Card
+        title={t('web.c360_access_title')}
+        hint={t('web.c360_controls_hint')}
+        id="c360-controls"
       >
-        {open === 'PHONE' && (
-          <Field
-            label={t('web.c360_phone_label')}
-            hint={t('web.c360_phone_hint')}
-            htmlFor="c360-phone"
-          >
-            <Input
-              id="c360-phone"
-              dir="ltr"
-              inputMode="tel"
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
+        {overview === undefined ? (
+          <Dash />
+        ) : (
+          <div className="c360-access">
+            <KV
+              items={[
+                [
+                  t('web.c360_phone'),
+                  <span key="ph" className="c360-control">
+                    <span>
+                      {verified !== null ? (
+                        <>
+                          <Ltr>{verified.number ?? verified.masked}</Ltr>{' '}
+                          <Badge tone="ok">{t('web.c360_phone_verified')}</Badge>
+                        </>
+                      ) : phoneNotAccepted !== null ? (
+                        <>
+                          <Ltr>{phoneNotAccepted.number ?? phoneNotAccepted.masked}</Ltr>{' '}
+                          {phoneNotAccepted.countsAsVerified ? (
+                            <Badge tone="ok">{t('web.c360_phone_counts_verified')}</Badge>
+                          ) : (
+                            <Badge tone="warn">{t('web.c360_phone_not_accepted')}</Badge>
+                          )}
+                        </>
+                      ) : (
+                        t('web.c360_phone_none')
+                      )}
+                      {phoneExempt !== null && (
+                        <>
+                          {' '}
+                          <Badge tone="violet">{t('web.c360_phone_admin_verified')}</Badge>
+                        </>
+                      )}
+                    </span>
+                    {mayVerifyPhone && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setOpen(verified === null ? 'PHONE' : 'UNPHONE')}
+                      >
+                        {verified === null
+                          ? t('web.c360_phone_verify_action')
+                          : t('web.c360_phone_revoke_action')}
+                      </Button>
+                    )}
+                  </span>,
+                ],
+              ]}
             />
-          </Field>
-        )}
-        {open === 'LOCATION' && (
-          <div className="form-grid">
-            <Field label={t('web.c360_location_cooldown')} htmlFor="c360-cooldown">
-              <Input
-                id="c360-cooldown"
-                dir="ltr"
-                inputMode="numeric"
-                value={cooldown}
-                onChange={(event) => setCooldown(event.target.value)}
-              />
-            </Field>
-            <Field label={t('web.c360_location_max_changes')} htmlFor="c360-max">
-              <Input
-                id="c360-max"
-                dir="ltr"
-                inputMode="numeric"
-                value={maxChanges}
-                onChange={(event) => setMaxChanges(event.target.value)}
-              />
-            </Field>
-            <Field label={t('web.c360_location_period_days')} htmlFor="c360-period">
-              <Input
-                id="c360-period"
-                dir="ltr"
-                inputMode="numeric"
-                value={periodDays}
-                onChange={(event) => setPeriodDays(event.target.value)}
-              />
-            </Field>
-            <p className="muted small">{t('web.c360_location_hint')}</p>
+            <ToggleRow
+              title={t('web.c360_phone_admin_verify_toggle')}
+              description={t('web.c360_phone_admin_verify_hint')}
+              checked={phoneExempt !== null}
+              disabled={!mayExemptPhone}
+              onChange={(next) => setOpen(next ? 'PHONE_EXEMPT' : 'PHONE_UNEXEMPT')}
+            />
+            <ToggleRow
+              title={t('web.c360_channel_exemption')}
+              description={
+                exempt === null ? t('web.c360_channel_required') : t('web.c360_channel_exempt')
+              }
+              checked={exempt !== null}
+              disabled={!mayExemptChannel}
+              onChange={(next) => setOpen(next ? 'EXEMPT' : 'UNEXEMPT')}
+            />
+            {account !== undefined && (
+              <div className="toggle-row">
+                <div className="txt">
+                  <b>{t('web.c360_account_status')}</b>
+                  <span>
+                    {account.status === 'ACTIVE'
+                      ? t('web.user_status_active')
+                      : t('web.user_status_blocked')}
+                  </span>
+                </div>
+                {account.mayBlock ? (
+                  <Button
+                    size="sm"
+                    variant={account.status === 'ACTIVE' ? 'danger' : 'primary'}
+                    disabled={account.busy}
+                    onClick={account.onToggle}
+                  >
+                    {account.status === 'ACTIVE' ? t('web.user_block') : t('web.user_unblock')}
+                  </Button>
+                ) : (
+                  <span className="muted small">{t('web.user_block_denied')}</span>
+                )}
+              </div>
+            )}
           </div>
         )}
-        {open === 'DISCOUNT' && (
+        <p className="muted small">{t('web.c360_access_permission_hint')}</p>
+      </Card>
+
+      <Card title={t('web.c360_controls_title')} hint={t('web.c360_controls_hint')}>
+        {overview === undefined ? (
+          <Dash />
+        ) : (
+          <KV
+            items={[
+              row(
+                t('web.c360_location_override'),
+                limitText,
+                { label: t('web.c360_location_set_action'), kind: 'LOCATION' },
+                mayEditLocation,
+              ),
+              ...(location !== null && mayEditLocation
+                ? [
+                    row(
+                      '',
+                      '',
+                      { label: t('web.c360_location_remove_action'), kind: 'UNLOCATION' },
+                      true,
+                    ),
+                  ]
+                : []),
+              row(
+                t('web.c360_notifications'),
+                optedOut === null ? t('web.user_marketing_in') : t('web.user_marketing_out'),
+                optedOut === null
+                  ? { label: t('web.c360_notifications_off_action'), kind: 'MKT_OUT' }
+                  : { label: t('web.c360_notifications_on_action'), kind: 'MKT_IN' },
+                mayEditNotifications,
+              ),
+              row(
+                t('web.c360_reminders'),
+                reminders === null || reminders.optOutAt === null ? (
+                  t('web.c360_reminders_on')
+                ) : (
+                  <span>
+                    {t('web.c360_reminders_off')}{' '}
+                    {!reminders.enabled && (
+                      <Badge tone="warn">{t('web.c360_reminders_feature_off')}</Badge>
+                    )}
+                  </span>
+                ),
+                reminders === null || reminders.optOutAt === null
+                  ? { label: t('web.c360_reminders_off_action'), kind: 'REMIND_OUT' }
+                  : { label: t('web.c360_reminders_on_action'), kind: 'REMIND_IN' },
+                mayEditNotifications,
+              ),
+              row(
+                t('web.c360_personal_discount'),
+                personal === null || personal.percent === 0 ? (
+                  t('web.c360_personal_discount_none')
+                ) : (
+                  <span>
+                    <Num value={String(personal.percent)} />
+                    {t('web.c360_personal_discount_unit')}{' '}
+                    {!personal.enabled && (
+                      <Badge tone="warn">{t('web.c360_personal_discount_feature_off')}</Badge>
+                    )}
+                  </span>
+                ),
+                { label: t('web.c360_personal_discount_set_action'), kind: 'DISCOUNT' },
+                mayEditPersonalDiscount,
+              ),
+            ]}
+          />
+        )}
+        <p className="muted small">{t('web.c360_controls_permission_hint')}</p>
+
+        <Modal
+          open={open !== null}
+          onClose={() => {
+            if (!write.isPending) close();
+          }}
+          title={t('web.c360_control_confirm_title')}
+          foot={
+            <>
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={!ready}
+                onClick={() => open !== null && write.mutate(open)}
+              >
+                {t('web.c360_confirm')}
+              </Button>
+              <Button size="sm" disabled={write.isPending} onClick={close}>
+                {t('web.user_action_cancel')}
+              </Button>
+            </>
+          }
+        >
+          {open === 'PHONE' && (
+            <Field
+              label={t('web.c360_phone_label')}
+              hint={t('web.c360_phone_hint')}
+              htmlFor="c360-phone"
+            >
+              <Input
+                id="c360-phone"
+                dir="ltr"
+                inputMode="tel"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+              />
+            </Field>
+          )}
+          {open === 'LOCATION' && (
+            <div className="form-grid">
+              <Field label={t('web.c360_location_cooldown')} htmlFor="c360-cooldown">
+                <Input
+                  id="c360-cooldown"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={cooldown}
+                  onChange={(event) => setCooldown(event.target.value)}
+                />
+              </Field>
+              <Field label={t('web.c360_location_max_changes')} htmlFor="c360-max">
+                <Input
+                  id="c360-max"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={maxChanges}
+                  onChange={(event) => setMaxChanges(event.target.value)}
+                />
+              </Field>
+              <Field label={t('web.c360_location_period_days')} htmlFor="c360-period">
+                <Input
+                  id="c360-period"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={periodDays}
+                  onChange={(event) => setPeriodDays(event.target.value)}
+                />
+              </Field>
+              <p className="muted small">{t('web.c360_location_hint')}</p>
+            </div>
+          )}
+          {open === 'DISCOUNT' && (
+            <Field
+              label={t('web.c360_personal_discount_label')}
+              hint={t('web.c360_personal_discount_hint')}
+              htmlFor="c360-personal-discount"
+              {...(percentInvalid ? { error: t('web.c360_personal_discount_invalid') } : {})}
+            >
+              <Input
+                id="c360-personal-discount"
+                dir="ltr"
+                inputMode="numeric"
+                value={percentText}
+                onChange={(event) => setPercentText(event.target.value)}
+              />
+            </Field>
+          )}
           <Field
-            label={t('web.c360_personal_discount_label')}
-            hint={t('web.c360_personal_discount_hint')}
-            htmlFor="c360-personal-discount"
-            {...(percentInvalid ? { error: t('web.c360_personal_discount_invalid') } : {})}
+            label={t('web.c360_reason_label')}
+            htmlFor="c360-control-reason"
+            {...(reasonTooLong ? { error: t('web.user_block_reason_too_long') } : {})}
           >
             <Input
-              id="c360-personal-discount"
-              dir="ltr"
-              inputMode="numeric"
-              value={percentText}
-              onChange={(event) => setPercentText(event.target.value)}
+              id="c360-control-reason"
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
             />
           </Field>
-        )}
-        <Field
-          label={t('web.c360_reason_label')}
-          htmlFor="c360-control-reason"
-          {...(reasonTooLong ? { error: t('web.user_block_reason_too_long') } : {})}
-        >
-          <Input
-            id="c360-control-reason"
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </Field>
-        {write.error !== null && (
-          <Banner tone="danger">
-            {c360Message(write.error)}
-            <ErrorRef error={write.error} />
-          </Banner>
-        )}
-      </Modal>
-    </Card>
+          {write.error !== null && (
+            <Banner tone="danger">
+              {c360Message(write.error)}
+              <ErrorRef error={write.error} />
+            </Banner>
+          )}
+        </Modal>
+      </Card>
+    </>
   );
 }
 

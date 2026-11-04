@@ -6,14 +6,7 @@
  * after it run full width below (the page's own markup, not a script).
  */
 .two-col.pay-balance {
-  align-items: stretch;
-}
-.pay-balance > .stack {
-  display: flex;
-  flex-direction: column;
-}
-.pay-balance > .stack > :last-child {
-  flex: 1 1 auto;
+  align-items: start;
 }
 .pay-balance + .stack {
   margin-top: var(--gap);
