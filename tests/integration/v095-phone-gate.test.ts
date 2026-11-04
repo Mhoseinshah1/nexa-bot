@@ -44,8 +44,8 @@ import {
  *    table first;
  *  - the exemption ignored in `PaymentGatewayService.phoneStanding` -> "an exempt customer is
  *    asked by neither A nor C" goes red;
- *  - the IRAN_ONLY check dropped in `verifyOwnContact` -> "with Iran only, refuses a foreign
- *    number" goes red;
+ *  - the IRAN_ONLY check dropped in `verifyOwnContact` -> "with Iran only, does not verify a
+ *    foreign number" goes red;
  *  - `refuseUnverifiedPhone` moved back behind "route not offered" (its R11 shape) in
  *    `PaymentService` -> three tests of `r11-b7-phone-verification.test.ts` go red (the direct
  *    top-up writes a payment); this file's bot paths stay green because
@@ -383,15 +383,22 @@ describe('NEXA v095 PR-4 — the phone gate, the route rule and the exemption', 
       expect(result.replyKey).toBe('bot.phone.verified');
     });
 
-    it('with Iran only, refuses a foreign number (nothing stored) and accepts 98…, +98… and 0098…', async () => {
+    it('with Iran only, does not verify a foreign number (NEXA v099: stored, not accepted) and accepts 98…, +98… and 0098…', async () => {
       await setAllowedNumbers('IRAN_ONLY');
       const foreign = await shareContact({ phone_number: '15551234567', user_id: OWN });
-      expect(foreign.replyKey).toBe('bot.phone.iran_only');
-      const stored = await rows<{ phone_number: string | null }>(
+      expect(foreign.replyKey).toBe('bot.phone.not_accepted');
+      const stored = await rows<{
+        phone_number: string | null;
+        phone_verified_at: Date | null;
+        phone_not_accepted_at: Date | null;
+      }>(
         f,
-        sql`SELECT phone_number FROM customers WHERE id = ${f.customer}`,
+        sql`SELECT phone_number, phone_verified_at, phone_not_accepted_at
+              FROM customers WHERE id = ${f.customer}`,
       );
-      expect(stored[0]?.phone_number).toBeNull();
+      expect(stored[0]?.phone_number).toBe('+15551234567');
+      expect(stored[0]?.phone_verified_at).toBeNull();
+      expect(stored[0]?.phone_not_accepted_at).not.toBeNull();
       for (const raw of ['989121234567', '+989121234567', '00989121234567']) {
         const result = await shareContact({ phone_number: raw, user_id: OWN });
         expect(result.replyKey, raw).toBe('bot.phone.verified');

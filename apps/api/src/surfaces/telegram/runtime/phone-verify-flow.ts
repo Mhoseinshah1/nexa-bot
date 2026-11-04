@@ -74,6 +74,39 @@ export function phoneRequiredReply(): PendingReply {
 }
 
 /**
+ * NEXA v099 (owner): the customer's own number is stored as NOT accepted (IRAN_ONLY, not +98).
+ * One sentence, and no «📞 Share Contact»: asking again would change nothing. The main menu
+ * keyboard (with «پشتیبانی») replaces any contact keyboard; nothing is remembered to resume,
+ * and the customer is neither blocked nor banned. Answers the share itself, every turn the
+ * bot-wide gate holds, and a route whose verified-phone rule refused them.
+ */
+export function phoneNotAcceptedReply(mainMenu: 'MAIN_MENU' | 'MAIN_MENU_ADMIN'): PendingReply {
+  return {
+    key: 'bot.phone.not_accepted',
+    values: {},
+    buttons: [],
+    orderId: null,
+    keyboard: mainMenu,
+  };
+}
+
+/**
+ * NEXA v099: whether a route's verified-phone refusal is about a number stored as NOT
+ * accepted — then the customer is told so instead of being asked for the contact. Display
+ * only: the refusal itself was decided inside the payment's transaction (`phoneRuleRefuses`).
+ */
+export function refusedForNotAcceptedNumber(
+  reply: PendingReply,
+  customer: Pick<CustomerRecord, 'phoneVerifiedAt' | 'phoneNotAcceptedAt'>,
+): boolean {
+  return (
+    reply.key === 'bot.phone.gateway_required' &&
+    customer.phoneVerifiedAt === null &&
+    customer.phoneNotAcceptedAt != null
+  );
+}
+
+/**
  * NEXA v095 PR-4 C: the chosen route needs a verified number. Nothing was charged and no
  * payment exists. «📞 Share Contact» continues straight to the route (the tap is remembered,
  * `phoneHold`), «↩️ انتخاب درگاه دیگر» goes back to the methods.
@@ -154,6 +187,7 @@ export function resumable(command: BotCommand): boolean {
 
 /** What a shared contact did: the reply, and — on a verification — the row and the held action. */
 export type PhoneContactOutcome =
+  // NEXA v099: `REFUSED` also carries a number stored as NOT accepted — nothing to resume.
   | { readonly kind: 'REFUSED'; readonly reply: PendingReply }
   | {
       readonly kind: 'VERIFIED';
@@ -188,6 +222,8 @@ export async function phoneContactShared(
       customerId: customer.id,
       contact,
     });
+    // NEXA v099 (owner): stored, not verified — told once, not asked again.
+    if (!verified.accepted) return refused(phoneNotAcceptedReply(mainMenu));
     return {
       kind: 'VERIFIED',
       reply: phoneVerifiedReply(verified.masked, mainMenu),
@@ -215,7 +251,8 @@ export async function phoneContactShared(
         keyboard: mainMenu,
       });
     }
-    // B: only +98 numbers are accepted here. Nothing was stored.
+    // B: only +98 numbers are accepted here, and this customer's verified number stays.
+    // Nothing was stored (NEXA v099 stores a foreign number only for an unverified customer).
     if (error.code === COMMERCE_ERROR_CODES.PHONE_NOT_IRANIAN) {
       return refused({
         key: 'bot.phone.iran_only',

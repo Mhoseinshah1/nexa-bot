@@ -670,7 +670,8 @@ export class CustomerAccountTransferService {
         locationOverride: facts.locationOverride,
         channelExemption: source.channelMembershipExemptAt !== null,
         phoneExemption: source.phoneVerificationExemptAt !== null,
-        verifiedPhone: source.phoneNumber !== null,
+        // NEXA v099: a number stored as NOT accepted is not a verified one.
+        verifiedPhone: source.phoneVerifiedAt !== null,
       },
       blockers,
       warnings,

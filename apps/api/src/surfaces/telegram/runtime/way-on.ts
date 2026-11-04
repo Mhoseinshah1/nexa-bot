@@ -152,6 +152,9 @@ export const NO_WAY_ON_ALLOWED: Readonly<Partial<Record<TemplateKey, string>>> =
     'sets the reply keyboard (phone-verify-flow.ts): the contact button over the other-route label',
   'bot.phone.iran_only':
     'sets the reply keyboard (phone-verify-flow.ts): the main menu keyboard back',
+  // NEXA v099: the not-accepted number; the main menu keyboard (with «پشتیبانی»), no contact button.
+  'bot.phone.not_accepted':
+    'sets the reply keyboard (phone-verify-flow.ts): the main menu keyboard back',
 };
 
 /**

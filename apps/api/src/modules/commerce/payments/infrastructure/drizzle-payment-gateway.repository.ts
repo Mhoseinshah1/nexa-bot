@@ -461,6 +461,16 @@ export class DrizzleGatewayAudienceReader implements GatewayAudienceReader {
     return (rows[0]?.verifiedAt ?? null) !== null;
   }
 
+  async phoneNotAccepted(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ notAcceptedAt: customers.phoneNotAcceptedAt })
+      .from(customers)
+      .where(and(eq(customers.tenantId, tenantId), eq(customers.id, customerId)))
+      .limit(1);
+    return (rows[0]?.notAcceptedAt ?? null) !== null;
+  }
+
   async phoneExempt(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)

@@ -472,16 +472,47 @@ export class DrizzleCustomerRepository implements CustomerRepository {
       .set({
         phoneNumber,
         phoneVerifiedAt: phoneNumber === null ? null : now,
+        // NEXA v099: a verification (or a revoke) ends a not-accepted number.
+        phoneNotAcceptedAt: null,
         updatedAt: now,
       })
       .where(
         and(
           eq(customers.tenantId, tenantId),
           eq(customers.id, id),
-          // Conditional on a CHANGE: the same number again keeps its first verification.
+          /*
+           * Conditional on a CHANGE: the same number again keeps its first verification. The
+           * same number stored as NOT accepted (NEXA v099) is a change: verifying it is what
+           * an operator's «تأیید شماره» or a later share under ALL is for.
+           */
           phoneNumber === null
             ? sql`${customers.phoneNumber} IS NOT NULL`
-            : sql`${customers.phoneNumber} IS DISTINCT FROM ${phoneNumber}`,
+            : sql`(${customers.phoneNumber} IS DISTINCT FROM ${phoneNumber} OR ${customers.phoneVerifiedAt} IS NULL)`,
+        ),
+      )
+      .returning({ id: customers.id });
+    return rows.length > 0;
+  }
+
+  async setNotAcceptedPhone(
+    scope: TenantContext,
+    id: UserId,
+    phoneNumber: string,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(customers)
+      .set({ phoneNumber, phoneNotAcceptedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(customers.tenantId, tenantId),
+          eq(customers.id, id),
+          // Never over a verified number: a verification is not revoked by a later share.
+          sql`${customers.phoneVerifiedAt} IS NULL`,
+          // The same number again keeps its first time.
+          sql`${customers.phoneNumber} IS DISTINCT FROM ${phoneNumber}`,
         ),
       )
       .returning({ id: customers.id });
@@ -511,6 +542,7 @@ function toRecord(row: typeof customers.$inferSelect): CustomerRecord {
     phoneVerificationExemptAt: row.phoneVerificationExemptAt,
     phoneNumber: row.phoneNumber,
     phoneVerifiedAt: row.phoneVerifiedAt,
+    phoneNotAcceptedAt: row.phoneNotAcceptedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

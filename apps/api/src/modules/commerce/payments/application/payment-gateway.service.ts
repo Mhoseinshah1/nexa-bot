@@ -3,6 +3,7 @@ import {
   CUSTOM_GATEWAY_IP_ALLOWLIST_MAX,
   CUSTOM_GATEWAY_SECRET_MIN_LENGTH,
   PAYMENT_GATEWAY_DESCRIPTORS,
+  PHONE_ALLOWED_NUMBERS_SETTING_KEY,
   errors,
   normaliseAllowlistEntry,
   normaliseCustomGatewayBaseUrl,
@@ -22,6 +23,7 @@ import {
   type PaymentPurpose,
   type PaymentRouteUnofferableReason,
   type PermissionKey,
+  type PhoneAllowedNumbers,
   type TenantContext,
   type ResolvedConversion,
   type SalesCurrencyCode,
@@ -48,6 +50,7 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import {
   accountAgeInDays,
   evaluateGatewayEligibility,
+  notAcceptedPhoneCounts,
   phoneRuleRefuses,
   phoneStandingOf,
   type GatewayAudience,
@@ -1735,11 +1738,27 @@ export class PaymentGatewayService {
    * `phone_verification`: the rule is enforced whenever a route has it.
    */
   private async phoneStanding(scope: TenantContext, customerId: UserId, tx?: unknown) {
-    const [verified, exempt] = await Promise.all([
+    const [verified, exempt, notAccepted] = await Promise.all([
       this.deps.audience.phoneVerified(scope, customerId, tx),
       this.deps.audience.phoneExempt?.(scope, customerId, tx) ?? Promise.resolve(false),
+      this.deps.audience.phoneNotAccepted?.(scope, customerId, tx) ?? Promise.resolve(false),
     ]);
-    return phoneStandingOf(verified, exempt);
+    /*
+     * NEXA v099 (owner): a number stored as NOT accepted is UNVERIFIED while IRAN_ONLY is on
+     * and verified once the setting is ALL — read here, in the caller's transaction, through
+     * the one predicate the gate uses too. The setting is read only when it can matter.
+     */
+    const counts =
+      verified ||
+      (notAccepted &&
+        notAcceptedPhoneCounts(
+          await this.deps.settings.valueOf<PhoneAllowedNumbers>(
+            scope,
+            PHONE_ALLOWED_NUMBERS_SETTING_KEY,
+            tx,
+          ),
+        ));
+    return phoneStandingOf(counts, exempt);
   }
 
   private async require(

@@ -3,6 +3,7 @@ import {
   CUSTOMER_PHONE_EXEMPTION_AUDIT_ACTIONS,
   PERSONAL_DISCOUNT_PERCENT_MAX,
   PERSONAL_DISCOUNT_PERCENT_MIN,
+  PHONE_ALLOWED_NUMBERS_SETTING_KEY,
   errors,
   maskPhoneNumber,
   normalisePhoneNumber,
@@ -15,6 +16,7 @@ import {
   type LocationChangeLimits,
   type OperationalEventRecorder,
   type PermissionKey,
+  type PhoneAllowedNumbers,
   type TenantContext,
   type UnitOfWork,
   type UserId,
@@ -35,6 +37,7 @@ import type {
   CustomerLocationOverrideRepository,
 } from '../../locations/application/ports.js';
 import type { CustomerTermsStanding } from '../../../control/terms/application/terms-acceptance.service.js';
+import { notAcceptedPhoneCounts } from '../../payments/domain/gateway-eligibility.js';
 import { CUSTOMER_VIEW_PERMISSION } from './customer.service.js';
 import type { CustomerRecord, CustomerRepository } from './ports.js';
 
@@ -72,6 +75,12 @@ export interface CustomerOverview {
    * `users.view` is shown its masked form only.
    */
   readonly phoneNumberVisible: boolean;
+  /**
+   * NEXA v099: whether a number stored as NOT accepted counts as verified NOW — the
+   * allowed numbers are ALL (`notAcceptedPhoneCounts`). Read for the page only; every gate
+   * reads it itself.
+   */
+  readonly phoneNotAcceptedCounts: boolean;
   /**
    * Round 11, B6: the service expiry / volume reminder switch. `enabled` is whether
    * `customer_reminder_opt_out` is on NOW — a stored opt-out is in force only while it is.
@@ -120,6 +129,17 @@ export interface CustomerControlDeps {
   readonly idempotency: IdempotencyStore;
   readonly outbox: OutboxWriter;
   readonly clock: Clock;
+  /**
+   * NEXA v099: `phone_verification.allowed_numbers`, for the overview's not-accepted number.
+   * Optional for the unit fixtures; absent reads as ALL, the default.
+   */
+  readonly settings?: {
+    valueOf<T>(
+      scope: TenantContext,
+      key: typeof PHONE_ALLOWED_NUMBERS_SETTING_KEY,
+      tx?: unknown,
+    ): Promise<T>;
+  };
   /** Program §6: the terms standing the overview shows. Optional for the unit fixtures. */
   readonly terms?: {
     standing(scope: TenantContext, customerId: string): Promise<CustomerTermsStanding>;
@@ -672,6 +692,14 @@ export class CustomerControlService {
         enabled: await this.deps.featureFlags.isEnabled(scope, PERSONAL_DISCOUNT_FLAG),
       },
       phoneNumberVisible: await this.deps.guard.has(scope, actor, PHONE_VERIFY_PERMISSION),
+      phoneNotAcceptedCounts:
+        customer.phoneNotAcceptedAt !== null &&
+        notAcceptedPhoneCounts(
+          (await this.deps.settings?.valueOf<PhoneAllowedNumbers>(
+            scope,
+            PHONE_ALLOWED_NUMBERS_SETTING_KEY,
+          )) ?? 'ALL',
+        ),
       reminders: {
         optOutAt: customer.remindersOptOutAt,
         enabled: await this.deps.featureFlags.isEnabled(scope, REMINDER_OPT_OUT_FLAG_KEY),

@@ -395,7 +395,8 @@ export class Customer360Controller {
   }
 }
 
-function toOverview(overview: CustomerOverview): CustomerOverviewResponse {
+/** The overview's wire shape — exported so its tests read exactly what the API answers. */
+export function toOverview(overview: CustomerOverview): CustomerOverviewResponse {
   const { customer, locationOverride } = overview;
   return {
     customerId: customer.id,
@@ -409,6 +410,16 @@ function toOverview(overview: CustomerOverview): CustomerOverviewResponse {
             number: overview.phoneNumberVisible ? customer.phoneNumber : null,
             masked: maskPhoneNumber(customer.phoneNumber),
             verifiedAt: customer.phoneVerifiedAt.toISOString(),
+          },
+    // NEXA v099: the customer's own number stored as NOT accepted — read-only, never verified.
+    phoneNotAccepted:
+      customer.phoneNumber === null || customer.phoneNotAcceptedAt === null
+        ? null
+        : {
+            number: overview.phoneNumberVisible ? customer.phoneNumber : null,
+            masked: maskPhoneNumber(customer.phoneNumber),
+            sharedAt: customer.phoneNotAcceptedAt.toISOString(),
+            countsAsVerified: overview.phoneNotAcceptedCounts,
           },
     locationOverride:
       locationOverride === null
