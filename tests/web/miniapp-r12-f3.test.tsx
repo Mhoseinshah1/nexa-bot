@@ -304,6 +304,7 @@ describe('R12 F3 item 5: «بیشتر» adds the next page, and an empty list le
       },
     });
     render(<Store />);
+    fireEvent.click(await screen.findByRole('button', { name: 'ماهانه' }));
     await screen.findByText('پلن اول');
     routes['GET /catalogue/categories/c1'] = () => ({
       body: {

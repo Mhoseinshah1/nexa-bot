@@ -46,12 +46,16 @@ export function Home() {
         )}
       </header>
       <Card className="balance">
-        <span className="muted">{t('miniapp.home_balance')}</span>
+        <span className="muted balance-label">{t('miniapp.home_balance')}</span>
         <strong className="figure">{money(me.wallet?.balance)}</strong>
-        <Button primary onClick={() => navigate({ name: 'store' })}>
-          {t('miniapp.home_buy')}
-        </Button>
-        <Button onClick={() => navigate({ name: 'wallet' })}>{t('miniapp.home_topup')}</Button>
+        <div className="balance-actions">
+          <Button primary small onClick={() => navigate({ name: 'store' })}>
+            {t('miniapp.home_buy')}
+          </Button>
+          <Button small onClick={() => navigate({ name: 'wallet' })}>
+            {t('miniapp.home_topup')}
+          </Button>
+        </div>
       </Card>
       {trial.loaded.state === 'ready' && trial.loaded.data.offers.length > 0 && (
         <Button onClick={() => navigate({ name: 'trial' })}>
