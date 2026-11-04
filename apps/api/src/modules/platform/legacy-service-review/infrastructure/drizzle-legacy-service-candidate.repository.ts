@@ -25,6 +25,7 @@ import type {
   LegacyServiceOutcomeWrite,
   LegacyServiceReviewChange,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof legacyServiceCandidates.$inferSelect;
 const t = legacyServiceCandidates;
@@ -74,6 +75,7 @@ function prefixPattern(prefix: string): string {
  * importer inserts and re-decides; the review moves only by a conditional UPDATE naming its
  * from-states and the version. There is no DELETE (0231 refuses one).
  */
+@ScopeBound()
 export class DrizzleLegacyServiceCandidateRepository implements LegacyServiceCandidateRepository {
   constructor(private readonly db: Database) {}
 

@@ -1,5 +1,6 @@
 import type { ReadinessProbes, SchemaReadiness } from '../application/readiness.service.js';
 import type { DatabaseHandle } from '../../../../infrastructure/persistence/database.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 import { migrationsFolder } from '../../../../infrastructure/persistence/migrate.js';
 import {
   compareMigrations,
@@ -28,6 +29,7 @@ export interface ReadinessOutbox {
  * which changed what a boundary check could see and nothing about the
  * dependency direction. This is where those calls belong.
  */
+@ScopeBound()
 export class DrizzleReadinessProbes implements ReadinessProbes {
   /**
    * What this release's journal says the schema must contain. Read once: the

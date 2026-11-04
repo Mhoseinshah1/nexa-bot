@@ -30,6 +30,7 @@ import type {
   RedemptionRecord,
   RuleCursor,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The states in which a redemption is LIVE (P6).
@@ -47,6 +48,7 @@ const LIVE_ORDER_STATES = ['AWAITING_PAYMENT', 'PAID'] as const;
  * Every query carries the tenant, primary-key lookups included, for the reason every
  * repository here states: a lookup without it returns another tenant's row.
  */
+@ScopeBound()
 export class DrizzleDiscountRepository implements DiscountRepository {
   constructor(private readonly db: Database) {}
 

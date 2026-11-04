@@ -17,7 +17,7 @@ import {
   type BotInstanceId,
   type TenantContext,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   BotManagementService,
@@ -32,6 +32,7 @@ import { perBotWebhookSecretFingerprint } from '../../apps/api/src/modules/platf
 import { DrizzleBotManagementRepository } from '../../apps/api/src/modules/platform/tenancy/infrastructure/drizzle-bot-management.repository';
 import { currentTransactionLabel } from '../../apps/api/src/infrastructure/transaction-boundary';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

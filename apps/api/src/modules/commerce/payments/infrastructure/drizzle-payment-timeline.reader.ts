@@ -57,6 +57,7 @@ import type {
   PaymentTimelineReader,
   TimelineSectionsIncluded,
 } from '../application/timeline-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The notification kinds whose subject is `payments.id` (`customer-notifications.ts`).
@@ -81,6 +82,7 @@ const PAYMENT_SUBJECT_KINDS: readonly CustomerNotificationKind[] = [
  * payment id and, where a customer is involved, on the payment's OWN customer.
  */
 
+@ScopeBound()
 export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
   constructor(private readonly db: Database) {}
 

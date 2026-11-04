@@ -1671,6 +1671,11 @@ cmd_update() {
   fi
   nexa_ok "migrations applied"
 
+  # ADR-0037: the application's database role, after the migrations that create it and
+  # before the start that uses it. Not fatal: until it succeeds the processes keep the
+  # owner's connection, where row-level security is inert, exactly as before this release.
+  nexa_ensure_app_db_role || nexa_warn "row-level security is NOT in force: the processes still connect as the owner. Rerun 'botctl update' to retry."
+
   # R12 F2: size PostgreSQL for this host before the start that applies it. Memory
   # settings only — no data change — and a release whose compose file does not read
   # these keys ignores them, so the back-out below and a later rollback are unaffected.
@@ -2040,6 +2045,9 @@ cmd_restart() {
   # the new botctl — is what applies it on that installation.
   nexa_record_pg_tuning
   nexa_record_backup_verify_limits
+  # ADR-0037, by the same rule: the first update into this release runs the outgoing
+  # botctl, which does not configure the application role, so a restart does.
+  nexa_ensure_app_db_role || nexa_warn "row-level security is NOT in force: the processes still connect as the owner."
   nexa_bring_up_with_edge "" "$edge" ||
     nexa_die "the stack restarted but the edge did not adopt the installed configuration (${edge#sha256:}). Run 'botctl logs caddy'."
   nexa_wait_ready || nexa_die "the stack restarted but the API is not ready."

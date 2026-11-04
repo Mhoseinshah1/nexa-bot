@@ -10,9 +10,16 @@ import {
   TELEGRAM_SECRET_TOKEN_HEADER,
 } from '@nexa/contracts';
 import { eq } from 'drizzle-orm';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { auditLogs, outboxMessages } from '../../apps/api/src/infrastructure/persistence/schema';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,

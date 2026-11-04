@@ -16,6 +16,7 @@ import type {
   PublicLabelRequest,
   PublicLabels,
 } from '../application/public-labels.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The ids asked for, without nulls or repeats. Every query is bounded by the page. */
 function idsOf(ids: readonly (string | null)[] | undefined): string[] {
@@ -26,6 +27,7 @@ function idsOf(ids: readonly (string | null)[] | undefined): string[] {
  * One query per table that was asked about, each over the primary key and inside the
  * tenant. A page asks for at most a page of ids, so each is a handful of index lookups.
  */
+@ScopeBound()
 export class DrizzlePublicLabelReader implements PublicLabelReader {
   constructor(private readonly db: Database) {}
 

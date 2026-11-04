@@ -23,7 +23,7 @@ import {
   type ProductId,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzleGatewayCardTransferRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository';
@@ -37,6 +37,7 @@ import { POST_DEADLINE_INQUIRY_MAX } from '../../apps/api/src/modules/commerce/p
 import { settingsLateCreditPolicy } from '../../apps/api/src/modules/commerce/payments/application/late-credit-policy';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

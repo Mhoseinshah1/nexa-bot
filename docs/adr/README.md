@@ -18,7 +18,7 @@ ADR says so explicitly.
 | [0001](0001-modular-monolith.md)                                   | Modular monolith with process roles                                        | Accepted                                     |
 | [0002](0002-module-boundaries.md)                                  | Module layout and boundary enforcement                                     | Accepted                                     |
 | [0003](0003-frozen-contracts.md)                                   | `@nexa/contracts` as a compiled frozen spec                                | Accepted                                     |
-| [0004](0004-tenant-isolation.md)                                   | Application-level tenant scoping, no RLS                                   | Accepted — **deviates from review ADR-004**  |
+| [0004](0004-tenant-isolation.md)                                   | Application-level tenant scoping, no RLS                                   | **Superseded by 0037**                       |
 | [0005](0005-money-and-rate-snapshots.md)                           | Money representation and when a rate snapshot is required                  | Accepted                                     |
 | [0006](0006-outbox-and-idempotency.md)                             | Transactional outbox, at-least-once delivery, durable idempotency          | Accepted                                     |
 | [0007](0007-events-audit-opslog.md)                                | Domain events, audit and operational events are three things               | Accepted                                     |
@@ -51,3 +51,4 @@ ADR says so explicitly.
 | [0034](0034-support-ai-provider-abstraction.md)                    | The support AI: one provider contract, a structured decision, no authority | Accepted for implementation — TB0            |
 | [0035](0035-support-knowledge-and-controlled-learning.md)          | Support knowledge, and why nothing is learned without a reviewer           | Accepted for implementation — TB0            |
 | [0036](0036-custom-main-menu-buttons.md)                           | Owner-defined main-menu buttons, and why the layout became version 2       | Accepted — R10 D2                            |
+| [0037](0037-row-level-security.md)                                 | Row-level security for tenant isolation                                    | Accepted — supersedes 0004                   |

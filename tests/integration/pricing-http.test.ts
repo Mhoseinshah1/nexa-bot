@@ -22,10 +22,11 @@ import {
   type ProductCategoryId,
   type ProductId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
+  createApiApp,
   createAdmin,
   makePanelSellable,
   migrateOnce,

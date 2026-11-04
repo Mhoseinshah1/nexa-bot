@@ -9,6 +9,7 @@ import type {
   WalletCrossing,
   WalletThresholdAlertRepository,
 } from '../application/wallet-low-balance.service.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 interface Row {
   readonly customer_id: string;
@@ -23,6 +24,7 @@ interface Row {
  * `balanceOf` takes, as a window over the wallet's entries in `(created_at, id)` order —
  * and never reads or writes a stored balance, because there is none.
  */
+@ScopeBound()
 export class DrizzleWalletThresholdAlertRepository implements WalletThresholdAlertRepository {
   constructor(private readonly db: Database) {}
 

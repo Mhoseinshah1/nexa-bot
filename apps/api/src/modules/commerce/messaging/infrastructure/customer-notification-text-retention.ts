@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { customerNotifications } from '../../../../infrastructure/persistence/schema.js';
+import { withSystemScope } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Retention for the words the notification centre keeps (R11 B1).
@@ -11,13 +12,16 @@ import { customerNotifications } from '../../../../infrastructure/persistence/sc
  * decides, kind by kind, when a row may go. Both columns go in ONE statement because the
  * table's CHECK forbids a read mark on a row with no text. A row without text is not listed.
  * Nothing is sent to anyone.
+ *
+ * Cross-tenant by nature, so on the system path under a named reason (ADR-0037).
  */
 export async function clearExpiredNotificationText(
   db: Database,
   cutoff: Date,
   limit: number,
 ): Promise<number> {
-  const result = await db.execute(sql`
+  const result = await withSystemScope('customer notification text retention', () =>
+    db.execute(sql`
     UPDATE ${customerNotifications}
        SET rendered_text = NULL, customer_read_at = NULL
      WHERE id IN (
@@ -26,6 +30,7 @@ export async function clearExpiredNotificationText(
           AND candidate.resolved_at < ${cutoff}
         LIMIT ${limit}
      )
-  `);
+  `),
+  );
   return result.rowCount ?? 0;
 }

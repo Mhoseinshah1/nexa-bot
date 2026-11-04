@@ -21,9 +21,16 @@ import {
   tenantTurnFreshTenantUpperBound,
 } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 import { newCorrelationId } from '../../apps/api/src/infrastructure/logging/logger';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * Phase 3D, over real HTTP and a real database.

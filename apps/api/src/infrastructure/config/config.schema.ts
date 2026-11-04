@@ -71,7 +71,18 @@ export const configSchema = z
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: port.default(3000),
 
+    /**
+     * The table OWNER's connection: migrations, `pg_dump` and restore, the CLIs. ADR-0037.
+     */
     DATABASE_URL: z.string().min(1).startsWith('postgres'),
+    /**
+     * The APPLICATION's connection, as `nexa_app` (no BYPASSRLS), which every process's
+     * request and job pool uses when it is set (ADR-0037). Row-level security binds only
+     * through it: the owner bypasses the policies. Optional so that an installation that
+     * has not yet been given the credential keeps working, on the owner, exactly as before
+     * — `botctl update` and the installer generate it.
+     */
+    DATABASE_APP_URL: z.string().min(1).startsWith('postgres').optional(),
     DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
 
     REDIS_URL: z.string().min(1).startsWith('redis'),

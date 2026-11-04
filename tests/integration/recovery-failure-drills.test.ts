@@ -9,11 +9,11 @@ import {
   RECOVERY_DISPLACED_PREFIX,
   type ActorContext,
 } from '@nexa/contracts';
-import { createContainer, type Container } from '../../apps/api/src/container';
+import { type Container } from '../../apps/api/src/container';
 import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { cmdRun, EXIT_RECOVERY_QUIESCED } from '../../apps/api/src/backup.cli';
-import { adminActorFor, createAdmin, tenantA, testConfig } from './harness';
+import { createTestContainer, adminActorFor, createAdmin, tenantA, testConfig } from './harness';
 
 /**
  * The E4 failure drills the existing suites did not cover, against a real
@@ -115,7 +115,7 @@ describe('recovery and backup failure drills (E4)', () => {
       BACKUP_WORK_DIR: workRoot,
       RECOVERY_WORK_DIR: recoveryRoot,
     });
-    const container = createContainer(config, 'recovery');
+    const container = createTestContainer(config, 'recovery');
     containers.push(container);
     await seed(container.database.db, container.cipher);
     container.setInstallationTenant(tenantA.tenantId);
@@ -130,7 +130,7 @@ describe('recovery and backup failure drills (E4)', () => {
 
   /** The SAME installation's process coming back: same config, same hostname, same lease owner. */
   function restarted(installation: Live): Container {
-    const container = createContainer(installation.config, 'recovery');
+    const container = createTestContainer(installation.config, 'recovery');
     containers.push(container);
     container.setInstallationTenant(tenantA.tenantId);
     return container;

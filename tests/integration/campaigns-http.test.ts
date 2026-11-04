@@ -10,11 +10,19 @@ import {
   campaignResponseSchema,
   campaignResultsResponseSchema,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { IntlCampaignCalendar } from '../../apps/api/src/modules/commerce/campaigns/infrastructure/intl-campaign-calendar';
 import { CachedTenantPresentationReader } from '../../apps/api/src/modules/control/templates/infrastructure/cached-tenant-presentation.reader';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  tenantB,
+  testConfig,
+} from './harness';
 
 /**
  * Campaigns over HTTP (round N, C1): the controller maps the contract to the service and

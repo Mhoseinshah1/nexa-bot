@@ -8,6 +8,7 @@ import {
 import { tenants } from '../../../../infrastructure/persistence/schema.js';
 import { IntlTimePeriodResolver } from '../../../../infrastructure/time/report-calendar.js';
 import type { ReferralDayCalendar } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * R10 D5 (b): the referral caps' "day" — `TODAY` in the tenant's display time zone and
@@ -17,6 +18,7 @@ import type { ReferralDayCalendar } from '../application/ports.js';
  * claim made at 23:59:59.999 local is counted in the day it was decided in. The tenant row is
  * read through the caller's transaction, like the reseller minimum's presentation read.
  */
+@ScopeBound()
 export class TenantReferralDayCalendar implements ReferralDayCalendar {
   constructor(private readonly db: Database) {}
 

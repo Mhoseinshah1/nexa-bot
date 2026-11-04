@@ -13,7 +13,7 @@ import {
   type AdminSessionId,
   type CorrelationId,
 } from '@nexa/contracts';
-import { createApiApp, resolveInstallationTenant, type ApiApp } from '../../apps/api/src/bootstrap';
+import { resolveInstallationTenant, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { ScryptPasswordHasher } from '../../apps/api/src/infrastructure/crypto/password-hasher';
 import {
@@ -28,6 +28,7 @@ import {
   tenants,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

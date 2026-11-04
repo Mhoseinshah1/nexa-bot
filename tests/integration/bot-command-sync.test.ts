@@ -16,7 +16,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   BOT_COMMAND_SYNC_BACKOFF_BASE_MS,
@@ -25,6 +25,7 @@ import {
 } from '../../apps/api/src/modules/platform/tenancy/domain/bot-command-sync';
 import { startFakeTelegramBotApi, type FakeTelegramBotApi } from '../support/fake-telegram-bot-api';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

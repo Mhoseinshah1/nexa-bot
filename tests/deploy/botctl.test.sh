@@ -6424,6 +6424,60 @@ assert_equals 'deploy.env changed on an unreadable host' "$before" "$(cat "${NEX
 unset NEXA_MEMINFO
 teardown_root
 
+# =============================================================================
+# ADR-0037 — the application's database role, for row-level security
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+app_db_env="${NEXA_CONFIG_DIR}/app-database.env"
+
+test_case 'app role: a refused role leaves no credential file, and the restart still succeeds'
+fake_set app_role_fails 1
+run_botctl restart
+assert_equals 'the restart failed' 0 "$BOTCTL_STATUS"
+assert_equals 'a credential file was written for a role that cannot log in' missing \
+  "$([ -e "$app_db_env" ] && printf present || printf missing)"
+assert_contains 'the restart did not say row-level security is off' "$BOTCTL_OUTPUT" \
+  'row-level security is NOT in force'
+fake_set app_role_fails 0
+
+test_case 'app role: a restart gives nexa_app a login and writes its URL in its own 0600 file'
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl restart
+assert_equals 'the restart failed' 0 "$BOTCTL_STATUS"
+assert_file_mode 'the credential file' "$app_db_env" 600
+app_url="$(grep '^DATABASE_APP_URL=' "$app_db_env" | cut -d= -f2-)"
+app_password="${app_url#postgres://nexa_app:}"
+app_password="${app_password%%@*}"
+assert_contains 'not the owner URL with the application credential' "$app_url" '@postgres:5432/nexa'
+assert_ok 'the generated password is not the installer alphabet' \
+  bash -c '[[ "$1" =~ ^[A-Za-z0-9]{24,64}$ ]]' _ "$app_password"
+assert_contains 'the password set on the role is not the one in the file' \
+  "$(cat "${FAKE_DIR}/app_role_sql")" "ALTER ROLE nexa_app LOGIN PASSWORD '${app_password}'"
+assert_contains 'the role SQL does not refuse a BYPASSRLS role' \
+  "$(cat "${FAKE_DIR}/app_role_sql")" 'rolbypassrls'
+assert_not_contains 'the password was printed' "$BOTCTL_OUTPUT" "$app_password"
+assert_not_contains 'the password reached an argv' "$(cat "$DOCKER_LOG")" "$app_password"
+assert_equals 'nexa.env was rewritten' "$before" "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+
+test_case 'app role: a later run keeps the password and re-asserts it on the role'
+rm -f "${FAKE_DIR}/app_role_sql"
+run_botctl restart
+assert_equals 'the restart failed' 0 "$BOTCTL_STATUS"
+assert_equals 'the password changed' "$app_url" "$(grep '^DATABASE_APP_URL=' "$app_db_env" | cut -d= -f2-)"
+assert_contains 'the role was not re-asserted' "$(cat "${FAKE_DIR}/app_role_sql")" \
+  "ALTER ROLE nexa_app LOGIN PASSWORD '${app_password}'"
+
+test_case 'app role: compose reads the file after nexa.env, optionally; the installer and update run it'
+assert_contains 'compose does not read app-database.env' "$(cat "${REPO}/deploy/compose.yml")" \
+  'path: ${NEXA_CONFIG_DIR:-/etc/nexa}/app-database.env'
+assert_contains 'the installer does not configure the role' "$(cat "${REPO}/deploy/install.sh")" \
+  'nexa_ensure_app_db_role'
+assert_contains 'an update does not configure the role' "$(cat "${REPO}/deploy/bin/botctl")" \
+  'nexa_ensure_app_db_role'
+teardown_root
+
 test_case 'db tuning: compose applies it with PostgreSQL defaults when unrecorded, and bounds Redis'
 compose_file="$(cat "${REPO}/deploy/compose.yml")"
 for flag in 'shared_buffers=${NEXA_PG_SHARED_BUFFERS:-128MB}' \

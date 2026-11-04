@@ -13,11 +13,12 @@ import {
   SESSION_COOKIE_NAME,
 } from '@nexa/contracts';
 import type { BotInstanceId, UserId } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
 import { hashRequest } from '../../apps/api/src/modules/platform/idempotency/infrastructure/drizzle-idempotency-store';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

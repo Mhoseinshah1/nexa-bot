@@ -10,9 +10,16 @@ import {
   REFUND_ROUTES,
   SESSION_COOKIE_NAME,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * Every DYNAMIC admin route is reachable at a real URL.

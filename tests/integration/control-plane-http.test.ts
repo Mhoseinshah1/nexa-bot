@@ -17,10 +17,17 @@ import {
   templateWriteResponseSchema,
 } from '@nexa/contracts';
 import { eq } from 'drizzle-orm';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { auditLogs } from '../../apps/api/src/infrastructure/persistence/schema';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * The control plane over real HTTP.

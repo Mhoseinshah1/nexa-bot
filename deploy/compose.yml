@@ -37,6 +37,11 @@ x-app-common: &app-common
     # exposure; it is a reason not to paste `docker compose config` output into
     # a ticket. `botctl status` exists partly so there is an output that can be.
     - ${NEXA_CONFIG_DIR:-/etc/nexa}/nexa.env
+    # ADR-0037: the application role's connection (DATABASE_APP_URL), written by the
+    # installer and `botctl update`/`restart` once nexa_app can log in. Optional: until it
+    # exists every process connects as the owner, where row-level security is inert.
+    - path: ${NEXA_CONFIG_DIR:-/etc/nexa}/app-database.env
+      required: false
   environment:
     # THE installation's data network, handed to the application by the same
     # file and the same expression that define the network below. The panel

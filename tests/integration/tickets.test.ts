@@ -20,9 +20,10 @@ import {
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { TicketsController } from '../../apps/api/src/surfaces/web/tickets.controller';
 import { RECEIPT_CAPTURE_LOCK_CLASS } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-receipt.repository';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

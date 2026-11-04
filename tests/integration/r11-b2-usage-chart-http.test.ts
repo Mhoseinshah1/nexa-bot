@@ -15,10 +15,11 @@ import {
   type BotInstanceId,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

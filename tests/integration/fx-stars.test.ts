@@ -19,7 +19,7 @@ import {
   type SettingKey,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { FX_UNAVAILABLE_REASON } from '../../apps/api/src/modules/commerce/payments/application/payment.service';
 import {
@@ -32,6 +32,7 @@ import { panelUrlPolicy } from '../../apps/api/src/infrastructure/net/installati
 import { checkUrl } from '../../apps/api/src/infrastructure/net/url-policy';
 import type { AppConfig } from '../../apps/api/src/infrastructure/config/config.schema';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

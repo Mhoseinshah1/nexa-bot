@@ -817,6 +817,38 @@ if [ -f "$MONITOR_FILE" ]; then
   fi
 fi
 
+# --- Every persistence adapter is bound to its caller's scope (ADR-0037) -----
+#
+# Row-level security reads the tenant from the session, and a repository's bare-pool
+# read (`tx ?? this.db`) gets it only because `@ScopeBound()` binds each method to the
+# scope it is called with. An adapter without it reads with whatever its caller had
+# bound — usually nothing, which RAISES as nexa_app, but under a unit of work a
+# different scope. So: every class in a file that imports the handle, and that holds or
+# uses one (`Database`, `Executor`, `.db`, a checkout), carries the decorator on the line
+# above it.
+require_dir apps/api/src/modules
+UNBOUND_ADAPTERS=$(grep -rlE --include='*.ts' "persistence/database(\.js)?'|from '\./database\.js'" apps/api/src |
+  # The unit of work binds its own scope (`withDatabaseScope`), and the handle's own module
+  # and the composition roots hold a Database without being an adapter.
+  grep -vE '/(container|bootstrap)\.ts$|\.cli\.ts$|/persistence/(database(-scope|-profile)?|unit-of-work)\.ts$' |
+  while read -r file; do
+    awk -v file="$file" '
+      /^(export )?(abstract )?class [A-Za-z0-9_]+/ { start = NR; name = $0; body = ""; prev_line = prev; inclass = 1 }
+      inclass { body = body "\n" $0 }
+      inclass && /^}/ {
+        if (body ~ /(Database|Executor|\.db\.|\.db,|\.db\)|withClient|withExecutor)/ && prev_line !~ /^@ScopeBound\(/) print file ": " name
+        inclass = 0
+      }
+      { prev = $0 }
+    ' "$file"
+  done)
+if [ -n "$UNBOUND_ADAPTERS" ]; then
+  fail "A persistence adapter is not bound to its caller's scope" "$UNBOUND_ADAPTERS" \
+       "Put @ScopeBound() (infrastructure/persistence/database-scope.ts) on the line above the class. ADR-0037."
+else
+  pass "every persistence adapter is @ScopeBound to its caller's scope"
+fi
+
 # A migration that would take a long blocking lock on a large table (R12 F2 item 8).
 #
 # `botctl update` migrates inside one transaction while the outgoing release is still

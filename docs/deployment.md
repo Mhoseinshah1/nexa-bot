@@ -106,6 +106,19 @@ Four locations, with four different lifetimes.
 Every file under `/etc/nexa` is mode `0600` and owned by root. Docker reads
 them as the daemon, which is also root, so no container needs permission to.
 
+**The application's database role (ADR-0037).** `/etc/nexa` also holds
+`app-database.env`: `DATABASE_APP_URL`, the connection every process's pool uses, as
+`nexa_app` — a role that owns no table and has no BYPASSRLS, so PostgreSQL row-level
+security binds every statement. `DATABASE_URL` in `nexa.env` stays the owner's, for
+migrations, dumps and restores. The installer, `botctl update` and `botctl restart` run
+`nexa_ensure_app_db_role` after the migrations: it gives `nexa_app` its login and a
+generated password (sent to psql on stdin) and only then writes the file, so no process is
+pointed at a role that cannot log in; a later run reads the password back and re-asserts
+it. Compose reads the file after `nexa.env` and treats it as optional: until it exists the
+processes connect as the owner, where the policies are inert. The first `botctl update`
+into the release that introduced it runs the previous `botctl`, so the switch happens at
+the next `botctl restart` or update.
+
 **Which role mounts which workspace (R12 F2).** The three named volumes the application
 writes — `backups` (archives), `recovery` (uploads and restore scratch) and
 `legacymigration` (the Mirza package) — are mounted only into `api`, `worker` and

@@ -28,6 +28,7 @@ import type {
   NotificationRepository,
   ReleasedClaimRecord,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * What an intent has actually spent, as SQL.
@@ -147,6 +148,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
 
+@ScopeBound()
 export class DrizzleNotificationRepository implements NotificationRepository {
   constructor(
     private readonly db: Database,

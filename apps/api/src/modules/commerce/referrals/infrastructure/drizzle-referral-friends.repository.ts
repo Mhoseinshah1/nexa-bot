@@ -11,6 +11,7 @@ import type {
   ReferralFriendsRepository,
 } from '../application/ports.js';
 import { refereeQualified } from './drizzle-referral-signup-gift.repository.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * A pending commission of THIS referral, by the referral's own table name (the same reason
@@ -68,6 +69,7 @@ const CREATED_AT_TEXT = sql<string>`to_char(${referrals.createdAt} AT TIME ZONE 
  * The customer's own invited friends, in PostgreSQL (R11 B3). Every query carries the tenant
  * AND the referrer, so another customer's list cannot be read by any id.
  */
+@ScopeBound()
 export class DrizzleReferralFriendsRepository implements ReferralFriendsRepository {
   constructor(private readonly db: Database) {}
 

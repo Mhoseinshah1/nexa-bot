@@ -28,8 +28,10 @@ import type {
   LegacyShapeTariffState,
 } from '../application/legacy-product-ports.js';
 import type { LegacyShape, TariffCandidate } from '../application/legacy-shape.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Hidden legacy product shapes, in PostgreSQL. Every query leads with the tenant. */
+@ScopeBound()
 export class DrizzleLegacyProductShapeRepository implements LegacyProductShapeRepository {
   constructor(private readonly db: Database) {}
 

@@ -46,6 +46,7 @@ import type {
   LegacyNxpkgTransition,
   NewLegacyNxpkgImport,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * `legacy_nxpkg_imports`, modelled on `DrizzleRecoveryRequestRepository`.
@@ -122,6 +123,7 @@ function patchColumns(patch: LegacyNxpkgImportPatch): Record<string, unknown> {
   return set;
 }
 
+@ScopeBound({ installation: true })
 export class DrizzleLegacyNxpkgImportRepository implements LegacyNxpkgImportRepository {
   constructor(private readonly db: Database) {}
 
@@ -450,12 +452,12 @@ export class DrizzleLegacyNxpkgImportRepository implements LegacyNxpkgImportRepo
     tx?: unknown,
   ): Promise<string | null> {
     const executor: Executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
-    const [row] = await executor
-      .select({ id: t.id })
-      .from(t)
-      .where(inArray(t.status, [...statuses]))
-      .orderBy(t.createdAt)
-      .limit(1);
-    return row?.id ?? null;
+    // Through `nexa_installation_nxpkg_import` (0315): the write gate asks this inside
+    // every tenant's transaction, and the import is the installation's — row-level
+    // security would hide it from a hosted tenant's transaction (ADR-0037).
+    const result = await executor.execute<{ id: string | null }>(
+      sql`SELECT nexa_installation_nxpkg_import(${sql.param([...statuses])}::text[]) AS id`,
+    );
+    return result.rows[0]?.id ?? null;
   }
 }

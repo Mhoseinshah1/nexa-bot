@@ -18,10 +18,18 @@ import {
   reportTrendResponseSchema,
   reportWalletResponseSchema,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleReportingRepository } from '../../apps/api/src/modules/commerce/reporting/infrastructure/drizzle-reporting.repository';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  tenantB,
+  testConfig,
+} from './harness';
 
 /**
  * WP12's business reports over real HTTP and real SQL (`docs/wp12-business-analytics-audit.md`).

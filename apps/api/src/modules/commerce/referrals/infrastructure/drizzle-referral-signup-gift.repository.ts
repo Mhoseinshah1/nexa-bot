@@ -32,6 +32,7 @@ import type {
   ReferralSignupGiftRepository,
   ReferredPurchaseTotals,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 function exec(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
@@ -109,6 +110,7 @@ export function refereeQualified() {
 }
 
 /** The signup gift rows and the referral statistics, in PostgreSQL. Every query carries the tenant. */
+@ScopeBound()
 export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRepository {
   constructor(private readonly db: Database) {}
 

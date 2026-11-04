@@ -7,6 +7,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { customers } from '../../../../infrastructure/persistence/schema.js';
 import type { PersonalDiscountReader } from '../../pricing/application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** A customer's personal discount as stored (R10 D3). */
 export interface PersonalDiscountRecord {
@@ -24,6 +25,7 @@ export interface PersonalDiscountRecord {
  * `CustomerRecord` is the row every customer read returns (and every fixture builds): the
  * percent is read where a price is decided and on the customer's page, nowhere else.
  */
+@ScopeBound()
 export class DrizzlePersonalDiscountRepository implements PersonalDiscountReader {
   constructor(private readonly db: Database) {}
 

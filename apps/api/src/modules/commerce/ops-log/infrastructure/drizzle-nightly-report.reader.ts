@@ -13,6 +13,7 @@ import {
 } from '../application/nightly-report.js';
 import { isFirstPaidPurchase } from './first-purchase-sql.js';
 import type { NightlyReportReader, NightlyReportWindow } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = Record<string, unknown>;
 const big = (value: unknown): bigint =>
@@ -28,6 +29,7 @@ const NONE: Tally = { count: 0, sum: 0n };
  * currency and the NEXA provenance — a row the import wrote is history and is never a day's
  * sale. Nothing is cached and nothing is estimated.
  */
+@ScopeBound()
 export class DrizzleNightlyReportReader implements NightlyReportReader {
   constructor(private readonly db: Database) {}
 

@@ -15,7 +15,7 @@ import {
   reportTrendResponseSchema,
   type Clock,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { ReportAccess } from '../../apps/api/src/modules/commerce/reporting/application/report-access';
 import { ReportingService } from '../../apps/api/src/modules/commerce/reporting/application/reporting.service';
 import { DrizzleOperationsOverviewRepository } from '../../apps/api/src/modules/commerce/reporting/infrastructure/drizzle-operations-overview.repository';
@@ -23,7 +23,15 @@ import { DrizzleReportingRepository } from '../../apps/api/src/modules/commerce/
 import { DefaultReportExportWriter } from '../../apps/api/src/infrastructure/export/report-export-writer';
 import { IntlReportPeriodResolver } from '../../apps/api/src/infrastructure/time/report-calendar';
 import { SEED_IDS, seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  tenantB,
+  testConfig,
+} from './harness';
 
 /**
  * Round W's dashboard and sidebar counters over real HTTP and real SQL

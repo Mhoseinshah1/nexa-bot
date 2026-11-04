@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ActorContext } from '@nexa/contracts';
-import { createApiApp, resolveInstallationTenant } from '../../apps/api/src/bootstrap';
-import { createContainer, type Container, type ProcessRole } from '../../apps/api/src/container';
+import { resolveInstallationTenant } from '../../apps/api/src/bootstrap';
+import { type Container, type ProcessRole } from '../../apps/api/src/container';
 import type { AppConfig } from '../../apps/api/src/infrastructure/config/config.schema';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
+  createTestContainer,
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,
@@ -119,7 +121,7 @@ describe('every process role boots and survives one pass of each of its loops', 
 
   /** As `main*.ts`: build the root, then resolve the installation (starts the key reload). */
   async function boot(role: ProcessRole, seedFirst: boolean): Promise<Container> {
-    const container = createContainer(config, role);
+    const container = createTestContainer(config, role);
     if (seedFirst) {
       await resetDatabase(container.database.db);
       await seed(container.database.db, container.cipher);

@@ -18,6 +18,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { OpsGroupRecord, OpsGroupRepository, OpsTopicRecord } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type GroupRow = typeof opsLogGroups.$inferSelect;
 type TopicRow = typeof opsLogTopics.$inferSelect;
@@ -66,6 +67,7 @@ function problemsArray(problems: readonly OpsLogGroupProblem[]) {
   return sql`${`{${problems.join(',')}}`}::text[]`;
 }
 
+@ScopeBound()
 export class DrizzleOpsGroupRepository implements OpsGroupRepository {
   constructor(private readonly db: Database) {}
 

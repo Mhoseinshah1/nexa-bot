@@ -59,6 +59,7 @@ import type {
   WalletReasonRow,
   Window,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The reporting aggregates, in SQL (`docs/wp12-business-analytics-audit.md` §4, §5, §10).
@@ -80,6 +81,7 @@ import type {
  * `cost_amount` (no profit reporting), and any money beside a panel or provider (no
  * revenue by infrastructure). Customer profile columns are never read.
  */
+@ScopeBound()
 export class DrizzleReportingRepository implements ReportingRepository {
   constructor(private readonly db: Database) {}
 

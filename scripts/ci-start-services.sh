@@ -79,6 +79,28 @@ start nexa-ci-redis redis:7-alpine 'redis-cli ping' \
 for _ in $(seq 1 30); do
   if docker exec nexa-ci-postgres psql -U nexa -d nexa_test -Atc 'SELECT 1' >/dev/null 2>&1; then
     printf 'ok    postgres answers queries\n'
+    # ADR-0037: the application role the integration suite's containers connect as
+    # (tests/integration/harness.ts, `testAppDatabaseUrl`), with this throwaway server's
+    # development password. Migration 0315 would create it without a login.
+    docker exec -i nexa-ci-postgres psql -U nexa -d postgres -v ON_ERROR_STOP=1 -q <<'SQL' || {
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexa_app') THEN
+    CREATE ROLE nexa_app LOGIN PASSWORD 'nexa_app' NOSUPERUSER NOBYPASSRLS NOINHERIT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexa_system') THEN
+    CREATE ROLE nexa_system NOLOGIN NOSUPERUSER NOBYPASSRLS;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid
+                 JOIN pg_roles u ON u.oid = m.member
+                 WHERE g.rolname = 'nexa_system' AND u.rolname = 'nexa_app') THEN
+    GRANT nexa_system TO nexa_app WITH INHERIT FALSE, SET TRUE;
+  END IF;
+END $$;
+SQL
+      printf 'FAIL  could not create the nexa_app/nexa_system roles\n' >&2
+      exit 1
+    }
+    printf 'ok    roles nexa_app (login) and nexa_system ready\n'
     exit 0
   fi
   sleep 2

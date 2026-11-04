@@ -14,6 +14,7 @@ import type {
   BusinessConnectionReport,
   BusinessConnectionRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof telegramBusinessConnections.$inferSelect;
 
@@ -38,6 +39,7 @@ function toRecord(row: Row): BusinessConnectionRecord {
   };
 }
 
+@ScopeBound()
 export class DrizzleBusinessConnectionRepository implements BusinessConnectionRepository {
   constructor(private readonly db: Database) {}
 

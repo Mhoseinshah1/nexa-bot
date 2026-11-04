@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
-import { migrateOnce, resetDatabase, testConfig } from './harness';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
+import { createApiApp, migrateOnce, resetDatabase, testConfig } from './harness';
 
 /**
  * FIX-04 (S2): the unauthenticated development system endpoint is ABSENT unless a process

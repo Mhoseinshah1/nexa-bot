@@ -10,8 +10,10 @@ import type {
   CustomerLocationOverrideRecord,
   CustomerLocationOverrideRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** `customer_location_change_overrides`: one row per customer, the trial override's shape. */
+@ScopeBound()
 export class DrizzleCustomerLocationOverrideRepository implements CustomerLocationOverrideRepository {
   constructor(private readonly db: Database) {}
 

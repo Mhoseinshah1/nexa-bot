@@ -19,6 +19,7 @@ import type {
   CustomerResolution,
   CustomerSearch,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Customers, in PostgreSQL.
@@ -30,6 +31,7 @@ import type {
  * database, so there is no later check to forget — the same reasoning
  * `drizzle-panel.repository.ts` states.
  */
+@ScopeBound()
 export class DrizzleCustomerRepository implements CustomerRepository {
   constructor(
     private readonly db: Database,

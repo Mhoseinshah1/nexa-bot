@@ -5,6 +5,7 @@ import { auditLogs } from '../../../../infrastructure/persistence/schema.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { redactRecord, redactSecretText } from '../../../../infrastructure/redaction.js';
 import type { AuditHistoryReader, AuditHistoryRecord } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * One entity's audit rows, newest first, through `audit_logs_entity_idx`.
@@ -13,6 +14,7 @@ import type { AuditHistoryReader, AuditHistoryRecord } from '../application/port
  * underscore, which `LIKE` reads as "any character". The columns are listed, so `ip` and
  * `user_agent` are never selected rather than selected and dropped.
  */
+@ScopeBound()
 export class DrizzleAuditHistoryReader implements AuditHistoryReader {
   constructor(private readonly db: Database) {}
 

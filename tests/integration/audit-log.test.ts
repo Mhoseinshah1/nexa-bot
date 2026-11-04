@@ -9,10 +9,18 @@ import {
   auditLogListResponseSchema,
   type AuditLogEntry,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleAuditHistoryReader } from '../../apps/api/src/modules/platform/audit/infrastructure/drizzle-audit-history.reader';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  tenantB,
+  testConfig,
+} from './harness';
 
 /**
  * Phase D1 — the audit log browser and its export, over real HTTP and real SQL

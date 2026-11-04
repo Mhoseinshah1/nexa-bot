@@ -21,6 +21,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Phase 4 PR-4 — the support AI's storage for TICKETS. Every query carries the tenant, and every
@@ -94,6 +95,7 @@ function toJob(row: JobRow): SupportAiTicketJobRecord {
   };
 }
 
+@ScopeBound()
 export class DrizzleSupportAiTicketRepository {
   constructor(private readonly db: Database) {}
 

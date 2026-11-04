@@ -36,6 +36,7 @@ import type {
   GatewayInvoiceRecord,
   GatewayInvoiceRepository,
 } from '../application/gateway-invoice-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof gatewayInvoices.$inferSelect;
 
@@ -164,6 +165,7 @@ function cooldownUntil(policy: GatewayCardChangePolicy | null, now: Date): Date 
  * The external gateway's side of each payment attempt (WP11A). Every statement names the
  * tenant; none resolves a provider identifier globally.
  */
+@ScopeBound()
 export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository {
   constructor(private readonly db: Database) {}
 
@@ -320,18 +322,16 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
      * tenants sharing one merchant account share its order namespace, and the partial unique
      * index `gateway_invoices_centralpay_order_id_key` is the same rule for a racing writer.
      * Existence only — nothing about the other attempt leaves this method.
+     *
+     * Through `nexa_gateway_order_id_taken` (0315), not a SELECT: this runs inside the
+     * paying tenant's transaction, where row-level security would hide every other
+     * tenant's invoice and the answer would quietly become "this tenant only"
+     * (ADR-0037). The function answers the one existence question as the owner.
      */
-    const [row] = await this.exec(tx)
-      .select({ one: sql<number>`1` })
-      .from(gatewayInvoices)
-      .where(
-        and(
-          eq(gatewayInvoices.provider, provider),
-          eq(gatewayInvoices.providerOrderId, providerOrderId),
-        ),
-      )
-      .limit(1);
-    return row !== undefined;
+    const result = await this.exec(tx).execute<{ taken: boolean }>(
+      sql`SELECT nexa_gateway_order_id_taken(${provider}, ${providerOrderId}) AS taken`,
+    );
+    return result.rows[0]?.taken === true;
   }
 
   async customerNumberFor(

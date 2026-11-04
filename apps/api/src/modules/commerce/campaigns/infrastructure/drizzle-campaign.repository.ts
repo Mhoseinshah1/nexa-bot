@@ -45,6 +45,7 @@ import type {
   DiscountOutcome,
   StateTally,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Campaigns in PostgreSQL (`docs/round-n-campaigns-audit.md`).
@@ -56,6 +57,7 @@ import type {
  *
  * Every query carries the tenant, primary-key lookups included.
  */
+@ScopeBound()
 export class DrizzleCampaignRepository implements CampaignRepository {
   constructor(private readonly db: Database) {}
 

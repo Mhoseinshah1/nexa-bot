@@ -1938,8 +1938,12 @@ export function createContainer(
   // The request path's bounds for every role but the two that run the Mirza import, whose
   // one long import gets bounds sized for it (`database-profile.ts`).
   const databaseProfile = databaseProfileFor(role, config);
+  // As nexa_app when the installation has been given its credential, so row-level
+  // security binds every statement this process makes (ADR-0037); on the owner until
+  // then, where the policies are inert and nothing behaves differently.
+  const applicationDatabaseUrl = config.DATABASE_APP_URL ?? config.DATABASE_URL;
   const database = createDatabase(
-    config.DATABASE_URL,
+    applicationDatabaseUrl,
     config.DATABASE_POOL_MAX,
     databaseProfile.timeouts,
     onPoolError,
@@ -1955,7 +1959,7 @@ export function createContainer(
     ? (() => {
         const profile = leaseDatabaseProfile(config);
         return createDatabase(
-          config.DATABASE_URL,
+          applicationDatabaseUrl,
           LEASE_POOL_MAX,
           profile.timeouts,
           onPoolError,

@@ -13,10 +13,18 @@ import {
   type CustomerWorkspaceResponse,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleCustomerInsightReader } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer-insight.reader';
 import { SEED_IDS, seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  tenantB,
+  testConfig,
+} from './harness';
 
 /**
  * Roadmap B5 — Customer 360's workspace summary (`GET /users/:id/workspace`) over real HTTP

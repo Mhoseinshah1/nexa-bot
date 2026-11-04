@@ -8,10 +8,12 @@ import { createTestContext, SEED_IDS, tenantA, tenantB, type TestContext } from 
  * TWO tenants are seeded, because a cross-tenant test with one tenant seeded
  * proves nothing — every query trivially returns only that tenant's rows.
  *
- * Phase 0 enforces scoping in the repository layer rather than with Postgres
- * row-level security (docs/adr/0004-tenant-isolation.md records that decision
- * and its cost). These tests are what stands in for the database-level
- * backstop, so they matter more than they otherwise would.
+ * Scoping is enforced twice: by the repository guard, and underneath it by
+ * PostgreSQL row-level security (docs/adr/0037-row-level-security.md, which
+ * superseded ADR-0004). These cases run through the container's APPLICATION
+ * pool, as nexa_app, so a repository method that dropped its tenant predicate
+ * would still be refused here by the database — and the first case below
+ * proves the pool really is that role rather than the owner the policies skip.
  */
 describe('tenant isolation', () => {
   let ctx: TestContext;
@@ -23,6 +25,10 @@ describe('tenant isolation', () => {
 
   afterAll(async () => {
     await ctx?.close();
+  });
+
+  it('runs as the application role, which row-level security binds', async () => {
+    expect(await ctx.applicationDatabase.scopeEnforcement()).toBe('enforcing');
   });
 
   it('returns only the calling tenant’s bot instances', async () => {

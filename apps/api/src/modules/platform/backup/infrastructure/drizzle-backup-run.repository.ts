@@ -25,6 +25,7 @@ import type {
   BackupRunRow,
   StartOutcome,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The backup run table, and the installation's backup lock.
@@ -74,6 +75,7 @@ function toRow(row: Row): BackupRunRow {
   };
 }
 
+@ScopeBound({ installation: true })
 export class DrizzleBackupRunRepository
   implements
     BackupRunRepository,

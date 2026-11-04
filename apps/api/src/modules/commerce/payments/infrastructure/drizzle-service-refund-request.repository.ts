@@ -35,6 +35,7 @@ import type {
   ServiceRefundRequestRecord,
   ServiceRefundRequestRepository,
 } from '../application/service-refund-request-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof serviceRefundRequests.$inferSelect;
 
@@ -70,6 +71,7 @@ function toRecord(row: Row): ServiceRefundRequestRecord {
  * WP19 — the customer service refund requests. Every state change is a conditional UPDATE
  * naming its `from`; there is no setter.
  */
+@ScopeBound()
 export class DrizzleServiceRefundRequestRepository implements ServiceRefundRequestRepository {
   constructor(private readonly db: Database) {}
 

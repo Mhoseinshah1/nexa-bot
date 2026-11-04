@@ -13,6 +13,10 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SessionRepository } from '../application/ports.js';
+import {
+  ScopeBound,
+  withSystemScope,
+} from '../../../../infrastructure/persistence/database-scope.js';
 
 type SessionRow = typeof adminSessions.$inferSelect;
 
@@ -32,6 +36,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
 
+@ScopeBound()
 export class DrizzleSessionRepository implements SessionRepository {
   constructor(private readonly db: Database) {}
 
@@ -72,11 +77,10 @@ export class DrizzleSessionRepository implements SessionRepository {
    * the tenant it returns.
    */
   async findByTokenHash(tokenHash: string): Promise<AdminSession | null> {
-    const [row] = await this.db
-      .select()
-      .from(adminSessions)
-      .where(eq(adminSessions.tokenHash, tokenHash))
-      .limit(1);
+    // The system path, by name (ADR-0037): no tenant is bound yet, by definition.
+    const [row] = await withSystemScope('admin session lookup by token hash', () =>
+      this.db.select().from(adminSessions).where(eq(adminSessions.tokenHash, tokenHash)).limit(1),
+    );
     return row ? toSession(row) : null;
   }
 

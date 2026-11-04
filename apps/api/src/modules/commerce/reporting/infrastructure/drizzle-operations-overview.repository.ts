@@ -20,6 +20,7 @@ import type {
   OperationsOverviewRepository,
   PanelFleetRow,
 } from '../application/operations-overview.service.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 const HOURS_PER_DAY = 24;
 
@@ -42,6 +43,7 @@ const HOURS_PER_DAY = 24;
  * A sidebar counter reads at most `cap` rows (`LIMIT` inside the count), so a backlog of a
  * million costs what a backlog of a thousand does, and the answer says "this many or more".
  */
+@ScopeBound()
 export class DrizzleOperationsOverviewRepository implements OperationsOverviewRepository {
   constructor(private readonly db: Database) {}
 

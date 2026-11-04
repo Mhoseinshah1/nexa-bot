@@ -7,6 +7,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelSettingRepository, StoredSetting } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Track 3 §2: `panel_setting_values`, read and written exactly as `DrizzleSettingRepository`
@@ -48,6 +49,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
 
+@ScopeBound()
 export class DrizzlePanelSettingRepository implements PanelSettingRepository {
   constructor(private readonly db: Database) {}
 

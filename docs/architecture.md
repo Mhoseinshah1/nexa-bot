@@ -136,9 +136,10 @@ reseller sales bot is its own tenant with a parent.
 
 Isolation is enforced in the repository layer: every tenant-scoped query
 resolves its tenant through `requireTenantId`, and work that genuinely has no
-tenant passes an explicit `SystemContext` rather than a null. Postgres row-level
-security is **not** used — see `docs/adr/0004-tenant-isolation.md` for that
-decision, its cost, and what would trigger revisiting it.
+tenant passes an explicit `SystemContext` rather than a null. PostgreSQL row-level
+security enforces the same boundary underneath it, with the application connecting
+as a non-owner role — see `docs/adr/0037-row-level-security.md`, which supersedes
+`docs/adr/0004-tenant-isolation.md`.
 
 ## Phase plan
 

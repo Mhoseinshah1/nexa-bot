@@ -26,6 +26,7 @@ import type {
   PaymentGatewayRepository,
   StoredGatewayConfig,
 } from '../application/gateway-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The columns the record is built from. Selected explicitly, in one place. */
 const COLUMNS = {
@@ -122,6 +123,7 @@ function toRecord(row: Row): PaymentGatewayRecord {
  * is a nicer failure than the accounts table's, where forgetting it returns somebody
  * else's card number.
  */
+@ScopeBound()
 export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository {
   constructor(private readonly db: Database) {}
 
@@ -406,6 +408,7 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
  * Its own class rather than two methods bolted onto the payment repository, because the
  * counts come from two tables and only one of them is about payments.
  */
+@ScopeBound()
 export class DrizzleGatewayAudienceReader implements GatewayAudienceReader {
   constructor(private readonly db: Database) {}
 

@@ -14,7 +14,7 @@ import {
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import {
   CUSTOMER_SEND_FAILED_CODE,
   CUSTOMER_SEND_OK_CODE,
@@ -22,6 +22,7 @@ import {
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { receiptFile } from './receipt-review-fixture';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

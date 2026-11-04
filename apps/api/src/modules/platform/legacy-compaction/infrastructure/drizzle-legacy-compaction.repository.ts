@@ -21,6 +21,7 @@ import type {
   LegacyCompactionRow,
 } from '../application/ports.js';
 import { balanceReconciliationClean } from '../application/cleanup-rules.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The compaction's SQL (Round 4 PR-E, E1). Every state change is a conditional UPDATE
@@ -97,6 +98,7 @@ const textArray = (values: readonly string[]): SQL =>
     sql`, `,
   )}]::text[]`;
 
+@ScopeBound({ installation: true })
 export class DrizzleLegacyCompactionRepository implements LegacyCompactionRepository {
   /**
    * `maintenance` hands out the dedicated connection `vacuum()` runs on (a `pg` pool, or a

@@ -15,6 +15,7 @@ import type {
   NeverPaidOrderInsert,
   ShapeProductRow,
 } from '../application/ended-services.ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The ended-services step's storage, in PostgreSQL. Raw SQL for the two inserts, for the
@@ -30,6 +31,7 @@ import type {
  * `services_is_test_source_check`, the per-tenant `source_ref` unique indexes) still decide
  * what is valid, so a wrong value is a refused statement, not a stored one.
  */
+@ScopeBound()
 export class DrizzleEndedServicesRepository implements EndedServicesRepository {
   constructor(private readonly db: Database) {}
 

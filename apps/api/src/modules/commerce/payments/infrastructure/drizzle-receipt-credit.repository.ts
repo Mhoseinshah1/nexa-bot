@@ -10,6 +10,7 @@ import type {
   ReceiptCreditRecord,
   ReceiptCreditRepository,
 } from '../application/receipt-credit-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Receipt credits, in PostgreSQL (D2).
@@ -18,6 +19,7 @@ import type {
  * `receipt_credits_no_update` and `_no_delete` (0114) refuse both, and a method that
  * offered either would be a capability the database refuses.
  */
+@ScopeBound()
 export class DrizzleReceiptCreditRepository implements ReceiptCreditRepository {
   constructor(private readonly db: Database) {}
 

@@ -30,12 +30,14 @@ import {
   type ClaimedCard,
   type OperationCardRepository,
 } from '../application/operation-card.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * `operation_card_messages` (R3 item 10). Every write is conditional: `attach` is an
  * insert that loses to an existing row, `claim` an UPDATE from `answered_at IS NULL`, and
  * `release` an UPDATE back to it with a 429's wait — so two provisioner replicas are safe by construction.
  */
+@ScopeBound()
 export class DrizzleOperationCardRepository implements OperationCardRepository {
   constructor(private readonly db: Database) {}
 

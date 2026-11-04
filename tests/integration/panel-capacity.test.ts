@@ -831,7 +831,7 @@ describe('panel capacity and sales eligibility', () => {
      * the fleet's capacity, the panels, the balancing flag (C3), the products — and the
      * SAME four whether the catalogue holds one product or a hundred.
      */
-    const pool = ctx.container.database.pool as unknown as {
+    const pool = ctx.applicationDatabase.pool as unknown as {
       query: (...args: unknown[]) => unknown;
     };
     const real = pool.query.bind(pool) as (...args: unknown[]) => unknown;
@@ -879,7 +879,7 @@ describe('panel capacity and sales eligibility', () => {
      * would report 10-ish and then 100-ish — and does not need a fixture nobody
      * will wait for.
      */
-    const pool = ctx.container.database.pool as unknown as {
+    const pool = ctx.applicationDatabase.pool as unknown as {
       query: (...args: unknown[]) => unknown;
     };
     const real = pool.query.bind(pool) as (...args: unknown[]) => unknown;

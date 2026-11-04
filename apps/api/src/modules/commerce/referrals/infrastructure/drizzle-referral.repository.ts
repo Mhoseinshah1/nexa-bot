@@ -39,6 +39,7 @@ import type {
   ReferralRepository,
   ReferralTotals,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The order states in which a promise can no longer be kept: nothing was delivered. */
 const ENDED_ORDER_STATES = ['CANCELLED', 'EXPIRED', 'REFUNDED'] as const;
@@ -99,6 +100,7 @@ function before(
 }
 
 /** Attributions and codes, in PostgreSQL. Every query carries the tenant. */
+@ScopeBound()
 export class DrizzleReferralRepository implements ReferralRepository {
   constructor(private readonly db: Database) {}
 
@@ -301,6 +303,7 @@ export class DrizzleReferralRepository implements ReferralRepository {
 }
 
 /** Commissions and their reversals, in PostgreSQL. Every query carries the tenant. */
+@ScopeBound()
 export class DrizzleReferralCommissionRepository implements ReferralCommissionRepository {
   constructor(private readonly db: Database) {}
 

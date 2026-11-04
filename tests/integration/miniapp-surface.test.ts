@@ -29,12 +29,13 @@ import {
   type ProductId,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { MINIAPP_DOCUMENT_CSP } from '../../apps/api/src/surfaces/miniapp/static.controller';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

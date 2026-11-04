@@ -13,8 +13,9 @@ import {
   type ActorContext,
   type BotInstanceId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

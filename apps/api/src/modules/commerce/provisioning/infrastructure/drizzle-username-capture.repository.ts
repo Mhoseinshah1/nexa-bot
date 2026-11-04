@@ -10,6 +10,7 @@ import type {
   UsernameCaptureRecord,
   UsernameCaptureRepository,
 } from '../application/username-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The advisory-lock CLASS for a customer's username work.
@@ -22,6 +23,7 @@ import type {
 export const USERNAME_CAPTURE_LOCK_CLASS = 0x554e;
 
 /** The username-entry window, in PostgreSQL. Modelled on `DrizzleReceiptCaptureRepository`. */
+@ScopeBound()
 export class DrizzleUsernameCaptureRepository implements UsernameCaptureRepository {
   constructor(private readonly db: Database) {}
 

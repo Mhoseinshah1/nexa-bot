@@ -12,9 +12,10 @@ import {
   supportFaqSchema,
   type ActorContext,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

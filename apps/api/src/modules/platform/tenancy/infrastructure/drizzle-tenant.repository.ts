@@ -32,6 +32,7 @@ import type {
   TenantRepository,
   TokenReplacementClaims,
 } from '../application/ports.js';
+import { ScopeBound, withSystemScope } from '../../../../infrastructure/persistence/database-scope.js';
 
 type TenantRow = typeof tenants.$inferSelect;
 type BotInstanceRow = typeof botInstances.$inferSelect;
@@ -66,6 +67,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
 
+@ScopeBound()
 export class DrizzleTenantRepository implements TenantRepository {
   constructor(private readonly db: Database) {}
 
@@ -160,6 +162,7 @@ function toBootstrapView(row: BotInstanceRow): BotBootstrapView {
   };
 }
 
+@ScopeBound()
 export class DrizzleBotInstanceRepository
   implements BotInstanceRepository, BotBootstrapRepository, TokenReplacementClaims
 {
@@ -175,7 +178,11 @@ export class DrizzleBotInstanceRepository
    * tenant it yields.
    */
   async findById(id: BotInstanceId): Promise<BotInstance | null> {
-    const [row] = await this.db.select().from(botInstances).where(eq(botInstances.id, id)).limit(1);
+    // The system path by name, even when called under a tenant's binding (ADR-0037):
+    // the answer decides the tenant, so it cannot be filtered by one.
+    const [row] = await withSystemScope('bot instance lookup by id', () =>
+      this.db.select().from(botInstances).where(eq(botInstances.id, id)).limit(1),
+    );
     return row ? toBotInstance(row) : null;
   }
 

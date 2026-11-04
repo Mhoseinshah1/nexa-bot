@@ -14,6 +14,7 @@ import type {
   PlacementRecord,
   PlacementRow,
 } from '../application/panel-placement.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Phase C3: the placement explanation, one row per balanced order.
@@ -22,6 +23,7 @@ import type {
  * `nexa_order_panel_placements_frozen` refuses an UPDATE — an explanation that could be
  * rewritten would explain something other than what was decided.
  */
+@ScopeBound()
 export class DrizzleOrderPlacementRepository implements OrderPlacementRepository {
   constructor(private readonly db: Database) {}
 

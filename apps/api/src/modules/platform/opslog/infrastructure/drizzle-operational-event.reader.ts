@@ -18,7 +18,9 @@ import type {
   OperationalEventReader,
   OperationalEventRow,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
+@ScopeBound()
 export class DrizzleOperationalEventReader implements OperationalEventReader {
   constructor(private readonly db: Database) {}
 
@@ -162,6 +164,7 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
  * `code`; the open set of any one condition is small by construction, because a
  * condition dedupes onto one row per scope.
  */
+@ScopeBound()
 export class DrizzleOperationalConditionReader implements OperationalConditionReader {
   constructor(private readonly db: Database) {}
 

@@ -12,6 +12,7 @@ import type {
   LegacyAdoptionStore,
 } from '../application/legacy-adoption-ports.js';
 import { legacyInvoiceLockName } from '../../../platform/legacy-import/application/legacy-import-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Migration P6 — the adoption's storage, in PostgreSQL.
@@ -25,6 +26,7 @@ import { legacyInvoiceLockName } from '../../../platform/legacy-import/applicati
  * subscription-ref unique indexes and the namespace unique index — so a wrong value here
  * is a refused statement, not a stored one.
  */
+@ScopeBound()
 export class DrizzleLegacyAdoptionStore implements LegacyAdoptionStore {
   constructor(private readonly db: Database) {}
 
@@ -118,16 +120,12 @@ export class DrizzleLegacyAdoptionStore implements LegacyAdoptionStore {
     input: { readonly panelId: string; readonly namespaceKey: string; readonly canonical: string },
     tx: TransactionScope,
   ): Promise<boolean> {
+    // Through `nexa_service_username_taken` (0315): the question is across tenants, asked
+    // inside this tenant's transaction, where row-level security would hide every other
+    // tenant's service and hold (ADR-0037). The function answers existence and no more.
     const result = await tx.tx.execute(sql`
-      SELECT EXISTS (
-               SELECT 1 FROM services
-                WHERE panel_id = ${input.panelId}
-                  AND state <> 'TERMINATED'
-                  AND lower(provider_username) = ${input.canonical})
-          OR EXISTS (
-               SELECT 1 FROM service_username_reservations
-                WHERE namespace_key = ${input.namespaceKey}
-                  AND username = ${input.canonical}) AS taken`);
+      SELECT nexa_service_username_taken(${input.panelId}, ${input.namespaceKey},
+                                         ${input.canonical}) AS taken`);
     return (result.rows as { taken: boolean }[])[0]?.taken === true;
   }
 

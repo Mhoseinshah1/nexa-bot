@@ -11,6 +11,7 @@ import type {
   InstallationKeyRepository,
   InstallationKeyRow,
 } from '../application/installation-key.ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The advisory-lock class every writer of `installation_keys` takes.
@@ -48,6 +49,7 @@ function toRow(row: typeof installationKeys.$inferSelect): InstallationKeyRow {
   };
 }
 
+@ScopeBound({ installation: true })
 export class DrizzleInstallationKeyRepository implements InstallationKeyRepository {
   constructor(private readonly db: Database) {}
 

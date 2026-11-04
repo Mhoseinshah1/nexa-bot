@@ -15,6 +15,7 @@ import type {
   InboxRow,
   NotificationInboxRepository,
 } from '../application/notification-center.ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The severities at or above `min`, in the contract's order. */
 function severitiesFrom(min: OperationalSeverity): readonly OperationalSeverity[] {
@@ -79,6 +80,7 @@ function toRow(row: RawRow): InboxRow {
  * tenant — never a SYSTEM-scoped row (null tenant), exactly as the operations log — and
  * joins one administrator's read marks. The one write is to `admin_notification_reads`.
  */
+@ScopeBound()
 export class DrizzleNotificationInboxRepository implements NotificationInboxRepository {
   constructor(
     private readonly db: Database,

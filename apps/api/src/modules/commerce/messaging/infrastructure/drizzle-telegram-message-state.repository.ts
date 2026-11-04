@@ -31,6 +31,7 @@ import type {
   TelegramWizardRecord,
   WizardSelector,
 } from '../application/telegram-message-state.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type WizardRow = typeof telegramWizards.$inferSelect;
 type ReviewRow = typeof telegramReviewMessages.$inferSelect;
@@ -110,6 +111,7 @@ function refOf(row: PurgedRow): TelegramMessageRef {
  * see `TelegramMessageStateRepository` — and none of them waits on a lock another turn holds
  * for longer than one statement: a claim is a lease column, not a held row lock.
  */
+@ScopeBound()
 export class DrizzleTelegramMessageStateRepository implements TelegramMessageStateRepository {
   constructor(private readonly db: Database) {}
 

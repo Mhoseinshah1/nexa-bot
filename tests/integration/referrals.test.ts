@@ -26,13 +26,14 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import type { Container } from '../../apps/api/src/container';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
 import type { ReferralInvite } from '../../apps/api/src/modules/commerce/referrals/application/referral-program';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
+  createApiApp,
   SEED_IDS,
   adminActorFor,
   createAdmin,

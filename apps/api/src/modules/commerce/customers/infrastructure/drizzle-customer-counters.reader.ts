@@ -10,7 +10,9 @@ import type {
   CustomerCounters,
   CustomerCountersReader,
 } from '../application/customer-counters-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
+@ScopeBound()
 export class DrizzleCustomerCountersReader implements CustomerCountersReader {
   constructor(private readonly db: Database) {}
 

@@ -20,9 +20,10 @@ import {
   type ProductCategoryId,
   type ProductId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

@@ -28,6 +28,7 @@ import type {
   GatewayReceiptSubmissionRecord,
 } from '../application/gateway-invoice-ports.js';
 import { RECEIPT_CAPTURE_LOCK_CLASS } from './drizzle-receipt.repository.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type ChangeRow = typeof gatewayCardChanges.$inferSelect;
 type CaptureRow = typeof gatewayReceiptCaptures.$inferSelect;
@@ -96,6 +97,7 @@ function submissionOf(row: SubmissionRow): GatewayReceiptSubmissionRecord {
  * Nothing here moves money, and nothing here writes `payment_receipts`: a provider receipt
  * is never in the manual review queue and never exempts a payment from expiry.
  */
+@ScopeBound()
 export class DrizzleGatewayCardTransferRepository implements GatewayCardTransferRepository {
   constructor(private readonly db: Database) {}
 

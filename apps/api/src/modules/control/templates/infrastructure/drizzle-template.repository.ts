@@ -21,6 +21,7 @@ import {
   isLocale,
   type Locale,
 } from '../application/template-resolver.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * A stored locale narrowed back to one this build supports.
@@ -65,6 +66,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
 
+@ScopeBound()
 export class DrizzleTemplateRepository implements TemplateRepository {
   constructor(private readonly db: Database) {}
 
