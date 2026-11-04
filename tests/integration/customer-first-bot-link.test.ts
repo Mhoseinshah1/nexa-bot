@@ -4,7 +4,14 @@ import { sql } from 'drizzle-orm';
 import { systemJobActor, type CorrelationId, type UserId } from '@nexa/contracts';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
 import { LINK_BOT_CONFIRM_ENV, parseLinkBotArgs } from '../../apps/api/src/customers-link-bot.cli';
-import { SEED_IDS, createTestContext, tenantA, testConfig, type TestContext } from './harness';
+import {
+  SEED_IDS,
+  createTestContext,
+  tenantA,
+  tenantB,
+  testConfig,
+  type TestContext,
+} from './harness';
 
 /**
  * OI-1 — imported customers have `first_bot_instance_id = NULL`, and every customer
@@ -182,6 +189,33 @@ describe('customer first-bot link (OI-1)', () => {
       const auto = await service().autoLinkImported(tenantA, ACTOR);
       expect(auto).toMatchObject({ linked: 0, eligible: 0 });
       expect(await botOf(matched.id)).toBeNull();
+    });
+
+    it('still links the imported customers after the cleanup emptied the map (v0.9.7)', async () => {
+      // The import marks the customers it CREATED (`drizzle-customer-source-marker.ts`); the
+      // cleanup after a clean import then deletes `legacy_import_map`. MUTATION: dropping the
+      // source-mark branch of `importedCreated` fails this — nobody is eligible any more.
+      const created = [await customer({ imported: true }), await customer({ imported: true })];
+      const matched = await customer({ imported: true, existing: true });
+      const organic = await customer({});
+      for (const c of created) {
+        await db().execute(sql`UPDATE customers SET source = 'MIRZA',
+          source_ref = ${`user:${c.telegramUserId}`} WHERE id = ${c.id}`);
+      }
+      // Another tenant's imported customer: never counted here.
+      await db().execute(sql`
+        INSERT INTO customers (id, tenant_id, telegram_user_id, status, source, source_ref, created_at)
+        VALUES (${randomUUID()}, ${tenantB.tenantId}, '799999999', 'ACTIVE', 'MIRZA',
+                'user:799999999', now())`);
+      const before = (await service().dryRun(tenantA, ACTOR, BOT1 as never)).eligible;
+      await db().execute(sql`DELETE FROM legacy_import_map`);
+      // The same customers, with the map gone.
+      expect((await service().dryRun(tenantA, ACTOR, BOT1 as never)).eligible).toBe(before);
+      expect(before).toBe(2);
+      expect((await service().apply(tenantA, ACTOR, BOT1 as never)).linked).toBe(2);
+      for (const c of created) expect(await botOf(c.id)).toBe(BOT1);
+      expect(await botOf(matched.id)).toBeNull();
+      expect(await botOf(organic.id)).toBeNull();
     });
 
     it('does not link a customer whose map row is not an IMPORTED CUSTOMER entry', async () => {

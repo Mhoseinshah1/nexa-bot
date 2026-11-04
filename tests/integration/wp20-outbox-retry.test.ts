@@ -307,22 +307,36 @@ describe('outbox retry scheduling', () => {
   });
 
   it('asks only for live failures when it checks for an earlier one (review of #84)', async () => {
-    // Published history is never deleted; the sibling rule must not walk it. A sequential
-    // scan is ruled out because the test table is tiny, not because the choice is close:
-    // what is left is the unique index, which walks every earlier sequence, or this one.
-    const plan = await ctx.container.database.db.transaction(async (tx) => {
-      await tx.execute(sql`SET LOCAL enable_seqscan = off`);
-      return tx.execute<{ 'QUERY PLAN': string }>(sql`
+    // Published history is never deleted; the sibling rule must not walk it. What this
+    // proves is that the lookup's predicate MATCHES the partial index, so that index can
+    // serve it. Which index the planner prefers on a near-empty table is a cost accident
+    // (it depends on what earlier files left and when the table was last analysed), so the
+    // choice is taken away: sequential scans are off and the competing indexes are dropped
+    // inside this transaction, which is rolled back (DDL is transactional in PostgreSQL;
+    // integration files run one at a time). If the predicate stopped matching the partial
+    // index, nothing would be left to serve the lookup and the plan would not name it.
+    const rollback = new Error('roll back the dropped indexes');
+    let plan: string[] = [];
+    await ctx.container.database.db
+      .transaction(async (tx) => {
+        await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+        await tx.execute(sql`DROP INDEX outbox_messages_aggregate_sequence_key`);
+        await tx.execute(sql`DROP INDEX outbox_messages_unpublished_idx`);
+        await tx.execute(sql`DROP INDEX outbox_messages_tenant_unpublished_idx`);
+        const explained = await tx.execute<{ 'QUERY PLAN': string }>(sql`
         EXPLAIN SELECT 1 FROM outbox_messages AS earlier
          WHERE earlier.aggregate_type = 'System' AND earlier.aggregate_id = 'system'
            AND earlier.tenant_id IS NOT DISTINCT FROM ${tenantA.tenantId}::uuid
            AND earlier.sequence < 100
            AND earlier.published_at IS NULL AND earlier.attempts > 0
            AND earlier.exhausted_at IS NULL`);
-    });
-    expect(plan.rows.map((one) => one['QUERY PLAN']).join('\n')).toContain(
-      'outbox_messages_live_failure_idx',
-    );
+        plan = explained.rows.map((one) => one['QUERY PLAN']);
+        throw rollback;
+      })
+      .catch((error: unknown) => {
+        if (error !== rollback) throw error;
+      });
+    expect(plan.join('\n')).toContain('outbox_messages_live_failure_idx');
   });
 
   it('shows the failures still being retried ahead of the exhausted ones (review of #84)', async () => {

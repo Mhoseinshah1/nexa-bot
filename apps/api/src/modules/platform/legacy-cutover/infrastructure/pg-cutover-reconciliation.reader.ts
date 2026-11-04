@@ -49,13 +49,18 @@ async function tenantIdOf(client: PoolClient, slug: string | null): Promise<stri
 
 export async function readNexaCutoverState(
   handle: DatabaseHandle,
-  options: { readonly tenantSlug: string | null; readonly statementTimeoutMs: number },
+  options: {
+    readonly tenantSlug: string | null;
+    readonly statementTimeoutMs: number;
+    /** v0.9.7: the tenant by id (the apply's own reconciliation), instead of by slug. */
+    readonly tenantId?: string;
+  },
 ): Promise<NexaCutoverState> {
   return handle.withClient(async (client) => {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
     try {
       await client.query(`SET LOCAL statement_timeout = ${String(options.statementTimeoutMs)}`);
-      const tenantId = await tenantIdOf(client, options.tenantSlug);
+      const tenantId = options.tenantId ?? (await tenantIdOf(client, options.tenantSlug));
 
       const customerRows = await client.query<{ id: string; telegram_user_id: string }>(
         `SELECT id, telegram_user_id FROM customers WHERE tenant_id = $1`,

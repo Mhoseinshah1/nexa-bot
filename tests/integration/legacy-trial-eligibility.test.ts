@@ -11,6 +11,7 @@ import {
 } from '@nexa/contracts';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import type { LegacyTrialFacts } from '../../apps/api/src/modules/commerce/trials/application/legacy-trial-eligibility';
+import { DrizzleLegacyCompactionRepository } from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -489,5 +490,38 @@ describe('legacy trial eligibility', () => {
     expect(await refusal(db.execute(sql`DELETE FROM legacy_trial_eligibility`))).toMatch(
       /append-only|not permitted|cannot/iu,
     );
+  });
+
+  /*
+   * v0.9.7 (owner decision): an imported customer MAY take a Nexa trial again. The cleanup
+   * after a clean import empties this table and, in the same statement, lifts the limit of 0
+   * the import wrote; the trial check never read the table, so it answers without it.
+   */
+  it('after the cleanup, the trial check works without the table and the imported customer may take a trial', async () => {
+    const imported = await customer('970013');
+    const operatorClosed = await customer('970014');
+    await preserve(imported, { limitUsertest: 1, hadTrial: true });
+    await preserve(operatorClosed, { limitUsertest: 0, hadTrial: false });
+    // An operator re-closes the second one AFTER the import: that limit is the operator's.
+    await ctx.container.database.db.execute(sql`
+      UPDATE trial_limit_overrides SET set_at = set_at + interval '1 day'
+       WHERE tenant_id = ${tenantA.tenantId} AND customer_id = ${operatorClosed}`);
+    expect(await claim(imported)).toEqual({ outcome: 'REFUSED', reason: 'LIMIT_REACHED' });
+
+    const repository = new DrizzleLegacyCompactionRepository(ctx.container.database.db);
+    const run = randomUUID();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO legacy_compaction_runs (id, tenant_id, state, requested_at, updated_at)
+      VALUES (${run}, ${tenantA.tenantId}, 'CLEARING', now(), now())`);
+    const cleared = await ctx.container.uow.run(tenantA, async (tx) => {
+      await repository.authorise(tx.tx, run);
+      return repository.clearBatch(tx.tx, { tenantId: tenantA.tenantId as string, limit: 10 });
+    });
+    expect(cleared).toEqual({ table: 'legacy_trial_eligibility', rows: 2, overridesLifted: 1 });
+    expect(await count(sql`SELECT count(*)::int AS n FROM legacy_trial_eligibility`)).toBe(0);
+
+    expect((await allowance(imported)).override).toBeNull();
+    expect((await claim(imported)).outcome).toBe('ISSUED');
+    expect(await claim(operatorClosed)).toEqual({ outcome: 'REFUSED', reason: 'LIMIT_REACHED' });
   });
 });

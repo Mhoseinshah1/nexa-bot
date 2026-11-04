@@ -11,7 +11,7 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { BackupOutcome } from '../../backup/application/backup.service.js';
 import type { BackupRunPartRow } from '../../backup/application/ports.js';
-import type { LegacyCompactionRepository, LegacyCompactionRow } from './ports.js';
+import type { CompactionSizes, LegacyCompactionRepository, LegacyCompactionRow } from './ports.js';
 import { COMPACTION_STRIP_KEYS, compactionDropTypes } from './read-map.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
@@ -40,6 +40,12 @@ export interface LegacyCompactionExecutorDeps {
   readonly heartbeatIntervalMs?: number;
   /** Consecutive failures of one stage before the run is FAILED. Default three. */
   readonly maxStepAttempts?: number;
+  /**
+   * v0.9.7: the automatic cleanup's scheduler (`LegacyCleanupScheduler`), asked on every tick
+   * before a run is claimed, so a finished, cleanly reconciled import is cleaned up without
+   * anybody pressing anything. Absent: only a requested run is driven.
+   */
+  readonly automatic?: { tick(): Promise<void> };
   readonly logger: {
     info(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
@@ -97,6 +103,17 @@ export class LegacyCompactionExecutor {
       if (await this.deps.quiesced()) {
         this.lastTickAt = this.deps.clock.now().getTime();
         return null;
+      }
+      if (this.deps.automatic !== undefined) {
+        // Never fatal to the run in flight: a scheduler that cannot decide now decides later.
+        try {
+          await this.deps.automatic.tick();
+        } catch (error) {
+          this.deps.logger.warn(
+            { err: error instanceof Error ? error.message : String(error) },
+            'the automatic legacy cleanup could not be scheduled this tick',
+          );
+        }
       }
       const now = this.deps.clock.now();
       const run = await this.deps.repository.claim({
@@ -213,6 +230,11 @@ export class LegacyCompactionExecutor {
         if (begun === 'IMPORT_NOT_READY') {
           await this.fail(run, 'legacy_compaction.import_not_completed');
         }
+        // v0.9.7: a difference in the balance reconciliation (or none recorded) stops the run
+        // here, before the archive is even taken. Nothing is deleted.
+        if (begun === 'RECONCILIATION_NOT_CLEAN') {
+          await this.fail(run, 'legacy_compaction.reconciliation_not_clean');
+        }
         return 'NEXT';
       }
       case 'ARCHIVING': {
@@ -292,7 +314,7 @@ export class LegacyCompactionExecutor {
           }),
         );
       case 'STRIPPING':
-        return this.batched(run, scope, 'STRIPPING', 'VACUUMING', (tx, after) =>
+        return this.batched(run, scope, 'STRIPPING', 'CLEARING', (tx, after) =>
           this.deps.repository.stripBatch(tx, {
             tenantId: run.tenantId,
             keys: COMPACTION_STRIP_KEYS,
@@ -300,6 +322,8 @@ export class LegacyCompactionExecutor {
             limit: this.deps.batchSize,
           }),
         );
+      case 'CLEARING':
+        return this.cleared(run, scope);
       case 'VACUUMING': {
         await this.notice(scope, run, 'maintenance', {});
         await this.heartbeating(run, () => this.deps.repository.vacuum());
@@ -316,6 +340,8 @@ export class LegacyCompactionExecutor {
           deleted: String(run.deleted),
           deduplicated: String(run.deduplicated),
           stripped: String(run.stripped),
+          // The operations group's summary: before → after per table (MiB), never a value.
+          sizes: sizeSummary(run.before, after),
         });
         return 'NEXT';
       }
@@ -332,7 +358,7 @@ export class LegacyCompactionExecutor {
     run: LegacyCompactionRow,
     scope: TenantContext,
     from: 'DROPPING' | 'DEDUPING' | 'STRIPPING',
-    to: 'DEDUPING' | 'STRIPPING' | 'VACUUMING',
+    to: 'DEDUPING' | 'STRIPPING' | 'CLEARING',
     batch: (
       tx: TransactionScope['tx'],
       after: string | null,
@@ -391,6 +417,62 @@ export class LegacyCompactionExecutor {
     }
   }
 
+  /**
+   * v0.9.7, CLEARING: the import's own tables emptied for the tenant
+   * (`LEGACY_CLEANUP_CLEARED_TABLES`), a batch per transaction. Each batch, the run's advance
+   * and ONE audit row (table, rows, trial limits lifted — never a value) commit together,
+   * inside the unit of work and after the scope check, as every other destructive batch.
+   * Resumable by construction: a batch deletes what it picked, so a restart takes the next.
+   */
+  private async cleared(run: LegacyCompactionRow, scope: TenantContext): Promise<'NEXT' | 'WAIT'> {
+    for (;;) {
+      if (await this.deps.quiesced()) return 'WAIT';
+      const result = await this.deps.uow.run(scope, async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return null;
+        await this.deps.repository.authorise(tx.tx, run.id);
+        const done = await this.deps.repository.clearBatch(tx.tx, {
+          tenantId: run.tenantId,
+          limit: this.deps.batchSize,
+        });
+        const now = this.deps.clock.now();
+        const moved = await this.deps.repository.advance(
+          {
+            id: run.id,
+            leaseOwner: this.deps.leaseOwner,
+            from: 'CLEARING',
+            to: done.table === null ? 'VACUUMING' : 'CLEARING',
+            now,
+            cursor: null,
+          },
+          tx.tx,
+        );
+        if (!moved) throw new Error('the compaction lease moved; this batch is not this process’s');
+        if (done.table === null) return done;
+        await this.deps.audit.record(
+          scope,
+          this.deps.actor(),
+          {
+            action: 'legacy.compaction.batch',
+            entityType: 'LegacyCompaction',
+            entityId: run.id,
+            before: null,
+            after: {
+              stage: 'CLEARING',
+              table: done.table,
+              rows: done.rows,
+              trialLimitsLifted: done.overridesLifted,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        return done;
+      });
+      if (result === null) return 'WAIT';
+      if (result.table === null) return 'NEXT';
+    }
+  }
+
   private async fail(
     run: LegacyCompactionRow,
     code:
@@ -398,6 +480,7 @@ export class LegacyCompactionExecutor {
       | 'legacy_compaction.archive_not_delivered'
       | 'legacy_compaction.archive_out_of_memory'
       | 'legacy_compaction.import_not_completed'
+      | 'legacy_compaction.reconciliation_not_clean'
       | 'legacy_compaction.step_failed',
     backupId?: string,
   ): Promise<void> {
@@ -435,9 +518,9 @@ export class LegacyCompactionExecutor {
       archived:
         'The legacy archive backup was delivered in full; compacting the legacy data begins.',
       maintenance:
-        'Maintenance: the legacy history tables are being rewritten (VACUUM FULL). The legacy ' +
-        'history pages wait until it finishes.',
-      completed: 'The compaction of the legacy data completed.',
+        'Maintenance: the legacy history and import tables are being rewritten (VACUUM FULL). ' +
+        'The legacy history pages wait until it finishes.',
+      completed: 'The cleanup of the imported legacy data completed.',
     } as const;
     try {
       await this.deps.opsLog.record(scope, {
@@ -453,4 +536,26 @@ export class LegacyCompactionExecutor {
       );
     }
   }
+}
+
+/** The tables whose before → after the operations group is told, in this order. */
+const SUMMARY_TABLES: readonly (readonly [string, string])[] = [
+  ['legacy_history_records', 'history'],
+  ['legacy_import_map', 'map'],
+  ['legacy_service_candidates', 'candidates'],
+  ['legacy_invoice_archive_staging', 'staging'],
+  ['legacy_trial_eligibility', 'trials'],
+  ['legacy_invoice_archive', 'invoices'],
+];
+
+/**
+ * `history 1952→410 · map 162→0 · …` in MiB: the before/after of each table, short enough
+ * for one detail line of the operations group's message. Sizes only.
+ */
+export function sizeSummary(before: CompactionSizes | null, after: CompactionSizes): string {
+  const mib = (bytes: string | undefined): string =>
+    bytes === undefined ? '?' : String(Math.round(Number(bytes) / (1024 * 1024)));
+  return SUMMARY_TABLES.map(
+    ([table, label]) => `${label} ${mib(before?.tables[table])}→${mib(after.tables[table])}`,
+  ).join(' · ');
 }

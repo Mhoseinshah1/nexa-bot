@@ -1,5 +1,6 @@
 import {
   errors,
+  LEGACY_CLEANUP_CLEARED_TABLES,
   LEGACY_COMPACTION_CONFIRMATION_PHRASE,
   PLATFORM_ERROR_CODES,
   type ActorContext,
@@ -35,6 +36,8 @@ import { compactionDropTypes } from './read-map.js';
 
 export const LEGACY_COMPACTION_PERMISSION: PermissionKey = 'legacy.migration.apply';
 const VIEW_PERMISSION: PermissionKey = 'legacy.migration.view';
+/** v0.9.7: what the worker's automatic request is checked against (`SYSTEM_JOB_PERMISSIONS`). */
+const AUTOMATIC_PERMISSION: PermissionKey = 'maintenance.run';
 
 export interface LegacyCompactionServiceDeps {
   readonly repository: LegacyCompactionRepository;
@@ -64,7 +67,8 @@ export class LegacyCompactionService {
     ]);
     const active = run !== null && run.state !== 'COMPLETED' && run.state !== 'FAILED';
     return {
-      available: readiness.completed && !readiness.inFlight && !active && !completed,
+      available:
+        readiness.completed && readiness.reconciled && !readiness.inFlight && !active && !completed,
       run,
     };
   }
@@ -108,10 +112,10 @@ export class LegacyCompactionService {
         }
         // Decided INSIDE the transaction: an import approved a moment ago is in flight.
         const readiness = await this.deps.repository.importReadiness(scope.tenantId, tx.tx);
-        if (!readiness.completed || readiness.inFlight) {
+        if (!readiness.completed || readiness.inFlight || !readiness.reconciled) {
           throw errors.conflict(
             PLATFORM_ERROR_CODES.LEGACY_COMPACTION_UNAVAILABLE,
-            'The legacy data can be compacted only after an import has completed and while none is running.',
+            'The legacy data can be compacted only after an import has completed with a clean balance reconciliation and while none is running.',
           );
         }
         if (await this.deps.repository.completedExists(scope.tenantId, tx.tx)) {
@@ -165,6 +169,83 @@ export class LegacyCompactionService {
     const row = await this.deps.repository.latest(scope.tenantId);
     if (row === null) throw new Error('a compaction row could not be read back');
     return row;
+  }
+
+  /**
+   * v0.9.7: the AUTOMATIC request (`LegacyCleanupScheduler`), made by the worker as
+   * `SYSTEM_JOB` under `maintenance.run` once an import has finished with a clean balance
+   * reconciliation and a backup destination exists. The same preconditions as the owner's
+   * request, decided again inside this transaction; the same REQUESTED row and audit row; the
+   * executor then takes the same «آرشیو ربات قبلی» archive first. Idempotent by the
+   * scheduler's key (per import and day: a FAILED run is retried at most once a day). Returns
+   * null when nothing was requested.
+   */
+  async requestAutomatic(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: { readonly importId: string; readonly idempotencyKey: string },
+  ): Promise<LegacyCompactionRow | null> {
+    const now = this.deps.clock.now();
+    const idempotencyKey = command.idempotencyKey;
+    const requestHash = 'legacy.compaction.request.automatic.v1';
+    const replay = await this.deps.idempotency.find<{ id: string | null }>(
+      scope,
+      actor.surface,
+      idempotencyKey,
+      requestHash,
+    );
+    if (replay) return null;
+    const id = this.deps.ids.uuid();
+    const created = await runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      AUTOMATIC_PERMISSION,
+      { action: 'legacy.compaction.request', entityType: 'LegacyCompaction', entityId: null },
+      async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
+        const readiness = await this.deps.repository.importReadiness(scope.tenantId, tx.tx);
+        if (!readiness.completed || readiness.inFlight || !readiness.reconciled) return false;
+        if (await this.deps.repository.completedExists(scope.tenantId, tx.tx)) return false;
+        const inserted = await this.deps.repository.create(
+          { id, tenantId: scope.tenantId, now, adminId: null, label: actor.label },
+          tx.tx,
+        );
+        if (!inserted) return false;
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'legacy.compaction.request',
+            entityType: 'LegacyCompaction',
+            entityId: id,
+            before: null,
+            after: {
+              state: 'REQUESTED',
+              automatic: true,
+              importId: command.importId,
+              dropTypes: [...compactionDropTypes()],
+              clearedTables: [...LEGACY_CLEANUP_CLEARED_TABLES],
+            },
+            reason:
+              'The import finished with a clean balance reconciliation; its working data is cleaned up automatically.',
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          actor.surface,
+          idempotencyKey,
+          requestHash,
+          { id },
+          tx,
+        );
+        return true;
+      },
+    );
+    return created ? this.deps.repository.latest(scope.tenantId) : null;
   }
 
   private async authorize(

@@ -29,6 +29,14 @@ import type { BackupRunPartRow } from '../../apps/api/src/modules/platform/backu
 
 type Rec = Record<string, unknown>;
 
+/** v0.9.7: the import's recorded balance reconciliation, clean (the cleanup's precondition). */
+const CLEAN_REPORT = JSON.stringify({
+  balanceReconciliation: {
+    verdict: 'RECONCILED',
+    differences: { BALANCE_DIFFERS: 0, MISSING_IN_NEXA: 0, AGENT_CREDIT_IN_WALLET: 0 },
+  },
+});
+
 describe('the legacy data compaction (E1)', () => {
   let ctx: TestContext;
   let ownerActor: ReturnType<typeof adminActorFor>;
@@ -82,10 +90,10 @@ describe('the legacy data compaction (E1)', () => {
       INSERT INTO legacy_nxpkg_imports
         (id, tenant_id, status, file_name, file_path, file_sha256, file_bytes, package_import_id,
          requested_by_admin_id, approved_dry_run_sha256, approved_at, approved_by_admin_id,
-         finished_at, created_at, updated_at)
+         apply_report, finished_at, created_at, updated_at)
       VALUES (${importId}::uuid, ${tenantA.tenantId}, 'COMPLETED', 'synthetic.nxpkg',
               '/nonexistent/synthetic.nxpkg', ${'a'.repeat(64)}, 1, 'pkg-1', ${owner.id},
-              ${'b'.repeat(64)}, now(), ${owner.id}, now(), now(), now())`);
+              ${'b'.repeat(64)}, now(), ${owner.id}, ${CLEAN_REPORT}::jsonb, now(), now(), now())`);
   });
 
   function executor(input: {

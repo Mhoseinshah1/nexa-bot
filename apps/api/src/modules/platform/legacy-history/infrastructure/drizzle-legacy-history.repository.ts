@@ -8,6 +8,7 @@ import {
   gt,
   inArray,
   isNull,
+  like,
   or,
   sql,
   type SQL,
@@ -350,7 +351,28 @@ export class DrizzleLegacyHistoryRepository implements LegacyHistoryRepository {
         ),
       )
       .orderBy(asc(services.id));
-    return rows;
+    // v0.9.7: the cleanup after an import empties `legacy_service_candidates`; an adopted
+    // service still names its own invoice (`source_ref = 'invoice:<key>'`).
+    const named = new Set(rows.map((row) => row.serviceId));
+    const own = await this.db
+      .select({ serviceId: services.id, sourceRef: services.sourceRef })
+      .from(services)
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.customerId, customerId),
+          inArray(services.id, [...serviceIds]),
+          eq(services.source, 'MIRZA'),
+          like(services.sourceRef, 'invoice:%'),
+        ),
+      )
+      .orderBy(asc(services.id));
+    const out = [...rows];
+    for (const row of own) {
+      if (named.has(row.serviceId) || row.sourceRef === null) continue;
+      out.push({ serviceId: row.serviceId, invoiceKey: row.sourceRef.slice('invoice:'.length) });
+    }
+    return out.sort((a, b) => (a.serviceId < b.serviceId ? -1 : a.serviceId > b.serviceId ? 1 : 0));
   }
 
   /**

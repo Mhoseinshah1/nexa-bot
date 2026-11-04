@@ -16,8 +16,10 @@ import { formatTimestamp } from '../format';
 /**
  * «فشرده‌سازی داده‌های ربات قبلی» — Round 4 PR-E, E1.
  *
- * An owner action, irreversible, offered only once an import has completed and none is
- * running. The press writes a request; the worker takes the «آرشیو ربات قبلی» backup first
+ * v0.9.7: AUTOMATIC once an import has finished with a clean balance reconciliation (the
+ * worker requests it); the owner's request below stays, under the same preconditions.
+ * Irreversible, offered only once an import has completed and none is running. The press
+ * writes a request; the worker takes the «آرشیو ربات قبلی» backup first
  * and deletes nothing unless every part of it reached Telegram. While the history tables
  * are rewritten (VACUUM FULL) the card says the legacy pages are in maintenance.
  */
@@ -29,6 +31,7 @@ const STATE_LABEL: Readonly<Record<LegacyCompactionState, WebKey>> = {
   DROPPING: 'web.lcp_state_dropping',
   DEDUPING: 'web.lcp_state_deduping',
   STRIPPING: 'web.lcp_state_stripping',
+  CLEARING: 'web.lcp_state_clearing',
   VACUUMING: 'web.lcp_state_vacuuming',
   COMPLETED: 'web.lcp_state_completed',
   FAILED: 'web.lcp_state_failed',
@@ -36,6 +39,11 @@ const STATE_LABEL: Readonly<Record<LegacyCompactionState, WebKey>> = {
 
 function mib(bytes: string | undefined): string {
   return bytes === undefined ? '—' : `${(Number(bytes) / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function total(tables: Readonly<Record<string, string>> | undefined): string | undefined {
+  if (tables === undefined) return undefined;
+  return String(Object.values(tables).reduce((sum, bytes) => sum + Number(bytes), 0));
 }
 
 function Report({ run }: { run: LegacyCompactionRun }) {
@@ -62,6 +70,11 @@ function Report({ run }: { run: LegacyCompactionRun }) {
             <td>{mib(run.after?.tables[name])}</td>
           </tr>
         ))}
+        <tr>
+          <td>{t('web.lcp_total')}</td>
+          <td>{mib(total(run.before.tables))}</td>
+          <td>{mib(total(run.after?.tables))}</td>
+        </tr>
       </tbody>
     </table>
   );
@@ -119,7 +132,9 @@ export function LegacyCompactionCard({ mayApply }: { mayApply: boolean }) {
             {t(
               run.failureCode === 'legacy_compaction.archive_out_of_memory'
                 ? 'web.lcp_failed_memory'
-                : 'web.lcp_failed',
+                : run.failureCode === 'legacy_compaction.reconciliation_not_clean'
+                  ? 'web.lcp_failed_reconciliation'
+                  : 'web.lcp_failed',
             )}{' '}
             <bdi dir="ltr" className="ltr mono">
               {run.failureCode}

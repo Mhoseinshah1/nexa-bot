@@ -14,6 +14,29 @@ Round 4 PR-E, E1. An **owner** action, **irreversible**, in the Web Admin («ب�
 The request writes one `legacy_compaction_runs` row (REQUESTED) and a CRITICAL audit row.
 The **worker** does the work (`LegacyCompactionExecutor`), never an HTTP request.
 
+## Automatic, after a clean import (v0.9.7, «پاک‌سازی داده‌های انتقال»)
+
+The owner refused a manual «پایان انتقال» button. The worker requests the run by itself
+(`LegacyCleanupScheduler`, asked on every executor tick, evaluated at most hourly, as
+`SYSTEM_JOB` under `maintenance.run`) when, for the tenant's latest finished import:
+
+- the import is `COMPLETED` / `COMPLETED_WITH_DISCREPANCY` / `ADOPT_DONE` and none is in flight;
+- its **balance reconciliation is clean**: the apply's REPORT step runs the cutover's
+  reconciliation (`reconcileCutover`, the `cutover-reconcile` CLI's own code) while the package
+  is open and the installation still frozen, and records the counts by kind in
+  `apply_report.balanceReconciliation`. Clean = recorded and zero `BALANCE_DIFFERS`,
+  `MISSING_IN_NEXA`, `AGENT_CREDIT_IN_WALLET` (`LEGACY_CLEANUP_BLOCKING_DIFFERENCES`). A missing
+  one (an import recorded before v0.9.7, or one that could not be computed) is NOT clean. Not
+  clean → nothing requested, one `maintenance.legacy_cleanup_reconciliation_differs`.
+  `beginArchiving` decides the same rule again under the import lock, for the owner's request
+  too (`legacy_compaction.reconciliation_not_clean`, before any archive is taken);
+- a **backup destination** exists (`BackupService.deliveryDestination() !== 'NONE'`). None →
+  nothing requested, one open `maintenance.legacy_cleanup_awaiting_backup_destination`
+  («پاک‌سازی داده‌های انتقال منتظر تنظیم مقصد بکاپ است»), repeated at most daily; a destination
+  appearing recovers it (`…_backup_destination_ready`) and the run is requested;
+- no run since that import finished is active or COMPLETED, and none FAILED in the last day
+  (a failed run is retried daily). A later import is cleaned up in its own turn.
+
 ## What the worker does, in order
 
 1. **ARCHIVING** — a full, verified backup through the ordinary pipeline, titled «آرشیو ربات
@@ -28,13 +51,24 @@ The **worker** does the work (`LegacyCompactionExecutor`), never an HTTP request
 5. **STRIPPING** — removes the top-level live-state flags (`affects_wallet`,
    `applies_to_live_state`, `grants_credit`, `creates_payment`, `redeemable`, …) from the kept
    payloads; every one is `false` on a stored record (a `true` was refused at ingest).
-6. **VACUUMING** — `VACUUM (FULL, ANALYZE)` of `legacy_history_records` and
-   `legacy_invoice_archive_staging`. **Maintenance window**: it takes an ACCESS EXCLUSIVE lock,
+6. **CLEARING** (v0.9.7) — empties, for THIS tenant only, in batches, the import's working
+   tables (`LEGACY_CLEANUP_CLEARED_TABLES`, in order): `legacy_trial_eligibility` (lifting, in
+   the same statement, the trial limit of 0 the import itself imposed — still 0 and not set
+   since; an operator's override is kept: owner decision, an imported customer MAY take a Nexa
+   trial), `legacy_service_candidates`, `legacy_import_map`, and `legacy_invoice_archive_staging`
+   rows of FINISHED archive runs. One audit row per batch (table, rows, trial limits lifted).
+   Migration 0312 lets the candidates' and trial decisions' delete guard accept a delete only
+   inside a transaction that named a run of the row's tenant in CLEARING.
+7. **VACUUMING** — `VACUUM (FULL, ANALYZE)` of `legacy_history_records` and the four cleared
+   tables. **Maintenance window**: it takes an ACCESS EXCLUSIVE lock,
    so the legacy history pages wait; the Web Admin card says so, and
    `maintenance.legacy_compaction_vacuum` is recorded.
-7. **COMPLETED** — the "after" sizes and counts beside the "before" on the card.
+8. **COMPLETED** — the "after" sizes and counts beside the "before" on the card, and the
+   operations group's `maintenance.legacy_compaction_completed` carries `sizes`
+   (`history 1952→410 · map 162→0 · …`, MiB).
 
-Steps 3–5 run in **keyset batches of 5000** by id: each batch, its cursor and **one audit row**
+Steps 3–5 run in **keyset batches of 5000** by id (step 6 in batches of 5000 that each delete
+what they picked, so it needs no cursor): each batch, its cursor and **one audit row**
 (`legacy.compaction.batch`: stage, rows, cursor — never a value) commit in one unit-of-work
 transaction, which the recovery quiesce refuses and which checks scope activity. A restarted
 worker (any replica, after the 15-minute lease) resumes after the last committed batch.
@@ -87,6 +121,22 @@ idempotency keys (`legacy-import:*`, `legacy:*` in `request_idempotency`) are ne
 - **Payment payloads are not reduced** to "what the payments table lacks": the history card
   shows the redacted payload and the money-history reader reads payload paths; no reduction is
   safe without an owner review of that card (open follow-up).
-- **No table is dropped.** `legacy_service_candidates` is read by the service review/adoption
-  lane; `legacy_invoice_archive_staging` is written by the invoice archive. Both stay (expand/
-  contract); the staging table is vacuumed.
+- **No table is dropped** (expand/contract): CLEARING empties rows, the tables stay.
+- **`legacy_invoice_archive` is never cleared** (every invoice reader, the customer's history
+  card), nor customers, wallets, the ledger, services, resellers, products, orders, payments,
+  `wallet_history_imports`, `legacy_import_runs` or the importer's idempotency keys.
+
+## Readers of the cleared tables (v0.9.7)
+
+Each answers once the rows are gone; `tests/integration/legacy-import-cleanup.test.ts` holds it.
+
+| Reader                                                         | After the cleanup                                  |
+| -------------------------------------------------------------- | -------------------------------------------------- |
+| terms exemption (`drizzle-terms.repository.ts`)                | `customers.source = 'MIRZA'` still says imported   |
+| service history `invoiceKeysOfService`, `adoptionsForCustomer` | `services.source_ref = 'invoice:<key>'` fallback   |
+| customer's invoices card (`invoicesForCustomer`)               | invoice shown, its candidate `null`                |
+| held-services review / adopt lane, manual-review queue         | empty lists                                        |
+| per-invoice outcome (`importOutcome`)                          | `null` (the card is removed in PR-5)               |
+| customer bot link (`countEligible`)                            | 0 — the import links its customers itself          |
+| trial check (`trialAllowanceFor`)                              | never read the decision table; the limit is lifted |
+| importer, materialize, cutover CLI, fresh-target guard         | import-time only; a new import is a fresh target   |
