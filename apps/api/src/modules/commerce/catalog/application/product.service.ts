@@ -48,6 +48,7 @@ import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   CatalogueAudience,
+  CatalogueServer,
   CustomerPage,
   PanelDirectory,
   ProductDraft,
@@ -272,12 +273,14 @@ export class ProductService {
     offset: number,
     /** The browsing customer, whose reseller standing picks the catalogue. */
     customerId?: string,
+    /** V099: only the categories with a plan on this server (a panel id); absent is all. */
+    serverId?: string,
   ): Promise<CustomerPage<ProductCategoryRecord>> {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
     // The same eligible-panel set the flat browse uses, and for the same reason:
     // every predicate goes into the query, ahead of LIMIT/OFFSET.
-    const view = await this.catalogueView(scope, customerId);
+    const view = await this.onServer(scope, await this.catalogueView(scope, customerId), serverId);
     if (view === null) return { items: [], hasMore: false };
     return this.deps.repository.listCustomerCategories(
       scope,
@@ -286,6 +289,64 @@ export class ProductService {
       view.panelIds,
       view.audience,
     );
+  }
+
+  /**
+   * V099 «انتخاب سرور در خرید»: whether the buy flow asks for a server first
+   * (`sales.server_selection`, default off). A display choice only — nothing that prices,
+   * confirms, pays or provisions reads it.
+   */
+  async serverSelectionEnabled(scope: TenantContext): Promise<boolean> {
+    return this.deps.settings.valueOf<boolean>(scope, 'sales.server_selection');
+  }
+
+  /**
+   * V099: one PAGE of the servers this customer may buy on — panels that are ACTIVE, not
+   * drained, not archived, in the browse's own eligible-panel view (reseller grants included)
+   * and carrying a product the category browse would show. Read whether or not the setting
+   * is on; the caller decides whether to draw it.
+   */
+  async browseServers(
+    scope: TenantContext,
+    actor: ActorContext,
+    limit: number,
+    offset: number,
+    /** The browsing customer, whose reseller standing picks the catalogue. */
+    customerId?: string,
+  ): Promise<CustomerPage<CatalogueServer>> {
+    await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
+    const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
+    const view = await this.catalogueView(scope, customerId);
+    if (view === null) return { items: [], hasMore: false };
+    return this.deps.repository.listCustomerServers(
+      scope,
+      bounded,
+      Math.max(offset, 0),
+      view.panelIds,
+      view.audience,
+    );
+  }
+
+  /**
+   * V099: the browse's view narrowed to ONE server, or unchanged without one. The server must
+   * be one `browseServers` would list for this view — the same query, pinned to that panel —
+   * so a stale or crafted id (drained, archived, another tenant's, not granted) narrows to
+   * nothing and the page is empty, never wider. A courtesy filter like the rest of the
+   * catalogue: the draft and the confirmation re-decide the panel for themselves.
+   */
+  private async onServer<
+    V extends { readonly panelIds: readonly string[]; readonly audience: CatalogueAudience },
+  >(scope: TenantContext, view: V | null, serverId: string | undefined): Promise<V | null> {
+    if (view === null || serverId === undefined) return view;
+    if (!view.panelIds.includes(serverId)) return null;
+    const listed = await this.deps.repository.listCustomerServers(
+      scope,
+      1,
+      0,
+      [serverId],
+      view.audience,
+    );
+    return listed.items.length === 0 ? null : { ...view, panelIds: [serverId] };
   }
 
   /**
@@ -309,10 +370,12 @@ export class ProductService {
     offset: number,
     /** The browsing customer, whose reseller standing picks the catalogue. */
     customerId?: string,
+    /** V099: only this server's plans (a panel id); absent is every eligible panel's. */
+    serverId?: string,
   ): Promise<CustomerPage<ListedProduct>> {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
-    const view = await this.catalogueView(scope, customerId);
+    const view = await this.onServer(scope, await this.catalogueView(scope, customerId), serverId);
     if (view === null) return { items: [], hasMore: false };
     const page = await this.deps.repository.listCustomerProductsInCategory(
       scope,

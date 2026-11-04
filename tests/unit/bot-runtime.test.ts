@@ -791,6 +791,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.captcha.option_button',
       'bot.captcha.wrong',
       'bot.catalog.back_to_categories_button',
+      /*
+       * V099 «انتخاب سرور در خرید»: the server list's heading and its way back. Reviewed: the
+       * heading asks for a choice among the buttons under it, and the back button returns to
+       * that list; neither promises a step the runtime does not draw.
+       */
+      'bot.catalog.back_to_servers_button',
       'bot.catalog.categories_heading',
       'bot.catalog.category_empty',
       'bot.catalog.empty',
@@ -799,6 +805,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       // Owner spec §2.2: a button label under a wallet credit, opening the catalogue.
       'bot.catalog.open_button',
       'bot.catalog.previous_page_button',
+      'bot.catalog.servers_heading',
       // Package B: the join screen and its check button.
       'bot.channels.check_button',
       'bot.channels.join_private_button',

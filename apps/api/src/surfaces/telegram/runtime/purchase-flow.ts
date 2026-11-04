@@ -27,6 +27,8 @@ import {
   CUSTOM_SERVICE_CALLBACK_DATA,
   CUSTOM_SERVICE_LOCATION_CALLBACK_PREFIX,
   DISCOUNT_CODE_ENTER_CALLBACK_PREFIX,
+  encodeServerCategory,
+  SERVER_CATEGORIES_CALLBACK_PREFIX,
   DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX,
   INPUT_BACK_CALLBACK_PREFIX,
   INPUT_CANCEL_CALLBACK_DATA,
@@ -364,6 +366,12 @@ export async function categoryPage(
   page: number,
   /** Whose catalogue: a reseller's tier decides what they see (WP9-B R6). */
   customerId: string,
+  /**
+   * V099 «انتخاب سرور در خرید»: the server (a panel id) the customer chose, or absent for the
+   * flow without the step — then every line below is exactly as it was. With one, only that
+   * server's plans are listed, and Back and paging stay on that server.
+   */
+  serverId?: string,
 ): Promise<PendingReply> {
   const { items, hasMore } = await rt.deps.products.browseCategory(
     scope,
@@ -372,13 +380,21 @@ export async function categoryPage(
     CATALOG_BROWSE_PAGE_SIZE,
     page * CATALOG_BROWSE_PAGE_SIZE,
     customerId,
+    serverId,
   );
   const back: CustomerButton = {
     ...inlineLabel('catalog.back_to_categories'),
-    data: `${CATALOG_PAGE_CALLBACK_PREFIX}0`,
+    data:
+      serverId === undefined
+        ? `${CATALOG_PAGE_CALLBACK_PREFIX}0`
+        : `${SERVER_CATEGORIES_CALLBACK_PREFIX}${serverId}.0`,
   };
+  const pageData = (target: number): string =>
+    serverId === undefined
+      ? `${CATEGORY_CALLBACK_PREFIX}${categoryId}.${target}`
+      : encodeServerCategory(serverId, categoryId, target);
   if (items.length === 0) {
-    if (page > 0) return categoryPage(rt, scope, actor, categoryId, 0, customerId);
+    if (page > 0) return categoryPage(rt, scope, actor, categoryId, 0, customerId, serverId);
     return {
       key: 'bot.catalog.category_empty',
       values: {},
@@ -413,13 +429,13 @@ export async function categoryPage(
   if (page > 0) {
     buttons.push({
       ...inlineLabel('catalog.previous_page'),
-      data: `${CATEGORY_CALLBACK_PREFIX}${categoryId}.${page - 1}`,
+      data: pageData(page - 1),
     });
   }
   if (hasMore && page < CATALOG_BROWSE_MAX_PAGE) {
     buttons.push({
       ...inlineLabel('catalog.next_page'),
-      data: `${CATEGORY_CALLBACK_PREFIX}${categoryId}.${page + 1}`,
+      data: pageData(page + 1),
     });
   }
   buttons.push(back);

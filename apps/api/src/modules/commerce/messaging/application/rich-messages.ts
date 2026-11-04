@@ -99,6 +99,7 @@ export const RICH_SCREEN_LAYOUTS: Readonly<
 > = {
   'bot.catalog.heading': { heading: true },
   'bot.catalog.categories_heading': { heading: true },
+  'bot.catalog.servers_heading': { heading: true },
   'bot.terms.required': { collapse: true },
   'bot.terms.updated': { collapse: true },
   'bot.tutorial.android': { collapse: true },
