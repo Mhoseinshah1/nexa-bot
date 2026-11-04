@@ -299,6 +299,9 @@ export const MINIAPP_FA = {
 
   'miniapp.home_topup': 'افزایش موجودی',
   'miniapp.home_shortcut_trial': 'سرویس تست رایگان',
+  'miniapp.store_step_server': 'انتخاب سرور',
+  'miniapp.store_step_category': 'انتخاب دسته',
+  'miniapp.store_step_back': 'بازگشت',
 
   'miniapp.wallet_title': 'کیف پول',
   'miniapp.wallet_balance': 'موجودی',
