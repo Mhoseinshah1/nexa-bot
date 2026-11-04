@@ -23,7 +23,10 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { PHONE_VERIFICATION_FLAG } from '../../payments/domain/gateway-eligibility.js';
+import {
+  PHONE_VERIFICATION_FLAG,
+  notAcceptedPhoneCounts,
+} from '../../payments/domain/gateway-eligibility.js';
 import { RESOLVE_CUSTOMER_PERMISSION } from './customer.service.js';
 import type { CustomerRecord, CustomerRepository } from './ports.js';
 
@@ -47,7 +50,7 @@ export interface SharedContact {
 export interface PhoneVerificationDeps {
   readonly customers: Pick<
     CustomerRepository,
-    'findById' | 'setVerifiedPhone' | 'setPhoneResume' | 'takePhoneResume'
+    'findById' | 'setVerifiedPhone' | 'setNotAcceptedPhone' | 'setPhoneResume' | 'takePhoneResume'
   >;
   /**
    * NEXA v095 PR-4 B: `phone_verification.allowed_numbers`, read in the verification's own
@@ -81,9 +84,14 @@ export interface PhoneVerificationDeps {
 /** What one verification did: the number now on the row, masked, and whether it changed. */
 export interface PhoneVerificationResult {
   readonly customer: CustomerRecord;
-  /** `maskPhoneNumber` of the verified number — the only form a reply or a log may carry. */
+  /** `maskPhoneNumber` of the stored number — the only form a reply or a log may carry. */
   readonly masked: string;
   readonly changed: boolean;
+  /**
+   * NEXA v099 (owner): false when the number was stored as NOT accepted (IRAN_ONLY, not +98)
+   * — it is on the row, it is not verified, and nothing resumes (`resume` is null).
+   */
+  readonly accepted: boolean;
   /**
    * NEXA v095 PR-4 A/C: the action a phone gate held, taken (read and cleared) in this
    * verification's transaction — the bot resumes it. Null when none was remembered, when it
@@ -119,6 +127,34 @@ export function phoneGateHolds(
   customer: Pick<CustomerRecord, 'phoneVerifiedAt' | 'phoneVerificationExemptAt'>,
 ): boolean {
   return customer.phoneVerifiedAt === null && customer.phoneVerificationExemptAt === null;
+}
+
+/**
+ * What the bot-wide phone gate does with a customer (NEXA v095 PR-4 A, NEXA v099):
+ * `OPEN` — let them through; `REQUIRED` — ask for the contact («📞 Share Contact»);
+ * `NOT_ACCEPTED` — their own number is stored as NOT accepted and IRAN_ONLY is on: they are
+ * told so (`bot.phone.not_accepted`) and NOT asked again. Neither held state blocks or bans.
+ */
+export type PhoneGateState = 'OPEN' | 'REQUIRED' | 'NOT_ACCEPTED';
+
+/**
+ * THE decision of the bot-wide phone gate, for the bot and the mini app alike: off opens; a
+ * verified number or an exemption opens (`phoneGateHolds`); a number stored as not accepted
+ * opens only when the allowed numbers count it (`notAcceptedPhoneCounts`, ALL) and otherwise
+ * holds with `NOT_ACCEPTED`; no number holds with `REQUIRED`.
+ */
+export function phoneGateOf(
+  customer: Pick<
+    CustomerRecord,
+    'phoneVerifiedAt' | 'phoneVerificationExemptAt' | 'phoneNotAcceptedAt'
+  >,
+  enabled: boolean,
+  allowed: PhoneAllowedNumbers,
+): PhoneGateState {
+  if (!enabled || !phoneGateHolds(customer)) return 'OPEN';
+  // `== null`: a row read without the column is asked for a number, never let through.
+  if (customer.phoneNotAcceptedAt == null) return 'REQUIRED';
+  return notAcceptedPhoneCounts(allowed) ? 'OPEN' : 'NOT_ACCEPTED';
 }
 
 /** The audit action of a customer's own verification; an operator's is `customer.phone.verify`. */
@@ -171,6 +207,38 @@ export class PhoneVerificationService {
    */
   async enabled(scope: TenantContext, tx?: unknown): Promise<boolean> {
     return this.deps.features.isEnabled(scope, PHONE_VERIFICATION_FLAG, tx);
+  }
+
+  /**
+   * NEXA v099: the bot-wide gate's decision for this customer row (`phoneGateOf`), reading
+   * the switch and — only for a number stored as not accepted — the allowed numbers.
+   */
+  async gateFor(
+    scope: TenantContext,
+    customer: Pick<
+      CustomerRecord,
+      'phoneVerifiedAt' | 'phoneVerificationExemptAt' | 'phoneNotAcceptedAt'
+    >,
+    tx?: unknown,
+  ): Promise<PhoneGateState> {
+    if (!phoneGateHolds(customer)) return 'OPEN';
+    const enabled = await this.enabled(scope, tx);
+    if (!enabled) return 'OPEN';
+    // The allowed numbers decide only a number stored as not accepted; none is read otherwise.
+    const allowed =
+      customer.phoneNotAcceptedAt === null ? 'ALL' : await this.allowedNumbers(scope, tx);
+    return phoneGateOf(customer, enabled, allowed);
+  }
+
+  /** `phone_verification.allowed_numbers`; ALL when no settings are wired (a narrow fixture). */
+  async allowedNumbers(scope: TenantContext, tx?: unknown): Promise<PhoneAllowedNumbers> {
+    return this.deps.settings === undefined
+      ? 'ALL'
+      : this.deps.settings.valueOf<PhoneAllowedNumbers>(
+          scope,
+          PHONE_ALLOWED_NUMBERS_SETTING_KEY,
+          tx,
+        );
   }
 
   /**
@@ -239,12 +307,11 @@ export class PhoneVerificationService {
       phoneLength: phone.length,
     });
     const namespace = actor.surface;
-    const replay = await this.deps.idempotency.find<{ customerId: string; changed: boolean }>(
-      scope,
-      namespace,
-      input.idempotencyKey,
-      requestHash,
-    );
+    const replay = await this.deps.idempotency.find<{
+      customerId: string;
+      changed: boolean;
+      accepted?: boolean;
+    }>(scope, namespace, input.idempotencyKey, requestHash);
     if (replay !== null) {
       const replayed = await this.deps.customers.findById(scope, customerId);
       if (replayed !== null && replayed.phoneNumber !== null) {
@@ -252,6 +319,7 @@ export class PhoneVerificationService {
           customer: replayed,
           masked: maskPhoneNumber(replayed.phoneNumber),
           changed: replay.result.changed,
+          accepted: replay.result.accepted ?? true,
           resume: null,
         };
       }
@@ -291,34 +359,35 @@ export class PhoneVerificationService {
          * NEXA v095 PR-4 C: no longer refused while `phone_verification` is off — a payment
          * route's verified-phone rule asks for a number whatever the bot-wide switch says.
          *
-         * B: the allowed numbers, read here, in the write's transaction. Refused before
-         * anything is stored; a number verified earlier is untouched (this only runs on a new
-         * share).
+         * B: the allowed numbers, read here, in the write's transaction.
+         *
+         * NEXA v099 (owner): a foreign number under IRAN_ONLY is no longer refused unstored —
+         * it is STORED, marked NOT accepted, and never verified (`setNotAcceptedPhone`); the
+         * gate stops asking and says why. A customer who already has a VERIFIED number keeps
+         * it untouched (B never revokes one): their foreign share is refused as before, with
+         * nothing stored.
          */
-        const allowed =
-          this.deps.settings === undefined
-            ? 'ALL'
-            : await this.deps.settings.valueOf<PhoneAllowedNumbers>(
-                scope,
-                PHONE_ALLOWED_NUMBERS_SETTING_KEY,
-                tx,
-              );
-        if (allowed === 'IRAN_ONLY' && !isIranianPhoneNumber(phone)) {
+        const allowed = await this.allowedNumbers(scope, tx);
+        const accepted = allowed !== 'IRAN_ONLY' || isIranianPhoneNumber(phone);
+        if (!accepted && before.phoneVerifiedAt !== null) {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PHONE_NOT_IRANIAN,
             'Only Iranian (+98) phone numbers are accepted here.',
           );
         }
-        const changed = await this.deps.customers.setVerifiedPhone(
-          scope,
-          customerId,
-          phone,
-          now,
-          tx,
-        );
+        const changed = accepted
+          ? await this.deps.customers.setVerifiedPhone(scope, customerId, phone, now, tx)
+          : await this.deps.customers.setNotAcceptedPhone(scope, customerId, phone, now, tx);
         const after = await this.deps.customers.findById(scope, customerId, tx);
         if (after === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
+        // A verification that raced in between this read and the conditional write wins.
+        if (!accepted && after.phoneVerifiedAt !== null) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PHONE_NOT_IRANIAN,
+            'Only Iranian (+98) phone numbers are accepted here.',
+          );
         }
         await this.deps.audit.record(
           scope,
@@ -330,12 +399,14 @@ export class PhoneVerificationService {
             before: {
               phoneNumber: before.phoneNumber === null ? null : maskPhoneNumber(before.phoneNumber),
             },
-            after: { phoneNumber: maskPhoneNumber(phone), changed },
+            // NEXA v099: audited like any share; `accepted: false` is a number stored NOT verified.
+            after: { phoneNumber: maskPhoneNumber(phone), changed, accepted },
             result: 'SUCCESS',
           },
           tx,
         );
-        if (changed) {
+        // A not-accepted number changes no verification: no event (its payload says `verified`).
+        if (changed && accepted) {
           await this.deps.outbox.write(tx, actor, {
             eventType: 'CustomerPhoneVerificationChanged',
             aggregateType: 'Customer',
@@ -349,9 +420,19 @@ export class PhoneVerificationService {
           namespace,
           input.idempotencyKey,
           requestHash,
-          { customerId, changed },
+          { customerId, changed, accepted },
           tx,
         );
+        // NEXA v099: nothing resumes behind a not-accepted number — every gate still holds.
+        if (!accepted) {
+          return {
+            customer: after,
+            masked: maskPhoneNumber(phone),
+            changed,
+            accepted,
+            resume: null,
+          };
+        }
         // A/C: the held action, taken in THIS transaction, so it resumes once and only after
         // the number is on the row.
         const held = await this.deps.customers.takePhoneResume(scope, customerId, now, tx);
@@ -359,7 +440,7 @@ export class PhoneVerificationService {
           held !== null && now.getTime() - held.at.getTime() <= PHONE_RESUME_LIFETIME_MS
             ? held.resume
             : null;
-        return { customer: after, masked: maskPhoneNumber(phone), changed, resume };
+        return { customer: after, masked: maskPhoneNumber(phone), changed, accepted, resume };
       },
     );
   }

@@ -15,7 +15,7 @@ import { t } from '../i18n/t.js';
 import { dateTime, money, trafficLimit } from '../format.js';
 import { Sheet } from '../sheet.js';
 import { botPhonePromptLink, openExternal, openTelegram } from '../telegram.js';
-import { phoneGateDeps, withPhoneVerification } from '../phone.js';
+import { phoneGateDeps, phoneNotAcceptedText, withPhoneVerification } from '../phone.js';
 import { Button, Card, Loading, Ltr, Row, errorText, useLoad } from '../ui.js';
 
 /**
@@ -131,6 +131,11 @@ function Invoice({
        */
       const outcome = await withPhoneVerification(() => payWith(method), phoneGateDeps(api));
       if (outcome.kind === 'DONE') return;
+      // NEXA v099: a number stored as not accepted — the bot's sentence, no contact dialog.
+      if (outcome.kind === 'NOT_ACCEPTED') {
+        setError(phoneNotAcceptedText());
+        return;
+      }
       if (outcome.kind === 'UNSUPPORTED' && me.botLink !== null) {
         openTelegram(botPhonePromptLink(me.botLink));
         setError(t('miniapp.phone_verification_open_bot'));

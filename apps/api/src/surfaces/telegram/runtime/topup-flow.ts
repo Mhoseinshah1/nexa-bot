@@ -8,6 +8,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { walletPhoneState } from '../../../modules/commerce/messaging/application/customer-screens.js';
+import { notAcceptedPhoneCounts } from '../../../modules/commerce/payments/domain/gateway-eligibility.js';
 import type { CustomerButton } from '../../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../../modules/commerce/customers/application/ports.js';
 import {
@@ -225,6 +226,11 @@ export async function walletBalance(
     (await rt.deps.routes.routesFor(scope, customer.id, 'WALLET_TOPUP', null)).length > 0;
   // R10 D4: the gift-card button only while the feature is on, read when the screen is drawn.
   const giftCards = rt.deps.giftCards !== undefined && (await rt.deps.giftCards.isEnabled(scope));
+  // NEXA v099: a number stored as not accepted reads «مجاز نیست» unless the setting now counts it.
+  const notAcceptedCounts =
+    customer.phoneNotAcceptedAt !== null &&
+    rt.deps.phoneVerification !== undefined &&
+    notAcceptedPhoneCounts(await rt.deps.phoneVerification.allowedNumbers(scope));
   const summary = await rt.deps.screens.walletSummary(scope, {
     telegramId: customer.telegramUserId,
     displayName: displayNameOf(customer),
@@ -234,7 +240,7 @@ export async function walletBalance(
     paidInvoiceCount: counters.paidInvoices,
     referralCount,
     group: reseller === null ? 'CUSTOMER' : 'RESELLER',
-    phone: walletPhoneState(customer),
+    phone: walletPhoneState(customer, notAcceptedCounts),
     // Owner spec §3: when the screen was drawn, not when anything happened.
     now: rt.deps.clock.now(),
   });

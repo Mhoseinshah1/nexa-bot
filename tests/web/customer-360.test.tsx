@@ -210,7 +210,7 @@ describe('Customer 360 — the customer page', () => {
     );
     renderPage(<UserDetailPage id={ID} {...OFF} mayExemptChannel denied={false} />);
     await openC360Tab('controls');
-    fireEvent.click(await screen.findByRole('button', { name: 'معاف کردن' }));
+    fireEvent.click(await screen.findByRole('switch', { name: 'معاف از عضویت اجباری کانال' }));
     const confirm = screen.getByRole('button', { name: 'تأیید' });
     expect(confirm).toBeDisabled();
     fireEvent.change(screen.getByLabelText('دلیل (اجباری)'), { target: { value: 'VIP' } });
@@ -241,12 +241,12 @@ describe('Customer 360 — the customer page', () => {
     renderPage(<UserDetailPage id={ID} {...OFF} mayExemptPhone denied={false} />);
     await openC360Tab('controls');
     // Both exemptions are on the card, each under a label that says what it does.
-    expect(await screen.findByText('معاف از عضویت اجباری کانال')).toBeTruthy();
-    expect(screen.getByText('معاف از تأیید شماره')).toBeTruthy();
-    // Only the control this administrator holds is offered.
-    const exempt = screen.getAllByRole('button', { name: 'معاف کردن' });
-    expect(exempt).toHaveLength(1);
-    fireEvent.click(exempt[0] as HTMLElement);
+    const phoneSwitch = await screen.findByRole('switch', { name: 'تأیید شماره توسط مدیر' });
+    const channelSwitch = screen.getByRole('switch', { name: 'معاف از عضویت اجباری کانال' });
+    // Only the control this administrator holds can be flipped.
+    expect(phoneSwitch).toBeEnabled();
+    expect(channelSwitch).toBeDisabled();
+    fireEvent.click(phoneSwitch);
     const confirm = screen.getByRole('button', { name: 'تأیید' });
     expect(confirm).toBeDisabled();
     fireEvent.change(screen.getByLabelText('دلیل (اجباری)'), { target: { value: 'پشتیبانی' } });
@@ -258,9 +258,41 @@ describe('Customer 360 — the customer page', () => {
     expect(sent?.method).toBe('POST');
     expect(sent?.body).toMatchObject({ exempt: true, reason: 'پشتیبانی' });
     expect(typeof (sent?.body as { idempotencyKey?: unknown }).idempotencyKey).toBe('string');
-    expect(
-      (await screen.findAllByText('معاف است (نه ربات، نه درگاه‌ها شماره نمی‌خواهند)')).length,
-    ).toBeGreaterThan(0);
+    expect((await screen.findAllByText('تأییدشده توسط مدیر')).length).toBeGreaterThan(0);
+    expect(await screen.findByRole('switch', { name: 'تأیید شماره توسط مدیر' })).toBeChecked();
+  });
+
+  it('v099: «تأیید شماره توسط مدیر» is always on the access tab, even with phone verification off', async () => {
+    // A customer with no number and no exemption: what phone verification being OFF leaves.
+    stubApi(routes());
+    renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    await openC360Tab('controls');
+    const phoneSwitch = await screen.findByRole('switch', { name: 'تأیید شماره توسط مدیر' });
+    expect(phoneSwitch).toHaveAttribute('aria-checked', 'false');
+    // Without the permission it is shown, read-only; the channel exemption and the block line too.
+    expect(phoneSwitch).toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'معاف از عضویت اجباری کانال' })).toBeTruthy();
+    expect(screen.getByText('وضعیت حساب')).toBeTruthy();
+  });
+
+  it('v099: a stored non-Iranian number reads «مجاز نیست (غیر ایران)» unless it counts as verified', async () => {
+    stubApi(
+      routes(
+        [],
+        overview({
+          phoneNotAccepted: {
+            number: '+14155550100',
+            masked: '\u20260100',
+            sharedAt: '2026-11-01T10:00:00.000Z',
+            countsAsVerified: false,
+          },
+        }),
+      ),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} mayVerifyPhone denied={false} />);
+    await openC360Tab('controls');
+    expect(await screen.findByText('+14155550100')).toBeTruthy();
+    expect(screen.getAllByText('مجاز نیست (غیر ایران)').length).toBeGreaterThan(0);
   });
 
   it('R10 D3: sets a personal discount — a whole percent 0..100 and a reason, Persian errors', async () => {
@@ -724,7 +756,7 @@ describe('Customer 360 — the customer page', () => {
 describe('Customer 360 — tabs and the action panel', () => {
   const OTHER = '019210ab-cdef-7012-8345-6789abcdef02';
 
-  it('draws only the chosen tab, and opens another customer on «نمای کلی»', async () => {
+  it('draws only the chosen tab, and opens another customer on «خلاصه»', async () => {
     stubApi([
       ...routes([{ url: `/users/${ID}/timeline`, body: { entries: [] } }]),
       { url: `/users/${OTHER}`, body: { customer: customer({ id: OTHER }) } },
@@ -735,14 +767,14 @@ describe('Customer 360 — tabs and the action panel', () => {
     const view = renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
     const tabs = await screen.findAllByRole('tab');
     expect(tabs.map((tab) => tab.textContent)).toEqual([
-      'نمای کلی',
-      'سرویس‌ها و سفارش‌ها',
+      'خلاصه',
+      'سرویس‌ها',
+      'پرداخت‌ها و کیف پول',
+      'تأیید و دسترسی',
+      'تاریخچهٔ مدیر',
       'پشتیبانی',
-      'مالی',
-      'محدودیت‌ها و کنترل‌ها',
       'معرف و نماینده',
       'یادداشت‌ها و برچسب‌ها',
-      'تاریخچهٔ مدیریتی',
     ]);
     expect(screen.queryByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' })).toBeNull();
     await openC360Tab('controls');
@@ -750,9 +782,7 @@ describe('Customer 360 — tabs and the action panel', () => {
       await screen.findByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' }),
     ).toBeInTheDocument();
     view.rerender(<UserDetailPage id={OTHER} {...OFF} denied={false} />);
-    expect(
-      await screen.findByRole('tab', { name: 'نمای کلی', selected: true }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'خلاصه', selected: true })).toBeInTheDocument();
     expect(screen.queryByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' })).toBeNull();
   });
 

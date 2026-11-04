@@ -232,4 +232,61 @@ describe('the payment situation guide', () => {
     expect(screen.getByText(t('web.payment_situation_no_action'))).toBeTruthy();
     expect(screen.queryByText(t('web.payment_situation_needs_action'))).toBeNull();
   });
+
+  it('draws no «—» row and no receipts card for a method that takes no receipts', async () => {
+    stubApi([
+      ...detailRoutes({
+        state: 'CONFIRMED',
+        method: 'WALLET',
+        gatewayProvider: null,
+        confirmedAt: '2026-10-07T08:05:00.000Z',
+        evidenceKind: 'WALLET_DEBIT',
+        situation: {
+          situation: 'EXPIRED',
+          money: 'NO',
+          customer: 'MAY_PAY_AGAIN',
+          actions: [],
+          needsAction: false,
+        },
+      }),
+      { url: `/payments/${ROW_ID}/receipts`, body: { receipts: [] } },
+    ]);
+    renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
+    );
+    await screen.findByText(t('web.payment_situation_card'));
+    // The summary names the customer once; the empty rows are not drawn at all.
+    expect(screen.getAllByText(t('web.payment_customer'))).toHaveLength(1);
+    expect(screen.queryByText(t('web.payment_disposition'))).toBeNull();
+    expect(screen.queryByText(t('web.payment_external_reference'))).toBeNull();
+    expect(screen.queryByText(t('web.payment_expires_at'))).toBeNull();
+    expect(screen.queryByText(t('web.payment_receipts'))).toBeNull();
+    expect(screen.queryByText(t('web.payment_receipts_empty'))).toBeNull();
+    // No callout where no action is needed.
+    expect(screen.queryByText(t('web.payment_situation_needs_action'))).toBeNull();
+    for (const dd of document.querySelectorAll('dd')) expect(dd.textContent).not.toBe('—');
+  });
+
+  it('keeps the receipts card for a card-to-card payment', async () => {
+    stubApi([
+      ...detailRoutes({ method: 'MANUAL_TRANSFER', gatewayProvider: null, state: 'PENDING' }),
+      { url: `/payments/${ROW_ID}/receipts`, body: { receipts: [] } },
+    ]);
+    renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
+    );
+    expect(await screen.findByText(t('web.payment_receipts'))).toBeTruthy();
+  });
 });

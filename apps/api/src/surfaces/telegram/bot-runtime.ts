@@ -1315,20 +1315,33 @@ export class BotRuntime {
     },
   ): Promise<PendingReply> {
     const phone = this.deps.phoneVerification;
-    if (
+    const gate =
       phone !== undefined &&
       !phoneVerifyFlow.PHONE_GATE_EXEMPT_INTENTS.has(command.intent) &&
       !ADMIN_INTENTS.has(command.intent) &&
-      phoneGateHolds(customer) &&
-      (await phone.enabled(scope)) &&
+      phoneGateHolds(customer)
+        ? await phone.gateFor(scope, customer)
+        : 'OPEN';
+    if (
+      gate !== 'OPEN' &&
       (await this.deps.telegramAdmins?.resolve(scope, input.telegramUserId, actor.correlationId)) ==
         null
     ) {
+      // NEXA v099 (owner): a number stored as NOT accepted is told so, never asked for again,
+      // and nothing is remembered: there is no verification to resume after.
+      if (gate === 'NOT_ACCEPTED') return phoneVerifyFlow.phoneNotAcceptedReply('MAIN_MENU');
       const held = phoneVerifyFlow.phoneRequiredReply();
       await this.rememberPhoneHold(scope, actor, command, customer, input);
       return held;
     }
     const reply = await this.act(scope, actor, command, customer, arrival, input);
+    // NEXA v099: a route's verified-phone rule refused a number stored as NOT accepted — the
+    // same sentence as the gate's, no contact keyboard and no tap remembered.
+    if (phoneVerifyFlow.refusedForNotAcceptedNumber(reply, customer)) {
+      return phoneVerifyFlow.phoneNotAcceptedReply(
+        (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
+      );
+    }
     if (reply.phoneHold === true) {
       await this.rememberPhoneHold(scope, actor, command, customer, input);
     }

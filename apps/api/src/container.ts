@@ -5435,6 +5435,8 @@ export function createContainer(
     outbox,
     clock,
     terms: termsAcceptanceService,
+    // NEXA v099: the allowed numbers, for the overview's not-accepted number.
+    settings: settingsResolver,
   });
   // R11 B7: a customer verifies their OWN phone number by sharing their Telegram contact.
   const phoneVerificationService = new PhoneVerificationService({

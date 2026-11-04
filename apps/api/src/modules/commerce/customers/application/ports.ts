@@ -59,9 +59,19 @@ export interface CustomerRecord {
    * row the update resolved) nor by a payment route's rule (read in the payment's transaction).
    */
   readonly phoneVerificationExemptAt: Date | null;
-  /** A number an operator verified out of band, and when; both or neither. */
+  /**
+   * The customer's stored number: verified (an operator out of band, or their own contact),
+   * with `phoneVerifiedAt`; or — NEXA v099 — their own number stored as NOT accepted, with
+   * `phoneNotAcceptedAt`. Exactly one of the two times is set while a number is.
+   */
   readonly phoneNumber: string | null;
   readonly phoneVerifiedAt: Date | null;
+  /**
+   * NEXA v099 (owner): the customer shared their own non-+98 number while
+   * `phone_verification.allowed_numbers` was IRAN_ONLY; null otherwise. Not a verification:
+   * whether it counts as one is decided when it is read (`notAcceptedPhoneCounts`).
+   */
+  readonly phoneNotAcceptedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -303,6 +313,20 @@ export interface CustomerRepository {
     scope: TenantContext,
     id: UserId,
     phoneNumber: string | null,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * NEXA v099 (owner): store the customer's own number as NOT accepted — `phone_number` set,
+   * `phone_not_accepted_at` = `now`, `phone_verified_at` left NULL. Conditional: never over a
+   * VERIFIED number (a verification is never revoked by this), and `false` when the row
+   * already holds exactly that number not accepted (it keeps its first time).
+   */
+  setNotAcceptedPhone(
+    scope: TenantContext,
+    id: UserId,
+    phoneNumber: string,
     now: Date,
     tx?: unknown,
   ): Promise<boolean>;

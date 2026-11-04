@@ -1,4 +1,5 @@
 import { COMMERCE_ERROR_CODES, MINIAPP_ROUTES, miniAppMeResponseSchema } from '@nexa/contracts';
+import { CATALOGUE_FA } from '@nexa/i18n';
 import { ApiError, type MiniAppApi } from './api.js';
 import { requestOwnContact } from './telegram.js';
 
@@ -8,17 +9,35 @@ import { requestOwnContact } from './telegram.js';
  * - `DONE` — the request went through, first time or after the number was verified;
  * - `CANCELLED` — the customer closed Telegram's contact dialog;
  * - `UNSUPPORTED` — this client has no `requestContact()`: the caller sends them to the bot;
- * - `PENDING` — they shared it, and the server has not verified it yet (it may still).
+ * - `PENDING` — they shared it, and the server has not verified it yet (it may still);
+ * - `NOT_ACCEPTED` — NEXA v099: their own number is stored as NOT accepted (IRAN_ONLY, not
+ *   +98), so the contact is not asked for again; the caller shows `phoneNotAcceptedText()`.
  */
 export type PhoneGatedResult<T> =
   | { readonly kind: 'DONE'; readonly value: T }
-  | { readonly kind: 'CANCELLED' | 'UNSUPPORTED' | 'PENDING'; readonly refusal: unknown };
+  | {
+      readonly kind: 'CANCELLED' | 'UNSUPPORTED' | 'PENDING' | 'NOT_ACCEPTED';
+      readonly refusal: unknown;
+    };
+
+/**
+ * NEXA v099 (owner): the bot's own sentence for a number stored as not accepted — the mini
+ * app says what the bot says, in the same words.
+ */
+export function phoneNotAcceptedText(): string {
+  return CATALOGUE_FA['bot.phone.not_accepted'];
+}
 
 export interface PhoneGateDeps {
   /** `Telegram.WebApp.requestContact()`, as `requestOwnContact` wraps it. */
   readonly requestContact: () => Promise<'shared' | 'cancelled' | 'unsupported'>;
   /** Whether the server now has a verified number (`/me.phoneVerified`). */
   readonly phoneVerified: () => Promise<boolean>;
+  /**
+   * NEXA v099: whether the server holds the customer's number as NOT accepted
+   * (`/me.phoneNotAccepted`). Absent: never.
+   */
+  readonly phoneNotAccepted?: () => Promise<boolean>;
   readonly wait: (ms: number) => Promise<void>;
 }
 
@@ -45,11 +64,19 @@ export async function withPhoneVerification<T>(
     ) {
       throw failure;
     }
+    // NEXA v099: asking again would change nothing — the number is on record, not accepted.
+    if ((await deps.phoneNotAccepted?.()) === true) {
+      return { kind: 'NOT_ACCEPTED', refusal: failure };
+    }
     const asked = await deps.requestContact();
     if (asked === 'unsupported') return { kind: 'UNSUPPORTED', refusal: failure };
     if (asked === 'cancelled') return { kind: 'CANCELLED', refusal: failure };
     for (let attempt = 0; attempt < PHONE_POLL_ATTEMPTS; attempt += 1) {
       if (await deps.phoneVerified()) return { kind: 'DONE', value: await work() };
+      // NEXA v099: the contact just shared was stored as NOT accepted — say so, not «pending».
+      if ((await deps.phoneNotAccepted?.()) === true) {
+        return { kind: 'NOT_ACCEPTED', refusal: failure };
+      }
       await deps.wait(PHONE_POLL_INTERVAL_MS);
     }
     return { kind: 'PENDING', refusal: failure };
@@ -62,6 +89,8 @@ export function phoneGateDeps(api: MiniAppApi): PhoneGateDeps {
     requestContact: requestOwnContact,
     phoneVerified: async () =>
       (await api.get(MINIAPP_ROUTES.me, {}, miniAppMeResponseSchema)).phoneVerified,
+    phoneNotAccepted: async () =>
+      (await api.get(MINIAPP_ROUTES.me, {}, miniAppMeResponseSchema)).phoneNotAccepted,
     wait: (ms) =>
       new Promise((resolve) => {
         setTimeout(resolve, ms);

@@ -185,6 +185,8 @@
   --fs-2xs: 11.5px;
   /* A KPI figure in a card too narrow for the 20px one and its unit. */
   --fs-kpi-narrow: 17px;
+  /* The one figure a detail page leads with (a payment's amount, a balance). */
+  --fs-hero: 26px;
   /* Motion: strong ease-out for entering UI, a drawer curve, short UI durations. */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);

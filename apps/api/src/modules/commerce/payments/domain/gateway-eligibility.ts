@@ -2,6 +2,7 @@ import {
   type PaymentGatewayEligibility,
   type PaymentGatewayIneligibilityReason,
   type PaymentGatewayStatus,
+  type PhoneAllowedNumbers,
 } from '@nexa/contracts';
 
 /**
@@ -17,6 +18,20 @@ export const PHONE_VERIFICATION_FLAG = 'phone_verification' as const;
  * otherwise whether their phone number is verified. Independent of `phone_verification`.
  */
 export type GatewayPhoneStanding = 'EXEMPT' | 'VERIFIED' | 'UNVERIFIED';
+
+/**
+ * NEXA v099 (owner): THE rule for a number stored as NOT accepted
+ * (`customers.phone_not_accepted_at` — the customer's own non-+98 number, shared while
+ * `phone_verification.allowed_numbers` was IRAN_ONLY): whether, under the setting as it is
+ * NOW, it counts as a verified number. While IRAN_ONLY is on it satisfies nothing — not the
+ * bot-wide gate, not the mini app's, not a route's verified-phone rule; once the owner
+ * switches to ALL it counts as verified, with no re-share. Decided at READ time by every
+ * reader, so the switch migrates nothing and can be switched back. One predicate for the
+ * gate (`phoneGateOf`) and the route rule (`PaymentGatewayService.phoneStanding`).
+ */
+export function notAcceptedPhoneCounts(allowed: PhoneAllowedNumbers): boolean {
+  return allowed === 'ALL';
+}
 
 /** What the evaluator is told about the customer, and nothing else. */
 export interface GatewayAudience {

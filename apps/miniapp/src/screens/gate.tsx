@@ -8,7 +8,7 @@ import {
   openTelegram,
   requestOwnContact,
 } from '../telegram.js';
-import { PHONE_POLL_ATTEMPTS, PHONE_POLL_INTERVAL_MS } from '../phone.js';
+import { PHONE_POLL_ATTEMPTS, PHONE_POLL_INTERVAL_MS, phoneNotAcceptedText } from '../phone.js';
 import { Button, Card, Ltr, Message, errorText } from '../ui.js';
 
 /**
@@ -110,6 +110,13 @@ export function Gate({ gate }: { gate: NonNullable<MiniAppMeResponse['gate']> })
       </main>
     );
   }
+
+  /*
+   * NEXA v099 (owner): the customer's own number is stored as NOT accepted (IRAN_ONLY, not
+   * +98). The bot's sentence, and no contact button: asking again would change nothing. They
+   * are not blocked; support stays in the bot, as there.
+   */
+  if (gate.kind === 'PHONE_NOT_ACCEPTED') return <Message text={phoneNotAcceptedText()} />;
 
   /*
    * NEXA v095 PR-4 A: the mandatory phone verification. Where the client has it,

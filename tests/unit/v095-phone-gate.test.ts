@@ -198,6 +198,7 @@ function customer(over: Partial<CustomerRecord> = {}): CustomerRecord {
     channelMembershipExemptAt: null,
     phoneVerificationExemptAt: null,
     phoneVerifiedAt: null,
+    phoneNotAcceptedAt: null,
     ...over,
   } as unknown as CustomerRecord;
 }

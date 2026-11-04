@@ -113,13 +113,19 @@ export class MiniAppSessionController {
     const customer = { firstName: context.customer.firstName, username: context.customer.username };
     // NEXA v095 PR-4 C: what the mini app polls after `requestContact()`.
     const phoneVerified = context.customer.phoneVerifiedAt !== null;
+    // NEXA v099: a number stored as NOT accepted, while IRAN_ONLY still refuses it.
+    const phoneNotAccepted = await this.container.miniApp.sessions.phoneNotAccepted(context);
     if (gate !== null) {
       return {
         customer,
         botLink,
         phoneVerified,
+        phoneNotAccepted,
         gate:
-          gate.kind === 'BLOCKED' || gate.kind === 'CAPTCHA' || gate.kind === 'PHONE'
+          gate.kind === 'BLOCKED' ||
+          gate.kind === 'CAPTCHA' ||
+          gate.kind === 'PHONE' ||
+          gate.kind === 'PHONE_NOT_ACCEPTED'
             ? { kind: gate.kind }
             : gate.kind === 'CHANNELS'
               ? {
@@ -157,6 +163,7 @@ export class MiniAppSessionController {
       customer,
       botLink,
       phoneVerified,
+      phoneNotAccepted,
       gate: null,
       wallet: { balance: wire(money(balance.amountMinor, balance.currency)) },
       reseller: standing === null ? null : { tierName: standing.tier.name },

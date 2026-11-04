@@ -103,7 +103,7 @@ export interface PreinvoiceFacts {
 
 /**
  * The phone line of the account screen. The number itself is never shown.
- * NOT_ACCEPTED (a shared non-Iranian number) is stored by PR-2; nothing maps to it yet.
+ * NOT_ACCEPTED: a shared non-Iranian number stored while IRAN_ONLY is on (v099).
  */
 export type WalletPhoneState = 'CUSTOMER_VERIFIED' | 'ADMIN_VERIFIED' | 'NOT_ACCEPTED' | 'NONE';
 
@@ -120,14 +120,25 @@ const WALLET_PHONE_TEMPLATE: Record<WalletPhoneState, TemplateKey> = {
  * the operator's hand. An exempt customer reads «تأیید توسط مدیر» even with a number; any
  * other verified number reads as the customer's own.
  */
-export function walletPhoneState(customer: {
-  readonly phoneNumber: string | null;
-  readonly phoneVerifiedAt: Date | null;
-  readonly phoneVerificationExemptAt: Date | null;
-}): WalletPhoneState {
+export function walletPhoneState(
+  customer: {
+    readonly phoneNumber: string | null;
+    readonly phoneVerifiedAt: Date | null;
+    readonly phoneVerificationExemptAt: Date | null;
+    readonly phoneNotAcceptedAt?: Date | null;
+  },
+  /**
+   * NEXA v099: whether a number stored as NOT accepted counts as verified under the setting
+   * as it is now (`notAcceptedPhoneCounts`: ALL). Default false: it reads «مجاز نیست».
+   */
+  notAcceptedCounts = false,
+): WalletPhoneState {
   if (customer.phoneVerificationExemptAt !== null) return 'ADMIN_VERIFIED';
   if (customer.phoneNumber !== null && customer.phoneVerifiedAt !== null) {
     return 'CUSTOMER_VERIFIED';
+  }
+  if (customer.phoneNumber !== null && (customer.phoneNotAcceptedAt ?? null) !== null) {
+    return notAcceptedCounts ? 'CUSTOMER_VERIFIED' : 'NOT_ACCEPTED';
   }
   return 'NONE';
 }

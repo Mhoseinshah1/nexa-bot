@@ -3534,3 +3534,14 @@ textarea.input,
   align-items: center;
   gap: 8px 16px;
 }
+
+/* A compact two-pair grid for a card of many short facts; one pair per line on a phone. */
+.kv.cols {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+@media (min-width: 900px) {
+  .kv.cols {
+    grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+    column-gap: 18px;
+  }
+}
