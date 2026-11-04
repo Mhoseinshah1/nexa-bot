@@ -135,6 +135,10 @@ botctl — operate a Nexa installation
   botctl secrets shutdown-check            whether v1 can be switched off yet
   botctl secrets disable-v1                stop reading v1 ciphertext, once the check passes
 
+  botctl harden check                      read-only host review in Persian, PASS/WARN per item:
+                                           SSH password and root login, firewall, open ports,
+                                           the Docker socket, /etc/nexa modes, unattended upgrades
+
   botctl admin check-2fa --username NAME   whether an administrator has two-step sign-in on
   botctl admin reset-2fa --username NAME --reason TEXT
                                            owner recovery: remove an administrator's two-step
@@ -3114,6 +3118,262 @@ cmd_cutover() {
   esac
 }
 
+# ---------------------------------------------------------------------------
+# harden check (Phase 6A D0)
+# ---------------------------------------------------------------------------
+#
+# `botctl harden check`: a READ-ONLY review of the host this installation runs on. It reads
+# files and asks `ufw status` and `ss`; it never changes, restarts or installs anything, and
+# it takes no lock. Every item prints PASS or WARN in Persian, with a stable ASCII id in the
+# second column so a script can read it. The exit code is 0 whatever it finds (a WARN is
+# advice, not a failure); only an internal error — an unknown argument — is non-zero.
+#
+# Every host path is read under NEXA_HOST_ROOT (empty on a real host), so the deploy-logic
+# tests drive it against fixture files instead of the machine running the suite.
+HARDEN_PASS=0
+HARDEN_WARN=0
+
+harden_line() {
+  # $1 PASS|WARN, $2 id, $3 Persian text
+  printf '%-5s %-17s %s\n' "$1" "$2" "$3"
+  if [ "$1" = PASS ]; then HARDEN_PASS=$((HARDEN_PASS + 1)); else HARDEN_WARN=$((HARDEN_WARN + 1)); fi
+}
+
+# sshd_config as sshd reads it: every directive in order, lower-cased keyword first, the
+# `Include`d files expanded in place (sorted, relative to /etc/ssh), stopping at the first
+# `Match` — what follows a Match applies only to some connections, and the global answer
+# is the FIRST value sshd meets.
+harden_sshd_directives() {
+  local file="$1" line keyword rest pattern included
+  [ -r "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in '' | '#'*) continue ;; esac
+    line="${line/=/ }"
+    read -r keyword rest <<<"$line"
+    keyword="$(printf '%s' "$keyword" | tr '[:upper:]' '[:lower:]')"
+    case "$keyword" in
+      match)
+        printf 'match\n'
+        return 0
+        ;;
+      include)
+        for pattern in $rest; do
+          case "$pattern" in /*) ;; *) pattern="/etc/ssh/${pattern}" ;; esac
+          for included in ${NEXA_HOST_ROOT:-}${pattern}; do
+            [ -f "$included" ] || continue
+            harden_sshd_directives "$included"
+          done
+        done
+        ;;
+      *) printf '%s %s\n' "$keyword" "$rest" ;;
+    esac
+  done <"$file"
+}
+
+# The first value of a keyword before any Match, lower-cased; $2 when sshd_config never sets it.
+harden_sshd_value() {
+  local value
+  value="$(printf '%s\n' "$HARDEN_SSHD" | awk -v k="$1" '$1 == "match" { exit } $1 == k { print tolower($2); exit }')"
+  printf '%s' "${value:-$2}"
+}
+
+harden_check_ssh() {
+  local config="${NEXA_HOST_ROOT:-}/etc/ssh/sshd_config" password kbd root
+  if [ ! -r "$config" ]; then
+    harden_line WARN ssh-password "فایل تنظیمات SSH (/etc/ssh/sshd_config) خوانده نشد؛ ورود با گذرواژه بررسی نشد."
+    harden_line WARN ssh-root "فایل تنظیمات SSH خوانده نشد؛ ورود کاربر root بررسی نشد."
+    HARDEN_SSH_PORT=22
+    return 0
+  fi
+  HARDEN_SSHD="$(harden_sshd_directives "$config")"
+  HARDEN_SSH_PORT="$(harden_sshd_value port 22)"
+  password="$(harden_sshd_value passwordauthentication yes)"
+  # Keyboard-interactive is the other way a password reaches PAM; its old name is the alias.
+  kbd="$(harden_sshd_value kbdinteractiveauthentication "$(harden_sshd_value challengeresponseauthentication yes)")"
+  if [ "$password" = no ] && [ "$kbd" = no ]; then
+    harden_line PASS ssh-password "ورود با گذرواژه به SSH خاموش است (فقط کلید)."
+  elif [ "$password" != no ]; then
+    harden_line WARN ssh-password "ورود با گذرواژه به SSH روشن است (PasswordAuthentication ${password}). آن را no کنید و فقط با کلید وارد شوید."
+  else
+    harden_line WARN ssh-password "PasswordAuthentication خاموش است اما KbdInteractiveAuthentication روشن است و گذرواژه از راه PAM پذیرفته می‌شود. آن را no کنید."
+  fi
+  root="$(harden_sshd_value permitrootlogin prohibit-password)"
+  case "$root" in
+    no) harden_line PASS ssh-root "ورود مستقیم کاربر root به SSH بسته است." ;;
+    prohibit-password | without-password)
+      harden_line WARN ssh-root "کاربر root هنوز با کلید وارد SSH می‌شود (PermitRootLogin ${root}). با یک کاربر sudo وارد شوید و آن را no کنید." ;;
+    *) harden_line WARN ssh-root "ورود کاربر root به SSH باز است (PermitRootLogin ${root}). آن را no کنید." ;;
+  esac
+}
+
+# The ports a ufw rule set allows, one per line: numbers from `80,443/tcp`, `8000:8100/tcp`
+# kept as ranges, and the application profiles ufw ships for SSH and web named as theirs.
+harden_ufw_allowed() {
+  printf '%s\n' "$1" | awk '
+    toupper($0) ~ /ALLOW/ {
+      target = $1
+      if (target == "OpenSSH") { print "ssh"; next }
+      if (target ~ /^(Nginx|Apache|WWW|Caddy)/) { print "80"; print "443"; next }
+      sub(/\/.*/, "", target)
+      n = split(target, list, ",")
+      for (i = 1; i <= n; i++) print list[i]
+    }' | sort -u
+}
+
+harden_check_firewall() {
+  local status allowed port extra=""
+  if ! command -v ufw >/dev/null 2>&1; then
+    harden_line WARN firewall "فایروال ufw نصب نیست؛ مطمئن شوید فایروالی فقط درگاه‌های 80، 443 و SSH (${HARDEN_SSH_PORT}) را باز می‌گذارد."
+    return 0
+  fi
+  if ! status="$(ufw status 2>/dev/null)"; then
+    harden_line WARN firewall "وضعیت ufw خوانده نشد (این بررسی به sudo نیاز دارد)."
+    return 0
+  fi
+  case "$status" in
+    *'Status: active'*) ;;
+    *)
+      harden_line WARN firewall "فایروال ufw خاموش است. درگاه‌های 80، 443 و ${HARDEN_SSH_PORT} را allow و سپس ufw enable کنید."
+      return 0
+      ;;
+  esac
+  allowed="$(harden_ufw_allowed "$status")"
+  for port in $allowed; do
+    case "$port" in
+      80 | 443 | ssh | "$HARDEN_SSH_PORT") ;;
+      *) extra="${extra:+${extra}، }${port}" ;;
+    esac
+  done
+  if [ -n "$extra" ]; then
+    harden_line WARN firewall "ufw روشن است اما جز 80، 443 و SSH این درگاه‌ها را هم باز گذاشته: ${extra}."
+  else
+    harden_line PASS firewall "ufw روشن است و فقط 80، 443 و SSH (${HARDEN_SSH_PORT}) را باز می‌گذارد."
+  fi
+}
+
+# Docker publishes ports around ufw, so the sockets actually listening on a public address
+# are checked too: anything but 80, 443 and SSH outside loopback is reachable however ufw reads.
+harden_check_listening() {
+  local listeners port extra=""
+  if ! command -v ss >/dev/null 2>&1 || ! listeners="$(ss -Hltn 2>/dev/null)"; then
+    harden_line WARN open-ports "درگاه‌های باز با ss خوانده نشد."
+    return 0
+  fi
+  for port in $(printf '%s\n' "$listeners" | awk '{ print $4 }' |
+    grep -vE '^(127\.[0-9.]+(%[[:alnum:]_.-]+)?|\[::1\](%[[:alnum:]_.-]+)?|::1|\[::ffff:127\.[0-9.]+\]):' |
+    sed -E 's/.*:([0-9]+)$/\1/' | sort -un); do
+    case "$port" in
+      80 | 443 | "$HARDEN_SSH_PORT") ;;
+      *) extra="${extra:+${extra}، }${port}" ;;
+    esac
+  done
+  if [ -n "$extra" ]; then
+    harden_line WARN open-ports "این درگاه‌ها روی نشانی عمومی گوش می‌دهند (داکر از کنار ufw رد می‌شود): ${extra}."
+  else
+    harden_line PASS open-ports "جز 80، 443 و SSH هیچ درگاهی روی نشانی عمومی گوش نمی‌دهد."
+  fi
+}
+
+harden_check_docker() {
+  local socket="${NEXA_HOST_ROOT:-}/var/run/docker.sock" mode group members problems=""
+  local daemon="${NEXA_HOST_ROOT:-}/etc/docker/daemon.json" unit file mounted
+  if [ -S "$socket" ] || [ -e "$socket" ]; then
+    mode="$(stat -c '%a' "$socket" 2>/dev/null || printf '000')"
+    group="$(stat -c '%G' "$socket" 2>/dev/null || printf '')"
+    if [ $((8#${mode} & 8#007)) -ne 0 ]; then
+      problems="${problems}سوکت داکر برای همهٔ کاربران باز است (حالت ${mode}). "
+    elif [ $((8#${mode} & 8#020)) -ne 0 ] && [ -n "$group" ]; then
+      members="$(awk -F: -v g="$group" '$1 == g { print $4 }' "${NEXA_HOST_ROOT:-}/etc/group" 2>/dev/null)"
+      if [ -n "$members" ]; then
+        problems="${problems}گروه ${group} روی سوکت داکر نوشتن دارد و ${members//,/، } عضو آن است (برابر دسترسی root). "
+      fi
+    fi
+  fi
+  # The daemon on TCP: daemon.json hosts, a unit or drop-in with -H tcp://, or the socket itself.
+  for unit in "$daemon" "${NEXA_HOST_ROOT:-}"/etc/systemd/system/docker.service \
+    "${NEXA_HOST_ROOT:-}"/etc/systemd/system/docker.service.d/*.conf \
+    "${NEXA_HOST_ROOT:-}"/lib/systemd/system/docker.service; do
+    [ -r "$unit" ] || continue
+    if grep -qE 'tcp://' "$unit"; then
+      problems="${problems}داکر روی TCP گوش می‌دهد (${unit#"${NEXA_HOST_ROOT:-}"}). "
+      break
+    fi
+  done
+  local api_ports=""
+  if command -v ss >/dev/null 2>&1; then
+    api_ports="$(ss -Hltn 2>/dev/null | awk '$4 ~ /:(2375|2376)$/ { n++ } END { print n + 0 }')"
+  fi
+  if [ "${api_ports:-0}" -gt 0 ]; then
+    case "$problems" in *TCP*) ;; *) problems="${problems}درگاه 2375 یا 2376 (API داکر) باز است. " ;; esac
+  fi
+  mounted=""
+  for file in "${NEXA_DEPLOY_DIR}"/compose*.yml; do
+    [ -r "$file" ] || continue
+    if grep -q 'docker.sock' "$file"; then mounted="${mounted} ${file##*/}"; fi
+  done
+  [ -z "$mounted" ] || problems="${problems}سوکت داکر داخل کانتینرهای برنامه mount شده است (${mounted# }). "
+  if [ -n "$problems" ]; then
+    harden_line WARN docker-socket "${problems% }"
+  else
+    harden_line PASS docker-socket "سوکت داکر فقط در دسترس root است، روی TCP باز نیست و در هیچ کانتینر برنامه mount نشده."
+  fi
+}
+
+harden_check_config_modes() {
+  local dir="$NEXA_CONFIG_DIR" mode file loose=""
+  if [ ! -d "$dir" ]; then
+    harden_line WARN config-modes "پوشهٔ تنظیمات ${dir#"${NEXA_HOST_ROOT:-}"} پیدا نشد."
+    return 0
+  fi
+  mode="$(stat -c '%a' "$dir")"
+  [ $((8#${mode} & 8#077)) -eq 0 ] || loose="${dir##*/}/ (${mode})"
+  while IFS= read -r file; do
+    mode="$(stat -c '%a' "$file")"
+    if [ $((8#${mode} & 8#077)) -ne 0 ]; then
+      loose="${loose:+${loose}، }${file#"${dir}/"} (${mode})"
+    fi
+  done < <(find "$dir" -maxdepth 2 -type f 2>/dev/null | sort)
+  if [ -n "$loose" ]; then
+    harden_line WARN config-modes "این فایل‌های تنظیمات و رمزها برای گروه یا دیگران خواناست؛ chmod 600 (پوشه 700) کنید: ${loose}."
+  else
+    harden_line PASS config-modes "فایل‌های ${dir#"${NEXA_HOST_ROOT:-}"} فقط برای مالک خوانا هستند."
+  fi
+}
+
+harden_check_upgrades() {
+  local conf="${NEXA_HOST_ROOT:-}/etc/apt/apt.conf.d" enabled=0
+  if [ -d "$conf" ] && grep -hsE '^[[:space:]]*APT::Periodic::Unattended-Upgrade[[:space:]]+"1"' "$conf"/* >/dev/null; then
+    enabled=1
+  fi
+  if [ ! -x "${NEXA_HOST_ROOT:-}/usr/bin/unattended-upgrade" ]; then
+    harden_line WARN upgrades "unattended-upgrades نصب نیست؛ به‌روزرسانی‌های امنیتی خودکار نصب نمی‌شوند (apt install unattended-upgrades)."
+  elif [ "$enabled" -ne 1 ]; then
+    harden_line WARN upgrades "unattended-upgrades نصب است اما روشن نیست (dpkg-reconfigure -plow unattended-upgrades)."
+  else
+    harden_line PASS upgrades "به‌روزرسانی‌های امنیتی خودکار (unattended-upgrades) روشن است."
+  fi
+}
+
+cmd_harden() {
+  local action="${1:-}"
+  shift || true
+  [ "$action" = check ] && [ "$#" -eq 0 ] || nexa_die "usage: botctl harden check"
+  HARDEN_PASS=0
+  HARDEN_WARN=0
+  HARDEN_SSH_PORT=22
+  HARDEN_SSHD=""
+  printf '==> بررسی امنیت میزبان: فقط خوانده می‌شود و چیزی تغییر نمی‌کند\n'
+  harden_check_ssh
+  harden_check_firewall
+  harden_check_listening
+  harden_check_docker
+  harden_check_config_modes
+  harden_check_upgrades
+  printf 'harden: %s PASS, %s WARN\n' "$HARDEN_PASS" "$HARDEN_WARN"
+  return 0
+}
+
 main() {
   # --allow-foreground, anywhere on a long command's line, is botctl's and not the command's
   # (botctl_long_command). Everything else is kept, in order, for the refusal's tmux line.
@@ -3152,6 +3412,7 @@ main() {
     secrets) cmd_secrets "$@" ;;
     telegram) cmd_telegram "$@" ;;
     admin) cmd_admin "$@" ;;
+    harden) cmd_harden "$@" ;;
     logs) cmd_logs "$@" ;;
     restart) cmd_restart "$@" ;;
     -h | --help | help | '') usage ;;
