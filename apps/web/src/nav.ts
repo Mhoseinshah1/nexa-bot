@@ -98,6 +98,15 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_dashboard',
   },
   {
+    id: 'reports',
+    path: '/reports',
+    label: 'web.nav_reports',
+    icon: 'reports',
+    permission: 'reports.view',
+    group: 'web.navgroup_dashboard',
+    ownerOnly: true,
+  },
+  {
     id: 'users',
     path: '/users',
     label: 'web.nav_users',
@@ -116,6 +125,58 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_customers',
   },
   {
+    id: 'orders',
+    path: '/orders',
+    label: 'web.nav_orders',
+    icon: 'orders',
+    permission: 'orders.view',
+    group: 'web.navgroup_customers',
+  },
+  {
+    id: 'payments',
+    path: '/payments',
+    label: 'web.nav_payments',
+    icon: 'payments',
+    permission: 'payments.view',
+    group: 'web.navgroup_finance',
+  },
+  {
+    /*
+     * The compensation list (Payment File 02 §21, D7), directly under payments because it
+     * is a view OF payments: the automatic wallet refunds of paid orders that could not be
+     * delivered. `payments.view`, the key `GET /compensations` charges.
+     */
+    id: 'compensations',
+    path: '/compensations',
+    label: 'web.nav_compensations',
+    icon: 'undo',
+    permission: 'payments.view',
+    group: 'web.navgroup_finance',
+  },
+  {
+    id: 'payment-gateways',
+    path: '/payment-gateways',
+    label: 'web.nav_payment_gateways',
+    icon: 'wallet',
+    /*
+     * The VIEW keys, and no edit key — a link is a promise that a page will work.
+     *
+     * `payments.gateways.view` is the list: the route passes `denied={!may(…view)}` and
+     * `PaymentGatewayService.list` charges the same key, so an edit-only role would reach a
+     * page it could not load and therefore could not edit from.
+     *
+     * `payments.accounts.view` since UX Batch 01, item 7: the separate «حساب‌های دریافت»
+     * entry is gone and the cards are managed on the card-to-card method's own view, so a
+     * role that reads the cards alone needs this entry to reach them. The list sends that
+     * role straight on to the card-to-card view (`PaymentGatewaysTabbedPage`
+     * `mayViewCards`), and `PaymentAccountService.list` still charges the accounts key.
+     */
+    // R5C-1: `settings.view` too — the card-switch limits on the card-to-card view are registry
+    // settings charged on the settings keys, so a settings-only role reaches them through here.
+    permission: ['payments.gateways.view', 'payments.accounts.view', 'settings.view'],
+    group: 'web.navgroup_finance',
+  },
+  {
     /*
      * WP-A7: the support ticket inbox. `tickets.view`, and only that — every write on the
      * page (reply, assign, status, categories) opens from a row the view key lists.
@@ -125,7 +186,19 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_tickets',
     icon: 'message',
     permission: 'tickets.view',
-    group: 'web.navgroup_customers',
+    group: 'web.navgroup_support_ai',
+  },
+  {
+    /*
+     * TB2: Telegram Business conversations (ADR-0033). `business_chats.view`; the take over,
+     * hand back and reply controls are drawn on `business_chats.reply` inside the page.
+     */
+    id: 'business-chats',
+    path: '/business-chats',
+    label: 'web.nav_business_chats',
+    icon: 'send',
+    permission: 'business_chats.view',
+    group: 'web.navgroup_support_ai',
   },
   {
     id: 'support',
@@ -139,18 +212,6 @@ export const NAV: readonly NavEntry[] = [
      * support DESTINATION is a setting on that page.
      */
     permission: 'settings.view',
-    group: 'web.navgroup_customers',
-  },
-  {
-    /*
-     * TB2: Telegram Business conversations (ADR-0033). `business_chats.view`; the take over,
-     * hand back and reply controls are drawn on `business_chats.reply` inside the page.
-     */
-    id: 'business-chats',
-    path: '/business-chats',
-    label: 'web.nav_business_chats',
-    icon: 'send',
-    permission: 'business_chats.view',
     group: 'web.navgroup_support_ai',
   },
   {
@@ -208,14 +269,6 @@ export const NAV: readonly NavEntry[] = [
     icon: 'activity',
     permission: 'support_ai.configure',
     group: 'web.navgroup_support_ai',
-  },
-  {
-    id: 'orders',
-    path: '/orders',
-    label: 'web.nav_orders',
-    icon: 'orders',
-    permission: 'orders.view',
-    group: 'web.navgroup_sales',
   },
   {
     id: 'products',
@@ -305,7 +358,7 @@ export const NAV: readonly NavEntry[] = [
      * not keep.
      */
     permission: 'catalog.view',
-    group: 'web.navgroup_sales',
+    group: 'web.navgroup_marketing',
   },
   {
     id: 'campaigns',
@@ -318,7 +371,28 @@ export const NAV: readonly NavEntry[] = [
      * each composed action's own key on the server.
      */
     permission: 'campaigns.view',
-    group: 'web.navgroup_sales',
+    group: 'web.navgroup_marketing',
+  },
+  {
+    /*
+     * Round N (B1): «ارسال همگانی». `broadcasts.view` reads the list and the reports;
+     * composing and launching is `broadcasts.send`, which requires it.
+     */
+    id: 'broadcasts',
+    path: '/broadcasts',
+    label: 'web.nav_broadcasts',
+    icon: 'send',
+    permission: 'broadcasts.view',
+    group: 'web.navgroup_marketing',
+  },
+  {
+    // WP-A9: every automated customer reminder, its schedule and its message.
+    id: 'reminders',
+    path: '/reminders',
+    label: 'web.nav_reminders',
+    icon: 'clock',
+    permission: 'settings.view',
+    group: 'web.navgroup_marketing',
   },
   {
     id: 'referrals',
@@ -331,7 +405,7 @@ export const NAV: readonly NavEntry[] = [
      * of its lists are charged this key by `ReferralReadService`.
      */
     permission: 'referrals.view',
-    group: 'web.navgroup_sales',
+    group: 'web.navgroup_marketing',
   },
   {
     id: 'gift-cards',
@@ -343,69 +417,7 @@ export const NAV: readonly NavEntry[] = [
      * passed to the page as props and charged again by `GiftCardAdminService`.
      */
     permission: 'gift_cards.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'reports',
-    path: '/reports',
-    label: 'web.nav_reports',
-    icon: 'reports',
-    permission: 'reports.view',
-    group: 'web.navgroup_sales',
-    ownerOnly: true,
-  },
-  {
-    id: 'payments',
-    path: '/payments',
-    label: 'web.nav_payments',
-    icon: 'payments',
-    permission: 'payments.view',
-    group: 'web.navgroup_finance',
-  },
-  {
-    /*
-     * The compensation list (Payment File 02 §21, D7), directly under payments because it
-     * is a view OF payments: the automatic wallet refunds of paid orders that could not be
-     * delivered. `payments.view`, the key `GET /compensations` charges.
-     */
-    id: 'compensations',
-    path: '/compensations',
-    label: 'web.nav_compensations',
-    icon: 'undo',
-    permission: 'payments.view',
-    group: 'web.navgroup_finance',
-  },
-  {
-    id: 'payment-gateways',
-    path: '/payment-gateways',
-    label: 'web.nav_payment_gateways',
-    icon: 'wallet',
-    /*
-     * The VIEW keys, and no edit key — a link is a promise that a page will work.
-     *
-     * `payments.gateways.view` is the list: the route passes `denied={!may(…view)}` and
-     * `PaymentGatewayService.list` charges the same key, so an edit-only role would reach a
-     * page it could not load and therefore could not edit from.
-     *
-     * `payments.accounts.view` since UX Batch 01, item 7: the separate «حساب‌های دریافت»
-     * entry is gone and the cards are managed on the card-to-card method's own view, so a
-     * role that reads the cards alone needs this entry to reach them. The list sends that
-     * role straight on to the card-to-card view (`PaymentGatewaysTabbedPage`
-     * `mayViewCards`), and `PaymentAccountService.list` still charges the accounts key.
-     */
-    // R5C-1: `settings.view` too — the card-switch limits on the card-to-card view are registry
-    // settings charged on the settings keys, so a settings-only role reaches them through here.
-    permission: ['payments.gateways.view', 'payments.accounts.view', 'settings.view'],
-    group: 'web.navgroup_finance',
-  },
-  {
-    // Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time.
-    id: 'bulk-operations',
-    path: '/bulk-operations',
-    label: 'web.nav_bulk_operations',
-    icon: 'grid',
-    permission: 'bulk_operations.view',
-    group: 'web.navgroup_finance',
+    group: 'web.navgroup_marketing',
   },
   {
     id: 'resellers',
@@ -477,24 +489,13 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_bot',
   },
   {
-    /*
-     * Round N (B1): «ارسال همگانی». `broadcasts.view` reads the list and the reports;
-     * composing and launching is `broadcasts.send`, which requires it.
-     */
-    id: 'broadcasts',
-    path: '/broadcasts',
-    label: 'web.nav_broadcasts',
-    icon: 'send',
-    permission: 'broadcasts.view',
-    group: 'web.navgroup_bot',
-  },
-  {
-    // WP-A9: every automated customer reminder, its schedule and its message.
-    id: 'reminders',
-    path: '/reminders',
-    label: 'web.nav_reminders',
-    icon: 'clock',
-    permission: 'settings.view',
+    // Program §6: the terms and rules. `terms.view`, the key `GET /terms` charges; the
+    // draft, publication and enforcement switch are each drawn under their own key.
+    id: 'terms',
+    path: '/terms',
+    label: 'web.nav_terms',
+    icon: 'shield',
+    permission: 'terms.view',
     group: 'web.navgroup_bot',
   },
   {
@@ -505,16 +506,6 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_client_apps',
     icon: 'devices',
     permission: 'client_apps.view',
-    group: 'web.navgroup_bot',
-  },
-  {
-    // Program §6: the terms and rules. `terms.view`, the key `GET /terms` charges; the
-    // draft, publication and enforcement switch are each drawn under their own key.
-    id: 'terms',
-    path: '/terms',
-    label: 'web.nav_terms',
-    icon: 'shield',
-    permission: 'terms.view',
     group: 'web.navgroup_bot',
   },
   {
@@ -561,7 +552,7 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_settings',
     icon: 'settings',
     permission: 'settings.view',
-    group: 'web.navgroup_config',
+    group: 'web.navgroup_system',
   },
   {
     id: 'features',
@@ -569,7 +560,17 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_features',
     icon: 'toggle',
     permission: 'settings.view',
-    group: 'web.navgroup_config',
+    group: 'web.navgroup_system',
+  },
+  {
+    // WP-A4: «گروه گزارش‌های مدیریتی». Read with `settings.view`, acted on with
+    // `settings.edit`, which the page gates itself.
+    id: 'ops-group',
+    path: '/ops-group',
+    label: 'web.nav_ops_group',
+    icon: 'radio',
+    permission: 'settings.view',
+    group: 'web.navgroup_system',
   },
   {
     // Phase B3: the notification center. Every administrator has an inbox; the server
@@ -582,13 +583,20 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_system',
   },
   {
-    // Phase D1: who changed what. Read with `audit.view`; the export is `audit.export`,
-    // which the page draws for itself.
-    id: 'audit-log',
-    path: '/audit-log',
-    label: 'web.nav_audit_log',
-    icon: 'clock',
-    permission: 'audit.view',
+    id: 'notifications',
+    path: '/notifications',
+    label: 'web.nav_notifications',
+    icon: 'bell',
+    // EITHER capability. See `NavEntry.permission`.
+    permission: ['opslog.view', 'settings.edit'],
+    group: 'web.navgroup_system',
+  },
+  {
+    id: 'alerts',
+    path: '/alerts',
+    label: 'web.nav_alerts',
+    icon: 'alertOctagon',
+    permission: 'opslog.view',
     group: 'web.navgroup_system',
   },
   {
@@ -602,30 +610,22 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_system',
   },
   {
-    id: 'alerts',
-    path: '/alerts',
-    label: 'web.nav_alerts',
-    icon: 'alertOctagon',
-    permission: 'opslog.view',
+    // Phase D1: who changed what. Read with `audit.view`; the export is `audit.export`,
+    // which the page draws for itself.
+    id: 'audit-log',
+    path: '/audit-log',
+    label: 'web.nav_audit_log',
+    icon: 'clock',
+    permission: 'audit.view',
     group: 'web.navgroup_system',
   },
   {
-    id: 'notifications',
-    path: '/notifications',
-    label: 'web.nav_notifications',
-    icon: 'bell',
-    // EITHER capability. See `NavEntry.permission`.
-    permission: ['opslog.view', 'settings.edit'],
-    group: 'web.navgroup_system',
-  },
-  {
-    // WP-A4: «گروه گزارش‌های مدیریتی». Read with `settings.view`, acted on with
-    // `settings.edit`, which the page gates itself.
-    id: 'ops-group',
-    path: '/ops-group',
-    label: 'web.nav_ops_group',
-    icon: 'radio',
-    permission: 'settings.view',
+    // Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time.
+    id: 'bulk-operations',
+    path: '/bulk-operations',
+    label: 'web.nav_bulk_operations',
+    icon: 'grid',
+    permission: 'bulk_operations.view',
     group: 'web.navgroup_system',
   },
   {
@@ -668,13 +668,13 @@ export const NAV: readonly NavEntry[] = [
 export const GROUP_ORDER: readonly WebKey[] = [
   'web.navgroup_dashboard',
   'web.navgroup_customers',
+  'web.navgroup_finance',
   'web.navgroup_support_ai',
   'web.navgroup_sales',
-  'web.navgroup_finance',
+  'web.navgroup_marketing',
   'web.navgroup_resellers',
   'web.navgroup_bot',
   'web.navgroup_infra',
-  'web.navgroup_config',
   'web.navgroup_system',
 ];
 

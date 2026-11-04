@@ -7,14 +7,16 @@ import { t } from '../../apps/web/src/i18n/web.fa';
 import { navGroupHeader, renderPage, stubApi } from './harness';
 
 /**
- * Hotfix — «هوش مصنوعی پشتیبانی»: the support-AI pages in one navigation group of their own.
+ * Hotfix — «پشتیبانی»: the support-AI pages in one navigation group of their own.
  * Presentation only: every path and permission is what it was, the generic support pages
  * stay where they were, and the group is drawn only when one of its links would be.
  */
 
 const GROUP = 'web.navgroup_support_ai';
 const AI_ENTRIES: readonly [id: string, path: string][] = [
+  ['tickets', '/tickets'],
   ['business-chats', '/business-chats'],
+  ['support', '/support'],
   ['support-ai', '/support-ai'],
   ['support-knowledge', '/support-knowledge'],
   ['learning-candidates', '/support-learning'],
@@ -37,9 +39,9 @@ function sidebar(permissions: readonly PermissionKey[]) {
   );
 }
 
-describe('the «هوش مصنوعی پشتیبانی» navigation group', () => {
-  it('holds the six support-AI pages, in order, at their unchanged paths', () => {
-    expect(t(GROUP)).toBe('هوش مصنوعی پشتیبانی');
+describe('the «پشتیبانی» navigation group', () => {
+  it('holds the support pages and the support-AI pages, in order, at their unchanged paths', () => {
+    expect(t(GROUP)).toBe('پشتیبانی');
     expect(GROUP_ORDER.filter((group) => group === GROUP)).toHaveLength(1);
     const members = NAV.filter((entry) => entry.group === GROUP);
     expect(members.map((entry) => [entry.id, entry.path])).toEqual(AI_ENTRIES);
@@ -48,6 +50,8 @@ describe('the «هوش مصنوعی پشتیبانی» navigation group', () => 
 
   it('keeps each entry’s permission exactly as before', () => {
     const permission = (id: string) => NAV.find((entry) => entry.id === id)?.permission;
+    expect(permission('tickets')).toBe('tickets.view');
+    expect(permission('support')).toBe('settings.view');
     expect(permission('business-chats')).toBe('business_chats.view');
     expect(permission('support-ai')).toBe('support_ai.configure');
     expect(permission('support-knowledge')).toBe('support_knowledge.view');
@@ -56,10 +60,7 @@ describe('the «هوش مصنوعی پشتیبانی» navigation group', () => 
     expect(permission('support-analytics')).toBe('support_ai.configure');
   });
 
-  it('leaves the generic support pages where they were, and lists nothing twice', () => {
-    const group = (id: string) => NAV.find((entry) => entry.id === id)?.group;
-    expect(group('tickets')).toBe('web.navgroup_customers');
-    expect(group('support')).toBe('web.navgroup_customers');
+  it('lists nothing twice', () => {
     const ids = NAV.map((entry) => entry.id);
     const paths = NAV.map((entry) => entry.path);
     expect(new Set(ids).size).toBe(ids.length);
@@ -99,7 +100,7 @@ describe('the «هوش مصنوعی پشتیبانی» navigation group', () => 
   });
 
   it('is not drawn at all when no child is permitted', async () => {
-    sidebar(['tickets.view', 'settings.view']);
+    sidebar(['users.view', 'orders.view']);
     await screen.findByRole('group', { name: t('web.navgroup_customers') });
     expect(screen.queryByRole('group', { name: t(GROUP) })).toBeNull();
     expect(screen.queryByText(t(GROUP))).toBeNull();
