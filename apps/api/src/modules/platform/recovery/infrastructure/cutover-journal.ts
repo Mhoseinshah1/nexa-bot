@@ -1,7 +1,43 @@
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { recoveryIdSchema } from '@nexa/contracts';
-import type { CutoverJournal } from '../application/ports.js';
+import {
+  CutoverJournalUnreadable,
+  type CutoverJournal,
+  type CutoverJournalRead,
+} from '../application/ports.js';
+
+/**
+ * The file operations the journal uses, so a test can make one of them fail
+ * half-way. Production passes nothing and gets `node:fs/promises`.
+ */
+export interface CutoverJournalIo {
+  readonly mkdir: typeof fsp.mkdir;
+  readonly open: typeof fsp.open;
+  readonly rename: typeof fsp.rename;
+  readonly readFile: typeof fsp.readFile;
+  readonly readdir: typeof fsp.readdir;
+  readonly rm: typeof fsp.rm;
+}
+
+const NODE_IO: CutoverJournalIo = {
+  mkdir: fsp.mkdir,
+  open: fsp.open,
+  rename: fsp.rename,
+  readFile: fsp.readFile,
+  readdir: fsp.readdir,
+  rm: fsp.rm,
+};
+
+function errorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * The one piece of recovery state that is not in the database.
@@ -26,7 +62,10 @@ import type { CutoverJournal } from '../application/ports.js';
  * not depend on an argument about what is in it.
  */
 export class FileCutoverJournal implements CutoverJournal {
-  constructor(private readonly root: string) {}
+  constructor(
+    private readonly root: string,
+    private readonly io: CutoverJournalIo = NODE_IO,
+  ) {}
 
   private path(recoveryId: string): string {
     // The id is a path component, so it is validated as a UUIDv7 rather than
@@ -48,10 +87,39 @@ export class FileCutoverJournal implements CutoverJournal {
     at: Date;
   }): Promise<void> {
     const path = this.path(entry.recoveryId);
-    await mkdir(this.root, { recursive: true, mode: 0o700 });
-    await writeFile(path, JSON.stringify({ ...entry, at: entry.at.toISOString() }, null, 2), {
-      mode: 0o600,
-    });
+    await this.io.mkdir(this.root, { recursive: true, mode: 0o700 });
+    /*
+     * ATOMICALLY: a temp file in the same directory, fsync, rename, fsync of the
+     * directory. The previous version rewrote the journal in place, and a crash
+     * during that write — an OOM kill is plausible on this host — truncated the
+     * only trace of a cutover in progress. `rename` within one directory replaces
+     * the name in one step, so a reader sees the old journal or the new one and
+     * never half of either. The temp name does not match `cutover-*.json`, so
+     * `pending()` never mistakes a leftover for a journal.
+     */
+    const temp = join(this.root, `.cutover-${entry.recoveryId}.${randomUUID()}.tmp`);
+    const body = JSON.stringify({ ...entry, at: entry.at.toISOString() }, null, 2);
+    try {
+      const file = await this.io.open(temp, 'wx', 0o600);
+      try {
+        await file.writeFile(body, 'utf8');
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await this.io.rename(temp, path);
+    } catch (error) {
+      // The previous journal is untouched; only the temp file is ours to remove.
+      await this.io.rm(temp, { force: true }).catch(() => undefined);
+      throw error;
+    }
+    // The rename is durable only once the directory entry is.
+    const dir = await this.io.open(this.root, 'r');
+    try {
+      await dir.sync();
+    } finally {
+      await dir.close();
+    }
   }
 
   /**
@@ -65,62 +133,76 @@ export class FileCutoverJournal implements CutoverJournal {
    * directory.
    */
   async pending(): Promise<readonly string[]> {
+    let names: string[];
     try {
-      const names = await readdir(this.root);
-      return names
-        .filter((name) => name.startsWith('cutover-') && name.endsWith('.json'))
-        .map((name) => name.slice('cutover-'.length, -'.json'.length));
-    } catch {
+      names = await this.io.readdir(this.root);
+    } catch (error) {
       // No directory is no journals, which is the ordinary case on an
-      // installation that has never run a recovery.
-      return [];
+      // installation that has never run a recovery. Anything else — a
+      // permission, an I/O error — is NOT "no journals": answering `[]` there
+      // would hide a cutover in progress behind the same answer as nothing.
+      if (errorCode(error) === 'ENOENT') return [];
+      throw new CutoverJournalUnreadable(this.root, messageOf(error));
     }
+    return names
+      .filter((name) => name.startsWith('cutover-') && name.endsWith('.json'))
+      .map((name) => name.slice('cutover-'.length, -'.json'.length));
   }
 
   /** Removes a journal once its facts are recorded where an operator reads them. */
   async clear(recoveryId: string): Promise<void> {
-    await rm(this.path(recoveryId), { force: true });
+    await this.io.rm(this.path(recoveryId), { force: true });
   }
 
-  async read(recoveryId: string): Promise<{
-    phase: 'ABOUT_TO_RENAME' | 'RENAMED_OUT' | 'RENAMED';
-    displacedDatabase: string;
-    candidateDatabase: string;
-  } | null> {
+  async read(recoveryId: string): Promise<CutoverJournalRead> {
+    // A name `pending()` returned that is not a recovery id is still a file in
+    // the journal directory, and it is reported rather than skipped. `readdir`
+    // names never contain a separator, so this join stays inside the root.
+    if (!recoveryIdSchema.safeParse(recoveryId).success) {
+      return {
+        status: 'UNREADABLE',
+        file: join(this.root, `cutover-${recoveryId}.json`),
+        reason: 'the file name does not carry a recovery id',
+      };
+    }
+    const file = this.path(recoveryId);
     let raw: string;
     try {
-      raw = await readFile(this.path(recoveryId), 'utf8');
-    } catch {
-      // Absent is an ANSWER — no cutover was ever begun for this recovery — and
-      // it is the common case, since most recoveries never reach that stage.
-      return null;
+      raw = await this.io.readFile(file, 'utf8');
+    } catch (error) {
+      // Absent is an ANSWER — no cutover was ever begun for this recovery, or
+      // its journal was cleared since it was listed. Every other failure is
+      // not: the file is there and says something nobody has read.
+      if (errorCode(error) === 'ENOENT') return { status: 'ABSENT' };
+      return { status: 'UNREADABLE', file, reason: messageOf(error) };
     }
+    let parsed: { phase?: unknown; displacedDatabase?: unknown; candidateDatabase?: unknown };
     try {
-      const parsed = JSON.parse(raw) as {
-        phase?: unknown;
-        displacedDatabase?: unknown;
-        candidateDatabase?: unknown;
-      };
-      if (
-        (parsed.phase !== 'ABOUT_TO_RENAME' &&
-          parsed.phase !== 'RENAMED_OUT' &&
-          parsed.phase !== 'RENAMED') ||
-        typeof parsed.displacedDatabase !== 'string' ||
-        typeof parsed.candidateDatabase !== 'string'
-      ) {
-        return null;
-      }
-      return {
+      parsed = JSON.parse(raw) as typeof parsed;
+    } catch (error) {
+      // A partially written JSON file is exactly what a crash mid-write left
+      // before the write was atomic. It is reported, never acted on: the
+      // database names it might have held are not guessed from the remains.
+      return { status: 'UNREADABLE', file, reason: `not valid JSON: ${messageOf(error)}` };
+    }
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      (parsed.phase !== 'ABOUT_TO_RENAME' &&
+        parsed.phase !== 'RENAMED_OUT' &&
+        parsed.phase !== 'RENAMED') ||
+      typeof parsed.displacedDatabase !== 'string' ||
+      typeof parsed.candidateDatabase !== 'string'
+    ) {
+      return { status: 'UNREADABLE', file, reason: 'not a cutover journal entry' };
+    }
+    return {
+      status: 'PRESENT',
+      entry: {
         phase: parsed.phase,
         displacedDatabase: parsed.displacedDatabase,
         candidateDatabase: parsed.candidateDatabase,
-      };
-    } catch {
-      // A journal we cannot parse is treated as absent, which is the SAFE
-      // reading: the executor then re-checks the databases themselves rather
-      // than acting on a half-written file. A partially written JSON file is
-      // exactly what a crash mid-write leaves.
-      return null;
-    }
+      },
+    };
   }
 }

@@ -91,7 +91,11 @@ recovery's row.
 
 So the executor writes a **cutover journal** file under the recovery root (mode
 0600; ids, names, timestamps and a stage — no secrets) before and after the
-renames, which is what makes the rename itself crash-recoverable; and after the
+renames, which is what makes the rename itself crash-recoverable — written
+atomically (a temp file in the same directory, fsync, rename, fsync of the
+directory), so a crash mid-write leaves the previous journal rather than a
+truncated one, and a journal that cannot be read is reported to the ops group
+for a manual check and never acted on; and after the
 rename it **re-asserts its own row** into the now-live restored database, so the
 recovery that produced this database is recorded in it.
 

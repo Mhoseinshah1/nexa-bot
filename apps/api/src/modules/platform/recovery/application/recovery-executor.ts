@@ -13,7 +13,7 @@ import {
   type ScopeContext,
 } from '@nexa/contracts';
 import type { BackupService } from '../../backup/application/backup.service.js';
-import { isCutoverFailure } from './ports.js';
+import { CutoverJournalUnreadable, isCutoverFailure } from './ports.js';
 import type {
   CutoverJournal,
   DatabaseInspection,
@@ -343,17 +343,38 @@ export class RecoveryExecutor {
         { err: rootMessage(error) },
         'the cutover journal could not be listed',
       );
+      // Not "no journals": a directory that cannot be listed may hold a cutover
+      // in progress, and only a person can look.
+      if (error instanceof CutoverJournalUnreadable) {
+        await this.reportUnreadableJournal(error.location);
+      }
       return;
     }
 
     for (const id of ids) {
-      const entry = await this.deps.journal.read(id).catch(() => null);
-      if (entry === null) {
-        // Unreadable or half-written. Left alone deliberately: a file this
-        // process cannot parse is not a fact to act on, and removing it would
-        // destroy the only trace of whatever wrote it.
+      const read = await this.deps.journal.read(id).catch((error: unknown) => ({
+        status: 'UNREADABLE' as const,
+        file: `cutover-${id}.json`,
+        reason: rootMessage(error),
+      }));
+      if (read.status === 'ABSENT') continue;
+      if (read.status === 'UNREADABLE') {
+        /*
+         * Unreadable or half-written. NOTHING is done with it: a file this
+         * process cannot parse is not a fact to act on, the database names it
+         * might hold are never guessed from its remains, and removing it would
+         * destroy the only trace of whatever wrote it. It is no longer silent,
+         * though — before, this was a bare `continue`, and a journal truncated
+         * by a crash mid-write hid a cutover in progress from everyone.
+         */
+        this.deps.logger.error(
+          { recoveryId: id, file: read.file, err: read.reason },
+          'a cutover journal could not be read; it needs a manual check',
+        );
+        await this.reportUnreadableJournal(read.file);
         continue;
       }
+      const entry = read.entry;
 
       const current = await this.deps.requests.byIdUnscoped(id).catch(() => null);
       if (current !== null) {
@@ -1385,6 +1406,27 @@ export class RecoveryExecutor {
     );
     timer.unref();
     return { stop: () => clearInterval(timer) };
+  }
+
+  /**
+   * One ops-group alert for a journal that exists and cannot be read.
+   *
+   * It names the file and asks for a manual check, and it names NO database:
+   * the only source for those names is the file that could not be read. Deduped
+   * on the file, so the same broken journal is one open condition however many
+   * ticks find it, not one message a minute.
+   */
+  private async reportUnreadableJournal(file: string): Promise<void> {
+    await this.report({
+      code: 'recovery.run_failed',
+      severity: 'CRITICAL',
+      message:
+        `فایل ثبت جابه‌جایی بازیابی (${file}) خوانده نمی‌شود. ` +
+        'ممکن است یک جابه‌جایی پایگاه داده نیمه‌کاره مانده باشد؛ ' +
+        'هیچ اقدامی خودکار انجام نشد. فایل و پایگاه‌های داده را دستی بررسی کنید.',
+      context: { journalFile: file },
+      dedupeKey: `recovery.journal.${file}`,
+    });
   }
 
   /**
