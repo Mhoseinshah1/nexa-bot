@@ -15,7 +15,7 @@ import { SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
  * notifications and closed receipt windows 30 days; the data compaction in APPLY («حذف»).
  */
 
-const MIGRATION = join(__dirname, '../../apps/api/drizzle/0311_compaction_mode_apply.sql');
+const MIGRATION = join(__dirname, '../../apps/api/drizzle/0313_compaction_mode_apply.sql');
 
 describe('v0.9.7 retention defaults', () => {
   let context: TestContext;
