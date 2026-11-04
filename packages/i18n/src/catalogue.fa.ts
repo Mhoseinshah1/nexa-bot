@@ -246,6 +246,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.catalog.next_page_button': 'بعدی ›',
   'bot.catalog.previous_page_button': '‹ قبلی',
   'bot.catalog.back_to_categories_button': 'بازگشت به دسته‌ها',
+  'bot.catalog.servers_heading': 'یک سرور را انتخاب کنید:',
+  'bot.catalog.back_to_servers_button': 'بازگشت به سرورها',
 
   // The username a customer's service is known by on the panel. The panel's policy
   // decides which of the two modes they are offered; with one enabled the choice is

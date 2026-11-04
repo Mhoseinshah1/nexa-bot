@@ -1357,6 +1357,24 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.catalog.servers_heading',
+    description:
+      'V099 «انتخاب سرور در خرید»: introduces the SERVER list, the first step of buying while ' +
+      'sales.server_selection is on and more than one server could sell. A server (a panel) is ' +
+      'listed only when it carries at least one plan the customer could buy; its button is the ' +
+      'panel\u2019s name.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.back_to_servers_button',
+    description:
+      'V099: returns from a server\u2019s category list to the server list. Choosing another ' +
+      'server starts its categories afresh.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.username.choose',
     description:
       'Asks which of the two username modes the customer wants. Sent only when the ' +

@@ -1237,6 +1237,26 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
+    key: 'sales.server_selection',
+    description:
+      'V099 owner decision «انتخاب سرور در خرید»: whether the customer picks a SERVER before the ' +
+      'categories when buying. A server is a panel. On, the bot\u2019s buy flow becomes server ' +
+      '\u2192 category \u2192 plan \u2192 the pre-invoice, and the mini app is told to draw the same ' +
+      'step: only panels that are ACTIVE, not drained, not archived and carry at least one product ' +
+      'the customer could buy are listed, by the panel\u2019s name, and with one such panel the step ' +
+      'is skipped. A category is listed on a server only when one of its plans is sold there, and ' +
+      'the plans are that server\u2019s. The chosen plan is the same product as without the step: ' +
+      'nothing about pricing, the pre-invoice, payment or provisioning reads this key, and a renewal ' +
+      'keeps its own panel and is never asked. Off by default: the flow is exactly as before.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
     key: CARD_SWITCH_SETTING_KEYS.MAX_SWITCHES,
     description:
       'R4 A1, bounded by R5C-1: how many times a customer may press «🔄 تغییر شماره کارت» on ' +
