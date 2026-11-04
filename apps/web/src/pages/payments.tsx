@@ -86,6 +86,7 @@ import {
   IdText,
   CursorPager,
   DataTable,
+  RowActions,
   Empty,
   Field,
   Input,
@@ -1405,7 +1406,7 @@ function ReceiptRow({ paymentId, receipt }: { paymentId: string; receipt: Paymen
   return (
     <div className="receipt">
       <KV
-        items={[
+        items={present([
           [
             t('web.payment_receipt_kind'),
             t(
@@ -1414,16 +1415,10 @@ function ReceiptRow({ paymentId, receipt }: { paymentId: string; receipt: Paymen
                 : 'web.payment_receipt_kind_document',
             ),
           ],
-          [
-            t('web.payment_receipt_file'),
-            receipt.fileName === null ? <Dash key="f" /> : receipt.fileName,
-          ],
-          [
-            t('web.payment_receipt_size'),
-            size === null ? <Dash key="s" /> : `${size.value} ${t(size.unit)}`,
-          ],
+          [t('web.payment_receipt_file'), receipt.fileName],
+          [t('web.payment_receipt_size'), size === null ? null : `${size.value} ${t(size.unit)}`],
           [t('web.payment_receipt_sent_at'), formatTimestamp(receipt.createdAt)],
-        ]}
+        ])}
       />
       <div className="btn-group">
         <Button
@@ -1739,15 +1734,18 @@ function RefundsCard({
     {
       key: 'createdAt',
       header: t('web.refund_created_at'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+      wrap: 'tight',
+      render: (row) => formatTimestamp(row.createdAt),
     },
     {
       key: 'completedAt',
+      wrap: 'tight',
       header: t('web.refund_completed_at'),
       render: (row) => (row.completedAt === null ? <Dash /> : formatTimestamp(row.completedAt)),
     },
     {
       key: 'externalReference',
+      wrap: 'tight',
       header: t('web.refund_external_reference'),
       render: (row) =>
         row.externalReference === null ? <Dash /> : <Ltr>{row.externalReference}</Ltr>,
@@ -1757,16 +1755,17 @@ function RefundsCard({
           {
             key: 'answer',
             header: t('web.refund_answer_column'),
+            wrap: true,
             render: (row: RefundView) =>
               row.state === 'AWAITING_EXTERNAL' ? (
-                <span className="nowrap">
+                <RowActions wrap>
                   <Button size="sm" onClick={() => openAnswer(row.id, 'complete')}>
                     {t('web.refund_complete')}
-                  </Button>{' '}
+                  </Button>
                   <Button size="sm" variant="danger" onClick={() => openAnswer(row.id, 'abandon')}>
                     {t('web.refund_abandon')}
                   </Button>
-                </span>
+                </RowActions>
               ) : null,
           },
         ]
