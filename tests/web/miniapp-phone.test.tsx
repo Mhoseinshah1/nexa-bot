@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COMMERCE_ERROR_CODES } from '@nexa/contracts';
+import { CATALOGUE_FA } from '@nexa/i18n';
 import { MINIAPP_FA } from '../../apps/miniapp/src/i18n/miniapp.fa';
 import { ApiError, MiniAppApi } from '../../apps/miniapp/src/api';
 import {
@@ -147,6 +148,53 @@ describe('A — the PHONE gate', () => {
     );
     expect(stub.requestContact).toHaveBeenCalledTimes(1);
     expect(stub.meCalls()).toBe(0);
+  });
+});
+
+describe('NEXA v099 — a number stored as NOT accepted', () => {
+  it('the gate shows the bot’s sentence and no contact button', () => {
+    const stub = mount({ requestContact: true, gateLiftsAfter: 1 });
+    render(<Gate gate={{ kind: 'PHONE_NOT_ACCEPTED' }} />);
+    expect(screen.getByText(CATALOGUE_FA['bot.phone.not_accepted'])).toBeTruthy();
+    expect(screen.queryByRole('button', { name: fa('miniapp.gate_phone_share') })).toBeNull();
+    expect(screen.queryByRole('button', { name: fa('miniapp.gate_phone_open_bot') })).toBeNull();
+    expect(stub.requestContact).not.toHaveBeenCalled();
+  });
+
+  it('a route’s refusal ends NOT_ACCEPTED: no contact dialog, nothing requested again', async () => {
+    const requestContact = vi.fn(async () => 'shared' as const);
+    const work = vi.fn(async () => {
+      throw new ApiError(409, COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED, {});
+    });
+    const outcome = await withPhoneVerification(work, {
+      requestContact,
+      phoneVerified: async () => false,
+      phoneNotAccepted: async () => true,
+      wait: async () => undefined,
+    });
+    expect(outcome.kind).toBe('NOT_ACCEPTED');
+    expect(requestContact).not.toHaveBeenCalled();
+    expect(work).toHaveBeenCalledTimes(1);
+  });
+
+  it('a first share the server stores as NOT accepted ends NOT_ACCEPTED, not PENDING', async () => {
+    let shared = false;
+    const requestContact = vi.fn(async () => {
+      shared = true;
+      return 'shared' as const;
+    });
+    const work = vi.fn(async () => {
+      throw new ApiError(409, COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED, {});
+    });
+    const outcome = await withPhoneVerification(work, {
+      requestContact,
+      phoneVerified: async () => false,
+      phoneNotAccepted: async () => shared,
+      wait: async () => undefined,
+    });
+    expect(outcome.kind).toBe('NOT_ACCEPTED');
+    expect(requestContact).toHaveBeenCalledTimes(1);
+    expect(work).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -121,6 +121,27 @@ export const customerOverviewSchema = z.object({
       verifiedAt: z.iso.datetime(),
     })
     .nullable(),
+  /**
+   * NEXA v099 (owner): a number the customer shared as their OWN while
+   * `phone_verification.allowed_numbers` was IRAN_ONLY and that is not a +98 one — stored, NOT
+   * verified, read-only here. Null when the customer has none (`phone` above is the verified
+   * number; a customer has one or the other, never both). It satisfies no gate while IRAN_ONLY
+   * is on and counts as verified once the setting is ALL (decided when a gate reads it, so
+   * this stored fact does not change); `countsAsVerified` is that reading, NOW. An operator's
+   * verification of a number, or the exemption, applies as for any customer.
+   *
+   * `number` follows `phone.number`'s rule: in full only to a holder of `users.phone.verify`.
+   * Defaulted so a client built before it still parses an older answer.
+   */
+  phoneNotAccepted: z
+    .object({
+      number: z.string().nullable(),
+      masked: z.string(),
+      sharedAt: z.iso.datetime(),
+      countsAsVerified: z.boolean(),
+    })
+    .nullable()
+    .default(null),
   locationOverride: customerLocationOverrideSchema.nullable(),
   marketingOptOutAt: z.iso.datetime().nullable(),
   /**

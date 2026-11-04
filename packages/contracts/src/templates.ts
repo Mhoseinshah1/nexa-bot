@@ -13916,6 +13916,19 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  {
+    key: 'bot.phone.not_accepted',
+    description:
+      'NEXA v099 (owner): the customer shared their OWN number while ' +
+      'phone_verification.allowed_numbers is IRAN_ONLY and it is not an Iranian (+98) one. The ' +
+      'number is stored and marked not accepted; it is not verified. Answers that share, every ' +
+      'turn the bot-wide phone gate holds afterwards, and a payment route that needs a verified ' +
+      'number, instead of asking for the contact again. Says only Iranian numbers may use the ' +
+      'bot and to contact support if this is a mistake; the customer is not blocked, and ' +
+      'support and /help stay reachable. Sets the main menu keyboard (no contact button).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   // --- Round 11, B6: the customer's switch for service expiry / volume reminders ----------
   {
     key: 'bot.reminders.opted_out',

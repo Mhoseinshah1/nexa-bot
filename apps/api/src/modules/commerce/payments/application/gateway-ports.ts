@@ -248,4 +248,12 @@ export interface GatewayAudienceReader {
    * Optional so a narrow fake need not carry it; absent is not exempt.
    */
   phoneExempt?(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<boolean>;
+
+  /**
+   * NEXA v099 (owner): whether this customer's own number is stored as NOT accepted
+   * (`phone_not_accepted_at` is set) — it counts as verified only while
+   * `phone_verification.allowed_numbers` is ALL (`notAcceptedPhoneCounts`). Optional so a
+   * narrow fake need not carry it; absent is none.
+   */
+  phoneNotAccepted?(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<boolean>;
 }

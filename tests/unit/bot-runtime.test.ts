@@ -1074,6 +1074,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.phone.invalid',
       // NEXA v095 PR-4 B: only +98 numbers; nothing was stored.
       'bot.phone.iran_only',
+      // NEXA v099: the stored, not-accepted number; nothing verified, support reachable.
+      'bot.phone.not_accepted',
       'bot.phone.not_own',
       'bot.phone.prompt',
       // NEXA v095 PR-4 A: the bot-wide mandatory gate.

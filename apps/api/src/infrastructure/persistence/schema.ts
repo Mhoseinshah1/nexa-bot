@@ -3793,10 +3793,21 @@ export const customers = pgTable(
      * sharing their OWN Telegram contact in the bot. The audit row says which
      * (`customer.phone.verify` / `customer.phone.self_verify`). Both or neither
      * (`customers_phone_check`), so a number is never stored without the verification that
-     * justified storing it.
+     * justified storing it — or (NEXA v099) without `phone_not_accepted_at` saying it was NOT.
      */
     phoneNumber: text('phone_number'),
     phoneVerifiedAt: timestamptz('phone_verified_at'),
+    /**
+     * NEXA v099 (owner): the customer shared their OWN contact while
+     * `phone_verification.allowed_numbers` was IRAN_ONLY and the number is not a +98 one. The
+     * number is stored in `phone_number` and this says when; `phone_verified_at` stays NULL,
+     * so "verified" keeps its one meaning. It satisfies no gate and no route's verified-phone
+     * rule while IRAN_ONLY is on; once the owner switches to ALL it counts as verified, decided
+     * at READ time (`notAcceptedPhoneCounts`), so nothing is migrated and the switch is
+     * reversible. A verification (the customer's or an operator's) clears it. A number is
+     * verified or not accepted, never both (`customers_phone_check`).
+     */
+    phoneNotAcceptedAt: timestamptz('phone_not_accepted_at'),
     /**
      * R4 A4: when the import recorded that this customer had ACCEPTED the previous bot's
      * rules (`user.roll_Status`), or NULL. Written only by the legacy import — at customer
@@ -3860,7 +3871,10 @@ export const customers = pgTable(
     check('customers_status_check', enumCheck('status', CUSTOMER_STATUSES)),
     /** A blocked customer has a time; an active one does not. Neither state can lie. */
     check('customers_blocked_at_check', sql`(status = 'BLOCKED') = (blocked_at IS NOT NULL)`),
-    check('customers_phone_check', sql`(phone_number IS NULL) = (phone_verified_at IS NULL)`),
+    check(
+      'customers_phone_check',
+      sql`(phone_number IS NULL) = (phone_verified_at IS NULL AND phone_not_accepted_at IS NULL) AND (phone_verified_at IS NULL OR phone_not_accepted_at IS NULL)`,
+    ),
     check(
       'customers_phone_resume_check',
       sql`(phone_resume IS NULL) = (phone_resume_at IS NULL) AND (phone_resume IS NULL OR char_length(phone_resume) <= 300)`,

@@ -19,7 +19,7 @@ import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { dateTime, money, parseAmountInput, signedMoney } from '../format.js';
 import { botPhonePromptLink, openExternal, openTelegram } from '../telegram.js';
-import { phoneGateDeps, withPhoneVerification } from '../phone.js';
+import { phoneGateDeps, phoneNotAcceptedText, withPhoneVerification } from '../phone.js';
 import { Button, Card, Loading, errorText, useLoad } from '../ui.js';
 import { LEDGER_REASON_KEY, PAYMENT_METHOD_KEY, PAYMENT_STATE_KEY } from './wallet-labels.js';
 
@@ -211,6 +211,11 @@ function TopUp({ wallet }: { wallet: MiniAppWalletResponse }) {
         phoneGateDeps(api),
       );
       if (outcome.kind !== 'DONE') {
+        // NEXA v099: a number stored as not accepted — the bot's sentence, no contact dialog.
+        if (outcome.kind === 'NOT_ACCEPTED') {
+          setNotice(phoneNotAcceptedText());
+          return;
+        }
         if (outcome.kind === 'UNSUPPORTED' && me.botLink !== null) {
           openTelegram(botPhonePromptLink(me.botLink));
           setNotice(t('miniapp.phone_verification_open_bot'));
