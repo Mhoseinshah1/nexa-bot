@@ -165,7 +165,7 @@ export interface BotRuntimeDeps {
    */
   readonly phoneVerification?: Pick<
     PhoneVerificationService,
-    'enabled' | 'gateFor' | 'verifyOwnContact' | 'rememberResume' | 'takeResume'
+    'enabled' | 'gateFor' | 'allowedNumbers' | 'verifyOwnContact' | 'rememberResume' | 'takeResume'
   >;
   readonly messenger: CustomerMessenger;
   readonly products: ProductService;
