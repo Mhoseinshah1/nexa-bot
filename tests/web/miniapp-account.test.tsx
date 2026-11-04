@@ -1099,7 +1099,7 @@ describe('trial', () => {
 });
 
 describe('the store and home after the first screen', () => {
-  it('draws every category tab, not only the first page of twenty', async () => {
+  it('lists every category, not only the first page of twenty', async () => {
     // 45 categories: the server pages them twenty at a time (`hasMore`), as the shop does.
     const all = Array.from({ length: 45 }, (_, index) => ({
       id: `cat-${String(index)}`,
@@ -1116,9 +1116,9 @@ describe('the store and home after the first screen', () => {
     });
     await mount();
     tab(text('miniapp.tab_store'));
-    await screen.findByRole('tab', { name: 'دسته 44' });
-    expect(screen.getAllByRole('tab')).toHaveLength(45);
-    expect(screen.getByRole('tab', { name: 'دسته 20' })).toBeTruthy();
+    await screen.findByRole('button', { name: 'دسته 44' });
+    expect(screen.getAllByRole('button', { name: /^دسته \d+$/u })).toHaveLength(45);
+    expect(screen.getByRole('button', { name: 'دسته 20' })).toBeTruthy();
     expect(
       calls.filter((one) => one.route === '/catalogue/categories').map((one) => one.query),
     ).toEqual(['?page=0', '?page=1', '?page=2']);

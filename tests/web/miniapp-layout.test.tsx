@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MiniAppApi } from '../../apps/miniapp/src/api';
 import { MINIAPP_FA } from '../../apps/miniapp/src/i18n/miniapp.fa';
@@ -74,6 +74,7 @@ describe('shop cards', () => {
       hasMore: false,
     });
     render(<Store />);
+    fireEvent.click(await screen.findByRole('button', { name: 'ماهانه' }));
     const title = await screen.findByText('پلن اول');
     const card = title.closest('section.plan') as HTMLElement;
     expect(within(card).getAllByRole('button')).toHaveLength(1);
@@ -147,5 +148,10 @@ describe('the username rule list', () => {
     const title = rule('.plan-title');
     expect(title).toMatch(/min-inline-size:\s*0/u);
     expect(title).toMatch(/overflow-wrap:\s*anywhere/u);
+  });
+
+  it('a service card’s figures wrap to a second row instead of overflowing a narrow card', () => {
+    // Codex (#407): nowrap spans in a non-wrapping row pushed «پایان: …» outside the card.
+    expect(rule('.service-figures')).toMatch(/flex-wrap:\s*wrap/u);
   });
 });
