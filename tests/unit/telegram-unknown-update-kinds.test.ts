@@ -36,6 +36,8 @@ describe('the Telegram webhook and update kinds it does not know', () => {
       starsPayments: { preCheckout: vi.fn(), recordSuccessfulPayment: vi.fn() },
       opsGroups: { bindFromTelegram: vi.fn(), membershipChanged: vi.fn() },
       botRuntime: { handle: vi.fn(async () => undefined) },
+      // Phase 6A PR-2: the bot's fair share, passed straight through here.
+      botTurnGuard: { run: (_tenantId: string, turn: () => Promise<unknown>) => turn() },
       customers: { resolveFromUpdate: vi.fn() },
       antiSpam: { observe: vi.fn(async () => ({ verdict: 'ALLOWED' })) },
       recordPing: { execute: vi.fn(async () => undefined) },

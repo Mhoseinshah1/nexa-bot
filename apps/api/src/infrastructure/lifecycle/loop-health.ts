@@ -28,3 +28,29 @@ export type LoopHealth = readonly [name: string, enabled: boolean, isFresh: () =
 export function stalledLoops(loops: readonly LoopHealth[]): readonly string[] {
   return loops.filter(([, enabled, isFresh]) => enabled && !isFresh()).map(([name]) => name);
 }
+
+/**
+ * Phase 6A PR-2: the worker's verdict, with its BOOT taken into account.
+ *
+ * The worker's heartbeat starts before its last loops do: `backup-scheduler`,
+ * `backup-housekeeping` and `legacy-compaction-executor` are started only after the start-up
+ * sweep of killed backup runs has been awaited, and under load that sweep outlasts the first
+ * beat. A loop that has not been started yet is not fresh (`LoopProgress` has no start), so
+ * every loaded boot logged "worker loops have stopped making progress" for exactly those
+ * three — and opened their stall condition in the operations log — for loops that had simply
+ * not begun (`docs/capacity/baseline.md`). Until every loop has been started the worker is
+ * NOT READY but ALIVE: no stall is reported and the liveness watchdog does not exit it.
+ */
+export type WorkerHealthVerdict = true | { readonly healthy: false; readonly alive: boolean };
+
+export function workerHealthVerdict(input: {
+  /** Whether every loop has been started. */
+  readonly started: boolean;
+  readonly stalledNow: readonly string[];
+  /** Loops stalled even allowing for `HEARTBEAT_LIVENESS_ALLOWANCE_MS`. */
+  readonly stalledBeyondAllowance: readonly string[];
+}): WorkerHealthVerdict {
+  if (!input.started) return { healthy: false, alive: true };
+  if (input.stalledNow.length === 0) return true;
+  return { healthy: false, alive: input.stalledBeyondAllowance.length === 0 };
+}

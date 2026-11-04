@@ -935,13 +935,18 @@ describe('L27 / L28 / L29 / L30 — the figures of the nightly reports', () => {
 
 describe('the nightly report’s time and day', () => {
   // Tehran is UTC+03:30 all year: its midnight of 2026-10-12 is 2026-10-11T20:30:00Z.
-  function service(now: { current: Date }, settings: Record<string, unknown>) {
+  function service(
+    now: { current: Date },
+    settings: Record<string, unknown>,
+    scheduleOffsetMs?: () => number,
+  ) {
     const posted = new Set<string>();
     const queued: { dedupeKey: string; logType: string; windowStart?: Date }[] = [];
     const reads: { start: Date; end: Date; previousStart: Date; previousEnd: Date }[] = [];
     const clock: Clock = { now: () => now.current };
     const periods: TimePeriodResolver = new IntlTimePeriodResolver(clock);
     const reporter = new NightlyReportService({
+      ...(scheduleOffsetMs === undefined ? {} : { scheduleOffsetMs }),
       uow: {
         run: async (_scope: unknown, work: (tx: never) => Promise<number>) => work(TX),
       } as never,
@@ -977,6 +982,16 @@ describe('the nightly report’s time and day', () => {
     'ops.log.nightly_report_time': '00:05',
     'sales.currency': 'IRT',
   };
+
+  it('phase 6A: a hosted bot’s report comes its own stable minutes after the configured time', async () => {
+    const now = { current: new Date('2026-10-12T20:35:00Z') }; // 00:05 Tehran
+    const { reporter } = service(now, {}, () => 17 * 60_000);
+    expect(await reporter.runOnce(SCOPE)).toBe(0);
+    now.current = new Date('2026-10-12T20:51:59Z'); // 00:21:59
+    expect(await reporter.runOnce(SCOPE)).toBe(0);
+    now.current = new Date('2026-10-12T20:52:00Z'); // 00:22, its own minute
+    expect(await reporter.runOnce(SCOPE)).toBe(3);
+  });
 
   it('posts nothing before 00:05 Tehran, and at 00:05 the three reports of the COMPLETED previous day', async () => {
     // 00:04 Tehran on 2026-10-13 is 2026-10-12T20:34:00Z.

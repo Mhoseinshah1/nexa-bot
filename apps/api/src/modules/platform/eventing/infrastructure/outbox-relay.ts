@@ -31,12 +31,21 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import type { EventConsumer } from '../application/event-consumer.js';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
+import { groupInOrder, weightedRoundRobin } from '../../capacity/domain/round-robin.js';
 
 export interface OutboxRelayOptions {
   readonly batchSize: number;
   readonly pollIntervalMs: number;
   readonly maxLagMs: number;
+  /**
+   * Phase 6A PR-2: a tenant's turns per round of the claim (`JOB_TURN_WEIGHT`), null for
+   * platform work. Absent, every tenant takes an equal turn.
+   */
+  readonly turnWeightOf?: (tenantId: string | null) => Promise<number>;
 }
+
+/** The key platform work (no tenant) takes in the round-robin. */
+const PLATFORM_TURN_KEY = '-';
 
 export interface RelayBatchResult {
   readonly claimed: number;
@@ -127,6 +136,8 @@ export class OutboxRelay {
    * everywhere, and the first sign was five minutes after traffic resumed.
    */
   private readonly progress: LoopProgress;
+  /** Advanced every batch, so the bot served first in a round rotates. */
+  private rotation = 0;
 
   constructor(
     private readonly db: Database,
@@ -276,25 +287,56 @@ export class OutboxRelay {
         // of that: the messages are still there, in order, when the tenant is
         // started again. A message with no tenant is platform work and always
         // eligible.
-        const eligible = eligibleForDispatch(await this.activeTenantIds(tx));
+        const active = await this.activeTenantIds(tx);
+        const eligible = eligibleForDispatch(active);
         const now = this.clock.now();
+        const dispatchable = and(
+          isNull(outboxMessages.publishedAt),
+          notExhausted(),
+          // Due: never failed, or its own back-off has run out (WP20).
+          or(isNull(outboxMessages.nextAttemptAt), lte(outboxMessages.nextAttemptAt, now)),
+          noEarlierLiveSibling(),
+        );
 
-        const claimed = await tx
-          .select()
-          .from(outboxMessages)
-          .where(
-            and(
-              isNull(outboxMessages.publishedAt),
-              eligible,
-              notExhausted(),
-              // Due: never failed, or its own back-off has run out (WP20).
-              or(isNull(outboxMessages.nextAttemptAt), lte(outboxMessages.nextAttemptAt, now)),
-              noEarlierLiveSibling(),
-            ),
-          )
-          .orderBy(asc(outboxMessages.occurredAt), asc(outboxMessages.sequence))
-          .limit(this.options.batchSize)
-          .for('update', { skipLocked: true });
+        /*
+         * Phase 6A PR-2: IN TURNS ACROSS TENANTS. Oldest-first over the whole table let one
+         * bot's backlog (a broadcast's events, an import) fill every batch while every other
+         * bot's messages waited behind it. Now the candidates are each tenant's own oldest
+         * `batchSize` (one index probe per tenant on `outbox_messages_tenant_unpublished_idx`),
+         * the batch is taken from them in weighted turns (`weightedRoundRobin`: the owner's
+         * own bot a double turn by default), and only those rows are locked. Within a tenant
+         * the order is untouched, and the batch is processed oldest first, so an aggregate's
+         * messages still never overtake each other.
+         */
+        const candidates = await this.fairCandidates(tx, active, dispatchable);
+        const weights = new Map<string, number>();
+        for (const key of new Set(candidates.map((row) => row.key))) {
+          weights.set(
+            key,
+            this.options.turnWeightOf === undefined
+              ? 1
+              : await this.options.turnWeightOf(key === PLATFORM_TURN_KEY ? null : key),
+          );
+        }
+        const picked = weightedRoundRobin(
+          groupInOrder(
+            candidates,
+            (row) => row.key,
+            (key) => weights.get(key) ?? 1,
+          ),
+          this.options.batchSize,
+          this.rotation++,
+        ).map((row) => row.id);
+
+        const claimed =
+          picked.length === 0
+            ? []
+            : await tx
+                .select()
+                .from(outboxMessages)
+                .where(and(inArray(outboxMessages.id, picked), eligible, dispatchable))
+                .orderBy(asc(outboxMessages.occurredAt), asc(outboxMessages.sequence))
+                .for('update', { skipLocked: true });
 
         let published = 0;
         let failed = 0;
@@ -519,6 +561,46 @@ export class OutboxRelay {
       .limit(1);
     if (!row) return 0;
     return this.clock.now().getTime() - row.occurredAt.getTime();
+  }
+
+  /**
+   * Each active tenant's oldest dispatchable messages, at most `batchSize` of each, and the
+   * platform's own (no tenant) the same way. Unlocked: the rows the round-robin picks are
+   * locked, and re-checked, by the claim itself.
+   */
+  private async fairCandidates(
+    tx: Executor,
+    activeTenantIds: readonly string[],
+    dispatchable: ReturnType<typeof and>,
+  ): Promise<{ readonly id: string; readonly key: string }[]> {
+    const limit = this.options.batchSize;
+    const platform = await tx
+      .select({ id: outboxMessages.id })
+      .from(outboxMessages)
+      .where(and(isNull(outboxMessages.tenantId), dispatchable))
+      .orderBy(asc(outboxMessages.occurredAt), asc(outboxMessages.sequence))
+      .limit(limit);
+    const rows: { id: string; key: string }[] = platform.map((row) => ({
+      id: row.id,
+      key: PLATFORM_TURN_KEY,
+    }));
+    if (activeTenantIds.length === 0) return rows;
+    const ids = sql.join(
+      activeTenantIds.map((id) => sql`${id}::uuid`),
+      sql`, `,
+    );
+    const perTenant = await tx.execute<{ id: string; tenant_id: string }>(sql`
+      SELECT c.id, c.tenant_id
+        FROM unnest(ARRAY[${ids}]) AS t(tid)
+        CROSS JOIN LATERAL (
+          SELECT ${outboxMessages.id} AS id, ${outboxMessages.tenantId} AS tenant_id
+            FROM ${outboxMessages}
+           WHERE ${outboxMessages.tenantId} = t.tid AND ${dispatchable}
+           ORDER BY ${outboxMessages.occurredAt}, ${outboxMessages.sequence}
+           LIMIT ${limit}
+        ) AS c`);
+    for (const row of perTenant.rows) rows.push({ id: row.id, key: row.tenant_id });
+    return rows;
   }
 
   /**

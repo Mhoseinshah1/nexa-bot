@@ -31,6 +31,7 @@ import {
 } from './stars-updates.js';
 import { opsConnectAttemptOf, opsMembershipChangeOf } from './ops-group-updates.js';
 import { handleBusinessUpdate } from './business-updates.js';
+import { isCapacityDeferral } from '../../modules/platform/capacity/application/bot-turn-guard.js';
 import { businessUpdateOf } from '../../modules/commerce/business-chats/domain/telegram-business.js';
 
 /**
@@ -429,14 +430,24 @@ export class TelegramWebhookController {
     const telegramUserId = telegramUserIdOf(update);
     if (telegramUserId !== null) {
       try {
-        await this.container.botRuntime.handle(scope, actor, {
-          idempotencyKey,
-          botInstanceId: botInstance.id,
-          update,
-          telegramUserId,
-          from: telegramFromOf(update),
-        });
+        /*
+         * Phase 6A PR-2: inside the bot's fair share — at most its `UPDATE_CONCURRENCY` turns
+         * at once (the rest wait in the bot's own queue) and its `DB_CONNECTIONS` of the pool.
+         * A turn that cannot get a place, or a new customer over the bot's per-minute rate, is
+         * a capacity DEFERRAL: rethrown below as a retryable non-2xx with nothing written, so
+         * Telegram delivers the same update again. Slower, never dropped.
+         */
+        await this.container.botTurnGuard.run(botInstance.tenantId, () =>
+          this.container.botRuntime.handle(scope, actor, {
+            idempotencyKey,
+            botInstanceId: botInstance.id,
+            update,
+            telegramUserId,
+            from: telegramFromOf(update),
+          }),
+        );
       } catch (error) {
+        if (isCapacityDeferral(error)) throw error;
         // FIX-05: windowed and quiet, for the reasons the ops-group failure above gives —
         // a throw here would be the non-2xx this wrapping exists to prevent.
         await recordQuietly(

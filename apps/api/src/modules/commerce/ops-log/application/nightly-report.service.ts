@@ -33,6 +33,11 @@ const REPORT_TYPES: readonly OpsLogTypeId[] = [
 ];
 
 export interface NightlyReportServiceDeps {
+  /**
+   * Phase 6A PR-2: how long after the configured time THIS bot's report is due — a stable
+   * hash of its tenant (`scheduleOffsetMs`), 0 for the owner's own bot. Absent: 0.
+   */
+  readonly scheduleOffsetMs?: (scope: TenantContext) => number;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly scopeActivity: ScopeActivityReader;
   readonly reader: NightlyReportReader;
@@ -108,7 +113,10 @@ export class NightlyReportService {
       };
       let queued = 0;
       for (const day of [dayBefore, yesterday]) {
-        const dueAt = day.end.getTime() + minutes * 60_000;
+        // Phase 6A PR-2: a hosted bot's report a stable few minutes after the configured
+        // time (`scheduleOffsetMs`); the owner's own at the time itself.
+        const dueAt =
+          day.end.getTime() + minutes * 60_000 + (this.deps.scheduleOffsetMs?.(scope) ?? 0);
         // Due once its time has come, and only for a while after: see the catch-up bound.
         if (now.getTime() < dueAt || now.getTime() - dueAt > NIGHTLY_REPORT_CATCH_UP_MS) continue;
         queued += await this.post(scope, day, enabled, currency, tx);

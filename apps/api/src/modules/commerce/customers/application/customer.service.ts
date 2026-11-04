@@ -82,6 +82,12 @@ export const CUSTOMER_BLOCK_PERMISSION: PermissionKey = 'users.block';
  */
 
 export interface CustomerServiceDeps {
+  /**
+   * Phase 6A PR-2: the bot's new-customer rate (`NEW_CUSTOMERS_PER_MINUTE`). Asked inside the
+   * resolving transaction only when it is about to CREATE a customer; a refusal throws a
+   * retryable error that rolls the creation back (`NewCustomerGate`). Absent: no limit.
+   */
+  readonly newCustomers?: { admit(tenantId: string): Promise<void> };
   readonly repository: CustomerRepository;
   readonly guard: PermissionGuard;
   readonly audit: AuditWriter;
@@ -389,6 +395,12 @@ export class CustomerService {
          */
         const arrival: CustomerArrival =
           customer.status === 'BLOCKED' ? 'BLOCKED' : created ? 'FIRST_SEEN' : 'RETURNING';
+
+        // Over the bot's new-customer rate this throws, and the throw takes the creation
+        // back with it: nothing is written, and Telegram delivers the update again.
+        if (created && this.deps.newCustomers !== undefined) {
+          await this.deps.newCustomers.admit(scope.tenantId);
+        }
 
         if (created) {
           await this.deps.audit.record(
