@@ -149,4 +149,9 @@ describe('the username rule list', () => {
     expect(title).toMatch(/min-inline-size:\s*0/u);
     expect(title).toMatch(/overflow-wrap:\s*anywhere/u);
   });
+
+  it('a service card’s figures wrap to a second row instead of overflowing a narrow card', () => {
+    // Codex (#407): nowrap spans in a non-wrapping row pushed «پایان: …» outside the card.
+    expect(rule('.service-figures')).toMatch(/flex-wrap:\s*wrap/u);
+  });
 });

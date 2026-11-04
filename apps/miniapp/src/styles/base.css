@@ -541,9 +541,10 @@ h2 {
 }
 .service-figures {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: baseline;
-  gap: 8px;
+  gap: 2px 8px;
   color: var(--fg-2);
   font-size: var(--fs-sm);
 }
