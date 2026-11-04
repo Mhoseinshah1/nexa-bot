@@ -228,6 +228,25 @@ describe('capacity guards (phase 6A PR-2)', () => {
   });
 
   describe('the webhook', () => {
+    // First in this file: the new-customer window is per process and per minute, so it
+    // must see this bot's first customers of the minute.
+    it('over the new-customer rate: 429 with nothing written, and a returning customer is never counted', async () => {
+      await setLimit(owner, tenantA, SEED_IDS.tenantB, 'NEW_CUSTOMERS_PER_MINUTE', {
+        mode: 'LIMITED',
+        value: 1,
+      });
+      expect((await start(BOT_B, 920_001)).statusCode).toBe(201);
+      const refused = await start(BOT_B, 920_002);
+      expect(refused.statusCode).toBe(429);
+      expect(JSON.parse(refused.body).code ?? JSON.parse(refused.body).error?.code).toBe(
+        CAPACITY_ERROR_CODES.NEW_CUSTOMER_RATE,
+      );
+      expect(await customerOf(SEED_IDS.tenantB, 920_002)).toBe(0);
+      // The customer already admitted comes back freely.
+      expect((await start(BOT_B, 920_001)).statusCode).toBe(201);
+      // The owner's own bot is unlimited by default.
+      for (let i = 0; i < 3; i += 1) expect((await start(BOT_A, 930_000 + i)).statusCode).toBe(201);
+    });
     it('queues a bot’s update over its concurrency and processes it; another bot is not slowed', async () => {
       await setLimit(owner, tenantA, SEED_IDS.tenantB, 'UPDATE_CONCURRENCY', {
         mode: 'LIMITED',
@@ -259,24 +278,6 @@ describe('capacity guards (phase 6A PR-2)', () => {
       expect(first.statusCode).toBe(201);
       expect(second.statusCode).toBe(201);
       expect(await customerOf(SEED_IDS.tenantB, 910_002)).toBe(1);
-    });
-
-    it('over the new-customer rate: 429 with nothing written, and a returning customer is never counted', async () => {
-      await setLimit(owner, tenantA, SEED_IDS.tenantB, 'NEW_CUSTOMERS_PER_MINUTE', {
-        mode: 'LIMITED',
-        value: 1,
-      });
-      expect((await start(BOT_B, 920_001)).statusCode).toBe(201);
-      const refused = await start(BOT_B, 920_002);
-      expect(refused.statusCode).toBe(429);
-      expect(JSON.parse(refused.body).code ?? JSON.parse(refused.body).error?.code).toBe(
-        CAPACITY_ERROR_CODES.NEW_CUSTOMER_RATE,
-      );
-      expect(await customerOf(SEED_IDS.tenantB, 920_002)).toBe(0);
-      // The customer already admitted comes back freely.
-      expect((await start(BOT_B, 920_001)).statusCode).toBe(201);
-      // The owner's own bot is unlimited by default.
-      for (let i = 0; i < 3; i += 1) expect((await start(BOT_A, 930_000 + i)).statusCode).toBe(201);
     });
   });
 
@@ -322,10 +323,10 @@ describe('capacity guards (phase 6A PR-2)', () => {
         .from(outboxMessages)
         .where(sql`${outboxMessages.publishedAt} IS NOT NULL`);
       const byTenant = (id: string) => published.filter((row) => row.tenantId === id).length;
-      // One batch of four, in weighted turns: the owner's two, then B's... B is not starved.
       expect(published).toHaveLength(4);
-      expect(byTenant(SEED_IDS.tenantB)).toBe(2);
-      expect(byTenant(SEED_IDS.tenantA)).toBe(2);
+      // Round 1: A (the owner, double turn) 2, B 1; round 2: A 1. Oldest-first would give B 0.
+      expect(byTenant(SEED_IDS.tenantB)).toBe(1);
+      expect(byTenant(SEED_IDS.tenantA)).toBe(3);
     });
   });
 
@@ -379,7 +380,8 @@ describe('capacity guards (phase 6A PR-2)', () => {
       expect(
         await queue.tryStart(ids.hosted, {
           now: lease(5),
-          leaseUntil: lease(60_000),
+          // The hosted job's waiter is alive: its lease runs past the owner's.
+          leaseUntil: lease(300_000),
           concurrency: 1,
         }),
       ).toBe('QUEUED');
