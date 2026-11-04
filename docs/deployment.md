@@ -1041,6 +1041,11 @@ and nothing here does it.
 Backups are not rotated automatically. Retention is an operator decision;
 `/var/backups/nexa` is on the disk-space checklist.
 
+This pre-update dump is plaintext and stays on the host. The encrypted, verified archive of
+the backup pipeline is the one that leaves it — to Telegram, and (Phase 6A D0) to a
+write-only, object-locked S3 bucket once its keys are in `nexa.env`; `sudo botctl backup
+offsite test` writes one test object and reports in Persian (`docs/backup.md` § Off-site copy).
+
 ## Updating
 
 ```bash

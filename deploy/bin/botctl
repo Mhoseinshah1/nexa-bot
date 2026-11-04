@@ -97,6 +97,7 @@ botctl — operate a Nexa installation
   botctl status              what is running, and whether it is ready
   botctl version             installed version, source commit, image digest
   botctl backup              a consistent PostgreSQL dump, timestamped
+  botctl backup offsite test one small test object to the off-site (S3) bucket; Persian report
   botctl restore --target DB PART...
                              restore a Nexa backup (.nxb, .7z, or every part .001 .002 …)
                              into an EMPTY database you created; never the live one
@@ -1256,6 +1257,16 @@ cmd_backup() {
   chmod 0600 "$target"
   nexa_ok "backup written: ${target} (${size} bytes of SQL)"
   printf '%s' "$target"
+}
+
+# Phase 6A D0: `botctl backup offsite test` — one small object written to the off-site
+# bucket with the configured key, through the same uploader every verified archive takes,
+# reported in Persian. Read-only for the installation: no lock, no database, no edit; the
+# credentials stay in nexa.env and never reach argv or this script's output.
+cmd_backup_offsite() {
+  require_installed
+  [ "${1:-}" = test ] && [ "$#" -eq 1 ] || nexa_die "usage: botctl backup offsite test"
+  nexa_compose run --rm --no-deps -T --entrypoint node api dist/backup.cli.js offsite-test
 }
 
 # ---------------------------------------------------------------------------
@@ -3122,8 +3133,13 @@ main() {
     version) cmd_version "$@" ;;
     status) cmd_status "$@" ;;
     backup)
-      botctl_long_command backup
-      cmd_backup
+      if [ "${1:-}" = offsite ]; then
+        shift
+        cmd_backup_offsite "$@"
+      else
+        botctl_long_command backup
+        cmd_backup
+      fi
       ;;
     restore) cmd_restore "$@" ;;
     update) cmd_update "$@" ;;

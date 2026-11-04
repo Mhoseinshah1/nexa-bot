@@ -19,6 +19,10 @@ import {
   privateScratchDirectory,
 } from './modules/platform/backup/infrastructure/workspace.js';
 import { InstallationKeyring } from './infrastructure/crypto/installation-keyring.js';
+import { SystemClock } from './infrastructure/clock.js';
+import type { AppConfig } from './infrastructure/config/config.schema.js';
+import { S3OffsiteUploader } from './modules/platform/backup/infrastructure/s3-offsite-uploader.js';
+import type { OffsiteUploadOutcome } from './modules/platform/backup/application/ports.js';
 import { openRecoveryKit } from './infrastructure/crypto/recovery-kit.js';
 
 /**
@@ -54,6 +58,8 @@ const USAGE = [
   '  backup verify --archive PATH            decrypt and checksum; touches no database',
   '  backup restore --archive PATH --target DB',
   '                                          restore into an explicit, empty, non-live database',
+  '  backup offsite-test                     write one small test object to the off-site bucket',
+  '                                          (Persian report; exits 3 when it is not configured)',
   '',
   '  A backup delivered in parts (E4): repeat --archive for every part, in any order, or',
   '  name only the .001 and the .002, .003 … beside it are found. The parts are joined',
@@ -72,7 +78,7 @@ const USAGE = [
 ].join('\n');
 
 interface Args {
-  readonly command: 'run' | 'list' | 'verify' | 'restore';
+  readonly command: 'run' | 'list' | 'verify' | 'restore' | 'offsite-test';
   readonly archive: string | null;
   /** Every `--archive` given, in the order given (E4: the parts of one archive). */
   readonly archives: readonly string[];
@@ -85,8 +91,19 @@ interface Args {
 
 function parseArgs(argv: readonly string[]): Args {
   const command = argv[0];
-  if (command !== 'run' && command !== 'list' && command !== 'verify' && command !== 'restore') {
+  if (
+    command !== 'run' &&
+    command !== 'list' &&
+    command !== 'verify' &&
+    command !== 'restore' &&
+    command !== 'offsite-test'
+  ) {
     throw new UsageError(USAGE);
+  }
+  // Takes nothing: the destination and its key come from the configuration only, so a
+  // credential can never arrive on a command line.
+  if (command === 'offsite-test' && argv.length > 1) {
+    throw new UsageError('offsite-test takes no arguments.');
   }
   const value = (flag: string): string | null => {
     const index = argv.indexOf(flag);
@@ -601,6 +618,84 @@ async function cmdRestore(
   }
 }
 
+/** The uploader exactly as the container builds it, from the configuration alone. */
+function offsiteUploaderOf(config: AppConfig): S3OffsiteUploader {
+  return new S3OffsiteUploader({
+    endpoint: config.BACKUP_OFFSITE_ENDPOINT,
+    region: config.BACKUP_OFFSITE_REGION,
+    bucket: config.BACKUP_OFFSITE_BUCKET,
+    accessKeyId: config.BACKUP_OFFSITE_ACCESS_KEY_ID,
+    secretAccessKey: config.BACKUP_OFFSITE_SECRET_ACCESS_KEY,
+    prefix: config.BACKUP_OFFSITE_PREFIX,
+    retentionDays: config.BACKUP_OFFSITE_RETENTION_DAYS,
+    pathStyle: config.BACKUP_OFFSITE_PATH_STYLE,
+    timeoutMs: config.BACKUP_OFFSITE_TIMEOUT_MS,
+  });
+}
+
+/** Exit codes of `offsite-test`: 0 written, 1 refused or unreachable, 3 not configured. */
+const EXIT_OFFSITE_NOT_CONFIGURED = 3;
+
+/**
+ * Phase 6A D0: the operator's report of one test upload, in Persian. Names the bucket and
+ * the retention, never the key, the secret or a signature; the provider's answer is its
+ * status and `<Code>` only.
+ */
+function offsiteTestReport(
+  outcome: OffsiteUploadOutcome,
+  facts: { readonly bucket: string; readonly retentionDays: number },
+): { readonly exitCode: number; readonly text: string } {
+  if (outcome.kind === 'NOT_CONFIGURED') {
+    return {
+      exitCode: EXIT_OFFSITE_NOT_CONFIGURED,
+      text:
+        'نسخهٔ بیرون از سرور خاموش است: BACKUP_OFFSITE_ENDPOINT، BACKUP_OFFSITE_REGION، ' +
+        'BACKUP_OFFSITE_BUCKET، BACKUP_OFFSITE_ACCESS_KEY_ID و BACKUP_OFFSITE_SECRET_ACCESS_KEY ' +
+        'در /etc/nexa/nexa.env تنظیم نشده‌اند.\n',
+    };
+  }
+  if (outcome.kind === 'FAILED') {
+    const hints: string[] = [];
+    if (/AccessDenied|SignatureDoesNotMatch|InvalidAccessKeyId/.test(outcome.detail)) {
+      hints.push('کلید دسترسی یا سیاست مخزن اجازهٔ PutObject نمی‌دهد؛ کلید و سیاست را بررسی کنید.');
+    }
+    if (/InvalidRequest|ObjectLock/i.test(outcome.detail) && facts.retentionDays > 0) {
+      hints.push(
+        'اگر قفل شیء (Object Lock) روی این مخزن روشن نیست، مخزن را با Object Lock بسازید ' +
+          'یا BACKUP_OFFSITE_RETENTION_DAYS را صفر کنید.',
+      );
+    }
+    if (/^network:/.test(outcome.detail)) {
+      hints.push('سرور به نشانی BACKUP_OFFSITE_ENDPOINT نرسید؛ نشانی و دسترسی شبکه را بررسی کنید.');
+    }
+    return {
+      exitCode: 1,
+      text: [`بارگذاری آزمایشی ناموفق بود: ${outcome.detail}`, ...hints].join('\n') + '\n',
+    };
+  }
+  const lines = [`بارگذاری آزمایشی موفق بود: یک شیء کوچک در مخزن «${facts.bucket}» نوشته شد.`];
+  lines.push(
+    outcome.lockedUntil === null
+      ? 'قفل شیء خاموش است (BACKUP_OFFSITE_RETENTION_DAYS=0): آرشیوها بدون مهلت نگهداری قفل‌شده فرستاده می‌شوند.'
+      : `قفل شیء در حالت COMPLIANCE پذیرفته شد؛ هر آرشیو ${String(facts.retentionDays)} روز ` +
+          'پس از بارگذاری قابل حذف نیست (شیء آزمایشی یک روز).',
+  );
+  lines.push(
+    'یادآوری: سیاست مخزن باید حذف (DeleteObject*) را برای این کلید رد کند؛ متن آن در docs/backup.md است.',
+  );
+  return { exitCode: 0, text: `${lines.join('\n')}\n` };
+}
+
+async function cmdOffsiteTest(config: AppConfig): Promise<number> {
+  const outcome = await offsiteUploaderOf(config).testUpload(new SystemClock().now());
+  const report = offsiteTestReport(outcome, {
+    bucket: config.BACKUP_OFFSITE_BUCKET,
+    retentionDays: config.BACKUP_OFFSITE_RETENTION_DAYS,
+  });
+  process.stdout.write(report.text);
+  return report.exitCode;
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -613,6 +708,8 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
+  // No container: the test needs the configuration and the network, never the database.
+  if (args.command === 'offsite-test') process.exit(await cmdOffsiteTest(config));
   const container = createContainer(config, 'worker');
   try {
     if (args.command === 'run') process.exit(await cmdRun(container));
@@ -651,6 +748,7 @@ export {
   parseArgs,
   cmdVerify,
   cmdRun,
+  offsiteTestReport,
   pointAtInstallation,
   UsageError,
   USAGE,
