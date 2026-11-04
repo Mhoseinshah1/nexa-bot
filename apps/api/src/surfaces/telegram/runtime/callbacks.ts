@@ -901,6 +901,27 @@ export const CATALOG_BROWSE_MAX_PAGE = 999;
 export const CATALOG_PAGE_CALLBACK_PREFIX = 'cg:';
 export const CATEGORY_CALLBACK_PREFIX = 'ck:';
 /**
+ * V099 «انتخاب سرور در خرید»: the server step's three callbacks, `c` then a letter like the
+ * two above (none starts with the one-letter `c:`).
+ *
+ * - `cs:<page>` — a page of the server list (back from a server's categories is `cs:0`);
+ * - `cr:<panel uuid>.<page>` — a page of one server's categories, at most 43 bytes;
+ * - `cl:<server + category, as an id pair>.<page>` — a page of one category's plans on one
+ *   server: 3 + 43 + 1 + 3 = 50 bytes, under Telegram's 64 (`encodeIdPair`).
+ *
+ * Ids, never positions, for the reason the two above give. The plan button itself is the
+ * ordinary `p:<product id>`: the chosen plan is the same product as without the step.
+ */
+export const SERVER_LIST_CALLBACK_PREFIX = 'cs:';
+export const SERVER_CATEGORIES_CALLBACK_PREFIX = 'cr:';
+export const SERVER_CATEGORY_CALLBACK_PREFIX = 'cl:';
+
+/** `cl:` data for one page of a category's plans on one server. */
+export function encodeServerCategory(serverId: string, categoryId: string, page: number): string {
+  return `${SERVER_CATEGORY_CALLBACK_PREFIX}${encodeIdPair(serverId, categoryId)}.${page}`;
+}
+
+/**
  * R11 A11: «🔁 سفارش دوباره» under an ended order whose category was recorded —
  * `ro:<category uuid>`, the category's product list as a new message. An identifier only;
  * the list is re-read for the tapping customer. `r:` is resend's and `ro:` does not start

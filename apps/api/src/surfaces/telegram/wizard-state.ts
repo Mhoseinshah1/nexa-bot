@@ -237,6 +237,11 @@ export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, Wiz
   // Purchase: category → product → username → pre-invoice → method → invoice.
   ['CATALOG_PAGE', ORDER('CATEGORIES', 'PRODUCTS')],
   ['CATEGORY', ORDER('CATEGORIES', 'PRODUCTS')],
+  // V099 «انتخاب سرور در خرید»: server → category → plan. The server list and a server's
+  // categories are both `CATEGORIES` screens, a server's plans a `PRODUCTS` one.
+  ['SERVER_LIST', ORDER('CATEGORIES', 'PRODUCTS')],
+  ['SERVER_CATEGORIES', ORDER('CATEGORIES', 'PRODUCTS')],
+  ['SERVER_CATEGORY', ORDER('CATEGORIES', 'PRODUCTS')],
   ['ORDER', ORDER('PRODUCTS')],
   ['USERNAME_CUSTOM', ORDER('USERNAME')],
   ['USERNAME_AUTOMATIC', ORDER('USERNAME')],

@@ -243,6 +243,21 @@ export interface ProductRepository {
   findById(scope: TenantContext, id: ProductId, tx?: unknown): Promise<ProductRecord | null>;
 
   /**
+   * V099 «انتخاب سرور در خرید»: one PAGE of the servers — panels — a customer may buy on,
+   * ordered by name then id. A panel is listed only when it is ACTIVE, not drained and not
+   * archived, is in `eligiblePanelIds`, and carries at least one product the customer
+   * catalogue's own predicate shows (`customerVisibleProduct`, by EXISTS, before the limit).
+   */
+  listCustomerServers(
+    scope: TenantContext,
+    limit: number,
+    offset: number,
+    eligiblePanelIds: readonly string[],
+    audience: CatalogueAudience,
+    tx?: unknown,
+  ): Promise<CustomerPage<CatalogueServer>>;
+
+  /**
    * One PAGE of the categories a customer may browse. See the implementation for why
    * emptiness is a property of the query's shape rather than a check it performs.
    */
@@ -428,6 +443,16 @@ export interface ProductCategoryRecord {
 export interface CustomerPage<T> {
   readonly items: readonly T[];
   readonly hasMore: boolean;
+}
+
+/**
+ * V099: one server of the server step — a panel, by its id and the operator's name for it.
+ * The name is the owner's chosen label (a panel has no other); nothing else of the panel is
+ * read, so no address, credential or health reaches a customer from here.
+ */
+export interface CatalogueServer {
+  readonly id: string;
+  readonly name: string;
 }
 
 /**

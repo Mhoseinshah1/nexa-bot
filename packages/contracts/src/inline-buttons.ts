@@ -173,6 +173,9 @@ export const INLINE_BUTTONS = [
   button('catalog.previous_page', 'PURCHASE', 'bot.catalog.previous_page_button'),
   button('catalog.next_page', 'PURCHASE', 'bot.catalog.next_page_button'),
   button('catalog.back_to_categories', 'PURCHASE', 'bot.catalog.back_to_categories_button'),
+  // V099: «انتخاب سرور در خرید» — a server (its panel's name) and the way back to the list.
+  button('catalog.server', 'PURCHASE', null),
+  button('catalog.back_to_servers', 'PURCHASE', 'bot.catalog.back_to_servers_button'),
   button('catalog.custom_service', 'PURCHASE', 'bot.custom_service.button'),
   button('custom_service.location', 'PURCHASE', null),
   button('trial.panel', 'PURCHASE', 'bot.trial.panel_button'),

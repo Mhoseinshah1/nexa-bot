@@ -6,6 +6,7 @@ import {
   MINIAPP_ERROR_CODES,
   MINIAPP_ROUTES,
   errors,
+  miniAppCatalogueQuerySchema,
   miniAppCreateOrderRequestSchema,
   miniAppDiscountRequestSchema,
   miniAppGatewayPayRequestSchema,
@@ -19,6 +20,7 @@ import {
   type MiniAppOrder,
   type MiniAppPaymentRoutesResponse,
   type MiniAppProduct,
+  type MiniAppServersResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
@@ -38,20 +40,54 @@ const PAGE_SIZE = 20;
 export class MiniAppShopController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
-  /** The category list — what reaches it is decided in SQL, reseller tier included. */
+  /**
+   * V099 «انتخاب سرور در خرید»: whether to draw the server step, and one page of the servers
+   * (the bot's own list: `ProductService.browseServers`). Off, nothing is listed and `step` is
+   * false. With one server the step is skipped (`step` false), exactly as the bot skips it.
+   */
+  @Get(MINIAPP_ROUTES.servers)
+  async servers(
+    @Req() request: FastifyRequest,
+    @Query() query: unknown,
+  ): Promise<MiniAppServersResponse> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    const { page } = parseWith(miniAppPageQuerySchema, query);
+    const enabled = await this.container.products.serverSelectionEnabled(call.context.scope);
+    if (!enabled) return { enabled, step: false, items: [], page, hasMore: false };
+    const result = await this.container.products.browseServers(
+      call.context.scope,
+      call.actor,
+      PAGE_SIZE,
+      page * PAGE_SIZE,
+      call.context.customer.id,
+    );
+    return {
+      enabled,
+      step: page > 0 || result.hasMore || result.items.length > 1,
+      items: result.items.map((server) => ({ id: server.id, name: server.name })),
+      page,
+      hasMore: result.hasMore,
+    };
+  }
+
+  /**
+   * The category list — what reaches it is decided in SQL, reseller tier included. V099: an
+   * optional `serverId` narrows it to the categories with a plan on that server.
+   */
   @Get(MINIAPP_ROUTES.categories)
   async categories(
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<MiniAppCategoriesResponse> {
     const call = await miniAppCall(this.container, request, { gated: true });
-    const { page } = parseWith(miniAppPageQuerySchema, query);
+    const { page, serverId } = parseWith(miniAppCatalogueQuerySchema, query);
     const result = await this.container.products.browseCategories(
       call.context.scope,
       call.actor,
       PAGE_SIZE,
       page * PAGE_SIZE,
       call.context.customer.id,
+      serverId,
     );
     return {
       items: result.items.map((category) => ({
@@ -71,7 +107,8 @@ export class MiniAppShopController {
     @Query() query: unknown,
   ): Promise<MiniAppCategoryResponse> {
     const call = await miniAppCall(this.container, request, { gated: true });
-    const { page } = parseWith(miniAppPageQuerySchema, query);
+    // V099: an optional `serverId` narrows the plans to that server's.
+    const { page, serverId } = parseWith(miniAppCatalogueQuerySchema, query);
     const result = await owned(() =>
       this.container.products.browseCategory(
         call.context.scope,
@@ -80,6 +117,7 @@ export class MiniAppShopController {
         PAGE_SIZE,
         page * PAGE_SIZE,
         call.context.customer.id,
+        serverId,
       ),
     );
     return {

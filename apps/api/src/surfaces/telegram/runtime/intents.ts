@@ -33,6 +33,15 @@ export const BOT_INTENTS = [
   'CATALOG_PAGE',
   'CATEGORY',
   /*
+   * V099 «انتخاب سرور در خرید» (`sales.server_selection`): the server step and the two
+   * catalogue levels narrowed to one server. `SERVER_LIST` carries a page; `SERVER_CATEGORIES`
+   * the server (a panel id) and a page; `SERVER_CATEGORY` the server as `targetId`, the
+   * category as `secondaryId`, and a page. Every id is validated at the boundary.
+   */
+  'SERVER_LIST',
+  'SERVER_CATEGORIES',
+  'SERVER_CATEGORY',
+  /*
    * R11 A11: «🔁 سفارش دوباره» under an expired or cancelled order — the order's category's
    * product list, as a NEW message. Its own intent rather than `CATEGORY`, which is gated to a
    * message still showing the catalogue: the button sits on an ENDED order's closed screen.

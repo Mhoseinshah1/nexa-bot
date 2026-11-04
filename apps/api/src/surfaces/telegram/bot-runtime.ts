@@ -94,6 +94,7 @@ import * as adminFlow from './runtime/admin-flow.js';
 import * as adminReviewFlow from './runtime/admin-review-flow.js';
 import { hasAnyPanelSection } from './runtime/admin-common.js';
 import * as purchaseFlow from './runtime/purchase-flow.js';
+import * as serverStepFlow from './runtime/server-step-flow.js';
 import * as checkoutFlow from './runtime/checkout-flow.js';
 import * as cardReceiptFlow from './runtime/card-receipt-flow.js';
 import * as topupFlow from './runtime/topup-flow.js';
@@ -269,6 +270,9 @@ export {
   REMINDER_SETTING_CODES,
   CATALOG_BROWSE_MAX_PAGE,
   CATALOG_PAGE_CALLBACK_PREFIX,
+  SERVER_LIST_CALLBACK_PREFIX,
+  SERVER_CATEGORIES_CALLBACK_PREFIX,
+  SERVER_CATEGORY_CALLBACK_PREFIX,
   CATEGORY_CALLBACK_PREFIX,
   REORDER_CATEGORY_CALLBACK_PREFIX,
   TRIAL_CALLBACK_DATA,
@@ -1492,8 +1496,36 @@ export class BotRuntime {
     if (command.intent === 'CUSTOM_MENU_BUTTON' && command.targetId !== null) {
       return customButtonFlow.customButtonTap(this, scope, input.botInstanceId, command.targetId);
     }
-    if (command.intent === 'CATALOG')
-      return purchaseFlow.catalogue(this, scope, actor, 0, customer);
+    // V099: the server step first while `sales.server_selection` is on; otherwise `catalogue`.
+    if (command.intent === 'CATALOG') return serverStepFlow.buyEntry(this, scope, actor, customer);
+    if (command.intent === 'SERVER_LIST') {
+      return serverStepFlow.serverList(this, scope, actor, command.page ?? 0, customer);
+    }
+    if (command.intent === 'SERVER_CATEGORIES' && command.targetId !== null) {
+      return serverStepFlow.serverCategories(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        command.page ?? 0,
+        customer,
+      );
+    }
+    if (
+      command.intent === 'SERVER_CATEGORY' &&
+      command.targetId !== null &&
+      typeof command.secondaryId === 'string'
+    ) {
+      return serverStepFlow.serverCategory(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        command.secondaryId,
+        command.page ?? 0,
+        customer,
+      );
+    }
     if (command.intent === 'CATALOG_PAGE') {
       return purchaseFlow.catalogue(this, scope, actor, command.page ?? 0, customer);
     }

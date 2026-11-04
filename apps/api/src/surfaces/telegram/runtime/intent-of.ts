@@ -101,6 +101,9 @@ import {
   CATALOG_PAGE_CALLBACK_PREFIX,
   CATEGORY_CALLBACK_PREFIX,
   CLIENT_APP_CALLBACK_PREFIX,
+  SERVER_CATEGORIES_CALLBACK_PREFIX,
+  SERVER_CATEGORY_CALLBACK_PREFIX,
+  SERVER_LIST_CALLBACK_PREFIX,
   CONFIRM_CALLBACK_PREFIX,
   CUSTOM_SERVICE_CALLBACK_DATA,
   CUSTOM_SERVICE_LOCATION_CALLBACK_PREFIX,
@@ -447,6 +450,42 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
       }
       return { intent: 'CATEGORY', targetId: category.data, page, callbackQueryId: id };
+    }
+    // V099: the server step (`sales.server_selection`) — see `SERVER_LIST_CALLBACK_PREFIX`.
+    if (data.startsWith(SERVER_LIST_CALLBACK_PREFIX)) {
+      const page = parseCatalogPage(data.slice(SERVER_LIST_CALLBACK_PREFIX.length));
+      if (page === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'SERVER_LIST', targetId: null, page, callbackQueryId: id };
+    }
+    if (data.startsWith(SERVER_CATEGORIES_CALLBACK_PREFIX)) {
+      const [rawId, rawPage, ...rest] = data
+        .slice(SERVER_CATEGORIES_CALLBACK_PREFIX.length)
+        .split('.');
+      const page = rawPage === undefined ? null : parseCatalogPage(rawPage);
+      const server = uuidV7Schema.safeParse(rawId);
+      if (rest.length > 0 || page === null || !server.success) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      return { intent: 'SERVER_CATEGORIES', targetId: server.data, page, callbackQueryId: id };
+    }
+    if (data.startsWith(SERVER_CATEGORY_CALLBACK_PREFIX)) {
+      const [rawPair, rawPage, ...rest] = data
+        .slice(SERVER_CATEGORY_CALLBACK_PREFIX.length)
+        .split('.');
+      const page = rawPage === undefined ? null : parseCatalogPage(rawPage);
+      const pair = rawPair === undefined ? null : decodeIdPair(rawPair);
+      const server = uuidV7Schema.safeParse(pair?.first);
+      const category = uuidV7Schema.safeParse(pair?.second);
+      if (rest.length > 0 || page === null || !server.success || !category.success) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      return {
+        intent: 'SERVER_CATEGORY',
+        targetId: server.data,
+        secondaryId: category.data,
+        page,
+        callbackQueryId: id,
+      };
     }
     /*
      * The customer UX completion's two-letter routes, before the one-letter ones for

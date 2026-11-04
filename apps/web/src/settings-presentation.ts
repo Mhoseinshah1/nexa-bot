@@ -547,6 +547,12 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'sales',
     control: { kind: 'integer', unit: 'web.unit_minutes' },
   },
+  'sales.server_selection': {
+    title: 'web.setting_server_selection',
+    description: 'web.setting_server_selection_desc',
+    group: 'sales',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
   'payments.card_switch_limit': {
     title: 'web.card_switch_max',
     description: 'web.card_switch_max_hint',

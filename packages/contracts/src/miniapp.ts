@@ -90,6 +90,11 @@ export const MINIAPP_ROUTES = {
   me: '/me',
   gateCheck: '/gate/check',
   termsAccept: '/terms/accept',
+  /**
+   * V099 «انتخاب سرور در خرید»: the servers (panels) a customer may buy on, and whether the
+   * mini app draws the server step at all (`sales.server_selection`).
+   */
+  servers: '/catalogue/servers',
   categories: '/catalogue/categories',
   category: '/catalogue/categories/:categoryId',
   orders: '/orders',
@@ -292,6 +297,34 @@ export const miniAppTermsAcceptRequestSchema = z.object({ termsVersionId: idSche
 export const miniAppPageQuerySchema = z.object({
   page: z.coerce.number().int().min(0).max(100).default(0),
 });
+
+/**
+ * V099: the categories and a category's plans, optionally on ONE server — the panel id the
+ * customer chose from `MINIAPP_ROUTES.servers`. Absent is the whole catalogue, as before; a
+ * server that no longer sells (or is not this customer's) answers an empty page.
+ */
+export const miniAppCatalogueQuerySchema = miniAppPageQuerySchema.extend({
+  serverId: z.string().uuid().optional(),
+});
+
+/**
+ * V099 «انتخاب سرور در خرید» (`MINIAPP_ROUTES.servers`).
+ *
+ * - `enabled` — the setting `sales.server_selection`. Off: `items` is empty and `step` false;
+ *   the store is exactly as before.
+ * - `step` — whether to draw the server step: on, and more than one server qualifies. With one
+ *   server the step is skipped and the categories are shown unfiltered, as the bot does.
+ * - `items` — one page of the servers: panels that are ACTIVE, not drained, not archived and
+ *   carry at least one plan this customer could buy; `name` is the panel's name.
+ */
+export const miniAppServersResponseSchema = z.object({
+  enabled: z.boolean(),
+  step: z.boolean(),
+  items: z.array(z.object({ id: idSchema, name: z.string() })),
+  page: z.number().int(),
+  hasMore: z.boolean(),
+});
+export type MiniAppServersResponse = z.infer<typeof miniAppServersResponseSchema>;
 
 export const miniAppCategoriesResponseSchema = z.object({
   items: z.array(z.object({ id: idSchema, name: z.string(), emoji: z.string().nullable() })),

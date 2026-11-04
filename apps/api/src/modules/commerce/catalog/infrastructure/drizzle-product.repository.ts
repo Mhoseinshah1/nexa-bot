@@ -27,6 +27,7 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
   CatalogueAudience,
+  CatalogueServer,
   CustomerPage,
   PanelDirectory,
   ProductCategoryDraft,
@@ -351,6 +352,48 @@ export class DrizzleProductRepository implements ProductRepository {
       eq(productCategories.status, 'ACTIVE'),
       eq(productCategories.visibility, 'VISIBLE'),
     ) as SQL;
+  }
+
+  /**
+   * See the port. The EXISTS is the browse's own product predicate (the category join and
+   * `customerVisibleProduct`) pinned to the listed panel, so a server is offered exactly when
+   * its category list would not be empty; the panel's own status, drain and archive are in
+   * the same WHERE, ahead of LIMIT/OFFSET.
+   */
+  async listCustomerServers(
+    scope: TenantContext,
+    limit: number,
+    offset: number,
+    eligiblePanelIds: readonly string[],
+    audience: CatalogueAudience,
+    tx?: unknown,
+  ): Promise<CustomerPage<CatalogueServer>> {
+    const tenantId = requireTenantId(scope);
+    if (eligiblePanelIds.length === 0) return { items: [], hasMore: false };
+    const rows = await this.exec(tx)
+      .select({ id: panels.id, name: panels.name })
+      .from(panels)
+      .where(
+        and(
+          eq(panels.tenantId, tenantId),
+          eq(panels.status, 'ACTIVE'),
+          isNull(panels.archivedAt),
+          isNull(panels.drainedAt),
+          sql`${panels.id} = ANY(${sql.param([...eligiblePanelIds])}::uuid[])`,
+          sql`EXISTS (
+            SELECT 1 FROM ${products}
+            INNER JOIN ${productCategories}
+              ON ${productCategories.id} = ${products.categoryId}
+             AND ${productCategories.tenantId} = ${products.tenantId}
+            WHERE ${products.panelId} = ${panels.id}
+              AND ${this.customerVisibleProduct(tenantId, eligiblePanelIds, audience)}
+          )`,
+        ),
+      )
+      .orderBy(asc(panels.name), asc(panels.id))
+      .limit(limit + 1)
+      .offset(offset);
+    return { items: rows.slice(0, limit), hasMore: rows.length > limit };
   }
 
   /**

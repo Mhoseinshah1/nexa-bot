@@ -111,6 +111,8 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'catalog.previous_page': 'web.ib_button_catalog_previous_page',
   'catalog.next_page': 'web.ib_button_catalog_next_page',
   'catalog.back_to_categories': 'web.ib_button_catalog_back_to_categories',
+  'catalog.server': 'web.ib_button_catalog_server',
+  'catalog.back_to_servers': 'web.ib_button_catalog_back_to_servers',
   'catalog.custom_service': 'web.ib_button_catalog_custom_service',
   'custom_service.location': 'web.ib_button_custom_service_location',
   'trial.panel': 'web.ib_button_trial_panel',

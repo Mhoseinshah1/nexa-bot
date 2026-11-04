@@ -249,6 +249,9 @@ export const WEB_FA = {
   'web.setting_payment_window_minutes': 'مهلت پرداخت',
   'web.setting_payment_window_minutes_desc':
     'مدتی که یک پرداخت در انتظار باز می‌ماند؛ پس از آن پرداخت و سفارشش منقضی می‌شوند.',
+  'web.setting_server_selection': 'انتخاب سرور در خرید',
+  'web.setting_server_selection_desc':
+    'روشن باشد، مشتری پیش از دسته‌ها سرور را انتخاب می‌کند: سرور ← دسته ← پلن. فقط سرورهای فعالِ تخلیه‌نشده‌ای که دست‌کم یک پلن قابل خرید دارند، با نام پنل، نشان داده می‌شوند؛ اگر فقط یک سرور باشد این مرحله نشان داده نمی‌شود. قیمت، پیش‌فاکتور، پرداخت و تمدید تغییری نمی‌کنند.',
   'web.setting_usage_sync_minutes': 'فاصلهٔ به‌روزرسانی مصرف سرویس‌ها',
   'web.setting_usage_sync_minutes_desc':
     'هر چند دقیقه یک بار مصرف حجم سرویس‌ها از پنل خوانده شود. عدد کمتر اطلاعات تازه‌تری به مشتری می‌دهد و درخواست بیشتری به پنل می‌فرستد.',
@@ -5141,6 +5144,8 @@ export const WEB_FA = {
   'web.ib_button_catalog_previous_page': 'صفحهٔ قبل فروشگاه',
   'web.ib_button_catalog_next_page': 'صفحهٔ بعد فروشگاه',
   'web.ib_button_catalog_back_to_categories': 'بازگشت به دسته‌بندی‌ها',
+  'web.ib_button_catalog_server': 'سرورهای فروشگاه (انتخاب سرور در خرید)',
+  'web.ib_button_catalog_back_to_servers': 'بازگشت به سرورها',
   'web.ib_button_catalog_custom_service': 'سرویس دلخواه',
   'web.ib_button_custom_service_location': 'لوکیشن‌های سرویس دلخواه',
   'web.ib_button_trial_panel': 'انتخاب سرور سرویس تست',
