@@ -12,7 +12,8 @@
 // results.json + results.md. `--mode ramp` raises the concurrency until p95 > 1 s or errors > 1 %.
 //
 // Not part of `pnpm verify` or CI. See scripts/load/README.md.
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -26,6 +27,8 @@ import os from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+
+const execFileAsync = promisify(execFile);
 import {
   API_PREFIX,
   AUTH_ROUTES,
@@ -140,18 +143,34 @@ const baseEnv = {
   DATABASE_URL: args['database-url'],
   TEST_DATABASE_URL: args['database-url'],
   REDIS_URL: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
-  SECRETS_KEK: LOAD_KEK,
-  SECRETS_KEK_ID: 'load-1',
+  // A spawned API gets the throwaway keyring and secret. Against a deployed stack (--api-url) the
+  // fixture must be sealed and signed with the STACK's own keys, so the caller's environment is kept.
+  ...(spawnLocal
+    ? {
+        SECRETS_KEK: LOAD_KEK,
+        SECRETS_KEK_ID: 'load-1',
+        SECRETS_KEYS: undefined,
+        SECRETS_ACTIVE_KEY_ID: undefined,
+        TELEGRAM_WEBHOOK_SECRET: WEBHOOK_MASTER,
+        DEPLOYMENT_TOPOLOGY: 'direct',
+        PASSWORD_HASH_PROFILE: 'fast',
+      }
+    : {}),
   TELEGRAM_WEBHOOK_ENABLED: 'true',
-  TELEGRAM_WEBHOOK_SECRET: WEBHOOK_MASTER,
   TELEGRAM_API_BASE_URL: stub.url,
-  DEPLOYMENT_TOPOLOGY: 'direct',
-  PASSWORD_HASH_PROFILE: 'fast',
   API_HOST: '127.0.0.1',
   API_PORT: String(args['api-port']),
   BACKUP_WORK_DIR: resolve(outDir, 'backup-work'),
   ...(args['pool-max'] > 0 ? { DATABASE_POOL_MAX: String(args['pool-max']) } : {}),
 };
+if (
+  !spawnLocal &&
+  (!process.env.TELEGRAM_WEBHOOK_SECRET || !(process.env.SECRETS_KEK || process.env.SECRETS_KEYS))
+) {
+  throw new Error(
+    "--api-url needs the stack's TELEGRAM_WEBHOOK_SECRET and its keyring (SECRETS_KEK or SECRETS_KEYS + SECRETS_ACTIVE_KEY_ID) in the environment.",
+  );
+}
 mkdirSync(baseEnv.BACKUP_WORK_DIR, { recursive: true });
 const apiUrl = spawnLocal
   ? `http://127.0.0.1:${args['api-port']}`
@@ -389,7 +408,9 @@ try {
   const dockerLoop = (async () => {
     while (!stopSampling && dockerNames.length > 0) {
       try {
-        const out = execFileSync(
+        // Asynchronous: `docker stats --no-stream` takes seconds and must not stall the event loop
+        // that paces the virtual customers and times their requests.
+        const { stdout: out } = await execFileAsync(
           'docker',
           ['stats', '--no-stream', '--format', '{{json .}}', ...dockerNames],
           { encoding: 'utf8' },
@@ -624,7 +645,6 @@ try {
 
   // ---------------------------------------------------------------------------- backup
   const backups = [];
-  const preexistingVerifyDbs = new Set();
   async function runBackupOnce() {
     const entry = {
       startedAtS: Math.round((Date.now() - runStartMs) / 100) / 10,
@@ -688,20 +708,18 @@ try {
     backups.push(entry);
     log(`backup finished: ${entry.command} exit=${entry.exitCode} in ${entry.durationS} s`);
   }
-  async function dropLeftoverVerifyDatabases() {
-    // `backup run` verifies by restoring into a scratch database on the same server; when the
-    // cleanup could not drop it (a connection still open) it is left behind. Local runs only.
+  async function dropLeftoverVerifyDatabases(output) {
+    // `backup run` verifies by restoring into a scratch database on the same server; when its
+    // cleanup could not drop it the CLI names it ("cleanup INCOMPLETE — nexa_verify_..."). Only
+    // those names, from THIS run's backup, are dropped: never a pattern match on the server.
+    if (!spawnLocal) return;
+    const names = [...new Set(output.match(/nexa_verify_[0-9a-f]+/g) ?? [])];
+    if (names.length === 0 || !/cleanup\s+INCOMPLETE/.test(output)) return;
     try {
       const admin2 = new pg.Client({ connectionString: args['database-url'] });
       await admin2.connect();
-      const rows = (
-        await admin2.query(`SELECT datname FROM pg_database WHERE datname LIKE 'nexa\\_verify\\_%'`)
-      ).rows;
-      for (const r of rows)
-        if (!preexistingVerifyDbs.has(r.datname))
-          await admin2
-            .query(`DROP DATABASE IF EXISTS "${r.datname}" WITH (FORCE)`)
-            .catch(() => undefined);
+      for (const name of names)
+        await admin2.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`).catch(() => undefined);
       await admin2.end();
     } catch {
       /* best effort */
@@ -717,7 +735,7 @@ try {
       do {
         if (stopping) break;
         await runBackupOnce();
-        await dropLeftoverVerifyDatabases();
+        await dropLeftoverVerifyDatabases(backups[backups.length - 1]?.output ?? '');
         if (backupLoop) await sleep(5000);
       } while (backupLoop && !stopping);
     })();
