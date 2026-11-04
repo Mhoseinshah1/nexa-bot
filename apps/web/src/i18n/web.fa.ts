@@ -2654,7 +2654,6 @@ export const WEB_FA = {
    * Payment File 02 §21 (D7): the diagnostics an operator reconciles against, on the list
    * and the detail. Read-only — card-to-card is decided in Telegram (§10).
    */
-  'web.payment_telegram': 'تلگرام مشتری',
   'web.payment_gateway': 'درگاه',
   'web.payment_external_reference': 'شناسهٔ پیگیری بیرونی',
   'web.payment_updated_at': 'آخرین تغییر',
@@ -2744,16 +2743,11 @@ export const WEB_FA = {
   'web.payment_ops_queue_hint_needs_action':
     'پرداخت‌هایی که تا کسی اقدام نکند جلو نمی‌روند؛ قدیمی‌ترین اول نمایش داده می‌شود.',
   'web.payment_situation_column': 'وضعیت عملیاتی',
-  'web.payment_situation_card': 'چه شده و چه باید کرد',
-  'web.payment_situation_what': 'چه شده',
+  'web.payment_situation_card': 'وضعیت و اقدام',
   'web.payment_situation_money': 'پول',
   'web.payment_situation_customer': 'مشتری باید',
-  'web.payment_situation_actions': 'اقدام‌های موجود برای اپراتور',
   'web.payment_situation_no_action': 'اقدامی لازم نیست.',
-  'web.payment_situation_safe': 'کار امن',
   'web.payment_situation_needs_action': 'نیازمند اقدام',
-  'web.payment_situation_state_note':
-    'این راهنما از رویدادهای ثبت‌شده استخراج می‌شود و جای وضعیت حسابداری پرداخت را نمی‌گیرد.',
   'web.payment_situation_awaiting_payment': 'در انتظار پرداخت مشتری',
   'web.payment_situation_invoice_not_issued': 'فاکتور درگاه صادر نشد',
   'web.payment_situation_customer_signalled': 'مشتری اعلام واریز کرده است (بدون رسید)',

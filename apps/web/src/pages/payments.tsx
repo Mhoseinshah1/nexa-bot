@@ -489,47 +489,120 @@ export function SituationBadge({ value }: { value: PaymentSituationView | null }
 export function SituationCard({ value }: { value: PaymentSituationView | null }) {
   if (value === null) return null;
   const situation: PaymentSituation = value.situation;
+  // ONE «وضعیت و اقدام» block: what happened, where the money is, what to tell the customer
+  // and which existing actions apply. A callout only when the server says an action is needed.
+  const body = (
+    <>
+      <p className="pay-status-what">
+        <SituationBadge value={value} /> <span>{t(SITUATION_WHAT[situation])}</span>
+      </p>
+      <p className="pay-status-facts">
+        <span>
+          <span className="muted">{t('web.payment_situation_money')}: </span>
+          <span>{t(MONEY_LABELS[value.money])}</span>
+        </span>
+        <span>
+          <span className="muted">{t('web.payment_situation_customer')}: </span>
+          <span>{t(CUSTOMER_GUIDANCE_LABELS[value.customer])}</span>
+        </span>
+      </p>
+      {value.actions.length === 0 ? (
+        <p className="muted small">{t('web.payment_situation_no_action')}</p>
+      ) : (
+        <ul className="plain pay-status-actions">
+          {value.actions.map((action) => (
+            <li key={action}>{t(OPERATOR_ACTION_LABELS[action])}</li>
+          ))}
+        </ul>
+      )}
+      <p className="muted small">{t(SITUATION_SAFE[situation])}</p>
+    </>
+  );
+  return value.needsAction ? (
+    <Banner tone="warn" title={t('web.payment_situation_card')}>
+      <div className="pay-status">
+        <Badge tone="warn" dot>
+          {t('web.payment_situation_needs_action')}
+        </Badge>
+        {body}
+      </div>
+    </Banner>
+  ) : (
+    <section className="pay-status plain-status" aria-label={t('web.payment_situation_card')}>
+      <strong>{t('web.payment_situation_card')}</strong>
+      {body}
+    </section>
+  );
+}
+
+/** Rows whose value is empty are not drawn: never a «—» row. */
+function present(items: [ReactNode, ReactNode | null | undefined][]): [ReactNode, ReactNode][] {
+  return items.filter((item): item is [ReactNode, ReactNode] => {
+    const value = item[1];
+    return value !== null && value !== undefined && value !== '' && value !== false;
+  });
+}
+
+/**
+ * The first thing the page says: how much, in what state, through which route, for whom, when
+ * and for which order. The customer is named here once and nowhere else on the page.
+ */
+function PaymentSummary({
+  row,
+  onLink,
+}: {
+  row: PaymentDetailResponse;
+  onLink: ReturnType<typeof useLinkHandler>;
+}) {
   return (
-    <Card
-      title={t('web.payment_situation_card')}
-      {...(value.needsAction
-        ? {
-            actions: (
-              <Badge tone="warn" dot>
-                {t('web.payment_situation_needs_action')}
-              </Badge>
-            ),
-          }
-        : {})}
-    >
-      <KV
-        items={[
-          [
-            t('web.payment_situation_what'),
-            <span key="s">
-              <SituationBadge value={value} /> {t(SITUATION_WHAT[situation])}
-            </span>,
-          ],
-          [t('web.payment_situation_money'), t(MONEY_LABELS[value.money])],
-          [t('web.payment_situation_customer'), t(CUSTOMER_GUIDANCE_LABELS[value.customer])],
-          [
-            t('web.payment_situation_actions'),
-            value.actions.length === 0 ? (
-              <span key="a" className="muted small">
-                {t('web.payment_situation_no_action')}
-              </span>
+    <Card className="pay-summary">
+      <div className="pay-summary-main">
+        <span className="pay-summary-amount">
+          <Money value={{ amountMinor: row.amount, currency: row.currency }} />
+        </span>
+        <StateBadge value={row.state} />
+        <span className="muted">
+          {t(METHOD_LABELS[row.method])}
+          {row.gatewayProvider === null || row.gatewayProvider === 'MANUAL_TRANSFER' ? null : (
+            <>
+              {' · '}
+              <GatewayName provider={row.gatewayProvider} />
+            </>
+          )}
+        </span>
+      </div>
+      <dl className="pay-summary-facts kv inline">
+        <div>
+          <dt>{t('web.payment_customer')}</dt>
+          <dd className="nowrap record-ref">
+            <CustomerIdentityLink
+              customerId={row.customerId}
+              telegramUserId={row.customerTelegramUserId}
+              username={row.customerUsername}
+              onLink={onLink}
+            />
+            <CopyIdButton id={row.customerId} />
+          </dd>
+        </div>
+        <div>
+          <dt>{t('web.payment_created_at')}</dt>
+          <dd>{formatTimestamp(row.createdAt)}</dd>
+        </div>
+        <div>
+          <dt>{t('web.payment_order')}</dt>
+          <dd>
+            {row.orderId === null ? (
+              <span className="muted small">{t('web.payment_topup')}</span>
             ) : (
-              <ul key="a" className="plain">
-                {value.actions.map((action) => (
-                  <li key={action}>{t(OPERATOR_ACTION_LABELS[action])}</li>
-                ))}
-              </ul>
-            ),
-          ],
-          [t('web.payment_situation_safe'), t(SITUATION_SAFE[situation])],
-        ]}
-      />
-      <p className="muted small">{t('web.payment_situation_state_note')}</p>
+              <RecordLink
+                href={recordHref.order(row.orderId)}
+                id={row.orderId}
+                code={row.orderCode}
+              />
+            )}
+          </dd>
+        </div>
+      </dl>
     </Card>
   );
 }
@@ -1248,12 +1321,14 @@ export function PaymentsPage({
  * response — a customer's «receipt» that is really an SVG cannot become a script on
  * this origin.
  */
-function ReceiptsCard({ paymentId }: { paymentId: string }) {
+function ReceiptsCard({ paymentId, usesReceipts }: { paymentId: string; usesReceipts: boolean }) {
   const receipts = useQuery({
     queryKey: ['payment-receipts', paymentId],
     queryFn: () => fetchPaymentReceipts(paymentId),
   });
   const rows = receipts.data?.receipts ?? [];
+  // A method that takes no receipts and has none shows no card, not an empty state.
+  if (!usesReceipts && rows.length === 0) return null;
 
   return (
     <Card title={t('web.payment_receipts')}>
@@ -2049,6 +2124,11 @@ export function PaymentDetailPage({
     enabled: !denied,
   });
   const row = payment.data?.payment;
+  const usesReceipts =
+    row !== undefined &&
+    (row.method === 'MANUAL_TRANSFER' ||
+      (row.gatewayInvoice !== null &&
+        (row.gatewayInvoice.cardSeq !== null || row.gatewayInvoice.receiptSubmissions.length > 0)));
 
   return (
     <>
@@ -2062,15 +2142,12 @@ export function PaymentDetailPage({
               <CopyCodeButton code={paymentTrackingCode(row)} />
             </span>
           }
-          badge={<StateBadge value={row.state} />}
-          subtitle={t(METHOD_LABELS[row.method])}
         />
       )}
 
       <StateSwitch query={payment} denied={denied}>
         {row === undefined ? null : (
           <>
-            <TechnicalIds id={row.id} />
             {row.state === 'UNKNOWN' && (
               <Banner tone="warn">{t('web.payment_unknown_banner')}</Banner>
             )}
@@ -2086,7 +2163,13 @@ export function PaymentDetailPage({
               tall column runs full width below, so neither column leaves an empty tail.
               A payment with no side card draws its head full width.
             */}
+            <PaymentSummary row={row} onLink={onLink} />
+            <SituationCard value={row.situation} />
             {(() => {
+              // The receipts card exists only where receipts are part of the method or one was
+              // sent. Anywhere else it is gone, not an empty state: it then draws nothing at all
+              // until a receipt is read, and sits in the full-width stack rather than the side.
+              const showReceipts = mayViewReceipts && usesReceipts;
               const sideCards = (
                 <>
                   {/*
@@ -2173,7 +2256,7 @@ export function PaymentDetailPage({
               `receipts.review` decides. A reader who may see a payment does not
               automatically get to open a customer's bank screenshot.
             */}
-                  {mayViewReceipts && <ReceiptsCard paymentId={id} />}
+                  {showReceipts && <ReceiptsCard paymentId={id} usesReceipts />}
                 </>
               );
               const hasSide =
@@ -2181,21 +2264,19 @@ export function PaymentDetailPage({
                 (row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER') ||
                 row.destination !== null ||
                 row.topupCashbackPercent !== null ||
-                mayViewReceipts;
+                showReceipts;
               return (
                 <div className={hasSide ? 'two-col pay-balance' : 'pay-balance solo'}>
                   <div className="stack">
-                    <SituationCard value={row.situation} />
                     <Card title={t('web.payment_detail')}>
                       <KV
-                        items={[
+                        columns
+                        items={present([
                           [
                             t('web.payment_disposition'),
-                            <DispositionBadge key="d" value={row.receiptDisposition} />,
-                          ],
-                          [
-                            t('web.payment_gateway'),
-                            <GatewayName key="g" provider={row.gatewayProvider} />,
+                            row.receiptDisposition === null ? null : (
+                              <DispositionBadge key="d" value={row.receiptDisposition} />
+                            ),
                           ],
                           [
                             t('web.payment_amount'),
@@ -2209,61 +2290,21 @@ export function PaymentDetailPage({
                            * when the route charged a fee — the figure a receipt is checked
                            * against. From the payment's frozen snapshot; the page adds nothing.
                            */
-                          ...(row.customerFee === null
-                            ? []
-                            : ([
-                                [
-                                  t('web.payment_transfer_payable'),
-                                  <Money
-                                    key="tp"
-                                    value={{
-                                      amountMinor: row.customerFee.payable,
-                                      currency: row.currency,
-                                    }}
-                                  />,
-                                ],
-                              ] as [ReactNode, ReactNode][])),
                           [
-                            t('web.payment_customer'),
-                            <span key="c" className="nowrap record-ref">
-                              <CustomerIdentityLink
-                                customerId={row.customerId}
-                                telegramUserId={row.customerTelegramUserId}
-                                username={row.customerUsername}
-                                onLink={onLink}
-                              />
-                              <CopyIdButton id={row.customerId} />
-                            </span>,
-                          ],
-                          [
-                            t('web.payment_telegram'),
-                            <TelegramIdentity
-                              key="tg"
-                              telegramUserId={row.customerTelegramUserId}
-                              username={row.customerUsername}
-                            />,
-                          ],
-                          [
-                            t('web.payment_order'),
-                            row.orderId === null ? (
-                              // A top-up, named rather than dashed. See the list column.
-                              <span key="o" className="muted small">
-                                {t('web.payment_topup')}
-                              </span>
-                            ) : (
-                              <RecordLink
-                                key="o"
-                                href={recordHref.order(row.orderId)}
-                                id={row.orderId}
-                                code={row.orderCode}
+                            t('web.payment_transfer_payable'),
+                            row.customerFee === null ? null : (
+                              <Money
+                                key="tp"
+                                value={{
+                                  amountMinor: row.customerFee.payable,
+                                  currency: row.currency,
+                                }}
                               />
                             ),
                           ],
                           [
                             t('web.payment_external_reference'),
-                            row.externalReference === null ? (
-                              <Dash key="x" />
-                            ) : (
+                            row.externalReference === null ? null : (
                               <Copyable key="x" value={row.externalReference} />
                             ),
                           ],
@@ -2271,11 +2312,7 @@ export function PaymentDetailPage({
                           [t('web.payment_updated_at'), formatTimestamp(row.updatedAt)],
                           [
                             t('web.payment_expires_at'),
-                            row.expiresAt === null ? (
-                              <Dash key="e" />
-                            ) : (
-                              formatTimestamp(row.expiresAt)
-                            ),
+                            row.expiresAt === null ? null : formatTimestamp(row.expiresAt),
                           ],
                           [
                             t('web.payment_customer_signalled'),
@@ -2290,7 +2327,7 @@ export function PaymentDetailPage({
                               formatTimestamp(row.customerSignalledAt)
                             ),
                           ],
-                        ]}
+                        ])}
                       />
                       {row.customerSignalledAt !== null && (
                         <p className="muted small">{t('web.payment_customer_signalled_hint')}</p>
@@ -2302,50 +2339,48 @@ export function PaymentDetailPage({
               );
             })()}
             <div className="stack">
+              {mayViewReceipts && !usesReceipts && (
+                <ReceiptsCard paymentId={id} usesReceipts={false} />
+              )}
               {/*
               What a confirmation RESTS on, and who made it.
               `UNK-PR-010` records the legacy receipt review as storing neither the
               reviewer nor the time, which is why "was this approved by a human" is
               unanswerable there. Both are columns here, and both are shown.
             */}
-              <Card title={t('web.payment_evidence_kind')}>
-                <KV
-                  items={[
-                    [
-                      t('web.payment_evidence_kind'),
-                      row.evidenceKind === null ? (
-                        <Dash key="k" />
-                      ) : (
-                        <CodeName
-                          key="k"
-                          value={row.evidenceKind}
-                          labels={PAYMENT_EVIDENCE_KIND_LABELS}
-                        />
-                      ),
-                    ],
-                    [
-                      t('web.payment_evidence_note'),
-                      row.evidenceNote === null ? <Dash key="n" /> : row.evidenceNote,
-                    ],
-                    [
-                      t('web.payment_reviewer'),
-                      row.confirmedByAdminId === null ? (
-                        <Dash key="w" />
-                      ) : (
-                        <Copyable key="w" value={row.confirmedByAdminId} />
-                      ),
-                    ],
-                    [
-                      t('web.payment_confirmed_at'),
-                      row.confirmedAt === null ? (
-                        <Dash key="t" />
-                      ) : (
-                        formatTimestamp(row.confirmedAt)
-                      ),
-                    ],
-                  ]}
-                />
-              </Card>
+              {(row.evidenceKind !== null ||
+                row.evidenceNote !== null ||
+                row.confirmedByAdminId !== null ||
+                row.confirmedAt !== null) && (
+                <Card title={t('web.payment_evidence_kind')}>
+                  <KV
+                    columns
+                    items={present([
+                      [
+                        t('web.payment_evidence_kind'),
+                        row.evidenceKind === null ? null : (
+                          <CodeName
+                            key="k"
+                            value={row.evidenceKind}
+                            labels={PAYMENT_EVIDENCE_KIND_LABELS}
+                          />
+                        ),
+                      ],
+                      [t('web.payment_evidence_note'), row.evidenceNote],
+                      [
+                        t('web.payment_reviewer'),
+                        row.confirmedByAdminId === null ? null : (
+                          <Copyable key="w" value={row.confirmedByAdminId} />
+                        ),
+                      ],
+                      [
+                        t('web.payment_confirmed_at'),
+                        row.confirmedAt === null ? null : formatTimestamp(row.confirmedAt),
+                      ],
+                    ])}
+                  />
+                </Card>
+              )}
               {/*
               How it ended WITHOUT money, when it did.
               Its own card rather than three more rows in the evidence one, because
@@ -2356,23 +2391,17 @@ export function PaymentDetailPage({
               {row.resolvedAt !== null && (
                 <Card title={t('web.payment_resolution')}>
                   <KV
-                    items={[
+                    columns
+                    items={present([
                       [t('web.payment_resolved_at'), formatTimestamp(row.resolvedAt)],
                       [
                         t('web.payment_resolver'),
-                        row.resolvedByAdminId === null ? (
-                          // Null is the ANSWER, not a missing value: nobody decided an
-                          // expiry and a withdrawal is the customer's own.
-                          <Dash key="rw" />
-                        ) : (
+                        row.resolvedByAdminId === null ? null : (
                           <Copyable key="rw" value={row.resolvedByAdminId} />
                         ),
                       ],
-                      [
-                        t('web.payment_resolution_note'),
-                        row.resolutionNote === null ? <Dash key="rn" /> : row.resolutionNote,
-                      ],
-                    ]}
+                      [t('web.payment_resolution_note'), row.resolutionNote],
+                    ])}
                   />
                 </Card>
               )}
@@ -2386,7 +2415,8 @@ export function PaymentDetailPage({
               {row.receiptCredit !== null && (
                 <Card title={t('web.payment_receipt_credit')}>
                   <KV
-                    items={[
+                    columns
+                    items={present([
                       [
                         t('web.payment_receipt_credit_amount'),
                         <Money
@@ -2405,15 +2435,8 @@ export function PaymentDetailPage({
                         t('web.payment_receipt_credit_at'),
                         formatTimestamp(row.receiptCredit.decidedAt),
                       ],
-                      [
-                        t('web.payment_receipt_credit_note'),
-                        row.receiptCredit.note === null ? (
-                          <Dash key="cn" />
-                        ) : (
-                          row.receiptCredit.note
-                        ),
-                      ],
-                    ]}
+                      [t('web.payment_receipt_credit_note'), row.receiptCredit.note],
+                    ])}
                   />
                   <p className="muted small">{t('web.payment_receipt_credit_hint')}</p>
                 </Card>
@@ -2625,6 +2648,7 @@ export function PaymentDetailPage({
             <Card tone="muted">
               <p className="muted small">{t('web.payment_not_settled_here')}</p>
             </Card>
+            <TechnicalIds id={row.id} />
           </>
         )}
       </StateSwitch>

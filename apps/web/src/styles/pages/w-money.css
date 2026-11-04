@@ -42,3 +42,39 @@
 .w-money-tabs {
   margin-block-end: var(--gap);
 }
+
+/* The payment detail's summary header and its one «وضعیت و اقدام» block. */
+.pay-summary-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.pay-summary-amount {
+  font-size: var(--fs-hero);
+  font-weight: 700;
+  line-height: 1.2;
+}
+.pay-summary-facts {
+  margin-block-start: 12px;
+}
+.pay-status > * + * {
+  margin-block-start: 6px;
+}
+.pay-status-what {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.pay-status-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+}
+.pay-status-actions {
+  padding-inline-start: 0;
+}
+.pay-status.plain-status {
+  padding-inline: 4px;
+}
