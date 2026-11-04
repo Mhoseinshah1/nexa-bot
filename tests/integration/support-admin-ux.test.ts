@@ -436,12 +436,20 @@ describe('support admin UX (Phase 4 PR-5)', () => {
       text: string,
     ) {
       const recorded = await inbound(CUSTOMER_TG, text);
+      /*
+       * The escalation is stamped with ITS message's own `sent_at`, not the database's now():
+       * the message time comes from the process clock, and a database clock even a little
+       * ahead let the reader's "question before the handoff" pick the NEXT message instead.
+       */
       await db().execute(
         sql`INSERT INTO business_conversation_escalations
               (id, tenant_id, conversation_id, control_epoch, reason, topic, intent, ticket_outcome, handoff_kind, created_at)
-            VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, ${recorded.conversationId},
-                    ${Math.floor(Math.random() * 1_000_000)}, ${reason}, ${topic}, ${intent},
-                    'NO_CATEGORY', 'SOFT', now())`,
+            SELECT ${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, ${recorded.conversationId},
+                   ${Math.floor(Math.random() * 1_000_000)}, ${reason}, ${topic}, ${intent},
+                   'NO_CATEGORY', 'SOFT', m.sent_at
+              FROM business_messages m
+             WHERE m.tenant_id = ${SEED_IDS.tenantA} AND m.conversation_id = ${recorded.conversationId}
+               AND m.telegram_message_id = ${messageSeq}`,
       );
       return recorded.conversationId;
     }

@@ -422,3 +422,9 @@
 .sa-gap .row {
   flex-wrap: wrap;
 }
+
+/* «تأیید و دسترسی»: the phone line and each switch are full-width lines. */
+.c360-access {
+  display: grid;
+  gap: 12px;
+}
