@@ -320,6 +320,17 @@ export function opsAggregationKey(
   return `${subjectKey}@${String(Math.floor(at.getTime() / windowMs))}`;
 }
 
+/**
+ * Phase 6A D0: the owner's security alerts and the off-site backup condition. Codes are schema:
+ * never renamed or split. The `auth.` and `access.` prefixes route the three alerts to the
+ * SECURITY topic, `backup.` the off-site pair to BACKUPS (`OPS_LOG_TOPIC_ROUTES`).
+ */
+export const OWNER_ALERT_LOGIN_NEW_IP_CODE = 'auth.login_new_ip';
+export const OWNER_ALERT_DATA_EXPORTED_CODE = 'access.data_exported';
+export const OWNER_ALERT_BULK_READ_CODE = 'access.bulk_read';
+export const BACKUP_OFFSITE_FAILED_CODE = 'backup.offsite_failed';
+export const BACKUP_OFFSITE_OK_CODE = 'backup.offsite_ok';
+
 // ---------------------------------------------------------------------------
 // The catalogue
 // ---------------------------------------------------------------------------
@@ -507,6 +518,14 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   failure('access.permission_denied', 'SECURITY', 'PER_OCCURRENCE', { eventClass: 'SECURITY' }),
   failure('auth.login_locked_out', 'SECURITY', 'PER_SUBJECT', { eventClass: 'SECURITY' }),
   fact('admin.', 'SECURITY', 'PER_OCCURRENCE', { prefix: true, eventClass: 'SECURITY' }),
+  // Phase 6A D0: the owner's security alerts. Recorded ONLY in the installation tenant's scope,
+  // so they reach the installation operator's operations group and never a hosted tenant's.
+  // A Web Admin sign-in from an address this administrator has not used before (the first
+  // sign-in ever only remembers its address); any data export; one read, or one window of
+  // reads, larger than the `security.bulk_read_*` settings allow.
+  fact(OWNER_ALERT_LOGIN_NEW_IP_CODE, 'SECURITY', 'PER_OCCURRENCE', { eventClass: 'SECURITY' }),
+  fact(OWNER_ALERT_DATA_EXPORTED_CODE, 'SECURITY', 'PER_OCCURRENCE', { eventClass: 'SECURITY' }),
+  fact(OWNER_ALERT_BULK_READ_CODE, 'SECURITY', 'PER_SUBJECT', { eventClass: 'SECURITY' }),
 
   // --- Notifications and the outbox -------------------------------------------------------
   failure('outbox.message_exhausted', 'NOTIFICATIONS', 'PER_SUBJECT'),
@@ -541,6 +560,10 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   recovery('backup.disk_threshold_ok', 'BACKUPS', 'backup.disk_threshold_exceeded'),
   failure('backup.interval_exceeded', 'BACKUPS', 'CONDITION'),
   recovery('backup.interval_ok', 'BACKUPS', 'backup.interval_exceeded'),
+  // Phase 6A D0: the off-site (S3-compatible, write-only) copy of a verified archive did not
+  // land. One installation-wide condition; the local archive is never removed because of it.
+  failure(BACKUP_OFFSITE_FAILED_CODE, 'BACKUPS', 'CONDITION'),
+  recovery(BACKUP_OFFSITE_OK_CODE, 'BACKUPS', BACKUP_OFFSITE_FAILED_CODE),
   failure('recovery.run_failed', 'BACKUPS', 'CONDITION'),
   recovery('recovery.run_ok', 'BACKUPS', 'recovery.run_failed'),
 
