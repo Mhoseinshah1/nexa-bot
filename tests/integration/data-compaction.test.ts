@@ -44,10 +44,10 @@ import { i18nOpsLogWords } from '../../apps/api/src/modules/commerce/ops-log/inf
 const DAY = 86_400_000;
 const NOW = new Date('2026-10-20T12:00:00.000Z');
 const BOT = SEED_IDS.botA1;
-/** The default retentions: 90 / 180 / 90 days. */
-const OPS_CUTOFF = new Date(NOW.getTime() - 90 * DAY);
-const CUSTOMER_CUTOFF = new Date(NOW.getTime() - 180 * DAY);
-const RECEIPT_CUTOFF = new Date(NOW.getTime() - 90 * DAY);
+/** The default retentions since v0.9.7: 7 / 30 / 30 days (until then 90 / 180 / 90). */
+const OPS_CUTOFF = new Date(NOW.getTime() - 7 * DAY);
+const CUSTOMER_CUTOFF = new Date(NOW.getTime() - 30 * DAY);
+const RECEIPT_CUTOFF = new Date(NOW.getTime() - 30 * DAY);
 const ago = (days: number) => new Date(NOW.getTime() - days * DAY);
 
 describe('data compaction (Round 9 C3)', () => {
@@ -263,7 +263,7 @@ describe('data compaction (Round 9 C3)', () => {
     const pay = await payment();
     const ids = {
       // operator lane
-      opsSentOld: await opsNotification({ status: 'SENT', completed: ago(91), attempts: 2 }),
+      opsSentOld: await opsNotification({ status: 'SENT', completed: ago(8), attempts: 2 }),
       opsFailedOld: await opsNotification({
         status: 'FAILED',
         completed: ago(200),
@@ -271,13 +271,13 @@ describe('data compaction (Round 9 C3)', () => {
         releases: 1,
       }),
       opsAtCutoff: await opsNotification({ status: 'SENT', completed: OPS_CUTOFF }),
-      opsRecent: await opsNotification({ status: 'SENT', completed: ago(10) }),
+      opsRecent: await opsNotification({ status: 'SENT', completed: ago(6) }),
       opsPendingOld: await opsNotification({ status: 'PENDING', completed: null }),
       // customer lane
       reminderOld: await customerNotice({
         kind: 'SERVICE_EXPIRY_FIRST',
         state: 'DELIVERED',
-        resolved: ago(181),
+        resolved: ago(31),
       }),
       lowBalanceFailedOld: await customerNotice({
         kind: 'WALLET_LOW_BALANCE',
@@ -323,7 +323,7 @@ describe('data compaction (Round 9 C3)', () => {
         subjectId: await operation(false),
       }),
       // receipt windows
-      windowClosedOld: await receiptWindow(pay, ago(91)),
+      windowClosedOld: await receiptWindow(pay, ago(31)),
       windowAtCutoff: await receiptWindow(pay, RECEIPT_CUTOFF),
       windowClosedRecent: await receiptWindow(pay, ago(5)),
       gatewayClosedOld: await gatewayWindow(pay, ago(120)),
@@ -383,8 +383,19 @@ describe('data compaction (Round 9 C3)', () => {
 
   // --- cases ---------------------------------------------------------------------------
 
-  it('dry run is the default: counts per table, records the run, deletes nothing', async () => {
+  it('APPLY is the default since v0.9.7: a pass with no stored mode removes', async () => {
     const ids = await scenario();
+    const outcome = await service().run(tenantA, job(), { trigger: 'WORKER', mode: 'SETTING' });
+    if (outcome.kind !== 'RAN') throw new Error(outcome.kind);
+    expect(outcome.run.mode).toBe('APPLY');
+    expect(outcome.run.state).toBe('COMPLETED');
+    expect(await exists('notifications', ids.opsSentOld)).toBe(false);
+    expect(await exists('notifications', ids.opsRecent)).toBe(true);
+  });
+
+  it('a stored DRY_RUN counts per table, records the run, deletes nothing', async () => {
+    const ids = await scenario();
+    await setMode('DRY_RUN');
     const outcome = await service().run(tenantA, job(), { trigger: 'WORKER', mode: 'SETTING' });
     expect(outcome.kind).toBe('RAN');
     if (outcome.kind !== 'RAN') return;
@@ -685,9 +696,9 @@ describe('data compaction (Round 9 C3)', () => {
     const runs = await db().execute<{ mode: string; trigger: string }>(
       sql`SELECT mode, trigger FROM data_compaction_runs`,
     );
-    // The second wake-up is inside the day: one pass, a dry run, nothing removed.
-    expect(runs.rows).toEqual([{ mode: 'DRY_RUN', trigger: 'WORKER' }]);
-    expect((await db().execute(sql`SELECT 1 FROM notifications`)).rows).toHaveLength(1);
+    // The second wake-up is inside the day: one pass, in the default mode (APPLY since v0.9.7).
+    expect(runs.rows).toEqual([{ mode: 'APPLY', trigger: 'WORKER' }]);
+    expect((await db().execute(sql`SELECT 1 FROM notifications`)).rows).toHaveLength(0);
   });
 
   it('puts one compaction line into the nightly summary, for the passes of that day', async () => {

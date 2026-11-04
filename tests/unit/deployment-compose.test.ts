@@ -386,6 +386,57 @@ describe('the production compose topology', () => {
     }
   });
 
+  it('v0.9.7: verifies backups on a capped, ephemeral, internal backup-verify server', () => {
+    const verify = serviceBlock(compose, 'backup-verify');
+    const postgres = serviceBlock(compose, 'postgres');
+    // The SAME image as the live server: a dump restores into the major it came from.
+    const image = (block: string) => /^ {4}image: (\S+)$/m.exec(block)?.[1];
+    expect(image(verify)).toBeTruthy();
+    expect(image(verify)).toBe(image(postgres));
+    // No published port, the internal data network only.
+    expect(verify).not.toMatch(/^\s+ports:/m);
+    expect(verify).toMatch(/networks:\s*\n\s+- data\s*\n/);
+    expect(verify, 'backup-verify is on the edge network').not.toMatch(/- edge/);
+    // Docker's limits: cpus is the backup CPU setting's share of ONE core, and its default
+    // is that setting's default (70 -> 0.70); the memory limit, with no swap beyond it.
+    expect(verify).toMatch(/^ {4}cpus: \$\{NEXA_BACKUP_VERIFY_CPUS:-0\.70\}$/m);
+    expect(verify).toMatch(/^ {4}mem_limit: \$\{NEXA_BACKUP_VERIFY_MEMORY:-512m\}$/m);
+    expect(verify).toMatch(/^ {4}memswap_limit: \$\{NEXA_BACKUP_VERIFY_MEMORY:-512m\}$/m);
+    // Ephemeral: the data directory lives inside its own volume and is removed before the
+    // image's entrypoint initialises a fresh cluster, on every start.
+    expect(verify).toMatch(/PGDATA: \/var\/lib\/postgresql\/verify\/pgdata/);
+    expect(verify).toMatch(/- backupverify:\/var\/lib\/postgresql\/verify$/m);
+    const wipe = verify.indexOf('rm -rf "$$PGDATA"');
+    const start = verify.indexOf('exec docker-entrypoint.sh postgres');
+    expect(wipe, 'the data directory is not wiped at start').toBeGreaterThan(-1);
+    expect(start).toBeGreaterThan(wipe);
+    expect(verify).toMatch(/healthcheck:/);
+    // The same five capabilities as postgres and nothing else.
+    expect(verify).toMatch(/cap_drop:\s*\n\s+- ALL/);
+    expect([...verify.matchAll(/^ {6}- [A-Z_]+$/gm)].map((m) => m[0].trim())).toEqual([
+      '- ALL',
+      '- CHOWN',
+      '- DAC_OVERRIDE',
+      '- FOWNER',
+      '- SETGID',
+      '- SETUID',
+    ]);
+    // Nothing else mounts its volume, and the live database's volume is not mounted here.
+    expect(compose.split('- backupverify:').length - 1).toBe(1);
+    expect(verify).not.toMatch(/pgdata:/);
+    // Every application role is pointed at it, by the shared anchor.
+    const anchor = compose.slice(0, compose.indexOf('\nservices:'));
+    expect(anchor).toMatch(/^ {4}BACKUP_VERIFY_PGHOST: backup-verify$/m);
+  });
+
+  it('v0.9.7: the backup-verify CPU default is the backup CPU setting default', () => {
+    const backup = readFileSync(join(__dirname, '../../packages/contracts/src/backup.ts'), 'utf8');
+    const percent = Number(/BACKUP_CPU_LIMIT_DEFAULT = (\d+);/.exec(backup)?.[1]);
+    expect(percent).toBeGreaterThan(0);
+    const cpus = /NEXA_BACKUP_VERIFY_CPUS:-([0-9.]+)\}/.exec(compose)?.[1];
+    expect(Number(cpus)).toBe(percent / 100);
+  });
+
   it('never writes a secret into the compose file', () => {
     // Every credential arrives through an env_file the Docker daemon reads as
     // root. None is a literal here, and none is a build argument.

@@ -5177,3 +5177,25 @@ live; the owner decides otherwise.
     `history: {written, total}` on the import row for Web Admin, and makes reconcile count
     "history pending N" as its own line instead of a difference. Owner: worth it, given the raw
     ingest is the small part?
+
+## NEXA v097 PR-2 — retention defaults, lean backups, the verification server
+
+- **OQ-V097-P2-01 — the audit log's 90 days: delete, or keep?** The round asked for "audit log:
+  90 days" as an editable retention and, in the same breath, "the audit log stays; it is the
+  only searchable record of who changed money or access". `audit_logs` is append-only BY
+  TRIGGER (0001, `docs/conventions.md` § Events, audit; `data-retention.ts`: "audit logs are
+  never deleted by any job"), and on the import fixture most of its rows are money evidence
+  (`wallet.migration_opening_balance`, one per imported balance). PR-2 therefore deletes no
+  audit row and adds no setting that would. Owner: should rows older than 90 days really be
+  deleted — which means lifting the DELETE trigger for one audited job, money and access rows
+  included — or does "90 days" mean something else (e.g. only what the Web Admin lists)?
+- **OQ-V097-P2-02 — the importer's own idempotency keys.** After an import, `request_idempotency`
+  holds the importer's `WORKER` keys: on the 200 000-customer fixture 200 000
+  `legacy-import:trial:<run>:<customer>` and 52 000 adopt keys, the whole table about 14 MB of
+  the compressed backup. E3 keeps job and importer keys for ever because they are re-run
+  safety. Keys of a run that is terminal (and whose trial table PR-1 drops) protect nothing;
+  removing them belongs with PR-1's post-import cleanup. Measured (`measure-backup-size.sh`):
+  with PR-1's tables and the published outbox gone the fixture's archive is 64 MiB (2 parts);
+  without the importer keys as well, 51 MiB — still 2 parts of 45 MiB; the audit log's import
+  rows (about 9 MB, OQ-V097-P2-01) are the rest of the way to one part. Owner / PR-1: include
+  them?

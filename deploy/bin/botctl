@@ -1133,6 +1133,8 @@ cmd_status() {
   status_capabilities
   # R12 F2: the PostgreSQL / Redis sizing this installation runs with.
   nexa_db_tuning_report
+  # v0.9.7: the verification server's CPU and memory limits, and the setting they follow.
+  nexa_backup_verify_report
 
   printf '\nreadiness: '
   if nexa_wait_ready 5; then
@@ -1673,6 +1675,8 @@ cmd_update() {
   # settings only — no data change — and a release whose compose file does not read
   # these keys ignores them, so the back-out below and a later rollback are unaffected.
   nexa_record_pg_tuning
+  # v0.9.7: and the backup-verify limits, read from the backup CPU setting before the start.
+  nexa_record_backup_verify_limits
 
   # 6. START the target.
   nexa_step "starting ${target}"
@@ -1975,7 +1979,7 @@ cmd_logs() {
   require_installed
   if [ $# -gt 0 ]; then
     case "$1" in
-      api | worker | monitor | recovery | provisioner | assistant | postgres | redis | caddy | web-assets)
+      api | worker | monitor | recovery | provisioner | assistant | postgres | backup-verify | redis | caddy | web-assets)
         nexa_compose logs -f --tail 200 "$1"
         ;;
       # `monitor` was missing from this list for the whole of Phase 3C, which
@@ -1987,7 +1991,7 @@ cmd_logs() {
       # after it: it has no request path either, and when a paid order has not
       # become a service its log is where the reason is.
       *)
-        nexa_die "unknown service \"$1\". One of: api worker monitor recovery provisioner assistant postgres redis caddy web-assets."
+        nexa_die "unknown service \"$1\". One of: api worker monitor recovery provisioner assistant postgres backup-verify redis caddy web-assets."
         ;;
     esac
   else
@@ -2035,6 +2039,7 @@ cmd_restart() {
   # sizes it runs the outgoing release's botctl, which does not, so this restart — run by
   # the new botctl — is what applies it on that installation.
   nexa_record_pg_tuning
+  nexa_record_backup_verify_limits
   nexa_bring_up_with_edge "" "$edge" ||
     nexa_die "the stack restarted but the edge did not adopt the installed configuration (${edge#sha256:}). Run 'botctl logs caddy'."
   nexa_wait_ready || nexa_die "the stack restarted but the API is not ready."

@@ -61,6 +61,9 @@ x-app-common: &app-common
     # root docker-compose.yml. `botctl status` shows the resolved value in its
     # `node environment` row and explains anything but production.
     NODE_ENV: production
+    # v0.9.7: the backup's verification restores on the capped `backup-verify` service below,
+    # never on the live `postgres`. Pinned here for every role that can take a backup.
+    BACKUP_VERIFY_PGHOST: backup-verify
   security_opt:
     - no-new-privileges:true
   cap_drop:
@@ -192,6 +195,86 @@ services:
     healthcheck:
       # The credentials come from the environment inside the container, so
       # nothing here lands in the command line.
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  # v0.9.7: where the backup's VERIFICATION restore runs — never on `postgres` above.
+  #
+  # Verifying a backup restores it into a scratch database and rebuilds every index, and the
+  # server does that work, not the client: the SIGSTOP/SIGCONT quota (`backup.cpu_limit_percent`)
+  # throttles 7-Zip, pg_dump and pg_restore, and the owner still saw 150-200% CPU on a 4-vCPU
+  # server while the main postgres built the scratch copy's indexes. Here Docker caps the
+  # server itself: `cpus` is that same percent of ONE core (botctl writes it from the setting
+  # into deploy.env at install, update and restart, and `botctl status` prints it with the
+  # running container's limits), and `mem_limit` is sized from the host's memory.
+  #
+  # The same image as `postgres` (a dump restores into the major it came from), the data
+  # network only, no published port, no route out. Its data directory is wiped and initialised
+  # afresh at every start: it holds nothing but the scratch database of a verification in
+  # flight, which the pipeline drops when the check ends. The credentials are postgres.env's,
+  # so the application reaches it as it reaches the live server, by `BACKUP_VERIFY_PGHOST`
+  # (pinned in `x-app-common`). The dump itself still runs against `postgres`, throttled as
+  # before; only the verification moves.
+  backup-verify:
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    restart: unless-stopped
+    init: true
+    # NO `ports`: reachable from the `data` network and from nothing else.
+    env_file:
+      - ${NEXA_CONFIG_DIR:-/etc/nexa}/postgres.env
+    environment:
+      # A directory INSIDE the volume, so the wipe below never touches the mount point.
+      PGDATA: /var/lib/postgresql/verify/pgdata
+    volumes:
+      - backupverify:/var/lib/postgresql/verify
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
+    # The same five capabilities the postgres entrypoint needs to create PGDATA and drop to
+    # the postgres user, and nothing else.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    # The limits. `cpus` is percent/100 of one core; the defaults after `:-` are the
+    # setting's default (70) and the smallest memory botctl sizes, so a deploy.env that
+    # predates them is capped all the same.
+    cpus: ${NEXA_BACKUP_VERIFY_CPUS:-0.70}
+    mem_limit: ${NEXA_BACKUP_VERIFY_MEMORY:-512m}
+    memswap_limit: ${NEXA_BACKUP_VERIFY_MEMORY:-512m}
+    shm_size: 128m
+    # Ephemeral by construction: the previous start's cluster is removed before the image's
+    # entrypoint initialises an empty one. A scratch server, so it keeps the least WAL, runs
+    # nothing in the background and no parallel workers (the CPU cap is the point), and its
+    # memory settings stay well inside `mem_limit`. Crash safety keeps PostgreSQL's defaults,
+    # as on the live server. Connections are logged (a handful per backup), so
+    # `botctl logs backup-verify` shows each verification's scratch database arriving.
+    # `$$` is a literal `$` for the shell.
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        rm -rf "$$PGDATA"
+        exec docker-entrypoint.sh postgres \
+          -c shared_buffers=64MB -c work_mem=4MB -c maintenance_work_mem=64MB \
+          -c max_connections=20 -c max_parallel_workers_per_gather=0 \
+          -c max_parallel_maintenance_workers=0 -c autovacuum=off \
+          -c wal_level=minimal -c max_wal_senders=0 -c log_connections=on
+    healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s
       timeout: 5s
@@ -695,5 +778,7 @@ volumes:
   # when its step ends; a finished import's package is removed unless
   # LEGACY_MIGRATION_RETAIN_PACKAGE).
   legacymigration:
+  # v0.9.7: the verification server's data directory, wiped at every start of backup-verify.
+  backupverify:
   caddydata:
   caddyconfig:

@@ -7955,6 +7955,11 @@ export function createContainer(
     dumpTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
     restoreTimeoutMs: config.BACKUP_RESTORE_TIMEOUT_MS,
     binDir: config.BACKUP_PG_BIN_DIR === '' ? undefined : config.BACKUP_PG_BIN_DIR,
+    // v0.9.7: the verification restores on the capped `backup-verify` server when one is named.
+    verifyServer:
+      config.BACKUP_VERIFY_PGHOST === ''
+        ? undefined
+        : { host: config.BACKUP_VERIFY_PGHOST, port: String(config.BACKUP_VERIFY_PGPORT) },
     /*
      * The migrator THIS release ships, located from this module's own file.
      *

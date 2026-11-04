@@ -621,6 +621,22 @@ esac
 dr_dir="/var/lib/nexa/backups/${dr_id}"
 pass "backup.cli.js run took a verified backup inside the image (${dr_id})"
 
+# v0.9.7: and that verification restored on `backup-verify`, never on the live postgres,
+# under the Docker limits compose gives it. The server logs each connection, so the
+# scratch database's arrival there is a fact read from that container, not an inference.
+verify_log="$(compose logs --no-color backup-verify 2>&1 || true)"
+case "$verify_log" in
+  *"database=nexa_verify_"*) ;;
+  *) fail "the DR backup's verification never connected to backup-verify" ;;
+esac
+verify_id="$(compose ps -q backup-verify 2>/dev/null || true)"
+[ -n "$verify_id" ] || fail "backup-verify is not running"
+verify_limits="$(docker inspect "$verify_id" --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}' 2>/dev/null || true)"
+case "$verify_limits" in
+  0\ * | *\ 0 | '') fail "backup-verify runs without its CPU or memory limit (${verify_limits:-unreadable})" ;;
+esac
+pass "the verification restored on backup-verify (cpus/memory: ${verify_limits})"
+
 # Modes, read INSIDE the container, on the named volume: the root and the run
 # directory 0700, the archive 0600, all owned by the unprivileged runtime user.
 dr_modes="$(compose exec -T api stat -c '%a %U' /var/lib/nexa/backups "$dr_dir" \

@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { createServer, connect, type Server, type Socket } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,7 +7,7 @@ import { join } from 'node:path';
 import { Client } from 'pg';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BACKUP_PART_MAX_BYTES, type BackupManifest } from '@nexa/contracts';
+import { BACKUP_PART_MAX_BYTES, PLATFORM_ERROR_CODES, type BackupManifest } from '@nexa/contracts';
 import { planArchiveParts } from '../../apps/api/src/modules/platform/backup/infrastructure/archive-parts';
 import { createTestContext, testConfig, type TestContext } from './harness';
 import { SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
@@ -16,6 +17,10 @@ import { FilesystemBackupWorkspaces } from '../../apps/api/src/modules/platform/
 import { BackupService } from '../../apps/api/src/modules/platform/backup/application/backup.service';
 import { cmdRun, pointAtInstallation } from '../../apps/api/src/backup.cli';
 import type { DeliveryAttempt } from '../../apps/api/src/modules/platform/backup/application/ports';
+import {
+  BACKUP_TABLE_DATA_EXCLUSIONS,
+  manifestExclusions,
+} from '../../apps/api/src/modules/platform/backup/infrastructure/backup-exclusions';
 
 /**
  * The backup pipeline against a real PostgreSQL, a real `pg_dump` and a real
@@ -90,11 +95,17 @@ describe('backup against a real database', () => {
    * pipeline that delivered the wrong thing.
    */
   function service(
-    overrides: { leaseOwner?: string; workDir?: string; partBytes?: number } = {},
+    overrides: {
+      leaseOwner?: string;
+      workDir?: string;
+      partBytes?: number;
+      verifyServer?: { host: string; port: string };
+    } = {},
   ): BackupService {
     const config = testConfig();
     const tools = new PostgresDatabaseTools({
       databaseUrl: config.DATABASE_URL,
+      verifyServer: overrides.verifyServer,
       dumpTimeoutMs: 120_000,
       restoreTimeoutMs: 120_000,
       // The migrator this release ships. Only ever used to migrate a restored
@@ -211,6 +222,18 @@ describe('backup against a real database', () => {
   }, 180_000);
 
   it('produces an archive the operator restore path turns back into a database', async () => {
+    // v0.9.7: rows in a table whose DATA the dump leaves out, and in the dedupe ledger,
+    // which it never leaves out.
+    await context.container.database.db.execute(sql`
+      INSERT INTO admin_login_throttle
+        (tenant_id, subject_kind, subject, failed_count, window_started_at, updated_at)
+      VALUES (${SEED_IDS.tenantA}::uuid, 'USERNAME', 'someone', 3, now(), now())
+    `);
+    const dedupeId = '01900000-0000-7000-8000-0000000b0001';
+    await context.container.database.db.execute(sql`
+      INSERT INTO processed_messages (consumer, message_id, processed_at)
+      VALUES ('backup-test', ${dedupeId}::uuid, now())
+    `);
     const outcome = await service().run('MANUAL');
     if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
     const run = outcome.run;
@@ -230,7 +253,11 @@ describe('backup against a real database', () => {
       const actual = await checksumFile(dumpPath);
       expect(actual.checksum).toBe(run.checksum);
       expect(opened.manifest.checksum).toBe(run.checksum);
-      expect(opened.manifest.exclusions).toEqual([]);
+      // v0.9.7: exactly the closed list, each entry with the reason a restorer reads.
+      expect(opened.manifest.exclusions).toEqual(manifestExclusions());
+      expect(opened.manifest.exclusions.length).toBe(BACKUP_TABLE_DATA_EXCLUSIONS.length);
+      for (const entry of opened.manifest.exclusions)
+        expect(entry.reason.length).toBeGreaterThan(40);
       expect(opened.manifest.installationId).toBe('integration-installation');
 
       await maintenance((client) => client.query(`CREATE DATABASE "${target}"`));
@@ -259,6 +286,45 @@ describe('backup against a real database', () => {
         ]) {
           expect(names).toContain(required);
         }
+
+        // v0.9.7: the SCHEMA is complete — every table, column, index, constraint and
+        // trigger of the live database is in the restored one, the excluded tables
+        // included; only their rows are absent.
+        const catalog = async (client: Client) => {
+          const q = async (text: string) =>
+            (await client.query<{ x: string }>(text)).rows.map((row) => row.x).sort();
+          return {
+            columns: await q(
+              "SELECT table_name || '.' || column_name || ':' || data_type AS x FROM information_schema.columns WHERE table_schema = 'public'",
+            ),
+            indexes: await q("SELECT indexname AS x FROM pg_indexes WHERE schemaname = 'public'"),
+            constraints: await q(
+              "SELECT conrelid::regclass::text || '.' || conname AS x FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'public'",
+            ),
+            triggers: await q(
+              "SELECT tgrelid::regclass::text || '.' || tgname AS x FROM pg_trigger WHERE NOT tgisinternal",
+            ),
+          };
+        };
+        const live = new Client({ connectionString: testConfig().DATABASE_URL });
+        await live.connect();
+        try {
+          const expected = await catalog(live);
+          expect(expected.columns.length).toBeGreaterThan(1000);
+          expect(await catalog(restored)).toEqual(expected);
+        } finally {
+          await live.end();
+        }
+        for (const entry of BACKUP_TABLE_DATA_EXCLUSIONS) {
+          const rows = await restored.query(`SELECT count(*)::int AS n FROM ${entry.table}`);
+          expect(rows.rows[0], `${entry.table} restored with data`).toEqual({ n: 0 });
+        }
+        // The dedupe ledger is never on the list.
+        const ledger = await restored.query(
+          'SELECT 1 FROM processed_messages WHERE message_id = $1',
+          [dedupeId],
+        );
+        expect(ledger.rowCount).toBe(1);
       } finally {
         await restored.end();
       }
@@ -268,6 +334,102 @@ describe('backup against a real database', () => {
       );
       await rm(restoreDir, { recursive: true, force: true });
     }
+  }, 180_000);
+
+  /**
+   * A TCP relay standing in for the `backup-verify` service: a second address that reaches a
+   * PostgreSQL server, counting every connection made through it. The relay is the only way
+   * the test can tell WHERE the verification connected — the server behind it is the suite's
+   * own, which is what CI has — and the compose test holds what the real service is.
+   */
+  async function relayToDatabase(): Promise<{
+    server: Server;
+    port: number;
+    connections: () => number;
+    close: () => Promise<void>;
+  }> {
+    const target = new URL(testConfig().DATABASE_URL);
+    let count = 0;
+    const open = new Set<Socket>();
+    const server = createServer((socket) => {
+      count += 1;
+      const upstream = connect(Number(target.port || '5432'), target.hostname);
+      open.add(socket);
+      open.add(upstream);
+      const close = () => {
+        socket.destroy();
+        upstream.destroy();
+        open.delete(socket);
+        open.delete(upstream);
+      };
+      socket.pipe(upstream).pipe(socket);
+      for (const side of [socket, upstream]) {
+        side.on('error', close);
+        side.on('close', close);
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no relay address');
+    return {
+      server,
+      port: address.port,
+      connections: () => count,
+      close: () =>
+        new Promise<void>((resolve) => {
+          for (const side of open) side.destroy();
+          server.close(() => resolve());
+        }),
+    };
+  }
+
+  /** The scratch databases on the cluster now (a shared CI cluster may hold others'). */
+  const scratchDatabases = async (): Promise<Set<string>> =>
+    maintenance(async (client) => {
+      const result = await client.query<{ datname: string }>(
+        "SELECT datname FROM pg_database WHERE datname LIKE 'nexa_verify_%'",
+      );
+      return new Set(result.rows.map((row) => row.datname));
+    });
+
+  it('v0.9.7: runs the verification on the dedicated server it is given', async () => {
+    const before = await scratchDatabases();
+    const relay = await relayToDatabase();
+    try {
+      const outcome = await service({
+        verifyServer: { host: '127.0.0.1', port: String(relay.port) },
+      }).run('MANUAL');
+      expect(outcome.kind).toBe('COMPLETED');
+      if (outcome.kind !== 'COMPLETED') return;
+      expect(outcome.run.verifiedAt).not.toBeNull();
+      // CREATE DATABASE, the emptiness check, pg_restore, the two inspections, DROP: every
+      // one of them through the verification server's address.
+      expect(relay.connections()).toBeGreaterThanOrEqual(6);
+      // Its scratch database was dropped there too.
+      expect(await scratchDatabases()).toEqual(before);
+      expect(delivered.filter((d) => d.kind === 'document').length).toBeGreaterThan(0);
+    } finally {
+      await relay.close();
+    }
+  }, 180_000);
+
+  it('v0.9.7: a verification server that cannot be reached fails the run; it never falls back to the live one', async () => {
+    const before = await scratchDatabases();
+    const relay = await relayToDatabase();
+    const port = relay.port;
+    await relay.close();
+    const outcome = await service({ verifyServer: { host: '127.0.0.1', port: String(port) } }).run(
+      'MANUAL',
+    );
+    if (outcome.kind !== 'COMPLETED') throw new Error(outcome.kind);
+    expect(outcome.run.state).toBe('FAILED');
+    expect(outcome.run.stage).toBe('VERIFY_RESTORE');
+    expect(outcome.run.failureCode).toBe(PLATFORM_ERROR_CODES.BACKUP_VERIFICATION_FAILED);
+    expect(outcome.run.verifiedAt).toBeNull();
+    // Nothing was delivered: DELIVER is reachable only from a VERIFY_RESTORE that passed.
+    expect(delivered).toEqual([]);
+    // And nothing was created on the live server in its place.
+    expect(await scratchDatabases()).toEqual(before);
   }, 180_000);
 
   it('refuses the live database as a restore target, by NAME and before anything else', async () => {

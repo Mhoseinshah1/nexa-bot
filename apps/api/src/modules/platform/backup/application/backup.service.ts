@@ -482,9 +482,13 @@ export class BackupService {
         dumpBytes: digest.bytes,
         checksumAlgorithm: 'sha256',
         checksum: digest.checksum,
-        // Nothing is excluded. See `pg-tools.ts`: no table is left out by name,
-        // by prefix or because it looks transient.
-        exclusions: [],
+        // Every table's schema is in the dump; the DATA left out is exactly what the
+        // dump says it left out, each entry with its reason (`backup-exclusions.ts`).
+        // Nothing is left out by prefix or because it looks transient.
+        exclusions: (dump.exclusions ?? []).map((entry) => ({
+          object: entry.object,
+          reason: entry.reason,
+        })),
       };
 
       // ---- ENCRYPT ---------------------------------------------------------

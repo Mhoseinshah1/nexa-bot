@@ -567,10 +567,25 @@ looks like a backup and is not:
   path that delivers without verifying, and never verify the plaintext dump
   still on disk — verification decrypts the ENCRYPTED archive through
   `openArchive`, the same function the operator's restore uses.
-- The dump **excludes nothing**. Not by table name, not by prefix, not because a
-  table looks transient — `processed_messages` looks like a cache and is what
-  stops a redelivered outbox message duplicating its effect. An exclusion needs
-  a reason inside the manifest, where a restorer can read it.
+- The dump **excludes no schema, and no data outside one closed list**. Not by
+  prefix, not because a table looks transient — `processed_messages` looks like a
+  cache and is what stops a redelivered outbox message duplicating its effect.
+  v0.9.7 (owner: leaner backups) leaves out the ROWS of the tables in
+  `backup-exclusions.ts` only, each with the reason its loss on a restore is
+  harmless, and every exclusion is in the manifest, where a restorer can read it.
+  A table whose rows are partly work, dedupe, money or evidence is never on it;
+  it is bounded by a retention job instead.
+- **The verification restores on `backup-verify`** (v0.9.7), a compose service
+  Docker caps at `backup.cpu_limit_percent` of one core and a host-sized memory
+  limit, never on the live server in production, and never by falling back to it
+  when the service does not answer.
+- **Retention defaults (owner, v0.9.7):** operational history lives in the
+  Telegram operations group, not in the database. Published outbox messages,
+  operations-lane notifications (with their attempts and released claims) and
+  interactive idempotency keys 7 days; customer notifications and closed receipt
+  windows 30 days; each an editable setting (minimum 7). The data compaction
+  removes by default (`APPLY`, «حذف») on new and existing installations. The
+  audit log is not deleted: "90 days" waits on `OQ-V097-P2-01`.
 - Delivery has **three** outcomes, and the third is why the run row exists.
   A 5xx, a 429, a timeout and an unreadable 2xx are `OUTCOME_UNKNOWN`, never
   "retryable": Telegram can reject a request whose upload it accepted. Nothing

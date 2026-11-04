@@ -21,6 +21,7 @@ import {
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
+import { manifestExclusions } from '../../apps/api/src/modules/platform/backup/infrastructure/backup-exclusions';
 
 /**
  * Web Admin Disaster Recovery, end to end, against a real PostgreSQL.
@@ -394,9 +395,9 @@ describe('web disaster recovery', () => {
       expect(verified.recovery.verification?.decrypted).toBe(true);
       expect(verified.recovery.verification?.checksumMatches).toBe(true);
       expect(verified.recovery.verification?.checksum).toBe(checksum);
-      // Asserted empty, and the emptiness is the point: nothing is excluded from
-      // a dump by name, by prefix, or because a table looks transient.
-      expect(verified.recovery.verification?.exclusions).toEqual([]);
+      // Exactly the closed list of v0.9.7 (table DATA only, each with its reason) and
+      // nothing more: nothing is excluded by prefix or because a table looks transient.
+      expect(verified.recovery.verification?.exclusions).toEqual(manifestExclusions());
       // A REAL restore happened, and the table count proves it was not empty.
       expect(verified.recovery.restoreTest?.restored).toBe(true);
       expect(verified.recovery.restoreTest?.tableCount).toBeGreaterThan(20);

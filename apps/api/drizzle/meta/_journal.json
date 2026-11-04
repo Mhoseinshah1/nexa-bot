@@ -2192,6 +2192,13 @@
       "when": 1793737424870,
       "tag": "0312_legacy_cleanup_delete_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 313,
+      "version": "7",
+      "when": 1793753271715,
+      "tag": "0313_compaction_mode_apply",
+      "breakpoints": true
     }
   ]
 }

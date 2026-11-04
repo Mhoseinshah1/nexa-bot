@@ -17,8 +17,11 @@ import { z } from 'zod';
  * services, receipts, refunds, audit rows, the consumers' dedupe ledger and every legacy
  * money record are protected and are never a class.
  *
- * DRY RUN IS THE DEFAULT. `retention.compaction_mode` starts at `DRY_RUN`: the worker counts
- * what it WOULD remove and deletes nothing until the owner changes the mode to `APPLY`.
+ * APPLY IS THE DEFAULT (v0.9.7, owner decision: operational history lives in the Telegram
+ * operations group, not in the database). `retention.compaction_mode` starts at `APPLY`, and
+ * the v0.9.7 migration moved an installation that had stored `DRY_RUN` to `APPLY` as well. `DRY_RUN`
+ * stays a choice: the worker then counts what it WOULD remove and deletes nothing. Until
+ * v0.9.7 the default was `DRY_RUN`.
  */
 
 /** The classes, each removed as one unit (its tables in one batch transaction). */
@@ -62,18 +65,20 @@ export const DATA_COMPACTION_CLASS_SETTING = {
   RECEIPT_WINDOWS: DATA_COMPACTION_SETTING_KEYS.receiptWindowsDays,
 } as const satisfies Record<DataCompactionClass, string>;
 
-export const DATA_COMPACTION_MODE_DEFAULT: DataCompactionMode = 'DRY_RUN';
+export const DATA_COMPACTION_MODE_DEFAULT: DataCompactionMode = 'APPLY';
 
 /*
- * The days. Conservative defaults, and a MINIMUM of 30 for every class: far beyond any lease,
- * catch-up window or redelivery that could still touch a row — a notification claim's lease is
- * minutes, a nightly report looks back two days, Telegram redelivers an update for one day.
+ * The days (v0.9.7 defaults: 7 for the operations lane, 30 for the customer lane and the
+ * receipt windows; until v0.9.7 they were 90, 180 and 90). A MINIMUM of 7 for every class:
+ * still far beyond any lease, catch-up window or redelivery that could touch a row — a
+ * notification claim's lease is minutes, a nightly report looks back two days, Telegram
+ * redelivers an update for one day.
  */
-export const DATA_COMPACTION_DAYS_MIN = 30;
+export const DATA_COMPACTION_DAYS_MIN = 7;
 export const DATA_COMPACTION_DAYS_MAX = 3650;
-export const OPS_NOTIFICATIONS_RETENTION_DAYS_DEFAULT = 90;
-export const CUSTOMER_NOTIFICATIONS_RETENTION_DAYS_DEFAULT = 180;
-export const RECEIPT_WINDOWS_RETENTION_DAYS_DEFAULT = 90;
+export const OPS_NOTIFICATIONS_RETENTION_DAYS_DEFAULT = 7;
+export const CUSTOMER_NOTIFICATIONS_RETENTION_DAYS_DEFAULT = 30;
+export const RECEIPT_WINDOWS_RETENTION_DAYS_DEFAULT = 30;
 
 export const DATA_COMPACTION_DAYS_DEFAULTS = {
   OPS_NOTIFICATIONS: OPS_NOTIFICATIONS_RETENTION_DAYS_DEFAULT,

@@ -838,7 +838,9 @@ export const SETTINGS = [
       'The most CPU the backup may use while it compresses, encrypts and verifies, as a ' +
       `percentage of ONE core, between ${String(BACKUP_CPU_LIMIT_MIN)} and ` +
       `${String(BACKUP_CPU_LIMIT_MAX)}. The default 70 keeps a whole core of a 2-vCPU server ` +
-      'free for the bot; a lower value makes the backup slower, not heavier.',
+      'free for the bot; a lower value makes the backup slower, not heavier. On a server ' +
+      'installed with botctl the same share also caps the separate verification database ' +
+      '(the backup-verify service), from the next botctl restart or update.',
     schema: z.number().int().min(BACKUP_CPU_LIMIT_MIN).max(BACKUP_CPU_LIMIT_MAX),
     defaultValue: BACKUP_CPU_LIMIT_DEFAULT,
     zeroMeaning: 'NOT_APPLICABLE',
@@ -910,14 +912,15 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   /*
-   * Round 9 C3: data compaction (`data-compaction.ts`). The mode first: DRY_RUN until the
-   * owner says otherwise, so a fresh installation counts and removes nothing.
+   * Round 9 C3: data compaction (`data-compaction.ts`). The mode first: APPLY since v0.9.7
+   * (the owner keeps operational history in the Telegram operations group); DRY_RUN remains
+   * a choice that counts and removes nothing.
    */
   {
     key: DATA_COMPACTION_SETTING_KEYS.mode,
     description:
-      'Whether the nightly data compaction only COUNTS what it would remove (DRY_RUN, the ' +
-      'default) or removes it (APPLY). It removes only the closed allow-list of finished ' +
+      'Whether the nightly data compaction only COUNTS what it would remove (DRY_RUN) or ' +
+      'removes it (APPLY, the default). It removes only the closed allow-list of finished ' +
       'notifications and closed receipt windows older than their retention days, never a ' +
       'ledger entry, payment, order, service, receipt, refund or audit row.',
     schema: z.enum(DATA_COMPACTION_MODES),

@@ -639,6 +639,10 @@ case "${1:-}" in
     # means it carries nothing the caller is looking for, which is the ordinary
     # case.
     case "$*" in
+      *HostConfig.NanoCpus*)
+        # v0.9.7: the Docker limits the backup-verify container was CREATED with.
+        printf '%s %s\n' "$(read_state verify_nanocpus 700000000)" "$(read_state verify_memory 536870912)"
+        ;;
       *'{{.Image}}'*)
         # The image a container was created FROM, which is what makes the
         # provenance comparison possible: `status` asks whether the API's build
@@ -914,6 +918,12 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
             # edge's environment, found none of the keys it wanted, and reported
             # "cannot say" — passing its tests for the wrong reason.
             case "$*" in
+              *backup-verify*)
+                case "$(read_state verify_state running)" in
+                  absent | exited | dead) : ;;
+                  *) printf 'fakeverifycontainerid\n' ;;
+                esac
+                ;;
               *' api'* | *'api '*)
                 case "$(read_state api_state running)" in
                   absent | exited | dead) : ;;
@@ -1058,6 +1068,15 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
         esac
         exit "$(read_state run_exit 0)" ;;
       exec)
+        # v0.9.7: the one SELECT botctl makes for the backup CPU setting. Empty is
+        # "nothing stored"; `backup_cpu_query_fails` is a database that did not answer.
+        case "$*" in
+          *backup.cpu_limit_percent*)
+            [ "$(read_state backup_cpu_query_fails 0)" != 1 ] || exit 1
+            printf '%s\n' "$(read_state backup_cpu_percent '')"
+            exit 0
+            ;;
+        esac
         # Stand in for pg_dump: emit something that looks like a real dump so
         # the backup's own integrity checks have something to check.
         if [ "$(read_state exec_exit 0)" != "0" ]; then exit 1; fi

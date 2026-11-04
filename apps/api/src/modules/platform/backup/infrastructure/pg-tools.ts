@@ -23,6 +23,7 @@ import {
   toolOomKilled,
   wrapLowPriority,
 } from './tool-process.js';
+import { excludeTableDataArgs, manifestExclusions } from './backup-exclusions.js';
 
 /**
  * The PostgreSQL command-line tools, as an adapter.
@@ -250,6 +251,16 @@ export interface PgToolsOptions {
   readonly lowPriorityPrefix?: readonly string[] | undefined;
   /** The CPU quota, percent of one core, read at each spawn. Absent: unlimited. */
   readonly cpuLimit?: CpuLimitProvider | undefined;
+  /**
+   * v0.9.7: the PostgreSQL server the pipeline's VERIFICATION restores into — the
+   * `backup-verify` compose service, which Docker caps at the backup's CPU share and a memory
+   * limit — reached with the same credentials as `databaseUrl`. Absent: the verification
+   * restores into a scratch database on the live server, as before (development, tests, an
+   * installation without the service). Only `verifyRestore` uses it; the dump, the operator's
+   * restore and a recovery's candidate stay on the live server. A server that cannot be
+   * reached FAILS the verification: it never falls back to the live server.
+   */
+  readonly verifyServer?: { readonly host: string; readonly port: string } | undefined;
 }
 
 /**
@@ -305,9 +316,20 @@ export class CutoverError extends Error {
 
 export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
   private readonly connection: Connection;
+  /** Where `verifyRestore` creates, restores into and drops its scratch database. */
+  private readonly verifyConnection: Connection;
 
   constructor(private readonly options: PgToolsOptions) {
     this.connection = parseConnection(options.databaseUrl);
+    this.verifyConnection =
+      options.verifyServer === undefined
+        ? this.connection
+        : { ...this.connection, host: options.verifyServer.host, port: options.verifyServer.port };
+  }
+
+  /** Whether the verification restores on a dedicated server rather than the live one. */
+  get verifiesOnDedicatedServer(): boolean {
+    return this.verifyConnection !== this.connection;
   }
 
   get databaseName(): string {
@@ -326,19 +348,19 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
    * is one that cannot end up in a diagnostic. `PGPASSWORD` is set here and
    * nowhere else.
    */
-  private env(database: string): NodeJS.ProcessEnv {
+  private env(database: string, server: Connection = this.connection): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH ?? '/usr/bin:/bin',
       LC_ALL: 'C',
-      PGHOST: this.connection.host,
-      PGPORT: this.connection.port,
+      PGHOST: server.host,
+      PGPORT: server.port,
       PGDATABASE: database,
       // Never interactive. Without this a tool that wants a password blocks on
       // a terminal that does not exist until the timeout fires.
       PGCONNECT_TIMEOUT: '10',
     };
-    if (this.connection.user !== '') env.PGUSER = this.connection.user;
-    if (this.connection.password !== null) env.PGPASSWORD = this.connection.password;
+    if (server.user !== '') env.PGUSER = server.user;
+    if (server.password !== null) env.PGPASSWORD = server.password;
     return env;
   }
 
@@ -399,12 +421,14 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
   /**
    * `pg_dump --format=custom` of the WHOLE database, to a file.
    *
-   * No `--exclude-table`, no `--schema`, nothing left out. The instruction was
-   * to include everything not proven safely reconstructable, and nothing here
-   * is: `processed_messages` looks like a cache and is the only thing standing
-   * between a redelivered outbox message and a duplicated effect;
-   * `panel_probe_budgets` looks like a counter and is what bounds an
-   * installation's outbound rate. A dump is not the place to be clever.
+   * No `--exclude-table`, no `--schema`: every table's SCHEMA is in the dump. The
+   * instruction was to include everything not proven safely reconstructable:
+   * `processed_messages` looks like a cache and is the only thing standing between a
+   * redelivered outbox message and a duplicated effect; `panel_probe_budgets` looks like
+   * a counter and is what bounds an installation's outbound rate. A dump is not the
+   * place to be clever. The one exception (v0.9.7) is the DATA of the closed list in
+   * `backup-exclusions.ts`, each table there with the reason its loss on a restore is
+   * harmless, returned here so the manifest carries every one of them.
    *
    * Read-only against the live database, and it takes no lock that blocks
    * writers — `pg_dump` runs in a repeatable-read snapshot.
@@ -426,6 +450,7 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
         // there. The roles are a property of the cluster, not of this database.
         '--no-owner',
         '--no-acl',
+        ...excludeTableDataArgs(),
         '--file',
         destination,
         this.databaseName,
@@ -448,6 +473,7 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
     return {
       databaseName: this.databaseName,
       pgDumpVersion: await this.pgDumpVersion(),
+      exclusions: manifestExclusions(),
     };
   }
 
@@ -473,11 +499,15 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
    * day somebody makes the name configurable.
    */
   async createDatabase(name: string): Promise<void> {
+    await this.createDatabaseOn(this.connection, name);
+  }
+
+  private async createDatabaseOn(server: Connection, name: string): Promise<void> {
     assertNotLiveTarget({ database: name }, this.databaseName);
     const created = await run(
       this.bin('psql'),
       ['--no-psqlrc', '--quiet', '--command', `CREATE DATABASE ${quoteIdent(name)}`],
-      this.env('postgres'),
+      this.env('postgres', server),
       60_000,
     );
     if (created.code !== 0) {
@@ -500,6 +530,10 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
    * candidate a failed restore left a connection on.
    */
   async dropDatabase(name: string): Promise<{ dropped: boolean }> {
+    return this.dropDatabaseOn(this.connection, name);
+  }
+
+  private async dropDatabaseOn(server: Connection, name: string): Promise<{ dropped: boolean }> {
     // The live database can never be dropped by this code path, whatever a
     // caller passes. There is no legitimate reason to drop it and one
     // catastrophic outcome if a name is ever computed wrongly.
@@ -512,7 +546,7 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
         '--command',
         `DROP DATABASE IF EXISTS ${quoteIdent(name)} WITH (FORCE)`,
       ],
-      this.env('postgres'),
+      this.env('postgres', server),
       60_000,
     ).catch(() => null);
     if (dropped === null || dropped.code !== 0) {
@@ -564,8 +598,17 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
     dumpPath: string,
     mode: RestoreMode = 'FULL',
   ): Promise<void> {
+    await this.restoreIntoEmptyOn(this.connection, name, dumpPath, mode);
+  }
+
+  private async restoreIntoEmptyOn(
+    server: Connection,
+    name: string,
+    dumpPath: string,
+    mode: RestoreMode,
+  ): Promise<void> {
     assertNotLiveTarget({ database: name }, this.databaseName);
-    const env = this.env(name);
+    const env = this.env(name, server);
     await this.assertEmpty(name, env);
     const verifying = mode === 'VERIFY';
 
@@ -651,7 +694,11 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
    * from that would be a confident wrong answer.
    */
   async inspectDatabase(name: string): Promise<DatabaseInspection> {
-    const env = this.env(name);
+    return this.inspectDatabaseOn(this.connection, name);
+  }
+
+  private async inspectDatabaseOn(server: Connection, name: string): Promise<DatabaseInspection> {
+    const env = this.env(name, server);
     const tables = await run(
       this.bin('psql'),
       [
@@ -984,8 +1031,13 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
     // guard says so anyway, because "cannot" is a property of today's code.
     assertNotLiveTarget({ database: scratch }, this.databaseName);
 
+    // v0.9.7: on the dedicated `backup-verify` server when one is configured, so the
+    // restore's index builds run under that container's Docker CPU and memory limits
+    // instead of on the live server. Never a fallback to the live server: a dedicated
+    // server that cannot be reached fails the verification, and the run with it.
+    const server = this.verifyConnection;
     try {
-      await this.createDatabase(scratch);
+      await this.createDatabaseOn(server, scratch);
     } catch (error) {
       throw new NexaError({
         kind: 'INTERNAL',
@@ -993,7 +1045,10 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
         message:
           'A backup could not be verified: the scratch database could not be created. ' +
           'Verification is mandatory, so the run fails rather than delivering an unproven archive.',
-        details: { reason: error instanceof Error ? error.message : String(error) },
+        details: {
+          reason: error instanceof Error ? error.message : String(error),
+          server: this.verifiesOnDedicatedServer ? 'DEDICATED' : 'LIVE',
+        },
       });
     }
 
@@ -1001,8 +1056,8 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
     let failure: string | null = null;
     let oomKilled = false;
     try {
-      await this.restoreIntoEmpty(scratch, dumpPath, 'VERIFY');
-      tableCount = (await this.inspectDatabase(scratch)).tableCount;
+      await this.restoreIntoEmptyOn(server, scratch, dumpPath, 'VERIFY');
+      tableCount = (await this.inspectDatabaseOn(server, scratch)).tableCount;
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
       // A memory kill is not "this archive cannot be restored": it must reach the run's
@@ -1013,7 +1068,7 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
       // `dropDatabase` records a failed drop on `leaked` itself, which the
       // cleanup stage reports. Visible, never swallowed: a scratch database left
       // behind is real debris on the operator's server.
-      await this.dropDatabase(scratch);
+      await this.dropDatabaseOn(server, scratch);
     }
 
     if (failure !== null) {

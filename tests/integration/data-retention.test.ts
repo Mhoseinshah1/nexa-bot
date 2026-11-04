@@ -149,4 +149,54 @@ describe('data retention (E3)', () => {
     expect((await outboxIds()).has(publishedOld)).toBe(false);
     expect(await context.container.idempotencyRetentionSweeper.sweep()).toBeGreaterThanOrEqual(0);
   });
+
+  it('v0.9.7: the worker sweepers run with the 7-day defaults, at the boundary, on real rows', async () => {
+    // The container's own sweepers on the container's clock and the registry's defaults
+    // (nothing stored): published outbox history and interactive keys go at 7 days, one day
+    // either side of the boundary decides, and what is work or a job's key stays whatever
+    // its age. This is the job that let the outbox reach 198 MB on the test server.
+    const at = context.container.clock.now();
+    const daysAgo = (days: number) => new Date(at.getTime() - days * DAY);
+    const publishedEight = await outbox({ published: daysAgo(8), occurred: daysAgo(8) });
+    const publishedSix = await outbox({ published: daysAgo(6), occurred: daysAgo(6) });
+    const pendingOld = await outbox({ published: null, occurred: daysAgo(400) });
+    const webEight = await key('WEB', daysAgo(8));
+    const telegramEight = await key('TELEGRAM', daysAgo(8));
+    const webSix = await key('WEB', daysAgo(6));
+    const workerOld = await key('WORKER', daysAgo(400));
+
+    context.container.setInstallationTenant(SEED_IDS.tenantA as never);
+    expect(await context.container.outboxRetentionSweeper.sweep()).toBe(1);
+    expect(await context.container.idempotencyRetentionSweeper.sweep()).toBe(2);
+
+    const left = await outboxIds();
+    expect(left.has(publishedEight)).toBe(false);
+    expect(left.has(publishedSix)).toBe(true);
+    expect(left.has(pendingOld)).toBe(true);
+    const keys = new Set(
+      (
+        await context.container.database.db.execute<{ id: string }>(
+          sql`SELECT id FROM request_idempotency`,
+        )
+      ).rows.map((row) => row.id),
+    );
+    expect(keys.has(webEight)).toBe(false);
+    expect(keys.has(telegramEight)).toBe(false);
+    expect(keys.has(webSix)).toBe(true);
+    expect(keys.has(workerOld)).toBe(true);
+  });
+
+  it('v0.9.7: a stored retention day is what the sweeper uses, not the default', async () => {
+    const at = context.container.clock.now();
+    const daysAgo = (days: number) => new Date(at.getTime() - days * DAY);
+    const publishedEight = await outbox({ published: daysAgo(8), occurred: daysAgo(8) });
+    await context.container.database.db.execute(sql`
+      INSERT INTO setting_values (id, tenant_id, setting_key, value)
+      VALUES (${randomUUID()}::uuid, ${SEED_IDS.tenantA}::uuid, 'retention.outbox_published_days',
+              '30'::jsonb)
+    `);
+    context.container.setInstallationTenant(SEED_IDS.tenantA as never);
+    expect(await context.container.outboxRetentionSweeper.sweep()).toBe(0);
+    expect((await outboxIds()).has(publishedEight)).toBe(true);
+  });
 });
