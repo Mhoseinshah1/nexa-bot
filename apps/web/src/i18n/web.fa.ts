@@ -10686,6 +10686,12 @@ export const WEB_FA = {
   'web.err_bot_token_malformed': 'شکل توکن درست نیست. توکن را کامل از BotFather کپی کنید.',
   'web.err_bot_token_rejected': 'تلگرام این توکن را نپذیرفت. از BotFather توکن تازه بگیرید.',
   'web.err_bot_token_replacement_in_progress': 'جایگزینی توکن این ربات در جریان است. کمی صبر کنید.',
+  'web.err_capacity_update_queue_full':
+    'این ربات الان پیام‌های زیادی در صف دارد. کمی بعد دوباره امتحان کنید.',
+  'web.err_capacity_new_customer_rate':
+    'این ربات در این دقیقه به سقف مشتری تازه رسیده است. کمی بعد دوباره امتحان کنید.',
+  'web.err_capacity_limit_invalid': 'این مقدار برای این سقف مجاز نیست.',
+  'web.err_capacity_owner_only': 'سقف‌های ظرفیت را فقط مالک نصب می‌تواند ببیند و تغییر دهد.',
   'web.err_bot_webhook_origin_unknown': 'نشانی عمومی این نصب تنظیم نشده است؛ وب‌هوک ساخته نشد.',
   'web.err_bot_webhook_refused':
     'تلگرام نشانی وب‌هوک را نپذیرفت. دامنه و گواهی HTTPS را بررسی کنید.',
