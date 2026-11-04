@@ -4,6 +4,8 @@ import {
   miniAppCategoriesResponseSchema,
   miniAppCategoryResponseSchema,
   miniAppOrderSchema,
+  miniAppServersResponseSchema,
+  type MiniAppServersResponse,
   type MiniAppCategoriesResponse,
   type MiniAppProduct,
 } from '@nexa/contracts';
@@ -15,9 +17,13 @@ import { money, trafficLimit } from '../format.js';
 import { Button, Card, Loading, PersonalPrice, appendPage, errorText, useLoad } from '../ui.js';
 
 /**
- * فروشگاه: the tenant's own categories as tabs (never four fixed period tabs — Nexa has
- * operator-defined categories), and each category's plans with the bot's eligibility and
- * visibility (a reseller's tier included), decided by the server.
+ * فروشگاه: step by step, like the bot — (server →) category → plan. The server step exists
+ * only when `servers.step` is true (the setting on AND more than one server qualifies); with
+ * one server or the setting off it starts at the categories. Each step is a list of cards
+ * with a back control; the chosen `serverId` goes to the category and plan calls, and
+ * changing the server resets the category. Categories are the tenant's own (never four fixed
+ * period tabs), and each category's plans carry the bot's eligibility and visibility (a
+ * reseller's tier included), decided by the server.
  *
  * Not drawn: the country chips (no structured country exists, only free display text), the
  * «پرفروش» badge (no best-seller signal), and a per-plan cashback percent (cashback is
@@ -26,33 +32,59 @@ import { Button, Card, Loading, PersonalPrice, appendPage, errorText, useLoad } 
  */
 export function Store() {
   const { api } = useApp();
-  const { loaded, reload } = useLoad(() => allCategories(api), [api]);
-  const [chosen, setChosen] = useState<string | null>(null);
+  // A servers read that fails reads as «no server step»: it is an optional narrowing, and the
+  // whole catalogue is still sellable without it.
+  const { loaded, reload } = useLoad(
+    () => allServers(api).catch(() => ({ step: false, items: [] as ServerRow[] })),
+    [api],
+  );
+  const [server, setServer] = useState<ServerRow | null>(null);
+  const [category, setCategory] = useState<CategoryRow | null>(null);
   return (
     <main className="page">
-      <h1 className="title">{t('miniapp.store_title')}</h1>
       <Loading loaded={loaded} reload={reload}>
-        {(categories) => {
-          if (categories.items.length === 0)
-            return <p className="muted">{t('miniapp.store_empty')}</p>;
-          const current = chosen ?? categories.items[0]?.id ?? null;
+        {(servers) => {
+          if (servers.step && server === null) {
+            return (
+              <>
+                <h1 className="title">{t('miniapp.store_title')}</h1>
+                <StepList
+                  title={t('miniapp.store_step_server')}
+                  items={servers.items.map((one) => ({ id: one.id, label: one.name }))}
+                  onPick={(id) => {
+                    setServer(servers.items.find((one) => one.id === id) ?? null);
+                    setCategory(null);
+                  }}
+                />
+              </>
+            );
+          }
+          const serverId = servers.step ? (server?.id ?? null) : null;
+          if (category === null) {
+            return (
+              <>
+                <h1 className="title">{t('miniapp.store_title')}</h1>
+                <Categories
+                  key={serverId ?? 'all'}
+                  serverId={serverId}
+                  onBack={servers.step ? () => setServer(null) : null}
+                  onPick={setCategory}
+                />
+              </>
+            );
+          }
           return (
             <>
-              <div className="chips" role="tablist">
-                {categories.items.map((category) => (
-                  <button
-                    key={category.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={category.id === current}
-                    className={category.id === current ? 'chip chip-on' : 'chip'}
-                    onClick={() => setChosen(category.id)}
-                  >
-                    {category.emoji === null ? category.name : `${category.emoji} ${category.name}`}
-                  </button>
-                ))}
+              <h1 className="title">{t('miniapp.store_title')}</h1>
+              <div className="step-head">
+                <BackButton onClick={() => setCategory(null)} />
+                <h2 className="step-title">{categoryLabel(category)}</h2>
               </div>
-              {current !== null && <Category key={current} categoryId={current} />}
+              <Category
+                key={`${serverId ?? 'all'}:${category.id}`}
+                categoryId={category.id}
+                serverId={serverId}
+              />
             </>
           );
         }}
@@ -61,21 +93,119 @@ export function Store() {
   );
 }
 
-/**
- * Every category, page after page: they are the store's tabs, so a tenant with more than one
- * page of them must see all of them, not the first page's. Bounded, so a server that kept
- * answering `hasMore` could not keep the store loading forever.
- */
-const CATEGORY_PAGES_MAX = 50;
+type ServerRow = MiniAppServersResponse['items'][number];
+type CategoryRow = MiniAppCategoriesResponse['items'][number];
 
-async function allCategories(api: MiniAppApi) {
-  const items: MiniAppCategoriesResponse['items'][number][] = [];
-  for (let page = 0; page < CATEGORY_PAGES_MAX; page += 1) {
+const categoryLabel = (category: CategoryRow) =>
+  category.emoji === null ? category.name : `${category.emoji} ${category.name}`;
+
+function BackButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button small onClick={onClick}>
+      {t('miniapp.store_step_back')}
+    </Button>
+  );
+}
+
+function StepList({
+  title,
+  items,
+  onPick,
+  onBack,
+}: {
+  title: string;
+  items: readonly { id: string; label: string }[];
+  onPick: (id: string) => void;
+  onBack?: (() => void) | null;
+}) {
+  return (
+    <section className="section">
+      <div className="step-head">
+        {onBack !== undefined && onBack !== null && <BackButton onClick={onBack} />}
+        <h2 className="step-title">{title}</h2>
+      </div>
+      <div className="step-list">
+        {items.map((item) => (
+          <button key={item.id} type="button" className="step-item" onClick={() => onPick(item.id)}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** The category step: the tenant's categories (on the chosen server, when there is one). */
+function Categories({
+  serverId,
+  onBack,
+  onPick,
+}: {
+  serverId: string | null;
+  onBack: (() => void) | null;
+  onPick: (category: CategoryRow) => void;
+}) {
+  const { api } = useApp();
+  const { loaded, reload } = useLoad(() => allCategories(api, serverId), [api, serverId]);
+  return (
+    <Loading loaded={loaded} reload={reload}>
+      {(categories) =>
+        categories.items.length === 0 ? (
+          <>
+            {onBack !== null && <BackButton onClick={onBack} />}
+            <p className="muted">{t('miniapp.store_empty')}</p>
+          </>
+        ) : (
+          <StepList
+            title={t('miniapp.store_step_category')}
+            items={categories.items.map((one) => ({ id: one.id, label: categoryLabel(one) }))}
+            onBack={onBack}
+            onPick={(id) => {
+              const picked = categories.items.find((one) => one.id === id);
+              if (picked !== undefined) onPick(picked);
+            }}
+          />
+        )
+      }
+    </Loading>
+  );
+}
+
+/** Bounded paging, so a server that kept answering `hasMore` could not load forever. */
+const CATALOGUE_PAGES_MAX = 50;
+
+const withServer = (page: number, serverId: string | null) =>
+  serverId === null ? `page=${String(page)}` : `page=${String(page)}&serverId=${serverId}`;
+
+async function allServers(api: MiniAppApi) {
+  const items: ServerRow[] = [];
+  let step = false;
+  for (let page = 0; page < CATALOGUE_PAGES_MAX; page += 1) {
+    const result = await api.get(
+      MINIAPP_ROUTES.servers,
+      {},
+      miniAppServersResponseSchema,
+      `page=${String(page)}`,
+    );
+    step = result.step;
+    items.push(...result.items);
+    if (!result.step || !result.hasMore) break;
+  }
+  return { step, items };
+}
+
+/**
+ * Every category, page after page: a tenant with more than one page of them must see all of
+ * them, not the first page's.
+ */
+async function allCategories(api: MiniAppApi, serverId: string | null) {
+  const items: CategoryRow[] = [];
+  for (let page = 0; page < CATALOGUE_PAGES_MAX; page += 1) {
     const result = await api.get(
       MINIAPP_ROUTES.categories,
       {},
       miniAppCategoriesResponseSchema,
-      `page=${String(page)}`,
+      withServer(page, serverId),
     );
     items.push(...result.items);
     if (!result.hasMore) break;
@@ -83,7 +213,7 @@ async function allCategories(api: MiniAppApi) {
   return { items };
 }
 
-function Category({ categoryId }: { categoryId: string }) {
+function Category({ categoryId, serverId }: { categoryId: string; serverId: string | null }) {
   const { api, navigate } = useApp();
   const [page, setPage] = useState(0);
   // R12 F3 item 5: «بیشتر» adds the next page under the plans already shown.
@@ -99,10 +229,10 @@ function Category({ categoryId }: { categoryId: string }) {
         MINIAPP_ROUTES.category,
         { categoryId },
         miniAppCategoryResponseSchema,
-        `page=${String(page)}`,
+        withServer(page, serverId),
       ),
     }),
-    [api, categoryId, page],
+    [api, categoryId, serverId, page],
   );
 
   const buy = async (product: MiniAppProduct) => {

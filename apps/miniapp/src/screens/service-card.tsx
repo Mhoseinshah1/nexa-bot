@@ -23,19 +23,30 @@ export function ServiceCard({
   const ending =
     service.state === 'ACTIVE' &&
     ((share !== null && share >= 0.9) || (days !== null && days <= 3));
+  const inactive = service.state === 'EXPIRED' || service.state === 'TERMINATED';
+  const tone =
+    service.state === 'PENDING_PROVISION'
+      ? 'building'
+      : service.state === 'ACTIVE'
+        ? ending
+          ? 'warn'
+          : 'ok'
+        : service.state === 'SUSPENDED'
+          ? 'off'
+          : 'muted';
   const body = (
     <>
       <div className="card-head">
-        <strong>
+        <strong className="service-title">
           {service.title}
           {service.isTrial && <span className="badge">{t('miniapp.service_trial')}</span>}
         </strong>
-        <span className={ending ? 'badge badge-warn' : 'badge'}>
+        <span className={`status-chip status-chip-${tone}`}>
           {ending ? t('miniapp.service_ending') : t(`miniapp.service_state_${service.state}`)}
         </span>
       </div>
       <UsageBar share={share} />
-      <div className="card-figures">
+      <div className="service-figures">
         <span>
           {t('miniapp.service_used_of', {
             used: traffic(service.trafficUsedBytes),
@@ -62,10 +73,11 @@ export function ServiceCard({
       )}
     </>
   );
+  const klass = inactive ? 'glass service service-muted' : 'glass service';
   return onOpen === undefined ? (
-    <section className="glass service">{body}</section>
+    <section className={klass}>{body}</section>
   ) : (
-    <button type="button" className="glass service service-button" onClick={onOpen}>
+    <button type="button" className={`${klass} service-button`} onClick={onOpen}>
       {body}
     </button>
   );

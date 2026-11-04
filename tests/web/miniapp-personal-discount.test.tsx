@@ -85,6 +85,7 @@ describe('R11 A9: the mini app lists the personal discount the invoice charges',
       hasMore: false,
     });
     render(<Store />);
+    fireEvent.click(await screen.findByRole('button', { name: 'ماهانه' }));
     const discounted = (await screen.findByText('پلن شخصی')).closest('section') as HTMLElement;
     const struck = discounted.querySelector('s.personal-price-was');
     expect(struck?.textContent).toBe(shown(100_000n));
@@ -166,6 +167,7 @@ describe('R11 A9: the mini app lists the personal discount the invoice charges',
     delete legacy['personalDiscount'];
     routes['GET /catalogue/categories/c1'] = () => ({ items: [legacy], page: 0, hasMore: false });
     render(<Store />);
+    fireEvent.click(await screen.findByRole('button', { name: 'ماهانه' }));
     const line = (await screen.findByText('پلن قدیمی')).closest('section') as HTMLElement;
     expect(line.querySelector('.personal-price')).toBeNull();
     expect(line.querySelector('strong.price')?.textContent).toBe(shown(100_000n));
