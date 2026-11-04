@@ -1,4 +1,17 @@
-import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { LegacyHistoryRecordType, TenantContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -107,7 +120,24 @@ export class DrizzleLegacyRecordsRepository implements LegacyRecordsRepository {
       .innerJoin(services, and(eq(services.tenantId, c.tenantId), eq(services.id, c.serviceId)))
       .where(and(eq(c.tenantId, tenantId), eq(c.serviceId, serviceId)))
       .orderBy(asc(c.invoiceKey));
-    return rows.map((row) => row.invoiceKey);
+    // v0.9.7: the cleanup after an import empties `legacy_service_candidates`; an adopted
+    // service still names its invoice itself (`source_ref = 'invoice:<key>'`).
+    const own = await this.db
+      .select({ sourceRef: services.sourceRef })
+      .from(services)
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, serviceId),
+          eq(services.source, 'MIRZA'),
+          like(services.sourceRef, 'invoice:%'),
+        ),
+      );
+    const keys = new Set(rows.map((row) => row.invoiceKey));
+    for (const row of own) {
+      if (row.sourceRef !== null) keys.add(row.sourceRef.slice('invoice:'.length));
+    }
+    return [...keys].sort();
   }
 
   async recordsOfInvoices(

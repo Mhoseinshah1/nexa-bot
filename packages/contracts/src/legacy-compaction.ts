@@ -17,6 +17,9 @@ import { LEGACY_HISTORY_RECORD_TYPES, type LegacyHistoryRecordType } from './leg
  *   DEDUPING    deletes `archive_row` records of the invoice table that have a twin in
  *               `legacy_invoice_archive` (which every invoice reader reads).
  *   STRIPPING   removes the top-level live-state flags (all false) from the kept payloads.
+ *   CLEARING    v0.9.7: empties the import's own working tables for the tenant
+ *               (`LEGACY_CLEANUP_CLEARED_TABLES`), in batches, and lifts the trial limit the
+ *               import imposed (owner decision: an imported customer MAY take a Nexa trial).
  *   VACUUMING   VACUUM FULL of the compacted tables — the maintenance window.
  *   COMPLETED   sizes and row counts after, beside the before.
  *
@@ -29,6 +32,7 @@ export const LEGACY_COMPACTION_STATES = [
   'DROPPING',
   'DEDUPING',
   'STRIPPING',
+  'CLEARING',
   'VACUUMING',
   'COMPLETED',
   'FAILED',
@@ -43,6 +47,7 @@ export const LEGACY_COMPACTION_ACTIVE_STATES = [
   'DROPPING',
   'DEDUPING',
   'STRIPPING',
+  'CLEARING',
   'VACUUMING',
 ] as const;
 
@@ -54,6 +59,11 @@ export const LEGACY_COMPACTION_FAILURE_CODES = [
   'legacy_compaction.archive_out_of_memory',
   'legacy_compaction.import_not_completed',
   'legacy_compaction.step_failed',
+  /**
+   * v0.9.7: the finished import's balance reconciliation is missing, or names a
+   * `LEGACY_CLEANUP_BLOCKING_DIFFERENCES` kind. Nothing was archived or deleted.
+   */
+  'legacy_compaction.reconciliation_not_clean',
 ] as const;
 export type LegacyCompactionFailureCode = (typeof LEGACY_COMPACTION_FAILURE_CODES)[number];
 
@@ -79,6 +89,38 @@ export const LEGACY_COMPACTION_DROP_TYPES = [
   'program_setting',
   'support_department',
 ] as const satisfies readonly LegacyHistoryRecordType[];
+
+/**
+ * v0.9.7 (owner decision): the tables the cleanup EMPTIES for the tenant once an import has
+ * finished cleanly. None is read by a Nexa screen for anything it cannot do without:
+ *
+ * - `legacy_import_map` — legacy id → Nexa id, the import's own bookkeeping;
+ * - `legacy_service_candidates` — held services for a manual review the owner does not do;
+ * - `legacy_invoice_archive_staging` — scratch rows of FINISHED archive runs only;
+ * - `legacy_trial_eligibility` — the import's trial decision. The trial limit it imposed is
+ *   lifted in the same batch: an imported customer MAY take a Nexa trial again.
+ *
+ * `legacy_invoice_archive` (every invoice reader's copy) is NOT here and is never cleared.
+ * Order matters: the trial decisions first (they name the overrides to lift).
+ */
+export const LEGACY_CLEANUP_CLEARED_TABLES = [
+  'legacy_trial_eligibility',
+  'legacy_service_candidates',
+  'legacy_import_map',
+  'legacy_invoice_archive_staging',
+] as const;
+export type LegacyCleanupClearedTable = (typeof LEGACY_CLEANUP_CLEARED_TABLES)[number];
+
+/**
+ * v0.9.7: the balance-reconciliation differences (`cutover-reconciliation.ts` kinds) any one of
+ * which keeps the cleanup from running. A finished import whose recorded reconciliation names
+ * one, or has none recorded, is never cleaned up automatically or by hand.
+ */
+export const LEGACY_CLEANUP_BLOCKING_DIFFERENCES = [
+  'BALANCE_DIFFERS',
+  'MISSING_IN_NEXA',
+  'AGENT_CREDIT_IN_WALLET',
+] as const;
 
 /** The typed confirmation, ASCII so it types the same on every keyboard. */
 export const LEGACY_COMPACTION_CONFIRMATION_PHRASE = 'COMPACT LEGACY DATA';

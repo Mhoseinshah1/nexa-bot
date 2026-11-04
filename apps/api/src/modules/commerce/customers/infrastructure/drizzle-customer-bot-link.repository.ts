@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import type { BotInstanceId, TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -10,10 +10,26 @@ import type { CustomerBotLinkRepository } from '../application/customer-bot-link
 /**
  * Customers the legacy importer created and nobody has linked to a bot yet.
  * Eligible = NULL link AND an IMPORTED `legacy_import_map` CUSTOMER row naming the customer
- * that is not `EXISTING_CUSTOMER`: a customer NEXA already had was matched, not created, and
+ * that is not `EXISTING_CUSTOMER` (or, after the cleanup emptied the map, the import's own
+ * `source = 'MIRZA'` mark on the same customers — `importedCreated`): a customer NEXA already had was matched, not created, and
  * is never linked by this (Codex on #288 — the automatic BOT_LINK would otherwise turn
  * reminders and notices on for them).
  */
+/**
+ * The customer `c` was CREATED by the import (not matched to one NEXA already had): an
+ * IMPORTED map row that is not `EXISTING_CUSTOMER`, or — once the v0.9.7 cleanup after the
+ * import has emptied `legacy_import_map` — the source mark the import put on exactly those
+ * customers (`drizzle-customer-source-marker.ts`: `source = 'MIRZA'`, `source_ref = 'user:…'`).
+ * While the map exists the two name the same customers; the mark is what survives it.
+ */
+function importedCreated(c: SQL): SQL {
+  return sql`((${c}.source = 'MIRZA' AND ${c}.source_ref LIKE 'user:%')
+    OR EXISTS (SELECT 1 FROM legacy_import_map m
+                WHERE m.tenant_id = ${c}.tenant_id AND m.entity_type = 'CUSTOMER'
+                  AND m.status = 'IMPORTED' AND m.entity_id = ${c}.id
+                  AND m.reason_code IS DISTINCT FROM 'EXISTING_CUSTOMER'))`;
+}
+
 export class DrizzleCustomerBotLinkRepository implements CustomerBotLinkRepository {
   constructor(private readonly db: Database) {}
 
@@ -69,11 +85,8 @@ export class DrizzleCustomerBotLinkRepository implements CustomerBotLinkReposito
     const r = await this.exec(tx).execute(sql`
       SELECT count(*)::int AS n
         FROM customers c
-        JOIN legacy_import_map m
-          ON m.tenant_id = c.tenant_id AND m.entity_type = 'CUSTOMER'
-         AND m.status = 'IMPORTED' AND m.entity_id = c.id
-         AND m.reason_code IS DISTINCT FROM 'EXISTING_CUSTOMER'
-       WHERE c.tenant_id = ${tenantId} AND c.first_bot_instance_id IS NULL`);
+       WHERE c.tenant_id = ${tenantId} AND c.first_bot_instance_id IS NULL
+         AND ${importedCreated(sql`c`)}`);
     return Number((r.rows[0] as { n: number } | undefined)?.n ?? 0);
   }
 
@@ -91,11 +104,8 @@ export class DrizzleCustomerBotLinkRepository implements CustomerBotLinkReposito
       WITH picked AS MATERIALIZED (
         SELECT c2.id
           FROM customers c2
-          JOIN legacy_import_map m
-            ON m.tenant_id = c2.tenant_id AND m.entity_type = 'CUSTOMER'
-           AND m.status = 'IMPORTED' AND m.entity_id = c2.id
-           AND m.reason_code IS DISTINCT FROM 'EXISTING_CUSTOMER'
          WHERE c2.tenant_id = ${tenantId} AND c2.first_bot_instance_id IS NULL
+           AND ${importedCreated(sql`c2`)}
          ORDER BY c2.id
          LIMIT ${input.limit}
            FOR UPDATE OF c2 SKIP LOCKED)

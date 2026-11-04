@@ -308,6 +308,8 @@ import { DrizzleDataCompactionRepository } from './modules/platform/data-compact
 import { BackupPasswordService } from './modules/platform/backup/application/backup-password.service.js';
 import { LegacyCompactionService } from './modules/platform/legacy-compaction/application/legacy-compaction.service.js';
 import { LegacyCompactionExecutor } from './modules/platform/legacy-compaction/application/legacy-compaction.executor.js';
+import { readNexaCutoverState } from './modules/platform/legacy-cutover/infrastructure/pg-cutover-reconciliation.reader.js';
+import { LegacyCleanupScheduler } from './modules/platform/legacy-compaction/application/legacy-cleanup.scheduler.js';
 import { DrizzleLegacyCompactionRepository } from './modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
@@ -8283,8 +8285,22 @@ export function createContainer(
    * pipeline takes the «آرشیو ربات قبلی» archive. Never in the api process: the work is
    * long, and deletes, and VACUUM FULL locks the history tables for its duration.
    */
+  /*
+   * v0.9.7: the automatic cleanup once an import has finished with a clean balance
+   * reconciliation — asked by the executor's tick, so it runs in the worker only.
+   */
+  const legacyCleanupScheduler = new LegacyCleanupScheduler({
+    repository: legacyCompactionRepository,
+    service: legacyCompaction,
+    backupDestination: () => backup.deliveryDestination(),
+    opsLog,
+    clock,
+    actor: () => systemJobActor('legacy-cleanup', newCorrelationId(ids.uuid())),
+    logger,
+  });
   const legacyCompactionExecutor = new LegacyCompactionExecutor({
     repository: legacyCompactionRepository,
+    automatic: legacyCleanupScheduler,
     uow,
     audit,
     opsLog,
@@ -8474,6 +8490,13 @@ export function createContainer(
       }),
     history: () => container.legacyHistoryIngest,
     cutover: () => container.legacyCutover,
+    // v0.9.7: the apply's own balance reconciliation reads the wallets read-only, here.
+    nexaCutoverState: (tenantId) =>
+      readNexaCutoverState(database, {
+        tenantSlug: null,
+        tenantId,
+        statementTimeoutMs: 600_000,
+      }),
     uow,
     target: databaseTarget(config.DATABASE_URL),
     // THIS process's environment, as the CLI reads its own: the acknowledgement is a server

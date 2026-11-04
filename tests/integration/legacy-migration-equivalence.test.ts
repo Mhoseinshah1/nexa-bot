@@ -160,7 +160,13 @@ describe('legacy migration: the speed work writes exactly what the per-row impor
         history: view.progress.history,
         materialize: view.progress.materialize,
         botLink: stable(view.progress.botLink),
-        report: stable(view.applyReport),
+        // v0.9.7 added `balanceReconciliation` (a read, recorded after the writes; the e2e
+        // asserts it). Left out here, so the pin still proves the rest of the report unchanged.
+        report: stable(
+          view.applyReport === null
+            ? null
+            : (({ balanceReconciliation: _read, ...rest }) => rest)(view.applyReport),
+        ),
       },
       customers: await rows(
         `SELECT telegram_user_id, username, status, (blocked_at IS NOT NULL) AS blocked,

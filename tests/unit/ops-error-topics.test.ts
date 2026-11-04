@@ -129,6 +129,10 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'recovery.run_ok': 'BACKUPS',
   'incident.': 'SYSTEM',
   'maintenance.': 'SYSTEM',
+  // v0.9.7: the automatic cleanup after an import — SYSTEM, beside the other maintenance facts.
+  'maintenance.legacy_cleanup_awaiting_backup_destination': 'SYSTEM',
+  'maintenance.legacy_cleanup_backup_destination_ready': 'SYSTEM',
+  'maintenance.legacy_cleanup_reconciliation_differs': 'SYSTEM',
   'system.ping': 'SYSTEM',
 };
 

@@ -2182,8 +2182,15 @@
     {
       "idx": 311,
       "version": "7",
-      "when": 1793741117157,
-      "tag": "0311_compaction_mode_apply",
+      "when": 1793737408535,
+      "tag": "0311_legacy_cleanup_states",
+      "breakpoints": true
+    },
+    {
+      "idx": 312,
+      "version": "7",
+      "when": 1793737424870,
+      "tag": "0312_legacy_cleanup_delete_guard",
       "breakpoints": true
     }
   ]

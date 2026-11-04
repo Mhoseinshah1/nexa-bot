@@ -62,6 +62,12 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'job.superseded': 'کار پس‌زمینه جایگزین شد',
   'process.restart_storm': 'سرویس پی‌درپی ری‌استارت می‌شود',
   'process.restart_storm_ended': 'سرویس دیگر پی‌درپی ری‌استارت نمی‌شود',
+  'maintenance.legacy_cleanup_awaiting_backup_destination':
+    'پاک‌سازی داده‌های انتقال منتظر تنظیم مقصد بکاپ است',
+  'maintenance.legacy_cleanup_backup_destination_ready':
+    'مقصد بکاپ تنظیم شد؛ پاک‌سازی داده‌های انتقال ادامه می‌یابد',
+  'maintenance.legacy_cleanup_reconciliation_differs':
+    'پاک‌سازی داده‌های انتقال انجام نشد: تطبیق موجودی‌ها اختلاف دارد',
   'nexa.invoice_id_unsafe': 'شناسهٔ فاکتور درگاه ناامن است',
   'nexa.no_payment_card': 'کارت پرداختی در دسترس نیست',
   'nexa.no_payment_link': 'پیوند پرداخت ساخته نشد',
