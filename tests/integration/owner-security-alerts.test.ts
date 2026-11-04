@@ -202,7 +202,11 @@ describe('access.bulk_read', () => {
 
   it('claims a window exactly once when two reads cross it together', async () => {
     const actor = adminActorFor(owner);
-    await ctx.container.ownerAlerts.rowsRead(tenantA, actor, { resource: 'customer', rows: 1_990 });
+    // 1 988 rows in calls under the per-call threshold, so only the window can alert.
+    for (let i = 0; i < 4; i += 1) {
+      await ctx.container.ownerAlerts.rowsRead(tenantA, actor, { resource: 'customer', rows: 497 });
+    }
+    expect(await events('access.bulk_read', tenantA.tenantId)).toEqual([]);
     await Promise.all([
       ctx.container.ownerAlerts.rowsRead(tenantA, actor, { resource: 'customer', rows: 20 }),
       ctx.container.ownerAlerts.rowsRead(tenantA, actor, { resource: 'customer', rows: 20 }),
