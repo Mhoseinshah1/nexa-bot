@@ -176,6 +176,26 @@ describe('NEXA v099 — a number stored as NOT accepted', () => {
     expect(requestContact).not.toHaveBeenCalled();
     expect(work).toHaveBeenCalledTimes(1);
   });
+
+  it('a first share the server stores as NOT accepted ends NOT_ACCEPTED, not PENDING', async () => {
+    let shared = false;
+    const requestContact = vi.fn(async () => {
+      shared = true;
+      return 'shared' as const;
+    });
+    const work = vi.fn(async () => {
+      throw new ApiError(409, COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED, {});
+    });
+    const outcome = await withPhoneVerification(work, {
+      requestContact,
+      phoneVerified: async () => false,
+      phoneNotAccepted: async () => shared,
+      wait: async () => undefined,
+    });
+    expect(outcome.kind).toBe('NOT_ACCEPTED');
+    expect(requestContact).toHaveBeenCalledTimes(1);
+    expect(work).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('C — a payment a route’s verified-phone rule refused', () => {

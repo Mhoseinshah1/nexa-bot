@@ -73,6 +73,10 @@ export async function withPhoneVerification<T>(
     if (asked === 'cancelled') return { kind: 'CANCELLED', refusal: failure };
     for (let attempt = 0; attempt < PHONE_POLL_ATTEMPTS; attempt += 1) {
       if (await deps.phoneVerified()) return { kind: 'DONE', value: await work() };
+      // NEXA v099: the contact just shared was stored as NOT accepted — say so, not «pending».
+      if ((await deps.phoneNotAccepted?.()) === true) {
+        return { kind: 'NOT_ACCEPTED', refusal: failure };
+      }
       await deps.wait(PHONE_POLL_INTERVAL_MS);
     }
     return { kind: 'PENDING', refusal: failure };
