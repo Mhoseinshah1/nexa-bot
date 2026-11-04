@@ -3397,13 +3397,20 @@ textarea.input,
   }
 }
 
-/* Charts draw in: lines trace from the first point to now, areas and bars follow. */
-@keyframes chart-draw {
+/*
+ * Charts draw in: a line traces from its first point to now, the area fades in after it,
+ * bars rise, donut and stack segments fade in. The trace is a clip that opens from the
+ * inline start, NOT a dash offset: every chart line is `vector-effect: non-scaling-stroke`,
+ * and a dash pattern on such a stroke is measured in screen pixels, so a normalised dash
+ * would leave the finished line half drawn. The clip has no end state to undo. A chart plays
+ * once, when its svg mounts, and every chart mounts only once its data is there.
+ */
+@keyframes chart-trace {
   from {
-    stroke-dashoffset: 1;
+    clip-path: inset(-8px 100% -8px -8px);
   }
   to {
-    stroke-dashoffset: 0;
+    clip-path: inset(-8px -8px -8px -8px);
   }
 }
 @keyframes chart-rise {
@@ -3421,25 +3428,33 @@ textarea.input,
 }
 @media (prefers-reduced-motion: no-preference) {
   .chart path.line:not(.dashed),
-  .spark path.line {
-    stroke-dasharray: 1;
-    stroke-dashoffset: 1;
-    animation: chart-draw 1s var(--ease-out) forwards;
+  .spark path.line,
+  .area-spark path.line,
+  .trend-line.current {
+    animation: chart-trace 1s var(--ease-out) backwards;
   }
   .chart path.area,
-  .spark path.area {
-    animation: chart-fade 0.5s var(--ease-out) 0.35s both;
+  .spark path.area,
+  .area-spark path.area,
+  .trend-area {
+    animation: chart-fade 0.5s var(--ease-out) 0.9s backwards;
+  }
+  .chart path.line.dashed,
+  .trend-line.previous {
+    animation: chart-fade 0.6s var(--ease-out) 0.4s backwards;
   }
   .chart rect.bar {
     transform-box: fill-box;
     transform-origin: 50% 100%;
     animation: chart-rise 0.5s var(--ease-out) both;
   }
-  .chart .donut-seg {
+  .chart .donut-seg,
+  .dash-stack rect {
     animation: chart-fade 0.8s ease-out both;
   }
-  .spark path.last {
-    animation: chart-fade 0.2s var(--ease-out) 0.9s both;
+  .spark path.last,
+  .area-spark path.last {
+    animation: chart-fade 0.2s var(--ease-out) 0.9s backwards;
   }
 }
 
