@@ -363,7 +363,7 @@ describe('the one-time Mirza import, end to end', () => {
     const c = ctx.container;
     const actor = systemJobActor('mirza-e2e-cleanup', 'corr-mirza-e2e' as CorrelationId);
     const scheduler = new LegacyCleanupScheduler({
-      repository: new DrizzleLegacyCompactionRepository(c.database.db),
+      repository: new DrizzleLegacyCompactionRepository(c.database.db, c.database.pool),
       service: c.legacyCompaction,
       backupDestination: async () => 'DEDICATED_CHAT',
       opsLog: c.opsLog,
@@ -374,7 +374,7 @@ describe('the one-time Mirza import, end to end', () => {
     await scheduler.tick();
     const backupId = '00000000-0000-4000-8000-00000000e2e1';
     const executor = new LegacyCompactionExecutor({
-      repository: new DrizzleLegacyCompactionRepository(c.database.db),
+      repository: new DrizzleLegacyCompactionRepository(c.database.db, c.database.pool),
       uow: c.uow,
       audit: c.audit,
       opsLog: c.opsLog,

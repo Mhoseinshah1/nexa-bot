@@ -13,6 +13,7 @@ import type { BackupOutcome } from '../../backup/application/backup.service.js';
 import type { BackupRunPartRow } from '../../backup/application/ports.js';
 import type { CompactionSizes, LegacyCompactionRepository, LegacyCompactionRow } from './ports.js';
 import { COMPACTION_STRIP_KEYS, compactionDropTypes } from './read-map.js';
+import { errorDiagnostics } from '../../legacy-migration/domain/error-diagnostics.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 // ---------------------------------------------------------------------------
@@ -110,7 +111,7 @@ export class LegacyCompactionExecutor {
           await this.deps.automatic.tick();
         } catch (error) {
           this.deps.logger.warn(
-            { err: error instanceof Error ? error.message : String(error) },
+            { err: errorDiagnostics(error) },
             'the automatic legacy cleanup could not be scheduled this tick',
           );
         }
@@ -125,10 +126,7 @@ export class LegacyCompactionExecutor {
       if (run === null) return null;
       return await this.drive(run);
     } catch (error) {
-      this.deps.logger.error(
-        { err: error instanceof Error ? error.message : String(error) },
-        'legacy compaction tick failed',
-      );
+      this.deps.logger.error({ err: errorDiagnostics(error) }, 'legacy compaction tick failed');
       return null;
     } finally {
       this.ticking = false;
@@ -172,7 +170,7 @@ export class LegacyCompactionExecutor {
         compactionId: run.id,
         state: run.state,
         attempts,
-        err: error instanceof Error ? error.message : String(error),
+        err: errorDiagnostics(error),
       },
       'a legacy compaction stage failed',
     );
@@ -196,7 +194,7 @@ export class LegacyCompactionExecutor {
               this.deps.logger.warn(
                 {
                   compactionId: run.id,
-                  err: error instanceof Error ? error.message : String(error),
+                  err: errorDiagnostics(error),
                 },
                 'a legacy compaction heartbeat failed',
               );
@@ -531,7 +529,7 @@ export class LegacyCompactionExecutor {
       });
     } catch (error) {
       this.deps.logger.warn(
-        { err: error instanceof Error ? error.message : String(error) },
+        { err: errorDiagnostics(error) },
         'could not record a legacy compaction notice',
       );
     }

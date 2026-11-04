@@ -1,4 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
+import { escapeIdentifier, type PoolClient } from 'pg';
 import type {
   LegacyCleanupClearedTable,
   LegacyCompactionFailureCode,
@@ -97,7 +98,14 @@ const textArray = (values: readonly string[]): SQL =>
   )}]::text[]`;
 
 export class DrizzleLegacyCompactionRepository implements LegacyCompactionRepository {
-  constructor(private readonly db: Database) {}
+  /**
+   * `maintenance` hands out the dedicated connection `vacuum()` runs on (a `pg` pool, or a
+   * `DatabaseHandle.pool`): it is not the query path, so it never touches `db`'s timeouts.
+   */
+  constructor(
+    private readonly db: Database,
+    private readonly maintenance: { connect(): Promise<PoolClient> },
+  ) {}
 
   async latest(tenantId: string, tx?: Executor): Promise<LegacyCompactionRow | null> {
     const rows = await (tx ?? this.db).execute<Raw>(sql`
@@ -530,12 +538,30 @@ export class DrizzleLegacyCompactionRepository implements LegacyCompactionReposi
    * VACUUM FULL of the compacted tables. Outside any transaction (PostgreSQL refuses one
    * inside), and it takes an ACCESS EXCLUSIVE lock on each table for its duration: the
    * legacy history pages wait while it runs — the maintenance window the UI announces.
+   *
+   * On its OWN connection with `statement_timeout = 0`: the ordinary pool caps a statement
+   * at DATABASE_STATEMENT_TIMEOUT_MS (15 s), which a VACUUM FULL of a multi-GB table never
+   * meets — v0.9.7's runs were cancelled (57014) at this stage and FAILED. `lock_timeout`
+   * is left as the connection option set it, so a VACUUM that cannot get its lock fails
+   * (55P03) and the stage is retried. The connection is destroyed afterwards, never
+   * returned to the pool, so nothing else inherits the unlimited timeout.
+   *
+   * Resuming: a retry (or a new request after FAILED) vacuums a table again even if it
+   * already succeeded. That is cheap — by then the table holds only its live,
+   * post-compaction rows — so no per-table progress is recorded.
    */
   async vacuum(): Promise<void> {
-    await this.db.execute(sql`VACUUM (FULL, ANALYZE) legacy_history_records`);
-    // v0.9.7: the tables CLEARING emptied give their space back too.
-    for (const table of LEGACY_CLEANUP_CLEARED_TABLES) {
-      await this.db.execute(sql`VACUUM (FULL, ANALYZE) ${sql.identifier(table)}`);
+    const client = await this.maintenance.connect();
+    try {
+      await client.query('SET statement_timeout = 0');
+      await client.query(`VACUUM (FULL, ANALYZE) ${escapeIdentifier('legacy_history_records')}`);
+      // v0.9.7: the tables CLEARING emptied give their space back too.
+      for (const table of LEGACY_CLEANUP_CLEARED_TABLES) {
+        await client.query(`VACUUM (FULL, ANALYZE) ${escapeIdentifier(table)}`);
+      }
+    } finally {
+      // `true`: destroy the connection (it carries the session-level override).
+      client.release(true);
     }
   }
 }

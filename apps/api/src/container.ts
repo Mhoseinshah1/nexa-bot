@@ -8267,7 +8267,10 @@ export function createContainer(
     verifyStepUp: (scope, actor, stepUp, context, action) =>
       adminManagement.verifyStepUp(scope, actor, stepUp, context, action),
   });
-  const legacyCompactionRepository = new DrizzleLegacyCompactionRepository(database.db);
+  const legacyCompactionRepository = new DrizzleLegacyCompactionRepository(
+    database.db,
+    database.pool,
+  );
   const legacyCompaction = new LegacyCompactionService({
     repository: legacyCompactionRepository,
     uow,
