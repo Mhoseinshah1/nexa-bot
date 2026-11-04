@@ -1,3 +1,4 @@
+import type { OwnerExportAlerts } from '../../../platform/owner-alerts/application/ports.js';
 import {
   COMMERCE_ERROR_CODES,
   GIFT_CARD_EXPIRY_MAX_LEAD_MS,
@@ -57,6 +58,8 @@ export const GIFT_CARD_BATCH_EXPORT_ACTION = 'gift_card.batch.export';
 export const GIFT_CARD_BATCH_DISABLE_ACTION = 'gift_card.batch.disable';
 
 export interface GiftCardAdminServiceDeps {
+  /** Phase 6A D0: announces every export to the installation owner before it leaves. */
+  readonly ownerAlerts?: OwnerExportAlerts;
   readonly repository: GiftCardRepository;
   readonly sealer: GiftCardExportSealer;
   readonly csv: GiftCardCsvRenderer;
@@ -378,6 +381,11 @@ export class GiftCardAdminService {
       },
     );
     const file = await this.deps.csv.render(scope, opened.batch, opened.codes);
+    await this.deps.ownerAlerts?.dataExported(scope, actor, {
+      kind: 'GIFT_CARD_CODES',
+      rows: opened.codes.length,
+      format: 'csv',
+    });
     return { batch: opened.batch, count: opened.codes.length, ...file };
   }
 

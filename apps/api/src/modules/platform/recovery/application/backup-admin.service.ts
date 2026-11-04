@@ -1,3 +1,4 @@
+import type { OwnerExportAlerts } from '../../owner-alerts/application/ports.js';
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -43,6 +44,8 @@ export const BACKUP_RUN: PermissionKey = 'backup.run';
 export const BACKUP_DOWNLOAD: PermissionKey = 'backup.download';
 
 export interface BackupAdminServiceDeps {
+  /** Phase 6A D0: announces every export to the installation owner before it leaves. */
+  readonly ownerAlerts?: OwnerExportAlerts;
   readonly runs: BackupRunRepository & BackupRunPartStore;
   /** Whether an owner-set backup password is stored (E4). Never the password. */
   readonly archivePassword: (
@@ -337,6 +340,11 @@ export class BackupAdminService {
     // `Content-Disposition` assembled from a stored string is a header-injection
     // surface, and a uuid cannot carry a quote, a newline or a semicolon.
     const extension = run.archiveFormat === 'SEVEN_ZIP' ? '7z' : 'nxb';
+    await this.deps.ownerAlerts?.dataExported(scope, actor, {
+      kind: 'BACKUP_ARCHIVE',
+      rows: null,
+      format: part === null ? extension : `${extension} part ${String(part)}`,
+    });
     return {
       path,
       filename: `nexa-backup-${run.id}.${extension}${partName ?? ''}`,

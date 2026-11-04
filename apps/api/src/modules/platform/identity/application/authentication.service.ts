@@ -61,6 +61,17 @@ export type { ThrottlePolicy } from './credential-throttle.js';
  *      request, so a revoked role stops applying immediately.
  */
 
+/** Phase 6A D0: the one call a sign-in makes to the owner's security alerts. */
+export interface OwnerLoginAlerts {
+  signedIn(
+    scope: TenantContext,
+    actor: ActorContext,
+    admin: { readonly id: string; readonly username: string },
+    ip: string | null,
+    tx: unknown,
+  ): Promise<void>;
+}
+
 export interface LoginContext {
   /**
    * The subject to throttle by IP, already resolved against the trusted-proxy
@@ -144,6 +155,11 @@ export class AuthenticationService {
     private readonly tenants: TenantStatusReader,
     private readonly permissions: EffectivePermissionReader,
     private readonly secondFactor: SecondFactorDependencies,
+    /**
+     * Phase 6A D0: the owner's new-address alert, written in the transaction that mints the
+     * session. Null in a graph that has no operations projection (some tests).
+     */
+    private readonly ownerAlerts: OwnerLoginAlerts | null = null,
   ) {}
 
   /**
@@ -650,6 +666,16 @@ export class AuthenticationService {
         },
         result: 'SUCCESS',
       },
+      tx,
+    );
+
+    // Phase 6A D0: remember the address and, when it is new for an administrator who had
+    // others, tell the installation owner — committing with the session or not at all.
+    await this.ownerAlerts?.signedIn(
+      scope,
+      identifiedActor,
+      { id: credentials.admin.id, username: credentials.admin.username },
+      context.ip,
       tx,
     );
 
