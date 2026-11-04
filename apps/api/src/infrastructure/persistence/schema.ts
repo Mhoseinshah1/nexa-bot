@@ -1433,6 +1433,81 @@ export const adminLoginThrottle = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Owner security alerts — Phase 6A D0
+// ---------------------------------------------------------------------------
+
+/**
+ * The addresses each administrator has signed in to the Web Admin from (Phase 6A D0).
+ *
+ * A sign-in from an address NOT in this table, for an administrator who already has a row,
+ * is `auth.login_new_ip` in the installation owner's operations group. The first sign-in an
+ * administrator ever makes only remembers its address: an owner told about every new
+ * account's first login would learn to ignore the alert. Written in the transaction that
+ * mints the session, so a remembered address always belongs to a session that exists.
+ *
+ * Only addresses the trusted-proxy configuration lets the API believe are recorded; an
+ * unbelievable one (null) is neither remembered nor alerted on. Tenant-owned, so row-level
+ * security covers it like every admin table.
+ */
+export const adminKnownIps = pgTable(
+  'admin_known_ips',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id').notNull(),
+    ip: text('ip').notNull(),
+    firstSeenAt: timestamptz('first_seen_at').notNull(),
+    lastSeenAt: timestamptz('last_seen_at').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'admin_known_ips_pkey',
+      columns: [table.tenantId, table.adminId, table.ip],
+    }),
+    foreignKey({
+      name: 'admin_known_ips_tenant_admin_fk',
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check('admin_known_ips_ip_check', sql`length(ip) BETWEEN 2 AND 64`),
+  ],
+);
+
+/**
+ * How many rows each administrator read through the Web Admin in one fixed window
+ * (Phase 6A D0, `security.bulk_read_*`). One row per (admin, window start); the window is
+ * half-open `[window_start, window_start + length)`. `alerted_at` is set by the one increment
+ * that crossed the threshold, so a window is announced to the owner at most once. Rows older
+ * than a day are removed by the next read of the same administrator.
+ */
+export const adminReadWindows = pgTable(
+  'admin_read_windows',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id').notNull(),
+    windowStart: timestamptz('window_start').notNull(),
+    rowsRead: bigint('rows_read', { mode: 'number' }).notNull().default(0),
+    alertedAt: timestamptz('alerted_at'),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'admin_read_windows_pkey',
+      columns: [table.tenantId, table.adminId, table.windowStart],
+    }),
+    foreignKey({
+      name: 'admin_read_windows_tenant_admin_fk',
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check('admin_read_windows_rows_check', sql`rows_read >= 0`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Admin security — Phase D2 (program §17)
 // ---------------------------------------------------------------------------
 
