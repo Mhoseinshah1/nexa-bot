@@ -1526,6 +1526,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.summary':
     '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} شناسه کاربری: <code>{telegramId}</code>\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت‌نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس‌های خریداری‌شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت‌شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه‌های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
   'bot.wallet.phone_missing': '🔴 ارسال نشده است',
+  'bot.wallet.phone_verified': '{icon:success} ثبت شده',
+  'bot.wallet.phone_admin_verified': '{icon:success} تأیید توسط مدیر',
+  'bot.wallet.phone_not_accepted': '{icon:warning} ثبت شده، مجاز نیست',
   'bot.wallet.group_customer': 'کاربر عادی',
   'bot.wallet.group_reseller': 'نماینده',
   // R4 A3: copies the numeric Telegram id.

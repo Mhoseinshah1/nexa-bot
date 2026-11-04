@@ -101,6 +101,37 @@ export interface PreinvoiceFacts {
   } | null;
 }
 
+/**
+ * The phone line of the account screen. The number itself is never shown.
+ * NOT_ACCEPTED (a shared non-Iranian number) is stored by PR-2; nothing maps to it yet.
+ */
+export type WalletPhoneState = 'CUSTOMER_VERIFIED' | 'ADMIN_VERIFIED' | 'NOT_ACCEPTED' | 'NONE';
+
+const WALLET_PHONE_TEMPLATE: Record<WalletPhoneState, TemplateKey> = {
+  CUSTOMER_VERIFIED: 'bot.wallet.phone_verified',
+  ADMIN_VERIFIED: 'bot.wallet.phone_admin_verified',
+  NOT_ACCEPTED: 'bot.wallet.phone_not_accepted',
+  NONE: 'bot.wallet.phone_missing',
+};
+
+/**
+ * Nothing on the row tells an operator-recorded number from the customer's own share (both
+ * write `phone_verified_at`; only the audit action differs), so the exemption is what marks
+ * the operator's hand. An exempt customer reads «تأیید توسط مدیر» even with a number; any
+ * other verified number reads as the customer's own.
+ */
+export function walletPhoneState(customer: {
+  readonly phoneNumber: string | null;
+  readonly phoneVerifiedAt: Date | null;
+  readonly phoneVerificationExemptAt: Date | null;
+}): WalletPhoneState {
+  if (customer.phoneVerificationExemptAt !== null) return 'ADMIN_VERIFIED';
+  if (customer.phoneNumber !== null && customer.phoneVerifiedAt !== null) {
+    return 'CUSTOMER_VERIFIED';
+  }
+  return 'NONE';
+}
+
 export interface WalletSummaryFacts {
   readonly telegramId: string;
   readonly displayName: string;
@@ -110,6 +141,7 @@ export interface WalletSummaryFacts {
   readonly paidInvoiceCount: number;
   readonly referralCount: number;
   readonly group: 'CUSTOMER' | 'RESELLER';
+  readonly phone: WalletPhoneState;
   /**
    * Owner spec §3: the moment the screen is drawn, from the `Clock` — shown as today's date
    * and the time of day in the tenant's zone and calendar. Never the registration and never
@@ -356,8 +388,7 @@ export class CustomerScreenComposer {
       values: {
         telegramId: facts.telegramId,
         displayName: facts.displayName,
-        // Always "not sent": this installation stores no phone number and asks for none.
-        phoneState: await this.templates.render(scope, 'bot.wallet.phone_missing', {}),
+        phoneState: await this.templates.render(scope, WALLET_PHONE_TEMPLATE[facts.phone], {}),
         registeredAt: facts.registeredAt,
         balance: facts.balance,
         serviceCount: facts.serviceCount,

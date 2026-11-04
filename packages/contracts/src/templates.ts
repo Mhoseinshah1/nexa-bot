@@ -12002,8 +12002,10 @@ export const TEMPLATES = [
       'The wallet screen: the customer’s account summary. Every figure is read on render ' +
       'from rows: the Telegram id and names from the customer row, the balance from the ' +
       'ledger, the counts from services, payments and referrals, the group from the ' +
-      'reseller standing. The phone line is `bot.wallet.phone_missing` because this ' +
-      'installation stores no phone number and asks for none. TELEGRAM_HTML since R4 A3, so ' +
+      'reseller standing. The phone line is one of `bot.wallet.phone_verified`, ' +
+      '`bot.wallet.phone_admin_verified`, `bot.wallet.phone_not_accepted` or ' +
+      '`bot.wallet.phone_missing`, read from the customer row; the number itself is never ' +
+      'shown. TELEGRAM_HTML since R4 A3, so ' +
       'the Telegram id is in <code> and copies on tap; every value is HTML-escaped.',
     format: 'TELEGRAM_HTML',
     placeholders: [
@@ -12024,7 +12026,8 @@ export const TEMPLATES = [
       {
         token: 'phoneState',
         type: 'STRING',
-        description: 'Rendered `bot.wallet.phone_missing`.',
+        description:
+          'The rendered phone line: one of the four `bot.wallet.phone_*` templates, never the number.',
         required: true,
         repeatable: false,
       },
@@ -12093,7 +12096,26 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.wallet.phone_missing',
-    description: 'The phone line when no number is stored — always, in this release.',
+    description: 'The phone line when the customer has shared no number and is not exempt.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.phone_verified',
+    description: 'The phone line when the customer verified their own number. Never shows it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.phone_admin_verified',
+    description: 'The phone line when an operator exempted the customer from phone verification.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.phone_not_accepted',
+    description:
+      'The phone line when the customer shared a number the installation does not accept (a non-Iranian number while only +98 is allowed).',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
