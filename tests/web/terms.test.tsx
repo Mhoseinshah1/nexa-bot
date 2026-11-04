@@ -262,6 +262,7 @@ describe('Customer 360’s terms line', () => {
     channelMembershipExemptAt: null,
     phoneVerificationExemptAt: null,
     phone: null,
+    phoneNotAccepted: null,
     locationOverride: null,
     marketingOptOutAt: null,
     personalDiscount: { percent: 0, setAt: null, enabled: false },
