@@ -508,7 +508,10 @@ describe('legacy trial eligibility', () => {
        WHERE tenant_id = ${tenantA.tenantId} AND customer_id = ${operatorClosed}`);
     expect(await claim(imported)).toEqual({ outcome: 'REFUSED', reason: 'LIMIT_REACHED' });
 
-    const repository = new DrizzleLegacyCompactionRepository(ctx.container.database.db);
+    const repository = new DrizzleLegacyCompactionRepository(
+      ctx.container.database.db,
+      ctx.container.database.pool,
+    );
     const run = randomUUID();
     await ctx.container.database.db.execute(sql`
       INSERT INTO legacy_compaction_runs (id, tenant_id, state, requested_at, updated_at)

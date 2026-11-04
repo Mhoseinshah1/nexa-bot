@@ -216,17 +216,30 @@ describe('the automatic cleanup after an import (v0.9.7)', () => {
     ({ customer, service, archiveId } = await workingRows(tenantA.tenantId as string, TG));
   }, 120_000);
 
-  function executor(options: { parts?: readonly Partial<BackupRunPartRow>[] } = {}): {
+  function executor(
+    options: {
+      parts?: readonly Partial<BackupRunPartRow>[];
+      /** The VACUUM stage throws (as v0.9.7's did, cancelled by the statement timeout). */
+      vacuumFails?: boolean;
+    } = {},
+  ): {
     executor: LegacyCompactionExecutor;
     titles: string[];
   } {
     const titles: string[] = [];
     const backupId = randomUUID();
     const c = ctx.container;
+    const repository = new DrizzleLegacyCompactionRepository(c.database.db, c.database.pool);
+    if (options.vacuumFails === true) {
+      repository.vacuum = async () => {
+        throw new Error('canceling statement due to statement timeout');
+      };
+    }
     return {
       titles,
       executor: new LegacyCompactionExecutor({
-        repository: new DrizzleLegacyCompactionRepository(c.database.db),
+        repository,
+        ...(options.vacuumFails === true ? { maxStepAttempts: 1 } : {}),
         uow: c.uow,
         audit: c.audit,
         opsLog: c.opsLog,
@@ -279,7 +292,7 @@ describe('the automatic cleanup after an import (v0.9.7)', () => {
   function scheduler(destination: () => BackupDeliveryDestination = () => 'DEDICATED_CHAT') {
     const c = ctx.container;
     return new LegacyCleanupScheduler({
-      repository: new DrizzleLegacyCompactionRepository(c.database.db),
+      repository: new DrizzleLegacyCompactionRepository(c.database.db, c.database.pool),
       service: c.legacyCompaction,
       backupDestination: async () => destination(),
       opsLog: c.opsLog,
@@ -497,6 +510,33 @@ describe('the automatic cleanup after an import (v0.9.7)', () => {
     expect((await runs()).map((row) => row.state)).toEqual(['FAILED', 'REQUESTED']);
   });
 
+  it('finishes, the next day, a run that FAILED at VACUUMING (rows already cleared)', async () => {
+    await nxpkgImport({
+      status: 'COMPLETED',
+      finishedAt: new Date(nowMs - 60_000),
+      reconciliation: CLEAN,
+    });
+    await scheduler().tick();
+    const failing = executor({ vacuumFails: true });
+    const failed = await failing.executor.tick();
+    expect(failed?.state).toBe('FAILED');
+    expect(failed?.failureCode).toBe('legacy_compaction.step_failed');
+    // The archive was delivered and the cleared tables are already empty.
+    expect(failing.titles).toEqual([LEGACY_COMPACTION_ARCHIVE_TITLE]);
+    expect(await working()).toEqual({ map: 0, candidates: 0, trials: 0, staging: 3, archive: 1 });
+
+    // The automatic scheduler retries a FAILED run after a day (a new day's idempotency key):
+    // a new archive, nothing left to clear, the real vacuum, and the run ends COMPLETED.
+    nowMs += 25 * 60 * 60_000;
+    await scheduler().tick();
+    expect((await runs()).map((row) => row.state)).toEqual(['FAILED', 'REQUESTED']);
+    const retry = executor();
+    const ended = await retry.executor.tick();
+    expect(ended?.state).toBe('COMPLETED');
+    expect(retry.titles).toEqual([LEGACY_COMPACTION_ARCHIVE_TITLE]);
+    expect((await runs()).map((row) => row.state)).toEqual(['FAILED', 'COMPLETED']);
+  }, 120_000);
+
   it('resumes the clearing after the last committed batch', async () => {
     await nxpkgImport({
       status: 'COMPLETED',
@@ -504,7 +544,7 @@ describe('the automatic cleanup after an import (v0.9.7)', () => {
       reconciliation: CLEAN,
     });
     await scheduler().tick();
-    const repository = new DrizzleLegacyCompactionRepository(db());
+    const repository = new DrizzleLegacyCompactionRepository(db(), ctx.container.database.pool);
     const claimed = await repository.claim({
       leaseOwner: 'test:cleanup',
       now: new Date(),

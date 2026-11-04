@@ -62,7 +62,9 @@ The owner refused a manual «پایان انتقال» button. The worker reques
 7. **VACUUMING** — `VACUUM (FULL, ANALYZE)` of `legacy_history_records` and the four cleared
    tables. **Maintenance window**: it takes an ACCESS EXCLUSIVE lock,
    so the legacy history pages wait; the Web Admin card says so, and
-   `maintenance.legacy_compaction_vacuum` is recorded.
+   `maintenance.legacy_compaction_vacuum` is recorded. It runs on its own connection without
+   the statement timeout (`lock_timeout` kept), because a VACUUM FULL of a multi-GB table cannot
+   finish within `DATABASE_STATEMENT_TIMEOUT_MS` (15 s default), which failed v0.9.7's runs.
 8. **COMPLETED** — the "after" sizes and counts beside the "before" on the card, and the
    operations group's `maintenance.legacy_compaction_completed` carries `sizes`
    (`history 1952→410 · map 162→0 · …`, MiB).

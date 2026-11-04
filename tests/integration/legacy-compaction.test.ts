@@ -11,10 +11,12 @@ import {
   createAdmin,
   createTestContext,
   tenantA,
+  testConfig,
   type TestContext,
 } from './harness';
 import { LegacyCompactionExecutor } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-compaction.executor';
 import { DrizzleLegacyCompactionRepository } from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
+import { createDatabase } from '../../apps/api/src/infrastructure/persistence/database';
 import { lockLegacyImportExclusion } from '../../apps/api/src/infrastructure/persistence/legacy-import-exclusion';
 import type { BackupRunPartRow } from '../../apps/api/src/modules/platform/backup/application/ports';
 
@@ -111,7 +113,7 @@ describe('the legacy data compaction (E1)', () => {
     return {
       titles,
       executor: new LegacyCompactionExecutor({
-        repository: new DrizzleLegacyCompactionRepository(c.database.db),
+        repository: new DrizzleLegacyCompactionRepository(c.database.db, c.database.pool),
         uow: c.uow,
         audit: c.audit,
         opsLog: c.opsLog,
@@ -312,7 +314,10 @@ describe('the legacy data compaction (E1)', () => {
   it('resumes after the last committed batch, without redoing it', async () => {
     for (let index = 0; index < 5; index += 1) await history('agent_usage', { n: index });
     await request();
-    const repository = new DrizzleLegacyCompactionRepository(ctx.container.database.db);
+    const repository = new DrizzleLegacyCompactionRepository(
+      ctx.container.database.db,
+      ctx.container.database.pool,
+    );
     // A worker that claimed, archived and measured, then died after one batch.
     const { executor: first } = executor({ parts: [{}] });
     const claimed = await repository.claim({
@@ -523,7 +528,10 @@ describe('the legacy data compaction (E1)', () => {
   it('an import start and a compaction start both wait on the same per-tenant lock', async () => {
     await request();
     const [run] = await q<{ id: string }>(sql`SELECT id FROM legacy_compaction_runs`);
-    const repository = new DrizzleLegacyCompactionRepository(ctx.container.database.db);
+    const repository = new DrizzleLegacyCompactionRepository(
+      ctx.container.database.db,
+      ctx.container.database.pool,
+    );
     await repository.claim({
       leaseOwner: 'test:compaction',
       now: new Date(),
@@ -561,6 +569,32 @@ describe('the legacy data compaction (E1)', () => {
       code: PLATFORM_ERROR_CODES.LEGACY_COMPACTION_ACTIVE,
     });
   });
+
+  it('vacuums on its own connection, whatever the pool statement timeout is', async () => {
+    // Enough rows that a VACUUM FULL takes far longer than the 50 ms the pool allows.
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO legacy_history_records
+        (id, tenant_id, nxpkg_import_id, package_import_id, record_type, idempotency_key, payload, created_at)
+      SELECT u, ${tenantA.tenantId}::uuid, ${importId}::uuid, 'pkg-1', 'agent_log',
+             'legacy:agent_log:' || u, jsonb_build_object('n', g, 'pad', repeat('x', 200)), now()
+        FROM (SELECT gen_random_uuid() AS u, g FROM generate_series(1, 150000) AS g) AS s`);
+    const tiny = createDatabase(testConfig().DATABASE_URL, 2, {
+      statementTimeoutMs: 50,
+      lockTimeoutMs: 5000,
+      idleInTransactionTimeoutMs: 60_000,
+    });
+    try {
+      const repository = new DrizzleLegacyCompactionRepository(tiny.db, tiny.pool);
+      await expect(repository.vacuum()).resolves.toBeUndefined();
+      // The unlimited timeout stayed on the destroyed connection: a fresh checkout has 50ms.
+      const shown = await tiny.pool.query<{ statement_timeout: string }>('SHOW statement_timeout');
+      expect(shown.rows[0]?.statement_timeout).toBe('50ms');
+      // And the same VACUUM through the ordinary path IS cancelled: the test has teeth.
+      await expect(tiny.db.execute(sql`VACUUM (FULL) legacy_history_records`)).rejects.toThrow();
+    } finally {
+      await tiny.pool.end();
+    }
+  }, 120_000);
 
   /** A valid `legacy_invoice_archive` row (the fixture `legacy-customer-invoices.test.ts` uses). */
   async function insertInvoiceTwin(invoiceKey: string): Promise<void> {
