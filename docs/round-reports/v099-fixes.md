@@ -7,13 +7,13 @@ on the exact head. Per-PR detail is in each PR description.
 
 ## PRs (all merged, as merge commits)
 
-| Order | PR   | Branch                                          | Merge              | Codex            |
-| ----- | ---- | ----------------------------------------------- | ------------------ | ---------------- |
-| 1     | #403 | `fix/v099-phone-state-and-chart-draw`           | `39c9de364`        | nothing found    |
-| 2     | #404 | `fix/v099-iran-only-stores-number`              | `f9cded789`        | 1 finding, fixed |
-| 3     | #405 | `feat/v099-webadmin-customer-and-payment-pages` | `699770e61`        | nothing found    |
-| 4     | #406 | `feat/v099-server-step`                         | `79c03b93b`        | nothing found    |
-| 5     | #407 | `fix/v099-miniapp-layout`                       | `<PR-4 merge sha>` | -                |
+| Order | PR   | Branch                                          | Merge       | Codex            |
+| ----- | ---- | ----------------------------------------------- | ----------- | ---------------- |
+| 1     | #403 | `fix/v099-phone-state-and-chart-draw`           | `39c9de364` | nothing found    |
+| 2     | #404 | `fix/v099-iran-only-stores-number`              | `f9cded789` | 1 finding, fixed |
+| 3     | #405 | `feat/v099-webadmin-customer-and-payment-pages` | `699770e61` | nothing found    |
+| 4     | #406 | `feat/v099-server-step`                         | `79c03b93b` | nothing found    |
+| 5     | #407 | `fix/v099-miniapp-layout`                       | `5424458e5` | 1 finding, fixed |
 
 Migration: `0314_customer_phone_not_accepted` (#404 only).
 
@@ -90,6 +90,8 @@ Migration: `0314_customer_phone_not_accepted` (#404 only).
 - Store: step by step, category → plan, or server → category → plan when `step` is true.
 - Service cards: a toned status chip, a thicker usage bar, used/total and days left, and an ended
   service muted.
+- Codex finding, fixed in `892862a22`: the service-figures row did not wrap, so an expired card's
+  «پایان: …» could overflow a narrow phone. The row wraps again, and a layout test pins it.
 
 ## Decisions taken
 
