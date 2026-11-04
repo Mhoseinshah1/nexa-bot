@@ -11,6 +11,7 @@ import {
   createAdmin,
   createTestContext,
   tenantA,
+  testConfig,
   type TestContext,
 } from './harness';
 import { LegacyCompactionExecutor } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-compaction.executor';
@@ -577,9 +578,7 @@ describe('the legacy data compaction (E1)', () => {
       SELECT u, ${tenantA.tenantId}::uuid, ${importId}::uuid, 'pkg-1', 'agent_log',
              'legacy:agent_log:' || u, jsonb_build_object('n', g, 'pad', repeat('x', 200)), now()
         FROM (SELECT gen_random_uuid() AS u, g FROM generate_series(1, 150000) AS g) AS s`);
-    const url = process.env['TEST_DATABASE_URL'] ?? process.env['DATABASE_URL'];
-    if (url === undefined) throw new Error('no test database url');
-    const tiny = createDatabase(url, 2, {
+    const tiny = createDatabase(testConfig().DATABASE_URL, 2, {
       statementTimeoutMs: 50,
       lockTimeoutMs: 5000,
       idleInTransactionTimeoutMs: 60_000,
