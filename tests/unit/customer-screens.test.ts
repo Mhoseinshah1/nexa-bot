@@ -7,7 +7,11 @@ import {
   type TemplateValues,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, renderTemplateBody, DEFAULT_TEMPLATE_PRESENTATION } from '@nexa/i18n';
-import { CustomerScreenComposer } from '../../apps/api/src/modules/commerce/messaging/application/customer-screens';
+import {
+  CustomerScreenComposer,
+  walletPhoneState,
+  type WalletPhoneState,
+} from '../../apps/api/src/modules/commerce/messaging/application/customer-screens';
 import { appearanceFallbackText } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 
 /**
@@ -153,6 +157,7 @@ describe('the wallet summary', () => {
       paidInvoiceCount: 4,
       referralCount: 2,
       group: 'CUSTOMER',
+      phone: 'NONE',
       now: new Date('2026-10-02T19:52:00Z'),
     });
     expect(screen.key).toBe('bot.wallet.summary');
@@ -192,9 +197,57 @@ describe('the wallet summary', () => {
       paidInvoiceCount: 0,
       referralCount: 0,
       group: 'RESELLER',
+      phone: 'NONE',
       now: new Date('2026-10-02T19:52:00Z'),
     });
     expect(render(screen.key, screen.values)).toContain('🔖 گروه کاربری: نماینده');
+  });
+});
+
+describe('the wallet summary phone line', () => {
+  const phoneLine = async (phone: WalletPhoneState): Promise<string> => {
+    const screen = await composer.walletSummary(scope, {
+      telegramId: '1',
+      displayName: 'x',
+      registeredAt: new Date('2026-09-01T08:00:00Z'),
+      balance: money(0n, 'IRT'),
+      serviceCount: 0,
+      paidInvoiceCount: 0,
+      referralCount: 0,
+      group: 'CUSTOMER',
+      phone,
+      now: new Date('2026-10-02T19:52:00Z'),
+    });
+    return render(screen.key, screen.values)
+      .split('\n')
+      .filter((l) => l.startsWith('📱'))
+      .join('');
+  };
+
+  it.each([
+    ['CUSTOMER_VERIFIED', '📱 شماره تماس: ✅ ثبت شده'],
+    ['ADMIN_VERIFIED', '📱 شماره تماس: ✅ تأیید توسط مدیر'],
+    ['NOT_ACCEPTED', '📱 شماره تماس: ⚠️ ثبت شده، مجاز نیست'],
+    ['NONE', '📱 شماره تماس: 🔴 ارسال نشده است'],
+  ] as const)('renders %s', async (state, line) => {
+    expect(await phoneLine(state)).toBe(line);
+  });
+
+  it('derives the state from the customer row, exemption first, never from a bare number', () => {
+    const at = new Date('2026-10-01T00:00:00Z');
+    const row = { phoneNumber: null, phoneVerifiedAt: null, phoneVerificationExemptAt: null };
+    expect(walletPhoneState(row)).toBe('NONE');
+    expect(walletPhoneState({ ...row, phoneNumber: '+989121234567', phoneVerifiedAt: at })).toBe(
+      'CUSTOMER_VERIFIED',
+    );
+    expect(walletPhoneState({ ...row, phoneVerificationExemptAt: at })).toBe('ADMIN_VERIFIED');
+    expect(
+      walletPhoneState({
+        phoneNumber: '+989121234567',
+        phoneVerifiedAt: at,
+        phoneVerificationExemptAt: at,
+      }),
+    ).toBe('ADMIN_VERIFIED');
   });
 });
 

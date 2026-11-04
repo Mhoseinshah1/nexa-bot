@@ -7,6 +7,7 @@ import {
   type PaymentGatewayProvider,
   type TenantContext,
 } from '@nexa/contracts';
+import { walletPhoneState } from '../../../modules/commerce/messaging/application/customer-screens.js';
 import type { CustomerButton } from '../../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../../modules/commerce/customers/application/ports.js';
 import {
@@ -233,6 +234,7 @@ export async function walletBalance(
     paidInvoiceCount: counters.paidInvoices,
     referralCount,
     group: reseller === null ? 'CUSTOMER' : 'RESELLER',
+    phone: walletPhoneState(customer),
     // Owner spec §3: when the screen was drawn, not when anything happened.
     now: rt.deps.clock.now(),
   });

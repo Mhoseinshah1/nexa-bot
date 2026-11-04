@@ -178,6 +178,7 @@ describe('§3 the account screen shows the moment it was drawn', () => {
         paidInvoiceCount: 0,
         referralCount: 0,
         group: 'CUSTOMER',
+        phone: 'NONE',
         now: new Date('2026-10-02T19:52:00Z'),
       },
     );
