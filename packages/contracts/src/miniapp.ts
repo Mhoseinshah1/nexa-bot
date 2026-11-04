@@ -195,7 +195,18 @@ export type MiniAppSessionResponse = z.infer<typeof miniAppSessionResponseSchema
  * bot. The mini app asks for the contact with `WebApp.requestContact()` where the client has it
  * (the contact arrives in the bot's chat and is verified there), and otherwise links to the bot.
  */
-export const MINIAPP_GATES = ['BLOCKED', 'CAPTCHA', 'CHANNELS', 'TERMS', 'PHONE'] as const;
+export const MINIAPP_GATES = [
+  'BLOCKED',
+  'CAPTCHA',
+  'CHANNELS',
+  'TERMS',
+  'PHONE',
+  /*
+   * NEXA v099 (owner): the same phone gate, for a customer whose own number is stored as NOT
+   * accepted (IRAN_ONLY, not +98): told so once more, never asked again.
+   */
+  'PHONE_NOT_ACCEPTED',
+] as const;
 export type MiniAppGate = (typeof MINIAPP_GATES)[number];
 
 const channelSchema = z.object({
@@ -225,6 +236,12 @@ export const miniAppMeResponseSchema = z.object({
       z.object({ kind: z.literal('CHANNELS'), channels: z.array(channelSchema) }),
       z.object({ kind: z.literal('TERMS'), terms: termsSchema }),
       z.object({ kind: z.literal('PHONE') }),
+      /*
+       * NEXA v099 (owner): the phone gate holds a customer whose own number was stored as NOT
+       * accepted (IRAN_ONLY, not +98). Nothing is asked again: the mini app shows the bot's
+       * `bot.phone.not_accepted` sentence instead of the contact button.
+       */
+      z.object({ kind: z.literal('PHONE_NOT_ACCEPTED') }),
     ])
     .nullable(),
   /**
@@ -233,6 +250,14 @@ export const miniAppMeResponseSchema = z.object({
    * verified-phone rule refused. Defaulted so a client built before it still parses.
    */
   phoneVerified: z.boolean().default(false),
+  /**
+   * NEXA v099 (owner): the customer's own number is stored as NOT accepted (IRAN_ONLY, not
+   * +98) and IRAN_ONLY is still on — so a route's verified-phone rule refuses them and asking
+   * for the contact again would change nothing. The mini app then shows the bot's
+   * `bot.phone.not_accepted` sentence instead of Telegram's contact dialog. Defaulted so a
+   * client built before it still parses.
+   */
+  phoneNotAccepted: z.boolean().default(false),
   /** Null while gated: nothing behind a gate is read for a customer held at one. */
   wallet: z.object({ balance: moneySchema }).nullable(),
   /** An ACTIVE reseller's standing; null for everybody else (SUSPENDED is an ordinary customer). */

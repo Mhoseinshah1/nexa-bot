@@ -6,6 +6,7 @@ import {
   TRIAL_ADMIN_REASON_MAX_LENGTH,
   type CustomerReferralResponse,
   type CustomerStatus,
+  type CustomerOverviewResponse,
   type CustomerSummaryResponse,
   type LedgerDirection,
   type OrderSummaryResponse,
@@ -80,6 +81,7 @@ import {
   Banner,
   Button,
   Card,
+  Copyable,
   IdText,
   Checkbox,
   CursorPager,
@@ -137,15 +139,16 @@ export type CustomerTab =
 /** The tabs in order; the messages tab only for a viewer who may read or send a message. */
 export function customerTabs(messages: boolean): { id: CustomerTab; label: string }[] {
   const all: { id: CustomerTab; label: WebKey }[] = [
+    // The five the owner named first, then the rest.
     { id: 'overview', label: 'web.c360_tab_overview' },
     { id: 'services', label: 'web.c360_tab_services' },
-    { id: 'support', label: 'web.c360_tab_support' },
     { id: 'financial', label: 'web.c360_tab_financial' },
     { id: 'controls', label: 'web.c360_tab_controls' },
+    { id: 'timeline', label: 'web.c360_tab_timeline' },
+    { id: 'support', label: 'web.c360_tab_support' },
     { id: 'relations', label: 'web.c360_tab_relations' },
     { id: 'messages', label: 'web.c360_tab_messages' },
     { id: 'crm', label: 'web.c360_tab_crm' },
-    { id: 'timeline', label: 'web.c360_tab_timeline' },
   ];
   return all
     .filter((item) => messages || item.id !== 'messages')
@@ -462,6 +465,7 @@ export function UserDetailPage({
             <UserHead
               row={row}
               exempt={controls !== undefined && controls.channelMembershipExemptAt !== null}
+              overview={controls}
               isReseller={isReseller === true}
             />
 
@@ -779,6 +783,12 @@ export function UserDetailPage({
                     mayEditLocation={mayEditLocation}
                     mayEditNotifications={mayEditNotifications}
                     mayEditPersonalDiscount={mayEditPersonalDiscount}
+                    account={{
+                      status: row.status === 'BLOCKED' ? 'BLOCKED' : 'ACTIVE',
+                      mayBlock,
+                      busy: mutate.isPending,
+                      onToggle: () => setPending(row.status === 'ACTIVE' ? 'BLOCK' : 'UNBLOCK'),
+                    }}
                   />
                   <TrialCard customerId={id} mayEdit={mayEditTrial} />
                 </div>
@@ -838,10 +848,12 @@ export function UserDetailPage({
 function UserHead({
   row,
   exempt,
+  overview,
   isReseller,
 }: {
   row: CustomerSummaryResponse;
   exempt: boolean;
+  overview: CustomerOverviewResponse | undefined;
   isReseller: boolean;
 }) {
   const name = displayName(row);
@@ -864,19 +876,19 @@ function UserHead({
           <StatusBadge status={row.status} />
           {isReseller && <Badge tone="teal">{t('web.c360_badge_reseller')}</Badge>}
           {exempt && <Badge tone="violet">{t('web.c360_channel_exempt')}</Badge>}
+          <PhoneChips overview={overview} />
         </>
       }
       meta={
         <>
           <span className="ca-meta">
             <span className="faint">{t('web.user_telegram_id')}</span>
-            {/* X7: the demo draws the id plain, without a copy icon. */}
-            <Ltr>{row.telegramUserId}</Ltr>
+            <Copyable value={row.telegramUserId} />
           </span>
           {row.username !== null && (
             <span className="ca-meta">
               <span className="faint">{t('web.user_username')}</span>
-              <Ltr>{`@${row.username}`}</Ltr>
+              <Copyable value={`@${row.username}`} />
             </span>
           )}
           <span className="ca-meta">
@@ -886,6 +898,30 @@ function UserHead({
         </>
       }
     />
+  );
+}
+
+/** The phone's state as chips in the head: verified, admin-verified, not accepted, or none. */
+function PhoneChips({ overview }: { overview: CustomerOverviewResponse | undefined }) {
+  if (overview === undefined) return null;
+  const notAccepted = overview.phoneNotAccepted;
+  return (
+    <>
+      {overview.phone !== null ? (
+        <Badge tone="ok">{t('web.c360_phone_verified')}</Badge>
+      ) : notAccepted !== null ? (
+        notAccepted.countsAsVerified ? (
+          <Badge tone="ok">{t('web.c360_phone_counts_verified')}</Badge>
+        ) : (
+          <Badge tone="warn">{t('web.c360_phone_not_accepted')}</Badge>
+        )
+      ) : (
+        <Badge tone="neutral">{t('web.c360_phone_none')}</Badge>
+      )}
+      {overview.phoneVerificationExemptAt !== null && (
+        <Badge tone="violet">{t('web.c360_phone_admin_verified')}</Badge>
+      )}
+    </>
   );
 }
 
@@ -920,8 +956,6 @@ function CustomerStatStrip({
   const purchases = orders?.purchases.reduce((sum, entry) => sum + entry.count, 0);
   return (
     <div className="stat-grid c360-stats" aria-label={t('web.c360_stats_label')} role="group">
-      <Stat label={t('web.user_first_seen')} value={formatTimestampNumeric(row.firstSeenAt)} />
-      <Stat label={t('web.user_last_seen')} value={formatTimestampNumeric(row.lastSeenAt)} />
       {mayViewWallet && (
         <Stat
           label={t('web.wallet_balance')}
@@ -940,6 +974,8 @@ function CustomerStatStrip({
       {purchases !== undefined && (
         <Stat label={t('web.c360_stat_purchases')} value={<Num value={purchases} />} />
       )}
+      <Stat label={t('web.user_first_seen')} value={formatTimestampNumeric(row.firstSeenAt)} />
+      <Stat label={t('web.user_last_seen')} value={formatTimestampNumeric(row.lastSeenAt)} />
       <Stat
         label={t('web.user_stat_trial_remaining')}
         value={remaining === undefined ? <Dash /> : <Num value={remaining} />}

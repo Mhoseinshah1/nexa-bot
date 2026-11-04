@@ -12,6 +12,7 @@ import {
   type CorrelationId,
   type CustomerArrival,
   type IdGenerator,
+  type PhoneAllowedNumbers,
   type ScopeContext,
   type TelegramChannel,
   type Tenant,
@@ -21,7 +22,10 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import type { CustomerRecord } from '../../customers/application/ports.js';
-import { phoneGateHolds } from '../../customers/application/phone-verification.service.js';
+import {
+  phoneGateHolds,
+  phoneGateOf,
+} from '../../customers/application/phone-verification.service.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import { verifyInitData } from '../domain/init-data.js';
 import type { MiniAppSessionRecord, MiniAppSessionRepository } from './ports.js';
@@ -73,6 +77,11 @@ export type MiniAppGateState =
     }
   /** NEXA v095 PR-4 A: `phone_verification` is on; no verified number and no exemption. */
   | { readonly kind: 'PHONE' }
+  /**
+   * NEXA v099 (owner): the same gate, for a customer whose own number is stored as NOT
+   * accepted while IRAN_ONLY is on — told so, never asked again (`phoneGateOf`).
+   */
+  | { readonly kind: 'PHONE_NOT_ACCEPTED' }
   | null;
 
 export interface MiniAppSessionServiceDeps {
@@ -132,7 +141,14 @@ export interface MiniAppSessionServiceDeps {
    * NEXA v095 PR-4 A: whether the bot-wide `phone_verification` gate is on. Absent (a narrow
    * fixture), nobody is held by it.
    */
-  readonly phoneGate?: { enabled(scope: TenantContext): Promise<boolean> };
+  readonly phoneGate?: {
+    enabled(scope: TenantContext): Promise<boolean>;
+    /**
+     * NEXA v099: `phone_verification.allowed_numbers`, which decides a number stored as not
+     * accepted. Absent (a narrow fixture): ALL, the default.
+     */
+    allowedNumbers?(scope: TenantContext): Promise<PhoneAllowedNumbers>;
+  };
   readonly telegramAdmins?: {
     resolve(
       scope: TenantContext,
@@ -387,15 +403,33 @@ export class MiniAppSessionService {
      * with `WebApp.requestContact()` (it arrives in the bot's chat and is verified there) or in
      * the bot itself.
      */
-    if (
-      this.deps.phoneGate !== undefined &&
-      phoneGateHolds(customer) &&
-      (await this.deps.phoneGate.enabled(scope)) &&
-      !(await isAdmin())
-    ) {
-      return { kind: 'PHONE' };
+    if (this.deps.phoneGate !== undefined && phoneGateHolds(customer)) {
+      const enabled = await this.deps.phoneGate.enabled(scope);
+      // NEXA v099: the allowed numbers matter only for a number stored as not accepted.
+      const allowed =
+        enabled && customer.phoneNotAcceptedAt !== null
+          ? ((await this.deps.phoneGate.allowedNumbers?.(scope)) ?? 'ALL')
+          : 'ALL';
+      const phone = phoneGateOf(customer, enabled, allowed);
+      if (phone !== 'OPEN' && !(await isAdmin())) {
+        return { kind: phone === 'NOT_ACCEPTED' ? 'PHONE_NOT_ACCEPTED' : 'PHONE' };
+      }
     }
     return null;
+  }
+
+  /**
+   * NEXA v099 (owner): whether this customer's own number is stored as NOT accepted and still
+   * counts as nothing (IRAN_ONLY on, no verification, no exemption) — what `/me` tells the mini
+   * app, so a route's verified-phone refusal shows `bot.phone.not_accepted` instead of asking
+   * for the contact again. The bot-wide switch does not matter here: a route's rule stands
+   * on its own. Display only; the payment's own transaction decides the refusal.
+   */
+  async phoneNotAccepted(context: MiniAppContext): Promise<boolean> {
+    const customer = context.customer;
+    if (!phoneGateHolds(customer) || customer.phoneNotAcceptedAt === null) return false;
+    const allowed = (await this.deps.phoneGate?.allowedNumbers?.(context.scope)) ?? 'ALL';
+    return phoneGateOf(customer, true, allowed) === 'NOT_ACCEPTED';
   }
 
   /** `gateFor`, as the refusal every gated endpoint answers while the customer is held. */

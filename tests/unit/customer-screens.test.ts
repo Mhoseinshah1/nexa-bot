@@ -248,6 +248,10 @@ describe('the wallet summary phone line', () => {
         phoneVerificationExemptAt: at,
       }),
     ).toBe('ADMIN_VERIFIED');
+    const foreign = { ...row, phoneNumber: '+447700900123', phoneNotAcceptedAt: at };
+    expect(walletPhoneState(foreign)).toBe('NOT_ACCEPTED');
+    expect(walletPhoneState(foreign, true)).toBe('CUSTOMER_VERIFIED');
+    expect(walletPhoneState({ ...foreign, phoneVerificationExemptAt: at })).toBe('ADMIN_VERIFIED');
   });
 });
 

@@ -936,8 +936,13 @@
     padding: 0 2px;
     border: 0;
   }
+  /* Each sensitive button is a full-width line and its label wraps, never clipped. */
   .action-group.danger .action-group-buttons .btn {
-    flex: 1 1 140px;
+    flex: 1 1 100%;
+    height: auto;
+    min-height: 40px;
+    padding-block: 8px;
+    white-space: normal;
   }
 }
 

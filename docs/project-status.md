@@ -146,6 +146,18 @@ Contact»). Two independent rules can ask for it (owner, NEXA v095 PR-4):
 - **Allowed numbers (B):** `phone_verification.allowed_numbers`, ALL (default) or IRAN_ONLY (+98,
   after normalising `98…` / `0098…`), applied to every verification; a number verified earlier
   keeps its verification, whatever its country.
+  **Owner, NEXA v099:** under IRAN_ONLY a customer's OWN non-+98 contact (same ownership rule
+  E) is STORED in `customers.phone_number` with `phone_not_accepted_at`, never
+  `phone_verified_at`; audited as `customer.phone.self_verify` with `accepted: false`, no
+  event. It satisfies no gate and no route rule (C): the gates stop showing «📞 Share Contact»
+  and answer `bot.phone.not_accepted` instead (bot, gateway pick, mini app gate
+  `PHONE_NOT_ACCEPTED` and `/me.phoneNotAccepted`); nobody is blocked; support and `/help`
+  stay reachable. The exemption (D) and an operator's verification open everything as usual.
+  Switched to ALL, the stored number counts as verified, decided at READ time
+  (`notAcceptedPhoneCounts`): no data migration, reversible. A customer who already has a
+  verified number and shares a foreign one under IRAN_ONLY keeps the verified number and
+  gets `bot.phone.iran_only` (nothing stored). Customer 360 API: `phoneNotAccepted`
+  (read-only; the page is PR-5's).
 - **Exemption (D):** Customer 360 «معاف از تأیید شماره» (`users.phone_verification.exempt`, reason
   required, `customer.phone_exemption.grant/revoke`) — an exempt customer is asked by neither A
   nor C. Beside it, «معاف از عضویت اجباری کانال» (the channel exemption) skips the join check in the

@@ -851,12 +851,15 @@ export function AlertStatCard(props: Parameters<typeof StatCard>[0]) {
 export function KV({
   items,
   inline = false,
+  columns = false,
 }: {
   items: [ReactNode, ReactNode][];
   inline?: boolean;
+  /** Two term/value pairs per line on a wide screen: a compact grid for many short facts. */
+  columns?: boolean;
 }) {
   return (
-    <dl className={cx('kv', inline && 'inline')}>
+    <dl className={cx('kv', inline && 'inline', columns && 'cols')}>
       {items.map(([term, value], index) => (
         // The index is the key because a KV row is identified by its POSITION
         // in a fixed, statically written list; the term can be an element.
