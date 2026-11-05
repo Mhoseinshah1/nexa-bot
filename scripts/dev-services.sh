@@ -120,11 +120,12 @@ start_natively() {
     # On stdin, not inside `su -c`: the block holds quotes and dollars two shells would parse.
     printf '%s\n' "$APP_ROLES_SQL" | su postgres -c "psql -v ON_ERROR_STOP=1" >/dev/null 2>&1 ||
       echo "    postgres  could not create the nexa_app/nexa_system roles"
-    # The suite's application code runs as nexa_app while its assertions read
-    # pg_stat_activity as the owner, which sees another role's query text only with this
-    # (CI's owner is the image's superuser and sees it anyway).
-    su postgres -c "psql -c \"GRANT pg_read_all_stats TO ${PG_USER}\"" >/dev/null 2>&1 ||
-      echo "    postgres  could not grant pg_read_all_stats to ${PG_USER}"
+    # The suite's application code runs as nexa_app while the owner reads pg_stat_activity
+    # (its assertions) and, in a recovery's cutover, terminates the live database's
+    # sessions: it sees and signals another role's backends only with these two (CI's and
+    # a Docker install's owner is the image's superuser and holds both anyway).
+    su postgres -c "psql -c \"GRANT pg_read_all_stats, pg_signal_backend TO ${PG_USER}\"" >/dev/null 2>&1 ||
+      echo "    postgres  could not grant pg_read_all_stats, pg_signal_backend to ${PG_USER}"
     echo "    roles     nexa_app (login), nexa_system (set role only) ready"
     for db in nexa_dev nexa_test; do
       db_exists="$(su postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='${db}'\"" 2>/dev/null || true)"
