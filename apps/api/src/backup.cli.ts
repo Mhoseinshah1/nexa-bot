@@ -679,6 +679,7 @@ function offsiteUploaderOf(config: AppConfig): S3OffsiteUploader {
     retentionDays: config.BACKUP_OFFSITE_RETENTION_DAYS,
     pathStyle: config.BACKUP_OFFSITE_PATH_STYLE,
     timeoutMs: config.BACKUP_OFFSITE_TIMEOUT_MS,
+    clock: new SystemClock(),
   });
 }
 

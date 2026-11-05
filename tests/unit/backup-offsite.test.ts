@@ -137,6 +137,7 @@ const OPTIONS: S3OffsiteOptions = {
   retentionDays: 30,
   pathStyle: true,
   timeoutMs: 10_000,
+  clock: { now: () => new Date('2026-11-04T10:00:00.000Z') },
 };
 const OBJECT = {
   key: 'b1/archive.7z',
@@ -322,6 +323,26 @@ describe('uploading to a local fake S3', () => {
         s3.objects.get('/nexa-backups/nexa/b1/a.7z.002')!,
       ]),
     ).toEqual(content);
+  });
+
+  it('signs EACH put at the time it is sent, so a long upload never outlives SigV4’s 15 minutes', async () => {
+    // Twenty minutes pass per request: a signature from the upload's start would be 40
+    // minutes stale by the index, past the skew S3 allows.
+    let at = now.getTime();
+    const clock = { now: () => new Date((at += 20 * 60_000)) };
+    const outcome = await uploader({ clock }).upload({
+      backupId: 'b1',
+      archivePath,
+      parts,
+      index: {},
+      now,
+    });
+    expect(outcome.kind).toBe('UPLOADED');
+    expect(s3.received.map((r) => r.headers['x-amz-date'])).toEqual([
+      '20261104T102000Z',
+      '20261104T104000Z',
+      '20261104T110000Z',
+    ]);
   });
 
   it('reports a refusal by status and provider code, keeps what landed, and never touches the archive', async () => {

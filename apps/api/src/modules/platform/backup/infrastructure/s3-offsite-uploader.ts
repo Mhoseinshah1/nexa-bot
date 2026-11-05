@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import type { Clock } from '@nexa/contracts';
 import type { Readable } from 'node:stream';
 import type {
   BackupArchivePart,
@@ -53,6 +54,12 @@ export interface S3OffsiteOptions {
   /** Path-style (`host/bucket/key`, the default: MinIO, R2, B2) or virtual-hosted. */
   readonly pathStyle: boolean;
   readonly timeoutMs: number;
+  /**
+   * Read at EACH request's signing. A SigV4 signature carries its own time and S3 refuses
+   * one more than 15 minutes from its clock, so a many-part upload signed with the time it
+   * STARTED would have its later parts refused (Codex, PR #411).
+   */
+  readonly clock: Pick<Clock, 'now'>;
 }
 
 const DAY_MS = 86_400_000;
@@ -108,7 +115,6 @@ export class S3OffsiteUploader implements OffsiteBackupUploader {
         md5: digest.md5,
         contentType: 'application/octet-stream',
         body: () => createReadStream(input.archivePath, { start: part.start, end: part.end - 1 }),
-        now: input.now,
         lockedUntil,
       });
       if (!result.ok) {
@@ -128,7 +134,6 @@ export class S3OffsiteUploader implements OffsiteBackupUploader {
       `${input.backupId}/index.json`,
       index,
       'application/json',
-      input.now,
       lockedUntil,
     );
     if (!indexResult.ok) {
@@ -149,7 +154,6 @@ export class S3OffsiteUploader implements OffsiteBackupUploader {
       `offsite-test/${stamp}-${randomBytes(4).toString('hex')}.txt`,
       body,
       'text/plain; charset=utf-8',
-      now,
       lockedUntil,
     );
     return result.ok
@@ -165,7 +169,6 @@ export class S3OffsiteUploader implements OffsiteBackupUploader {
     key: string,
     body: Buffer,
     contentType: string,
-    now: Date,
     lockedUntil: Date | null,
   ): Promise<PutResult> {
     return this.put({
@@ -175,7 +178,6 @@ export class S3OffsiteUploader implements OffsiteBackupUploader {
       md5: createHash('md5').update(body).digest('base64'),
       contentType,
       body: () => body,
-      now,
       lockedUntil,
     });
   }
@@ -187,10 +189,13 @@ export class S3OffsiteUploader implements OffsiteBackupUploader {
     readonly md5: string;
     readonly contentType: string;
     readonly body: () => Readable | Buffer;
-    readonly now: Date;
     readonly lockedUntil: Date | null;
   }): Promise<PutResult> {
-    const request = buildPutObjectRequest(this.options, object);
+    // Signed NOW, for this request: see `S3OffsiteOptions.clock`.
+    const request = buildPutObjectRequest(this.options, {
+      ...object,
+      now: this.options.clock.now(),
+    });
     return send(request, object.body, this.options.timeoutMs);
   }
 }
