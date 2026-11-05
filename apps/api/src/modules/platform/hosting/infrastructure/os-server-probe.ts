@@ -22,8 +22,9 @@ export class OsHostingServerProbe implements HostingServerProbe {
     return totalmem();
   }
 
-  availableMemoryBytes(): Promise<number | null> {
-    return this.system.availableMemoryBytes();
+  async availableMemoryBytes(): Promise<number | null> {
+    // The host's MemAvailable: the capacity card describes the server, not one container.
+    return (await this.system.memory()).hostAvailableBytes;
   }
 
   disk(path: string) {
