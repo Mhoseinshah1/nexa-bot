@@ -175,6 +175,7 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
     );
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-s'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-schedule',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

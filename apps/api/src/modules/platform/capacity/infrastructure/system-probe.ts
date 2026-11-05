@@ -1,6 +1,6 @@
 import { readFile, statfs } from 'node:fs/promises';
 import type { OperationalEventRecorder } from '@nexa/contracts';
-import { availableMemoryBytes, cgroupHeadroomBytes, memAvailableBytes } from '../domain/memory.js';
+import { cgroupHeadroomBytes, memAvailableBytes } from '../domain/memory.js';
 import type { OwnerOpsLog, SystemProbe } from '../application/ports.js';
 
 async function readOrNull(path: string): Promise<string | null> {
@@ -25,7 +25,10 @@ export class ProcSystemProbe implements SystemProbe {
     } = { meminfo: '/proc/meminfo', cgroupRoot: '/sys/fs/cgroup' },
   ) {}
 
-  async availableMemoryBytes(): Promise<number | null> {
+  async memory(): Promise<{
+    hostAvailableBytes: number | null;
+    containerHeadroomBytes: number | null;
+  }> {
     const meminfo = await readOrNull(this.paths.meminfo);
     const host = meminfo === null ? null : memAvailableBytes(meminfo);
     const root = this.paths.cgroupRoot;
@@ -39,7 +42,7 @@ export class ProcSystemProbe implements SystemProbe {
         await readOrNull(`${root}/memory/memory.usage_in_bytes`),
       );
     }
-    return availableMemoryBytes(host, headroom);
+    return { hostAvailableBytes: host, containerHeadroomBytes: headroom };
   }
 
   async disk(path: string): Promise<{ totalBytes: number; availableBytes: number } | null> {

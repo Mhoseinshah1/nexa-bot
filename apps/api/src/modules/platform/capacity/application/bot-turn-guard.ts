@@ -73,13 +73,27 @@ export class BotTurnGuard {
 }
 
 /**
- * Whether an error is a capacity guard handing an update back to Telegram: the webhook
- * must let it become a non-2xx rather than record it as a failed turn and answer 2xx.
+ * The capacity deferral behind an error, if there is one: a capacity guard handing an update
+ * back to Telegram, which the webhook must answer as that retryable non-2xx rather than record
+ * as a failed turn and answer 2xx. Looked for through `cause` too: a refusal raised inside a
+ * pool checkout reaches the turn wrapped by the query layer (drizzle's "Failed query").
  */
+export function capacityDeferralOf(error: unknown): NexaError | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current !== undefined && current !== null; depth += 1) {
+    if (
+      isNexaError(current) &&
+      (current.code === CAPACITY_ERROR_CODES.UPDATE_QUEUE_FULL ||
+        current.code === CAPACITY_ERROR_CODES.NEW_CUSTOMER_RATE)
+    ) {
+      return current;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
+/** Whether an error is (or wraps) a capacity deferral; see `capacityDeferralOf`. */
 export function isCapacityDeferral(error: unknown): boolean {
-  return (
-    isNexaError(error) &&
-    (error.code === CAPACITY_ERROR_CODES.UPDATE_QUEUE_FULL ||
-      error.code === CAPACITY_ERROR_CODES.NEW_CUSTOMER_RATE)
-  );
+  return capacityDeferralOf(error) !== null;
 }

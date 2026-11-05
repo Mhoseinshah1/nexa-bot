@@ -1,8 +1,15 @@
+import { createHmac } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   CAPACITY_ERROR_CODES,
+  MINIAPP_API_PREFIX,
+  MINIAPP_ROUTES,
+  miniAppPath,
   TELEGRAM_SECRET_TOKEN_HEADER,
   isNexaError,
   systemJobActor,
@@ -34,6 +41,23 @@ import {
 const WEBHOOK_SECRET = 'a-sufficiently-long-secret-for-capacity';
 const BOT_A = SEED_IDS.botA1 as BotInstanceId;
 const BOT_B = SEED_IDS.botB1 as BotInstanceId;
+const TOKEN_B = '000000:seed-token-globex-1';
+
+/** A Mini App launch's initData, signed with bot B's token as Telegram signs it. */
+function initDataForB(id: number): string {
+  const fields: Record<string, string> = {
+    query_id: `q-${String(id)}-${String(Math.random()).slice(2, 10)}`,
+    user: JSON.stringify({ id, first_name: 'C' }),
+    auth_date: String(Math.floor(Date.now() / 1000)),
+  };
+  const check = Object.keys(fields)
+    .sort()
+    .map((field) => `${field}=${fields[field]}`)
+    .join('\n');
+  const secret = createHmac('sha256', 'WebAppData').update(TOKEN_B).digest();
+  const hash = createHmac('sha256', secret).update(check).digest('hex');
+  return new URLSearchParams({ ...fields, hash }).toString();
+}
 
 /**
  * Phase 6A PR-2 — capacity guards against the real app and a real database. Telegram is a
@@ -47,6 +71,7 @@ describe('capacity guards (phase 6A PR-2)', () => {
   let updateId = 500_000;
   let messageId = 1;
   let keys = 0;
+  const distDir = mkdtempSync(join(tmpdir(), 'nexa-capacity-miniapp-'));
   /** Chat ids whose answers are held until `release()`. */
   const held = new Set<number>();
   const releases: (() => void)[] = [];
@@ -128,7 +153,9 @@ describe('capacity guards (phase 6A PR-2)', () => {
     await new Promise<void>((resolve) => telegram.listen(0, '127.0.0.1', resolve));
     const address = telegram.address();
     if (address === null || typeof address === 'string') throw new Error('no address');
+    writeFileSync(join(distDir, 'index.html'), '<!doctype html><title>mini</title>');
     const config = testConfig({
+      MINIAPP_DIST_DIR: distDir,
       TELEGRAM_WEBHOOK_ENABLED: 'true',
       TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET,
       TELEGRAM_API_BASE_URL: `http://127.0.0.1:${String(address.port)}`,
@@ -141,6 +168,7 @@ describe('capacity guards (phase 6A PR-2)', () => {
     release();
     await api?.close();
     await new Promise<void>((resolve) => telegram.close(() => resolve()));
+    rmSync(distDir, { recursive: true, force: true });
   });
 
   beforeEach(async () => {
@@ -247,6 +275,56 @@ describe('capacity guards (phase 6A PR-2)', () => {
       // The owner's own bot is unlimited by default.
       for (let i = 0; i < 3; i += 1) expect((await start(BOT_A, 930_000 + i)).statusCode).toBe(201);
     });
+    it('security review of #410: the Mini App launch is held to the same rate — 429, no customer; only INTERNAL is exempt', async () => {
+      const flag = await api.container.featureFlagResolver.resolve(tenantB, 'mini_app');
+      await api.container.featureFlags.set(tenantB, hostedOwner, {
+        key: 'mini_app',
+        enabled: true,
+        expectedVersion: flag.version,
+        idempotencyKey: `capacity-flag-${String((keys += 1))}-abcdef`,
+        reason: 'capacity test',
+      });
+      await setLimit(owner, tenantA, SEED_IDS.tenantB, 'NEW_CUSTOMERS_PER_MINUTE', {
+        mode: 'LIMITED',
+        value: 1,
+      });
+      const launch = (id: number) =>
+        inject({
+          method: 'POST',
+          url: `${MINIAPP_API_PREFIX}${miniAppPath(MINIAPP_ROUTES.session, { botInstanceId: BOT_B })}`,
+          payload: { initData: initDataForB(id) },
+        });
+      // The window already holds this minute's admissions of bot B (the case above): open a
+      // fresh customer until one is refused, then check the refusal.
+      let refused = null as Awaited<ReturnType<typeof launch>> | null;
+      let refusedId = 0;
+      for (let id = 940_001; id < 940_005 && refused === null; id += 1) {
+        const answer = await launch(id);
+        if (answer.statusCode !== 201) {
+          refused = answer;
+          refusedId = id;
+        }
+      }
+      expect(refused?.statusCode, refused?.body).toBe(429);
+      expect(JSON.parse(refused?.body ?? '{}').error.code).toBe(
+        CAPACITY_ERROR_CODES.NEW_CUSTOMER_RATE,
+      );
+      expect(await customerOf(SEED_IDS.tenantB, refusedId)).toBe(0);
+      // An explicit internal caller (an import, a fixture) is not held to the public rate.
+      await api.container.customers.resolveFromUpdate(
+        tenantB,
+        systemJobActor('telegram-update:test', 'corr-cap' as CorrelationId),
+        {
+          intake: 'INTERNAL',
+          idempotencyKey: 'capacity-internal-950001',
+          telegramUserId: '950001',
+          from: { id: 950_001, first_name: 'I' },
+          botInstanceId: BOT_B,
+        },
+      );
+      expect(await customerOf(SEED_IDS.tenantB, 950_001)).toBe(1);
+    });
+
     it('queues a bot’s update over its concurrency and processes it; another bot is not slowed', async () => {
       await setLimit(owner, tenantA, SEED_IDS.tenantB, 'UPDATE_CONCURRENCY', {
         mode: 'LIMITED',

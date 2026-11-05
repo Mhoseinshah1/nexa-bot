@@ -31,7 +31,7 @@ import {
 } from './stars-updates.js';
 import { opsConnectAttemptOf, opsMembershipChangeOf } from './ops-group-updates.js';
 import { handleBusinessUpdate } from './business-updates.js';
-import { isCapacityDeferral } from '../../modules/platform/capacity/application/bot-turn-guard.js';
+import { capacityDeferralOf } from '../../modules/platform/capacity/application/bot-turn-guard.js';
 import { businessUpdateOf } from '../../modules/commerce/business-chats/domain/telegram-business.js';
 
 /**
@@ -447,7 +447,9 @@ export class TelegramWebhookController {
           }),
         );
       } catch (error) {
-        if (isCapacityDeferral(error)) throw error;
+        // The deferral itself, unwrapped, so Telegram gets the clean retryable 429.
+        const deferral = capacityDeferralOf(error);
+        if (deferral !== null) throw deferral;
         // FIX-05: windowed and quiet, for the reasons the ops-group failure above gives —
         // a throw here would be the non-2xx this wrapping exists to prevent.
         await recordQuietly(

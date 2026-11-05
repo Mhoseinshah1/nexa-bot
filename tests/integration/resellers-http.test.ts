@@ -140,6 +140,7 @@ describe('reseller HTTP surface', () => {
       tenantA,
       customerActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: firstName },

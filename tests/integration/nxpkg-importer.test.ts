@@ -266,6 +266,7 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     // Products are configuration (the product review maps onto them): this tenant has one.
     expect(await count('products')).toBe(1);
     await ctx.container.customers.resolveFromUpdate(tenantA, job('webhook'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'nxpkg-existing',
       telegramUserId: '555000555',
       from: { id: 555000555, first_name: 'Existing' },
@@ -546,6 +547,7 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
       ),
     ).toBe(digest);
     await ctx.container.customers.resolveFromUpdate(tenantA, job('webhook'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'nxpkg-late-customer',
       telegramUserId: '555000556',
       from: { id: 555000556, first_name: 'Late' },

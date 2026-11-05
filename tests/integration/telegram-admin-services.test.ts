@@ -1495,6 +1495,7 @@ describe('the services section of the Telegram management panel', () => {
       tenantA,
       systemActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'مریم' },
@@ -1668,6 +1669,7 @@ describe('the services section of the Telegram management panel', () => {
     await makePanelSellable(ctx.container, tenantB, panelB);
     const customerB = (
       await ctx.container.customers.resolveFromUpdate(tenantB, systemActor('resolve-b'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-b',
         telegramUserId: '820820',
         from: { id: 820_820, first_name: 'سارا' },

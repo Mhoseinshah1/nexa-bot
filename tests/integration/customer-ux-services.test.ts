@@ -145,6 +145,7 @@ describe('a customer looks after the services they bought', () => {
       tenantA,
       systemActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: firstName },

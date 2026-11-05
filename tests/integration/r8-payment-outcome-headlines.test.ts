@@ -67,6 +67,7 @@ describe('R8 A3: distinct headlines for a payment that did not succeed', () => {
       tenantA,
       systemActor('resolve-958301'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-958301',
         telegramUserId: '958301',
         from: { id: 958301, first_name: 'آرش', username: 'arash' },

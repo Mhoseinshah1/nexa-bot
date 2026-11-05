@@ -131,6 +131,7 @@ describe('TonPays Telegram, through the one settlement path', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-m'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-m',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },
@@ -1014,6 +1015,7 @@ describe('TonPays Telegram, through the one settlement path', () => {
       clock.shift(61_000);
       const other = (
         await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-o'), {
+          intake: 'INTERNAL',
           idempotencyKey: 'resolve-o',
           telegramUserId: '910999',
           from: { id: 910999, first_name: 'دیگری' },

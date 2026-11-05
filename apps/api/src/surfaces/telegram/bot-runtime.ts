@@ -465,6 +465,8 @@ export class BotRuntime {
       botInstanceId: input.botInstanceId,
       // A referral link's code, on the `/start` it opened (WP9 F2). Null on anything else.
       startPayload: intent === 'START' ? startPayloadOf(input.update) : null,
+      // Phase 6A PR-2: a public intake, held to the bot's new-customer rate.
+      intake: 'TELEGRAM',
     });
     let { customer, arrival } = resolved;
 

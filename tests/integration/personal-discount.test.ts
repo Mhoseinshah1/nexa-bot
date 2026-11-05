@@ -156,6 +156,7 @@ describe('personal discount (R10 D3)', () => {
       tenantA,
       customerActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'سارا' },

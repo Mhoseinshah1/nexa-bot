@@ -133,6 +133,7 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
       tenantA,
       systemActor('resolve-941001'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-941001',
         telegramUserId: '941001',
         from: { id: 941001, first_name: 'زهرا' },

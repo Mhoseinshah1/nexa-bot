@@ -206,6 +206,7 @@ describe('every capture lane a button opens is consumed by the handler the next 
     panelId = created.view.panel.id;
     await validatePanelConnection(ctx.container, tenantA, panelId);
     await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-cl'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-cl',
       telegramUserId: MARYAM,
       from: { id: Number(MARYAM), first_name: 'مریم' },

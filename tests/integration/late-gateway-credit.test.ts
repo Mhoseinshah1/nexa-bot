@@ -236,6 +236,7 @@ describe('a late gateway approval, credited to the wallet', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-m'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-m',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

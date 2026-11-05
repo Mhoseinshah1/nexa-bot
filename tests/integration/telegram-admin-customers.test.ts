@@ -789,6 +789,7 @@ describe('the customers section of the Telegram management panel', () => {
       scope,
       systemActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: {

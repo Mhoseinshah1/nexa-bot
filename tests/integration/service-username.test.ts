@@ -142,6 +142,7 @@ describe('the name a service is sold under', () => {
       scope,
       systemActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'زهرا' },

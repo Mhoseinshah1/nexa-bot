@@ -174,6 +174,7 @@ describe('campaigns', () => {
       VALUES (${panelA}, ${tenantA.tenantId}, 'Panel A', 'sanaei', 'https://a.example.test', 'ACTIVE')`);
     await makePanelSellable(c, tenantA, panelA);
     const { customer } = await c.customers.resolveFromUpdate(tenantA, customerActor('resolve'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-campaign-customer',
       telegramUserId: '930001',
       from: { id: 930001, first_name: 'زهرا' },
@@ -470,6 +471,7 @@ describe('campaigns', () => {
 
       // Somebody registers between the preview and the confirmation.
       await ctx.container.customers.resolveFromUpdate(tenantA, customerActor('late'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-late-customer',
         telegramUserId: '930002',
         from: { id: 930002, first_name: 'علی' },
@@ -1060,6 +1062,7 @@ describe('campaigns', () => {
         tenantA,
         customerActor('late-gift'),
         {
+          intake: 'INTERNAL',
           idempotencyKey: 'resolve-late-gift',
           telegramUserId: '930003',
           from: { id: 930003, first_name: 'مریم' },
@@ -1213,6 +1216,7 @@ describe('campaigns', () => {
         tenantA,
         customerActor(`resolve-${telegramUserId}`),
         {
+          intake: 'INTERNAL',
           idempotencyKey: `resolve-${telegramUserId}`,
           telegramUserId,
           from: { id: Number(telegramUserId), first_name: 'مشتری' },

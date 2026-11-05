@@ -219,6 +219,7 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
     await validatePanelConnection(ctx.container, tenantA, panelId);
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-d'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-d',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

@@ -221,6 +221,7 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
     );
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve'), {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${key()}`,
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

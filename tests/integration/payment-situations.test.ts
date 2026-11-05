@@ -69,6 +69,7 @@ describe('the payment situation guide and the NEEDS_ACTION queue', () => {
     );
     customerA = (
       await ctx.container.customers.resolveFromUpdate(tenantA, system('sa'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-sit-a',
         telegramUserId: '7300001',
         from: { id: 7300001, first_name: 'آرش' },
@@ -77,6 +78,7 @@ describe('the payment situation guide and the NEEDS_ACTION queue', () => {
     ).customer.id;
     customerB = (
       await ctx.container.customers.resolveFromUpdate(tenantB, system('sb'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-sit-b',
         telegramUserId: '7400002',
         from: { id: 7400002, first_name: 'بهار' },
@@ -243,6 +245,7 @@ describe('the payment situation guide and the NEEDS_ACTION queue', () => {
     // One open manual top-up per customer (`payments_open_topup_key`): another customer's.
     const second = (
       await ctx.container.customers.resolveFromUpdate(tenantA, system('sc'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-sit-c',
         telegramUserId: '7300003',
         from: { id: 7300003, first_name: 'کاوه' },
@@ -262,6 +265,7 @@ describe('the payment situation guide and the NEEDS_ACTION queue', () => {
     // A claim WITH a filed receipt: what a reviewer acts on (review of PR #243, CX2).
     const third = (
       await ctx.container.customers.resolveFromUpdate(tenantA, system('sd'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-sit-d',
         telegramUserId: '7300004',
         from: { id: 7300004, first_name: 'نیما' },

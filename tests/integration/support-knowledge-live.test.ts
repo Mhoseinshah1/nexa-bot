@@ -102,6 +102,7 @@ describe('PR-2: the live catalogue quotes the checkout’s price', () => {
       tenantA,
       customerActor(`resolve-${String(USER)}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${String(USER)}`,
         telegramUserId: String(USER),
         from: { id: USER, first_name: 'سارا' },

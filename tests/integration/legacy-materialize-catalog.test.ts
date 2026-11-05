@@ -237,6 +237,7 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
         correlationId: `r-${tg}` as CorrelationId,
       },
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${tg}`,
         telegramUserId: tg,
         from: { id: Number(tg), first_name: 'synthetic' },

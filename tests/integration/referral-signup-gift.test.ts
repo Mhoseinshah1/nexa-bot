@@ -186,6 +186,7 @@ function fixtures(container: Container, owner: ActorContext, finance: ActorConte
     bot: BotInstanceId = BOT_A,
   ) =>
     container.customers.resolveFromUpdate(scope, customerActor(key()), {
+      intake: 'INTERNAL',
       idempotencyKey: key(),
       telegramUserId,
       from: { id: Number(telegramUserId), first_name: 'مهسا' },

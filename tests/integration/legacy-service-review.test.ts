@@ -169,6 +169,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       productId: product.id,
     });
     await ctx.container.customers.resolveFromUpdate(tenantA, job('webhook'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'pr5-existing',
       telegramUserId: SYNTHETIC_EXISTING_CUSTOMER,
       from: { id: Number(SYNTHETIC_EXISTING_CUSTOMER), first_name: 'Existing' },

@@ -204,6 +204,7 @@ describe('FIX-05: the surfaces report through the one recorder', () => {
           correlationId: 'fix05-resolve' as CorrelationId,
         },
         {
+          intake: 'INTERNAL',
           idempotencyKey: 'fix05-resolve-maryam',
           telegramUserId: '910910',
           from: { id: 910910, first_name: 'مریم' },

@@ -226,6 +226,7 @@ describe('TetraPay, through the one settlement path', () => {
     );
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-tp'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-tp',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

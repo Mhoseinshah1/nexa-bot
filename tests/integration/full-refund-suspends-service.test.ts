@@ -101,6 +101,7 @@ describe('R12 F1 — a full refund suspends the service it paid for', () => {
 
   async function resolve(telegramUserId: string): Promise<UserId> {
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, botActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: `resolve-${telegramUserId}`,
       telegramUserId,
       from: { id: Number(telegramUserId), first_name: 'سارا' },

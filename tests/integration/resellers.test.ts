@@ -156,6 +156,7 @@ describe('resellers (WP9-B)', () => {
       scope,
       customerActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'مریم' },

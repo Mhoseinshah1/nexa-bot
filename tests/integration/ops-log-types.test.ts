@@ -91,6 +91,7 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
       tenantA,
       customerActor(`resolve-${telegramId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramId}`,
         telegramUserId: telegramId,
         from: { id: Number(telegramId), first_name: firstName, username: `u${telegramId}` },

@@ -108,6 +108,7 @@ describe('the custom (bridge protocol) provider', () => {
       await createAdmin(ctx.container, tenantA, { username: 'owner-custom', roleKeys: ['owner'] }),
     );
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('c'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-custom',
       telegramUserId: '930930',
       from: { id: 930930, first_name: 'مریم' },

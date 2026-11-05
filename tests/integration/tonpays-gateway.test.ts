@@ -336,6 +336,7 @@ describe('TonPays, through the one settlement path', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-m'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-m',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

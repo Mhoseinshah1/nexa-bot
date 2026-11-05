@@ -103,6 +103,7 @@ describe('the emergency switch for automated customer messages (R5A-2 item 5)', 
       tenantA,
       systemActor('resolve-952001'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-952001',
         telegramUserId: '952001',
         from: { id: 952001, first_name: 'سارا' },

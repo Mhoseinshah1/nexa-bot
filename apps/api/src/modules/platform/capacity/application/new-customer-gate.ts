@@ -8,7 +8,9 @@ const MINUTE_MS = 60_000;
  * Phase 6A PR-2: at most `NEW_CUSTOMERS_PER_MINUTE` new customers of one bot per minute,
  * against a spam wave of fresh accounts.
  *
- * Asked by `CustomerService.resolveFromUpdate` INSIDE its transaction, only when that
+ * Asked by `CustomerService.resolveFromUpdate` INSIDE its transaction, for the public intakes
+ * only (a Telegram update or a Mini App launch, never an explicit INTERNAL caller), and only
+ * when that
  * transaction is about to create a customer — a returning customer is never counted and
  * never slowed. Over the limit the call throws a retryable `capacity.new_customer_rate`,
  * which rolls the creation back (nothing is written: no customer, no audit, no event) and

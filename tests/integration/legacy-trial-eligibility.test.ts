@@ -107,6 +107,7 @@ describe('legacy trial eligibility', () => {
       scope,
       systemActor(`r-${telegramId}-${String(scope.tenantId)}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramId}`,
         telegramUserId: telegramId,
         from: { id: Number(telegramId), first_name: 'سارا' },

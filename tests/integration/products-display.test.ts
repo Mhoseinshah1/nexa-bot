@@ -125,6 +125,7 @@ describe('product display metadata', () => {
               'ACTIVE', ${JSON.stringify({ subscriptionDomain: DECOY_HOST, inboundId: 1 })}::jsonb)`);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-disp',
       telegramUserId: '910911',
       from: { id: 910911, first_name: 'مریم' },
