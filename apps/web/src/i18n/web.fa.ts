@@ -11735,6 +11735,8 @@ export const WEB_FA = {
   'web.outbox_event_system_pinged': 'آزمون سامانه',
   'web.outbox_event_tenant_created': 'ساخت مستأجر',
   'web.outbox_event_tenant_status_changed': 'تغییر وضعیت مستأجر',
+  'web.outbox_event_hosted_bot_state_changed': 'تغییر وضعیت ربات میزبانی‌شده',
+  'web.outbox_event_hosted_bot_expiry_changed': 'تغییر تاریخ انقضای ربات میزبانی‌شده',
   'web.outbox_event_bot_instance_registered': 'ثبت ربات',
   'web.outbox_event_bot_instance_status_changed': 'تغییر وضعیت ربات',
   'web.outbox_event_setting_changed': 'تغییر تنظیم',

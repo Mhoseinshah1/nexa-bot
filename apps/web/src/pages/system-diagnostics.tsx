@@ -134,6 +134,8 @@ export const OUTBOX_EVENT_LABELS: Readonly<Record<EventType, WebKey>> = {
   GiftCardBatchDisabled: 'web.outbox_event_gift_card_batch_disabled',
   ServiceAutoRenewChanged: 'web.outbox_event_service_auto_renew_changed',
   ServiceAutoRenewRunSettled: 'web.outbox_event_service_auto_renew_run_settled',
+  HostedBotStateChanged: 'web.outbox_event_hosted_bot_state_changed',
+  HostedBotExpiryChanged: 'web.outbox_event_hosted_bot_expiry_changed',
 };
 
 export const OUTBOX_AGGREGATE_LABELS: Readonly<Record<string, WebKey>> = {
