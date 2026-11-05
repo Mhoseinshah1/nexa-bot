@@ -165,6 +165,7 @@ function fixtures(container: Container, owner: ActorContext, finance: ActorConte
   const registered = async (startPayload: string | null = null): Promise<UserId> =>
     (
       await container.customers.resolveFromUpdate(tenantA, customerActor(key()), {
+        intake: 'INTERNAL',
         idempotencyKey: key(),
         telegramUserId: String((telegramId += 1)),
         from: { id: telegramId, first_name: 'مهسا' },

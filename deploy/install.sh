@@ -1014,6 +1014,8 @@ write_deploy_env() {
   # v0.9.7: the backup-verify service's CPU (the backup CPU setting's default here, before
   # the database exists) and memory limits; botctl update and restart redo it.
   nexa_record_backup_verify_limits
+  # Phase 6A PR-2: every container's memory limit, from the host's RAM.
+  nexa_record_container_memory_limits
 }
 
 # ---------------------------------------------------------------------------
@@ -1653,7 +1655,7 @@ main() {
 
   start_data_services
   run_migrations
-  # After the migrations (0316 makes the roles) and before anything starts, so no process
+  # After the migrations (0317 makes the roles) and before anything starts, so no process
   # is ever pointed at a role that cannot log in. A failure leaves the processes on the
   # owner, where row-level security is inert, and says so (ADR-0037).
   nexa_ensure_app_db_role || nexa_warn "row-level security is NOT in force on this installation until 'botctl update' configures the application role."

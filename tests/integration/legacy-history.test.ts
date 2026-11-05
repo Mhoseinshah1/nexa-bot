@@ -169,6 +169,7 @@ describe('Mirza .nxpkg importer: the history archive', () => {
         correlationId: `r-${telegramUserId}` as CorrelationId,
       },
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-history-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'synthetic' },

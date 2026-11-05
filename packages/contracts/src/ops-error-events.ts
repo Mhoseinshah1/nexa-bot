@@ -1,4 +1,18 @@
 import type { OperationalSeverity } from './ports.js';
+// BEGIN phase 6A PR-2: capacity guards
+import {
+  CAPACITY_BOT_LIMIT_PRESSURE_CODE,
+  CAPACITY_DISK_CRITICAL_CLEARED_CODE,
+  CAPACITY_DISK_CRITICAL_CODE,
+  CAPACITY_DISK_WARNING_CLEARED_CODE,
+  CAPACITY_DISK_WARNING_CODE,
+  CAPACITY_HEAVY_JOB_DEFERRED_CODE,
+  CAPACITY_MEMORY_LOW_CODE,
+  CAPACITY_MEMORY_OK_CODE,
+  CAPACITY_WORKER_LAG_CODE,
+  CAPACITY_WORKER_LAG_OK_CODE,
+} from './capacity.js';
+// END phase 6A PR-2
 import {
   CUSTOMER_NOTICES_PAUSED_CODE,
   CUSTOMER_NOTICES_RESUMED_CODE,
@@ -583,6 +597,19 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   // the cleanup waits for a person and deletes nothing.
   failure(LEGACY_CLEANUP_RECONCILIATION_DIFFERS_CODE, 'SYSTEM', 'CONDITION'),
   fact('system.ping', 'SYSTEM', 'PER_OCCURRENCE'),
+
+  // --- BEGIN phase 6A PR-2: capacity guards (owner only; recorded on the installation tenant)
+  failure(CAPACITY_BOT_LIMIT_PRESSURE_CODE, 'SYSTEM', 'WINDOW'),
+  failure(CAPACITY_HEAVY_JOB_DEFERRED_CODE, 'JOBS', 'WINDOW'),
+  failure(CAPACITY_DISK_WARNING_CODE, 'SYSTEM', 'CONDITION'),
+  recovery(CAPACITY_DISK_WARNING_CLEARED_CODE, 'SYSTEM', CAPACITY_DISK_WARNING_CODE),
+  failure(CAPACITY_DISK_CRITICAL_CODE, 'SYSTEM', 'CONDITION'),
+  recovery(CAPACITY_DISK_CRITICAL_CLEARED_CODE, 'SYSTEM', CAPACITY_DISK_CRITICAL_CODE),
+  failure(CAPACITY_MEMORY_LOW_CODE, 'SYSTEM', 'CONDITION'),
+  recovery(CAPACITY_MEMORY_OK_CODE, 'SYSTEM', CAPACITY_MEMORY_LOW_CODE),
+  failure(CAPACITY_WORKER_LAG_CODE, 'JOBS', 'CONDITION'),
+  recovery(CAPACITY_WORKER_LAG_OK_CODE, 'JOBS', CAPACITY_WORKER_LAG_CODE),
+  // --- END phase 6A PR-2
 ];
 
 /** The entry for a code: its exact entry first, then the longest family prefix. */

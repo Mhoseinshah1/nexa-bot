@@ -52,6 +52,7 @@ describe('the provider review window (repository and schema)', () => {
           correlationId: 'c' as CorrelationId,
         },
         {
+          intake: 'INTERNAL',
           idempotencyKey: 'resolve-review',
           telegramUserId: '424242',
           from: { id: 424242, first_name: 'سارا' },

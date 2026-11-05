@@ -60,6 +60,7 @@ describe('R4: customer notices for manual wallet changes and unblocks; imported 
       tenantA,
       customerActor('resolve-r4'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-r4',
         telegramUserId: '940001',
         from: { id: 940001, first_name: 'زهرا' },

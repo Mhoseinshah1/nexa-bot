@@ -43,6 +43,7 @@ export const LOOP_LABELS_FA: Readonly<Record<string, string>> = {
   'notification-dispatcher': 'ارسال اعلان‌ها',
   'backup-scheduler': 'زمان‌بند بکاپ',
   'backup-housekeeping': 'نگهداری بکاپ‌ها',
+  'capacity-monitor': 'پایش ظرفیت سرور',
   // The monitor, the recovery executor, the migration executor.
   'panel-monitor': 'پایش پنل‌ها',
   'recovery-executor': 'اجرای بازیابی',

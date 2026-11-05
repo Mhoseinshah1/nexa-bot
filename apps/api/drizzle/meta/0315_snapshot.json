@@ -1,5 +1,5 @@
 {
-  "id": "2f47a75c-62f6-43f9-9a94-da20c54187f1",
+  "id": "f2ef8bf9-a3ee-4153-85c1-a9edb402073d",
   "prevId": "0e6bbdc9-96ea-41b8-89bd-faf58a3d811f",
   "version": "7",
   "dialect": "postgresql",
@@ -415,92 +415,6 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.admin_known_ips": {
-      "name": "admin_known_ips",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "admin_id": {
-          "name": "admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "ip": {
-          "name": "ip",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "first_seen_at": {
-          "name": "first_seen_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "last_seen_at": {
-          "name": "last_seen_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "admin_known_ips_tenant_id_tenants_id_fk": {
-          "name": "admin_known_ips_tenant_id_tenants_id_fk",
-          "tableFrom": "admin_known_ips",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "admin_known_ips_tenant_admin_fk": {
-          "name": "admin_known_ips_tenant_admin_fk",
-          "tableFrom": "admin_known_ips",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "admin_known_ips_pkey": {
-          "name": "admin_known_ips_pkey",
-          "columns": [
-            "tenant_id",
-            "admin_id",
-            "ip"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "admin_known_ips_ip_check": {
-          "name": "admin_known_ips_ip_check",
-          "value": "length(ip) BETWEEN 2 AND 64"
-        }
-      },
       "isRLSEnabled": false
     },
     "public.admin_login_challenges": {
@@ -1047,99 +961,6 @@
         "admin_permission_overrides_effect_check": {
           "name": "admin_permission_overrides_effect_check",
           "value": "effect IN ('GRANT', 'DENY')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.admin_read_windows": {
-      "name": "admin_read_windows",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "admin_id": {
-          "name": "admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "window_start": {
-          "name": "window_start",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "rows_read": {
-          "name": "rows_read",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "alerted_at": {
-          "name": "alerted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "admin_read_windows_tenant_id_tenants_id_fk": {
-          "name": "admin_read_windows_tenant_id_tenants_id_fk",
-          "tableFrom": "admin_read_windows",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "admin_read_windows_tenant_admin_fk": {
-          "name": "admin_read_windows_tenant_admin_fk",
-          "tableFrom": "admin_read_windows",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "admin_read_windows_pkey": {
-          "name": "admin_read_windows_pkey",
-          "columns": [
-            "tenant_id",
-            "admin_id",
-            "window_start"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "admin_read_windows_rows_check": {
-          "name": "admin_read_windows_rows_check",
-          "value": "rows_read >= 0"
         }
       },
       "isRLSEnabled": false
@@ -15148,6 +14969,154 @@
         "gift_card_redemption_attempts_outcome_check": {
           "name": "gift_card_redemption_attempts_outcome_check",
           "value": "outcome IN ('MALFORMED', 'UNKNOWN', 'USED', 'EXPIRED', 'DISABLED', 'LIMIT_REACHED', 'CURRENCY_MISMATCH')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.heavy_job_tickets": {
+      "name": "heavy_job_tickets",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "priority": {
+          "name": "priority",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enqueued_at": {
+          "name": "enqueued_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_until": {
+          "name": "lease_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "heavy_job_tickets_tenant_idx": {
+          "name": "heavy_job_tickets_tenant_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "enqueued_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "heavy_job_tickets_live_idx": {
+          "name": "heavy_job_tickets_live_idx",
+          "columns": [
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "priority",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "enqueued_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "state IN ('QUEUED', 'RUNNING')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "heavy_job_tickets_tenant_id_tenants_id_fk": {
+          "name": "heavy_job_tickets_tenant_id_tenants_id_fk",
+          "tableFrom": "heavy_job_tickets",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "heavy_job_tickets_kind_check": {
+          "name": "heavy_job_tickets_kind_check",
+          "value": "kind IN ('BACKUP', 'IMPORT', 'EXPORT', 'REPORT')"
+        },
+        "heavy_job_tickets_state_check": {
+          "name": "heavy_job_tickets_state_check",
+          "value": "state IN ('QUEUED', 'RUNNING', 'DONE', 'ABANDONED')"
+        },
+        "heavy_job_tickets_priority_check": {
+          "name": "heavy_job_tickets_priority_check",
+          "value": "priority >= 0"
+        },
+        "heavy_job_tickets_started_check": {
+          "name": "heavy_job_tickets_started_check",
+          "value": "(state = 'QUEUED') = (started_at IS NULL) OR state = 'ABANDONED'"
         }
       },
       "isRLSEnabled": false
@@ -40595,6 +40564,90 @@
         "template_revisions_body_check": {
           "name": "template_revisions_body_check",
           "value": "(action = 'SET' AND body IS NOT NULL AND length(body) BETWEEN 1 AND 4096) OR (action = 'REVERT' AND body IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.tenant_capacity_limits": {
+      "name": "tenant_capacity_limits",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resource": {
+          "name": "resource",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "value": {
+          "name": "value",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_by_admin_id": {
+          "name": "updated_by_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "tenant_capacity_limits_tenant_id_tenants_id_fk": {
+          "name": "tenant_capacity_limits_tenant_id_tenants_id_fk",
+          "tableFrom": "tenant_capacity_limits",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "tenant_capacity_limits_pkey": {
+          "name": "tenant_capacity_limits_pkey",
+          "columns": [
+            "tenant_id",
+            "resource"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "tenant_capacity_limits_resource_check": {
+          "name": "tenant_capacity_limits_resource_check",
+          "value": "resource IN ('UPDATE_CONCURRENCY', 'DB_CONNECTIONS', 'JOB_TURN_WEIGHT', 'BROADCAST_PER_SECOND', 'HEAVY_JOB_PRIORITY', 'NEW_CUSTOMERS_PER_MINUTE', 'SUPPORT_AI_MONTHLY_REQUESTS', 'STORAGE_MB', 'INSTALLATION_HEAVY_JOB_CONCURRENCY', 'INSTALLATION_HEAVY_JOB_MIN_FREE_MEMORY_MB', 'INSTALLATION_ALERT_MIN_FREE_MEMORY_MB', 'INSTALLATION_ALERT_WORKER_LAG_SECONDS')"
+        },
+        "tenant_capacity_limits_mode_check": {
+          "name": "tenant_capacity_limits_mode_check",
+          "value": "mode IN ('LIMITED', 'UNLIMITED')"
+        },
+        "tenant_capacity_limits_value_check": {
+          "name": "tenant_capacity_limits_value_check",
+          "value": "(mode = 'UNLIMITED' AND value IS NULL) OR (mode = 'LIMITED' AND value IS NOT NULL AND value >= 0)"
         }
       },
       "isRLSEnabled": false

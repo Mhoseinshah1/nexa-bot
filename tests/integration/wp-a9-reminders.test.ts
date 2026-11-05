@@ -129,6 +129,7 @@ describe('WP-A9 reminders', () => {
       tenantA,
       systemActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'زهرا' },
@@ -1101,6 +1102,7 @@ describe('WP-A9 reminders', () => {
       tenantB,
       systemActor('resolve-foreign'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-foreign',
         telegramUserId: '931099',
         from: { id: 931099, first_name: 'زهرا' },

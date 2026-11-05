@@ -180,6 +180,7 @@ describe('Telegram Stars (Package A)', () => {
   async function customer(telegramUserId: number, bot: BotInstanceId = BOT_A, scope = tenantA) {
     return (
       await api.container.customers.resolveFromUpdate(scope, systemActor(`r-${telegramUserId}`), {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${String(telegramUserId)}-${bot}`,
         telegramUserId: String(telegramUserId),
         from: { id: telegramUserId, first_name: 'Customer' },

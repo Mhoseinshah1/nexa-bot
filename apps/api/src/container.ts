@@ -168,7 +168,11 @@ import {
   newCorrelationId,
   stderrLogDestination,
 } from './infrastructure/logging/logger.js';
-import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
+import {
+  POOL_CONNECTION_TIMEOUT_MS,
+  createDatabase,
+  type DatabaseHandle,
+} from './infrastructure/persistence/database.js';
 import {
   databaseProfileFor,
   isImportRole,
@@ -989,6 +993,37 @@ import { DrizzleNotificationCentreRepository } from './modules/commerce/miniapp/
 import { CheckoutService } from './modules/commerce/checkout/application/checkout.service.js';
 import { DrizzleMiniAppSessionRepository } from './modules/commerce/miniapp/infrastructure/drizzle-miniapp-session.repository.js';
 import { TelegramReceiptUploader } from './modules/commerce/miniapp/infrastructure/telegram-receipt-uploader.js';
+// Phase 6A PR-2: capacity guards.
+import { CapacityLimitResolver } from './modules/platform/capacity/application/capacity-limit-resolver.js';
+import { CapacityLimitsService } from './modules/platform/capacity/application/capacity-limits.service.js';
+import { LimitPressureReporter } from './modules/platform/capacity/application/limit-pressure.js';
+import {
+  BOT_UPDATE_MAX_WAIT_MS,
+  BOT_UPDATE_QUEUE_MAX,
+  BotTurnGuard,
+} from './modules/platform/capacity/application/bot-turn-guard.js';
+import { NewCustomerGate } from './modules/platform/capacity/application/new-customer-gate.js';
+import { HeavyJobGate } from './modules/platform/capacity/application/heavy-job-gate.js';
+import { CapacityMonitor } from './modules/platform/capacity/application/capacity-monitor.js';
+import {
+  CAPACITY_MONITOR_INTERVAL_MS,
+  CapacityMonitorLoop,
+} from './modules/platform/capacity/application/capacity-monitor-loop.js';
+import { KeyedConcurrencyLimiter } from './modules/platform/capacity/domain/keyed-limiter.js';
+import {
+  NIGHTLY_REPORT_SPREAD_MS,
+  SCHEDULE_PURPOSES,
+  scheduleOffsetMs,
+} from './modules/platform/capacity/domain/schedule-offset.js';
+import { PoolShare } from './modules/platform/capacity/infrastructure/pool-share.js';
+import {
+  DrizzleCapacityLimitRepository,
+  DrizzleHeavyJobQueueRepository,
+} from './modules/platform/capacity/infrastructure/drizzle-capacity.repository.js';
+import {
+  InstallationOwnerOpsLog,
+  ProcSystemProbe,
+} from './modules/platform/capacity/infrastructure/system-probe.js';
 
 /**
  * The composition root.
@@ -1267,6 +1302,16 @@ export interface Container {
    * rather than authenticating against nothing.
    */
   readonly installationTenantId: TenantId | null;
+  /** Phase 6A PR-2: the owner's per-bot capacity limits (owner-only admin service). */
+  readonly capacityLimits: CapacityLimitsService;
+  /** Phase 6A PR-2: the per-bot limits as the hot paths read them (cached). */
+  readonly capacityResolver: CapacityLimitResolver;
+  /** Phase 6A PR-2: a customer turn inside its bot's fair share (webhook). */
+  readonly botTurnGuard: BotTurnGuard;
+  /** Phase 6A PR-2: the one installation-wide heavy-job queue. */
+  readonly heavyJobs: HeavyJobGate;
+  /** Phase 6A PR-2: the owner's disk, memory and worker-lag alerts (worker loop). */
+  readonly capacityMonitorLoop: CapacityMonitorLoop;
   setInstallationTenant(tenantId: TenantId | null): void;
   readonly recordPing: RecordPingService;
   /**
@@ -2323,6 +2368,84 @@ export function createContainer(
   let installationTenantId: TenantId | null = null;
 
   /*
+   * Phase 6A PR-2: capacity guards. The per-bot limits (`tenant_capacity_limits`, cached per
+   * tenant), the owner's operations log (always the INSTALLATION tenant's group), the
+   * pressure alert, the per-bot update queue and database share of the webhook, the
+   * new-customer rate, the heavy-job queue and the server monitor. The database share is
+   * installed on the API's pool only: it is the process that runs customer turns.
+   */
+  const capacityRepository = new DrizzleCapacityLimitRepository(database.db);
+  const capacityResolver = new CapacityLimitResolver({
+    repository: capacityRepository,
+    clock,
+    installationTenantId: () => installationTenantId,
+    onReadFailure: (tenantId, error) =>
+      logger.warn(
+        { tenantId, err: error instanceof Error ? error.message : String(error) },
+        'capacity limits could not be read; the defaults apply',
+      ),
+  });
+  const capacityConditions = new DrizzleOperationalConditionReader(database.db);
+  const ownerOpsLog = new InstallationOwnerOpsLog({
+    recorder: opsLog,
+    installationTenantId: () => installationTenantId,
+    conditionIsOpen: (tenantId, code) => capacityConditions.tenantConditionIsOpen(tenantId, code),
+  });
+  const limitPressure = new LimitPressureReporter({
+    clock,
+    ownerOpsLog,
+    onFailure: (error) =>
+      logger.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        'a capacity pressure alert could not be recorded',
+      ),
+  });
+  const poolShare = new PoolShare({ maxWaitMs: POOL_CONNECTION_TIMEOUT_MS });
+  if (role === 'api') poolShare.install(database.pool);
+  const botTurnGuard = new BotTurnGuard({
+    limits: capacityResolver,
+    limiter: new KeyedConcurrencyLimiter({
+      maxQueuedPerKey: BOT_UPDATE_QUEUE_MAX,
+      maxWaitMs: BOT_UPDATE_MAX_WAIT_MS,
+    }),
+    dbShare: poolShare,
+    pressure: limitPressure,
+  });
+  const newCustomerGate = new NewCustomerGate({
+    clock,
+    limits: capacityResolver,
+    pressure: limitPressure,
+  });
+  const systemProbe = new ProcSystemProbe();
+  const heavyJobs = new HeavyJobGate({
+    repository: new DrizzleHeavyJobQueueRepository(database.db),
+    limits: capacityResolver,
+    probe: systemProbe,
+    ownerOpsLog,
+    clock,
+    ids,
+    installationTenantId: () => installationTenantId,
+  });
+  const turnWeightOf = async (tenantId: string | null): Promise<number> => {
+    const id = tenantId ?? installationTenantId;
+    return id === null ? 1 : capacityResolver.numberOf(id, 'JOB_TURN_WEIGHT');
+  };
+  const capacityLimits = new CapacityLimitsService({
+    uow,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    clock,
+    repository: capacityRepository,
+    tenants: capacityRepository,
+    idempotency,
+    scopeActivity: tenants,
+    resolver: capacityResolver,
+    installationTenantId: () => installationTenantId,
+  });
+
+  /*
    * Round 4 PR-D: the operations log group's facts and its lane. The lane is a closure over
    * `notifications`, which is built further down: it is called only once the relay (or a
    * sweep) runs, never during construction.
@@ -2443,6 +2566,7 @@ export function createContainer(
       batchSize: config.OUTBOX_RELAY_BATCH_SIZE,
       pollIntervalMs: config.OUTBOX_RELAY_POLL_INTERVAL_MS,
       maxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
+      turnWeightOf,
     },
     database,
     writeGate,
@@ -2649,6 +2773,7 @@ export function createContainer(
     ids,
   });
   const customerService = new CustomerService({
+    newCustomers: newCustomerGate,
     referrals: referralProgram,
     captcha: startCaptchaService,
     repository: customerRepository,
@@ -5048,6 +5173,13 @@ export function createContainer(
   });
   const nightlyReportLoop = new NightlyReportLoop(
     new NightlyReportService({
+      scheduleOffsetMs: (scope) =>
+        scheduleOffsetMs(
+          scope.tenantId,
+          SCHEDULE_PURPOSES.nightlyReport,
+          NIGHTLY_REPORT_SPREAD_MS,
+          capacityResolver.tierOf(scope.tenantId),
+        ),
       uow,
       scopeActivity: tenants,
       reader: new DrizzleNightlyReportReader(database.db),
@@ -5220,6 +5352,14 @@ export function createContainer(
           : { tenantId: installationTenantId, botInstanceId: null },
       intervalMs: CUSTOMER_REMINDER_INTERVAL_MS,
       now: () => clock.now().getTime(),
+      // Phase 6A PR-2: each bot's sweeps in its own slot of their interval.
+      offsetMs: (scope, sweep, everyMs) =>
+        scheduleOffsetMs(
+          scope.tenantId,
+          `${SCHEDULE_PURPOSES.customerReminders}:${sweep}`,
+          everyMs,
+          capacityResolver.tierOf(scope.tenantId),
+        ),
       logger,
     },
   );
@@ -6445,6 +6585,7 @@ export function createContainer(
     auditHistory: new DrizzleAuditHistoryReader(database.db),
   });
   const broadcastDispatcher = new BroadcastDispatcher({
+    sendsPerSecond: (scope) => capacityResolver.numberOf(scope.tenantId, 'BROADCAST_PER_SECOND'),
     repository: broadcastRepository,
     transport: broadcastTransport,
     facts: broadcastFacts,
@@ -7173,7 +7314,9 @@ export function createContainer(
     logger,
   });
 
-  const notificationRepository = new DrizzleNotificationRepository(database.db, ids);
+  const notificationRepository = new DrizzleNotificationRepository(database.db, ids, (tenantId) =>
+    turnWeightOf(tenantId),
+  );
 
   /*
    * TB1 (ADR-0033): Telegram Business connections and the send-on-behalf transport. The
@@ -8498,6 +8641,27 @@ export function createContainer(
     return lock !== null && lock.quiescing;
   };
   /*
+   * Phase 6A PR-2: the server's disk, memory and worker lag, told to the OWNER only. The
+   * volumes are this role's root (the host's disk under an overlay) and the backup
+   * directory; the lag is the outbox's oldest unpublished age.
+   */
+  const capacityMonitorLoop = new CapacityMonitorLoop(
+    new CapacityMonitor({
+      probe: systemProbe,
+      ownerOpsLog,
+      limits: capacityResolver,
+      installationTenantId: () => installationTenantId,
+      diskPaths: ['/', config.BACKUP_WORK_DIR],
+      workerLagMs: async () => relay.lagMs(),
+    }),
+    {
+      intervalMs: CAPACITY_MONITOR_INTERVAL_MS,
+      now: () => clock.now().getTime(),
+      quiesced: recoveryQuiesced,
+      logger,
+    },
+  );
+  /*
    * Mirza `.nxpkg` importer — Fresh Migration. The service in every role (the API serves the
    * Web Admin), the executor STARTED only by `main.migration.ts`.
    *
@@ -8630,6 +8794,8 @@ export function createContainer(
     logger,
   });
   const backupScheduler = new BackupScheduler({
+    heavyJobs,
+    installationTenantId: () => installationTenantId,
     service: backup,
     runs: backupRuns,
     quiesced: recoveryQuiesced,
@@ -9029,6 +9195,11 @@ export function createContainer(
     get installationTenantId() {
       return installationTenantId;
     },
+    capacityLimits,
+    capacityResolver,
+    botTurnGuard,
+    heavyJobs,
+    capacityMonitorLoop,
     setInstallationTenant(tenantId: TenantId | null) {
       installationTenantId = tenantId;
       // The dispatcher runs for the installation but the rate ceiling is a
@@ -9628,6 +9799,7 @@ export function createContainer(
       );
       backupScheduler.stop();
       backupHousekeeping.stop();
+      await capacityMonitorLoop.stop();
       legacyCompactionExecutor.stop();
       recoveryExecutor.stop();
       migrationExecutor.stop();

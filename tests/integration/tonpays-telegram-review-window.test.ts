@@ -149,6 +149,7 @@ describe('the TonPays Telegram provider review window', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-rv'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-rv',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isSystemContext, systemContext, type ScopeContext } from '@nexa/contracts';
+import { sql, type SQL } from 'drizzle-orm';
 import type { Pool, PoolClient } from 'pg';
 import { SYSTEM_ROLE } from './row-level-security.js';
 
@@ -283,4 +284,41 @@ function scopeAmong(args: readonly unknown[]): ScopeContext | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * The system path for ONE piece of work inside a transaction that is bound to a tenant.
+ *
+ * For the rare write an installation's owner makes to ANOTHER tenant's row from inside
+ * the owner's own unit of work — the capacity limits are the case: the audit row, the
+ * idempotency key and the permission check belong to the owner's transaction, the limit
+ * row to the tenant it caps. `SET LOCAL ROLE nexa_system` with `reason` bound, `fn`, then
+ * back to the session's role with the reason cleared, all on the caller's transaction.
+ * A no-op switch on a connection the policies do not bind (the owner, a superuser), where
+ * nexa_system may not even be reachable.
+ */
+export async function withSystemScopeIn<T>(
+  executor: { execute: (query: SQL) => Promise<unknown> },
+  reason: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  // What the transaction had, so it gets exactly that back: a tenant's checkout has no
+  // role set ('none'), a system one has its own role and reason.
+  const before = (await executor.execute(sql`
+    SELECT current_setting('role') AS role,
+           coalesce(current_setting('app.system_reason', true), '') AS reason`)) as {
+    rows: { role: string; reason: string }[];
+  };
+  const previous = before.rows[0] ?? { role: 'none', reason: '' };
+  await executor.execute(sql`
+    SELECT set_config('role', ${SYSTEM_ROLE}, true), set_config('app.system_reason', ${reason}, true)
+      FROM pg_roles r
+     WHERE r.rolname = session_user AND NOT r.rolsuper AND NOT r.rolbypassrls
+       AND EXISTS (SELECT 1 FROM pg_roles s WHERE s.rolname = ${SYSTEM_ROLE}
+                    AND pg_has_role(session_user, s.oid, 'SET'))`);
+  const result = await fn();
+  await executor.execute(sql`
+    SELECT set_config('role', ${previous.role}, true),
+           set_config('app.system_reason', ${previous.reason}, true)`);
+  return result;
 }

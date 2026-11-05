@@ -213,6 +213,7 @@ function fixtures(container: Container, owner: ActorContext, finance: ActorConte
     bot: BotInstanceId = BOT_A,
   ) =>
     container.customers.resolveFromUpdate(scope, customerActor(key()), {
+      intake: 'INTERNAL',
       idempotencyKey: key(),
       telegramUserId,
       from: { id: Number(telegramUserId), first_name: 'مهسا' },
@@ -596,6 +597,7 @@ describe('the referral program: attribution, the promise, the credit and its rev
       const code = await f.codeOf(referrer);
       const update = (startPayload: string | null) =>
         ctx.container.customers.resolveFromUpdate(tenantA, customerActor('upgrade'), {
+          intake: 'INTERNAL',
           idempotencyKey: 'telegram-update-930091',
           telegramUserId: '930091',
           from: { id: 930091, first_name: 'مهسا' },

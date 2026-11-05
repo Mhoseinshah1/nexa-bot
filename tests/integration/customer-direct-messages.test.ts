@@ -184,6 +184,7 @@ describe('Phase A2 — direct message from Customer 360', () => {
       scope,
       systemActor(`r-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-dm-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'مریم' },
@@ -703,6 +704,7 @@ describe('Phase A2 — direct message over HTTP', () => {
     if (match === null) throw new Error('No session cookie.');
     cookie = `${SESSION_COOKIE_NAME}=${match[1] as string}`;
     const resolved = await api.container.customers.resolveFromUpdate(tenantA, systemActor('h'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-dm-http',
       telegramUserId: CUSTOMER_TG,
       from: { id: Number(CUSTOMER_TG), first_name: 'مریم' },

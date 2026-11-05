@@ -323,7 +323,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
      * index `gateway_invoices_centralpay_order_id_key` is the same rule for a racing writer.
      * Existence only — nothing about the other attempt leaves this method.
      *
-     * Through `nexa_gateway_order_id_taken` (0316), not a SELECT: this runs inside the
+     * Through `nexa_gateway_order_id_taken` (0317), not a SELECT: this runs inside the
      * paying tenant's transaction, where row-level security would hide every other
      * tenant's invoice and the answer would quietly become "this tenant only"
      * (ADR-0037). The function answers the one existence question as the owner.

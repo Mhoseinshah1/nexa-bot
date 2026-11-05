@@ -4,6 +4,7 @@ import type {
   AUDIENCE_ERROR_CODES,
   BOT_ERROR_CODES,
   BROADCAST_ERROR_CODES,
+  CAPACITY_ERROR_CODES,
   BULK_ERROR_CODES,
   CAMPAIGN_ERROR_CODES,
   COMMERCE_ERROR_CODES,
@@ -59,6 +60,7 @@ export type ContractErrorCode =
   | CodesOf<typeof AUDIENCE_ERROR_CODES>
   | CodesOf<typeof BOT_ERROR_CODES>
   | CodesOf<typeof BROADCAST_ERROR_CODES>
+  | CodesOf<typeof CAPACITY_ERROR_CODES>
   | CodesOf<typeof BULK_ERROR_CODES>
   | CodesOf<typeof CAMPAIGN_ERROR_CODES>
   | CodesOf<typeof COMMERCE_ERROR_CODES>
@@ -170,6 +172,11 @@ export const ERROR_TEXT = {
   'bot.token_malformed': 'web.err_bot_token_malformed',
   'bot.token_rejected': 'web.err_bot_token_rejected',
   'bot.token_replacement_in_progress': 'web.err_bot_token_replacement_in_progress',
+  // Phase 6A PR-2: capacity guards (the owner's limits page is PR-3).
+  'capacity.update_queue_full': 'web.err_capacity_update_queue_full',
+  'capacity.new_customer_rate': 'web.err_capacity_new_customer_rate',
+  'capacity.limit_invalid': 'web.err_capacity_limit_invalid',
+  'capacity.owner_only': 'web.err_capacity_owner_only',
   'bot.webhook_origin_unknown': 'web.err_bot_webhook_origin_unknown',
   'bot.webhook_refused': 'web.err_bot_webhook_refused',
   'bot.webhook_route_unavailable': 'web.err_bot_webhook_route_unavailable',

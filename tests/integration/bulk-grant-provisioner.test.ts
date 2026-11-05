@@ -73,6 +73,7 @@ describe('a mass traffic grant through the provisioner', () => {
     panelId = created.view.panel.id;
     await validatePanelConnection(ctx.container, tenantA, panelId);
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-grant',
       telegramUserId: '920920',
       from: { id: 920920, first_name: 'Sara' },

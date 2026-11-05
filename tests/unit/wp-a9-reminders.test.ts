@@ -187,6 +187,25 @@ describe('CustomerReminderLoop', () => {
     expect(runs).toEqual(['fast', 'slow', 'fast', 'fast', 'slow']);
   });
 
+  it('phase 6A: a hosted bot runs each sweep in its own slot of the interval (stable offset)', async () => {
+    let clock = 0;
+    const runs: number[] = [];
+    const loop = new CustomerReminderLoop(
+      [{ name: 'slow', everyMs: 900_000, runOnce: async () => (runs.push(clock), 0) }],
+      {
+        scope: () => scope,
+        intervalMs: 60_000,
+        now: () => clock,
+        logger,
+        // Seven minutes into every fifteen.
+        offsetMs: () => 420_000,
+      },
+    );
+    for (clock = 0; clock <= 1_800_000; clock += 60_000) await loop.tick();
+    // First at once, then at 7 min and 22 min: the bot's own minute, not every bot's.
+    expect(runs).toEqual([0, 420_000, 1_320_000]);
+  });
+
   it('keeps running the other sweep when one throws, and records no progress for it', async () => {
     let clock = 1_000;
     const runs: string[] = [];

@@ -88,6 +88,7 @@ describe('a submitted receipt and its three dispositions', () => {
       VALUES (${panelA}, ${tenantA.tenantId}, 'Panel A', 'sanaei', 'https://a.example.test', 'ACTIVE')`);
     await makePanelSellable(ctx.container, tenantA, panelA);
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-dispositions',
       telegramUserId: '930930',
       from: { id: 930930, first_name: 'زهرا' },

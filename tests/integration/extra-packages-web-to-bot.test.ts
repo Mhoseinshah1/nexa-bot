@@ -159,6 +159,7 @@ describe('extra traffic and time: configured on the web, bought in the bot', () 
     await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-packages',
       telegramUserId: '930930',
       from: { id: 930930, first_name: 'نیما' },

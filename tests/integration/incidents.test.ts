@@ -240,6 +240,7 @@ describe('Phase E3 — incidents and maintenance', () => {
       tenantA,
       systemActor(`r-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-inc-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'مریم' },
@@ -657,6 +658,7 @@ describe('Phase E3 — incidents and maintenance', () => {
       tenantA,
       systemActor('rc'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-inc-buyer',
         telegramUserId: '972001',
         from: { id: 972001, first_name: 'علی' },

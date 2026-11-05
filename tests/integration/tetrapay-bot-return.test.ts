@@ -122,6 +122,7 @@ describe('TetraPay: /start tp-<payment> answers with the payment’s own state',
     );
     customer = (
       await api.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-tpr'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-tpr',
         telegramUserId: String(CUSTOMER),
         from: { id: CUSTOMER, first_name: 'Ali' },

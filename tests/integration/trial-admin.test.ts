@@ -117,6 +117,7 @@ describe('trial overrides and the global reset', () => {
       scope,
       systemActor(`r-${telegramId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramId}`,
         telegramUserId: telegramId,
         from: { id: Number(telegramId), first_name: 'سارا' },

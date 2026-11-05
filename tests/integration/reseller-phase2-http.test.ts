@@ -139,6 +139,7 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
       tenantA,
       customerActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: firstName },

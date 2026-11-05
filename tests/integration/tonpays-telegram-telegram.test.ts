@@ -125,6 +125,7 @@ describe('TonPays Telegram in the bot', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-tg'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-tg',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },
@@ -350,6 +351,7 @@ describe('TonPays Telegram in the bot', () => {
     const { paymentId, message } = await cardOnScreen();
     await runSecondBot();
     await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-reza'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-reza',
       telegramUserId: REZA,
       from: { id: Number(REZA), first_name: 'رضا' },

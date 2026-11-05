@@ -452,7 +452,7 @@ export class DrizzleLegacyNxpkgImportRepository implements LegacyNxpkgImportRepo
     tx?: unknown,
   ): Promise<string | null> {
     const executor: Executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
-    // Through `nexa_installation_nxpkg_import` (0316): the write gate asks this inside
+    // Through `nexa_installation_nxpkg_import` (0317): the write gate asks this inside
     // every tenant's transaction, and the import is the installation's — row-level
     // security would hide it from a hosted tenant's transaction (ADR-0037).
     const result = await executor.execute<{ id: string | null }>(

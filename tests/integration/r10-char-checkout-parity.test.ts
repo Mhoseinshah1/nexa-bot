@@ -325,6 +325,7 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
 
   async function botCustomer(): Promise<UserId> {
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: `resolve-${String(BOT_USER)}`,
       telegramUserId: String(BOT_USER),
       from: { id: BOT_USER, first_name: 'ربات' },

@@ -169,6 +169,7 @@ describe('FIX-03: payment-gateway operational events', () => {
     );
     customer = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve'), {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${key()}`,
         telegramUserId: CUSTOMER,
         from: { id: Number(CUSTOMER), first_name: 'آزمون' },

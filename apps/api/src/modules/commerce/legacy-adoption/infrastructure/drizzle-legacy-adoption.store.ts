@@ -120,7 +120,7 @@ export class DrizzleLegacyAdoptionStore implements LegacyAdoptionStore {
     input: { readonly panelId: string; readonly namespaceKey: string; readonly canonical: string },
     tx: TransactionScope,
   ): Promise<boolean> {
-    // Through `nexa_service_username_taken` (0316): the question is across tenants, asked
+    // Through `nexa_service_username_taken` (0317): the question is across tenants, asked
     // inside this tenant's transaction, where row-level security would hide every other
     // tenant's service and hold (ADR-0037). The function answers existence and no more.
     const result = await tx.tx.execute(sql`

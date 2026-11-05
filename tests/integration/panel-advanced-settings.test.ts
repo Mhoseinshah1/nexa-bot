@@ -164,6 +164,7 @@ describe('advanced provider settings', () => {
       tenantA,
       systemActor(CUSTOMER_TG),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${CUSTOMER_TG}`,
         telegramUserId: CUSTOMER_TG,
         from: { id: Number(CUSTOMER_TG), first_name: 'سارا' },

@@ -122,6 +122,7 @@ describe('WP15 provider safety: provenance, propagation and termination', () => 
     await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-wp15',
       telegramUserId: '950950',
       from: { id: 950950, first_name: 'نگار' },

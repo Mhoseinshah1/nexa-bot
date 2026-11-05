@@ -421,6 +421,7 @@ describe('panel drain and the health dashboard', () => {
         correlationId: `resolve-${customerTelegramId}` as CorrelationId,
       },
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${customerTelegramId}`,
         telegramUserId: customerTelegramId,
         from: { id: Number(customerTelegramId), first_name: 'سارا' },

@@ -490,7 +490,7 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
      */
     const executor: Executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
     /*
-     * Through `nexa_installation_recovery` (0316), not a SELECT on the table. The gate
+     * Through `nexa_installation_recovery` (0317), not a SELECT on the table. The gate
      * asks this inside EVERY unit of work's transaction, and the recovery belongs to the
      * installation's tenant: under row-level security a hosted tenant's transaction
      * would not see it, and its writes would go through a restore. The function answers

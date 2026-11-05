@@ -22,6 +22,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { redactSecretText } from '../../../../infrastructure/redaction.js';
+import { groupInOrder, weightedRoundRobin } from '../../../platform/capacity/domain/round-robin.js';
 import type {
   DeliveryAttemptRecord,
   NotificationIntent,
@@ -150,9 +151,14 @@ function executorOf(db: Database, tx?: unknown): Executor {
 
 @ScopeBound()
 export class DrizzleNotificationRepository implements NotificationRepository {
+  /** Advanced every claim, so the tenant served first in a round rotates (phase 6A PR-2). */
+  private rotation = 0;
+
   constructor(
     private readonly db: Database,
     private readonly ids: IdGenerator,
+    /** Phase 6A PR-2: a tenant's turns per round of the claim (`JOB_TURN_WEIGHT`). */
+    private readonly turnWeightOf: (tenantId: string) => Promise<number> = async () => 1,
   ) {}
 
   async create(
@@ -397,38 +403,75 @@ export class DrizzleNotificationRepository implements NotificationRepository {
    */
   async claimDue(now: Date, limit: number, leaseMs: number): Promise<NotificationIntent[]> {
     return this.db.transaction(async (tx) => {
+      const dueFilter = and(
+        eq(notifications.status, 'PENDING'),
+        lte(notifications.nextAttemptAt, now),
+        // The tenant has to be open for business, the same rule the outbox
+        // relay applies to a domain event and for the same reason: a
+        // tenant's status is a system-wide kill switch, and a notification
+        // queued while it was ACTIVE would otherwise still leave the
+        // process after somebody stopped the installation.
+        //
+        // The row stays PENDING rather than being failed. A stop is not a
+        // verdict on the message; it is a pause, and the alert is still
+        // worth sending when the tenant comes back.
+        inArray(
+          notifications.tenantId,
+          tx.select({ id: tenants.id }).from(tenants).where(eq(tenants.status, 'ACTIVE')),
+        ),
+        // The backstop. Abandonment normally happens in `recordAttempt`,
+        // which is exactly the code that does not run when a dispatch
+        // throws before it — so an intent that has already spent its
+        // attempts is refused here rather than being claimed forever.
+        //
+        // SPENT, not claimed. A claim handed back without reaching the
+        // transport did not use an attempt, and reading `attempt_count`
+        // directly meant a tenant stopped and restarted a few times could
+        // exhaust a message that had never been sent once.
+        sql`${spentAttempts} < ${notifications.maxAttempts}`,
+      );
+
+      /*
+       * Phase 6A PR-2: IN TURNS ACROSS TENANTS. Each tenant's own oldest `limit` due intents
+       * are the candidates; the batch is taken from them in weighted turns
+       * (`weightedRoundRobin`), so one bot's storm of alerts cannot hold every other bot's
+       * behind it; and only the picked rows are locked, re-checked by the same predicates.
+       */
+      const ranked = tx
+        .select({
+          id: notifications.id,
+          tenantId: notifications.tenantId,
+          rank: sql<number>`row_number() OVER (PARTITION BY ${notifications.tenantId} ORDER BY ${notifications.nextAttemptAt}, ${notifications.createdAt}, ${notifications.id})`.as(
+            'rank',
+          ),
+        })
+        .from(notifications)
+        .where(dueFilter)
+        .as('ranked');
+      const candidates = await tx
+        .select({ id: ranked.id, tenantId: ranked.tenantId })
+        .from(ranked)
+        .where(lte(ranked.rank, limit))
+        .orderBy(asc(ranked.tenantId), asc(ranked.rank));
+      if (candidates.length === 0) return [];
+      const weights = new Map<string, number>();
+      for (const tenantId of new Set(candidates.map((row) => String(row.tenantId)))) {
+        weights.set(tenantId, await this.turnWeightOf(tenantId));
+      }
+      const picked = weightedRoundRobin(
+        groupInOrder(
+          candidates,
+          (row) => String(row.tenantId),
+          (key) => weights.get(key) ?? 1,
+        ),
+        limit,
+        this.rotation++,
+      ).map((row) => row.id);
+
       const due = await tx
         .select({ id: notifications.id })
         .from(notifications)
-        .where(
-          and(
-            eq(notifications.status, 'PENDING'),
-            lte(notifications.nextAttemptAt, now),
-            // The tenant has to be open for business, the same rule the outbox
-            // relay applies to a domain event and for the same reason: a
-            // tenant's status is a system-wide kill switch, and a notification
-            // queued while it was ACTIVE would otherwise still leave the
-            // process after somebody stopped the installation.
-            //
-            // The row stays PENDING rather than being failed. A stop is not a
-            // verdict on the message; it is a pause, and the alert is still
-            // worth sending when the tenant comes back.
-            inArray(
-              notifications.tenantId,
-              tx.select({ id: tenants.id }).from(tenants).where(eq(tenants.status, 'ACTIVE')),
-            ),
-            // The backstop. Abandonment normally happens in `recordAttempt`,
-            // which is exactly the code that does not run when a dispatch
-            // throws before it — so an intent that has already spent its
-            // attempts is refused here rather than being claimed forever.
-            //
-            // SPENT, not claimed. A claim handed back without reaching the
-            // transport did not use an attempt, and reading `attempt_count`
-            // directly meant a tenant stopped and restarted a few times could
-            // exhaust a message that had never been sent once.
-            sql`${spentAttempts} < ${notifications.maxAttempts}`,
-          ),
-        )
+        .where(and(inArray(notifications.id, picked), dueFilter))
         // Oldest first among intents due together (HF-A4): a requeue makes a whole backlog
         // due at one instant, and without the tie-break it would go out in arbitrary order.
         .orderBy(
@@ -436,7 +479,6 @@ export class DrizzleNotificationRepository implements NotificationRepository {
           asc(notifications.createdAt),
           asc(notifications.id),
         )
-        .limit(limit)
         .for('update', { skipLocked: true });
 
       if (due.length === 0) return [];

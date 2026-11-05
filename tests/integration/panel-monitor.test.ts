@@ -3887,6 +3887,7 @@ describe('the panel health monitor', () => {
         tenantA,
         systemActor('capacity-occupant'),
         {
+          intake: 'INTERNAL',
           idempotencyKey: 'capacity-occupant',
           telegramUserId: '900991',
           from: { id: 900_991, first_name: 'مینا' },

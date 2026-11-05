@@ -2,7 +2,7 @@
 
 **Status:** Accepted (owner decision, 2026-11-01). **Supersedes
 [ADR-0004](0004-tenant-isolation.md).** The ADR number is provisional and is renumbered at
-merge with the migration (`0316` in this branch) if another PR claims either first.
+merge with the migration (`0317` in this branch) if another PR claims either first.
 
 ## Why ADR-0004 no longer holds
 
@@ -35,7 +35,7 @@ application pool uses it (`container.ts`).
 
 `nexa_app` is a member of `nexa_system` **WITH INHERIT FALSE, SET TRUE**: it holds none of
 `nexa_system`'s rights until it switches, and it can switch only for a checkout. Neither role
-may be SUPERUSER or BYPASSRLS; migration 0316 and the deploy step refuse one that is.
+may be SUPERUSER or BYPASSRLS; migration 0317 and the deploy step refuse one that is.
 
 ### The policy
 
@@ -118,7 +118,7 @@ The write gate asks, inside **every** unit of work, whether a recovery or a Mirz
 frozen the installation. Those rows belong to the installation's tenant, so a hosted tenant's
 transaction would not see them and its writes would go through a restore. Two narrow
 `SECURITY DEFINER` functions answer exactly that question on the caller's own transaction
-(`nexa_installation_recovery`, `nexa_installation_nxpkg_import`, 0316), returning an id and a
+(`nexa_installation_recovery`, `nexa_installation_nxpkg_import`, 0317), returning an id and a
 state, never a row.
 
 ### Tables without RLS

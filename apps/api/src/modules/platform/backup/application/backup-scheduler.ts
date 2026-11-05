@@ -3,6 +3,7 @@ import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress
 import { latestDailySlot } from './backup-schedule.js';
 import { BACKUP_RETRY_LOOKBACK, backupRetryHold } from './backup-retry-policy.js';
 import type { BackupRunRepository } from './ports.js';
+import type { HeavyJobGate } from '../../capacity/application/heavy-job-gate.js';
 import type { BackupService } from './backup.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
@@ -36,6 +37,14 @@ export { BACKUP_MEMORY_FAILURE_COOLDOWN_MS } from './backup-retry-policy.js';
  * not a loop that does not exist.
  */
 export interface BackupSchedulerDeps {
+  /**
+   * Phase 6A PR-2: the installation-wide heavy-job queue. A scheduled backup that is not
+   * admitted (another heavy job runs, or free memory is below the owner's floor) keeps its
+   * place and asks again on the next tick. Absent: no queue.
+   */
+  readonly heavyJobs?: Pick<HeavyJobGate, 'attempt' | 'finish' | 'hold'>;
+  /** The tenant a scheduled backup is queued for: the installation's. */
+  readonly installationTenantId?: () => string | null;
   readonly service: BackupService;
   readonly runs: BackupRunRepository;
   /**
@@ -111,6 +120,10 @@ export class BackupScheduler {
   private runStartedAt: number | null = null;
   /** The failed run the last "held back" line was about, so a hold is logged once. */
   private lastHeldFor: string | null = null;
+  /** This scheduler's place in the heavy-job queue, kept between ticks while it waits. */
+  private heavyTicket: string | null = null;
+  /** Whether the last tick's wait in the heavy-job queue was logged. */
+  private heavyWaitLogged = false;
 
   constructor(private readonly deps: BackupSchedulerDeps) {
     this.progress = new LoopProgress(deps.tickIntervalMs);
@@ -152,6 +165,29 @@ export class BackupScheduler {
       return nowMs - beat <= this.deps.runStaleAfterMs;
     }
     return this.progress.isFresh(nowMs);
+  }
+
+  /**
+   * The heavy-job queue's answer: the ticket to hand back when the run ends, null when no
+   * queue is wired, or false when the backup must wait for a later tick.
+   */
+  private async admitHeavyJob(): Promise<string | null | false> {
+    const tenantId = this.deps.installationTenantId?.() ?? null;
+    if (this.deps.heavyJobs === undefined || tenantId === null) return null;
+    const admission = await this.deps.heavyJobs.attempt('BACKUP', tenantId, this.heavyTicket);
+    this.heavyTicket = admission.ticketId;
+    if (admission.granted) {
+      this.heavyWaitLogged = false;
+      return admission.ticketId;
+    }
+    if (!this.heavyWaitLogged) {
+      this.heavyWaitLogged = true;
+      this.deps.logger.info(
+        { reason: admission.reason },
+        'scheduled backup waits in the heavy-job queue; it starts on a later tick',
+      );
+    }
+    return false;
   }
 
   async tick(): Promise<void> {
@@ -242,8 +278,27 @@ export class BackupScheduler {
         return;
       }
 
+      const ticket = await this.admitHeavyJob();
+      if (ticket === false) {
+        this.progress.record(now.getTime());
+        return;
+      }
+      const release = ticket === null ? null : this.deps.heavyJobs?.hold(ticket);
       this.runStartedAt = now.getTime();
-      const outcome = await this.deps.service.run('SCHEDULED');
+      const outcome = await this.deps.service.run('SCHEDULED').finally(async () => {
+        release?.();
+        if (ticket !== null) {
+          this.heavyTicket = null;
+          await this.deps.heavyJobs
+            ?.finish(ticket)
+            .catch((error: unknown) =>
+              this.deps.logger.error(
+                { err: error instanceof Error ? error.message : String(error) },
+                'the scheduled backup could not hand its heavy-job slot back; its lease will',
+              ),
+            );
+        }
+      });
       if (outcome.kind === 'BUSY') {
         // Two replicas, one lock. Expected on every rolling update, and not a
         // problem: the other one is taking the backup.

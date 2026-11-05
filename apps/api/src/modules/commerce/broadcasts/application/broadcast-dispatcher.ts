@@ -5,6 +5,7 @@ import {
   BROADCAST_MEDIA_RETENTION_DAYS,
   BROADCAST_RETRY_FLOOR_MS,
   BROADCAST_SENDS_PER_SECOND,
+  TELEGRAM_BOT_MESSAGES_PER_SECOND_CEILING,
   isSourcedBroadcastKind,
   placeholderTokensIn,
   systemJobActor,
@@ -32,8 +33,6 @@ import type {
 } from './ports.js';
 
 const DAY_MS = 86_400_000;
-/** How many of one bot's recipients one pass claims at most: its per-second budget. */
-const PER_BOT_PASS = BROADCAST_SENDS_PER_SECOND;
 /** Sends in flight at once within a pass; the bot's budget still bounds the total. */
 const CONCURRENCY = 4;
 
@@ -86,6 +85,13 @@ interface TransportObservation {
 }
 
 export interface BroadcastDispatcherDeps {
+  /**
+   * Phase 6A PR-2: the tenant's broadcast messages per second (`BROADCAST_PER_SECOND`, the
+   * owner's per-bot limit; hosted 10, the owner's own 25). Absent, the lane's historical
+   * `BROADCAST_SENDS_PER_SECOND`. It is both the pacing row's budget and how many of one
+   * bot's recipients one pass claims at most.
+   */
+  readonly sendsPerSecond?: (scope: TenantContext) => Promise<number>;
   readonly repository: BroadcastRepository;
   readonly transport: BroadcastTransport;
   readonly facts: RecipientFactsReader;
@@ -184,6 +190,19 @@ export class BroadcastDispatcher {
       return contents.get(id) ?? null;
     };
 
+    const perSecond =
+      this.deps.sendsPerSecond === undefined
+        ? BROADCAST_SENDS_PER_SECOND
+        : // «نامحدود» is Telegram's own per-bot ceiling, never more.
+          Math.max(
+            1,
+            Math.floor(
+              Math.min(
+                TELEGRAM_BOT_MESSAGES_PER_SECOND_CEILING,
+                await this.deps.sendsPerSecond(scope),
+              ),
+            ),
+          );
     for (const bot of await this.deps.repository.botsWithWork(scope, now)) {
       // Through the unit of work, so a recovery's quiesce refuses the claim like every write.
       const claimed = await this.deps.uow.run(scope, (tx) =>
@@ -193,8 +212,8 @@ export class BroadcastDispatcher {
           {
             now,
             leaseUntil: new Date(now.getTime() + BROADCAST_LEASE_MS),
-            max: PER_BOT_PASS,
-            perSecond: BROADCAST_SENDS_PER_SECOND,
+            max: perSecond,
+            perSecond,
           },
           tx,
         ),

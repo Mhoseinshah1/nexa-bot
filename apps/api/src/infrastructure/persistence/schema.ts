@@ -25,6 +25,10 @@ import {
   AUTO_RENEW_REFUSALS,
   AUTO_RENEW_RUN_STATES,
   BACKUP_ARCHIVE_FORMATS,
+  CAPACITY_LIMIT_MODES,
+  CAPACITY_RESOURCES,
+  HEAVY_JOB_KINDS,
+  HEAVY_JOB_STATES,
   LEGACY_COMPACTION_FAILURE_CODES,
   LEGACY_COMPACTION_STATES,
   DATA_COMPACTION_MODES,
@@ -18280,5 +18284,80 @@ export const customMenuButtonBots = pgTable(
       columns: [table.tenantId, table.buttonId],
       foreignColumns: [customMenuButtons.tenantId, customMenuButtons.id],
     }),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Phase 6A PR-2 — capacity guards
+// ---------------------------------------------------------------------------
+
+/**
+ * The owner's per-bot capacity limits (`packages/contracts/src/capacity.ts`). One row per
+ * (tenant, resource) the OWNER changed; an absent row is the tier's default, so a new
+ * hosted bot is limited from its first update with nothing written. Keyed by `tenant_id`
+ * like every tenant-owned table, so row-level security covers it; written only by
+ * `CapacityLimitsService`, which refuses every scope but the installation's own owner.
+ *
+ * `updated_by_admin_id` is the installation's administrator, NOT one of this tenant's, so
+ * it carries no tenant-composite foreign key; the audit row names the actor in full.
+ */
+export const tenantCapacityLimits = pgTable(
+  'tenant_capacity_limits',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    resource: text('resource').notNull(),
+    mode: text('mode').notNull(),
+    /** The limit for `LIMITED`; NULL for `UNLIMITED` (never a sentinel number). */
+    value: integer('value'),
+    updatedAt: timestamptz('updated_at').notNull(),
+    updatedByAdminId: uuid('updated_by_admin_id'),
+  },
+  (table) => [
+    primaryKey({ name: 'tenant_capacity_limits_pkey', columns: [table.tenantId, table.resource] }),
+    check('tenant_capacity_limits_resource_check', enumCheck('resource', CAPACITY_RESOURCES)),
+    check('tenant_capacity_limits_mode_check', enumCheck('mode', CAPACITY_LIMIT_MODES)),
+    check(
+      'tenant_capacity_limits_value_check',
+      sql`(mode = 'UNLIMITED' AND value IS NULL) OR (mode = 'LIMITED' AND value IS NOT NULL AND value >= 0)`,
+    ),
+  ],
+);
+
+/**
+ * The ONE installation-wide queue of heavy jobs (backup, import, export, large report): at
+ * most `INSTALLATION_HEAVY_JOB_CONCURRENCY` RUNNING at once, the rest QUEUED in priority
+ * order (the owner's own bot first) and then arrival. A ticket is a lease: a waiter or a
+ * runner that stops refreshing it is ABANDONED by the next caller, so a killed process
+ * never holds the queue. `tenant_id` is the bot the job is for.
+ */
+export const heavyJobTickets = pgTable(
+  'heavy_job_tickets',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    kind: text('kind').notNull(),
+    state: text('state').notNull(),
+    priority: integer('priority').notNull(),
+    enqueuedAt: timestamptz('enqueued_at').notNull(),
+    startedAt: timestamptz('started_at'),
+    finishedAt: timestamptz('finished_at'),
+    leaseUntil: timestamptz('lease_until').notNull(),
+  },
+  (table) => [
+    index('heavy_job_tickets_tenant_idx').on(table.tenantId, table.enqueuedAt),
+    index('heavy_job_tickets_live_idx')
+      .on(table.state, table.priority, table.enqueuedAt)
+      .where(sql`state IN ('QUEUED', 'RUNNING')`),
+    check('heavy_job_tickets_kind_check', enumCheck('kind', HEAVY_JOB_KINDS)),
+    check('heavy_job_tickets_state_check', enumCheck('state', HEAVY_JOB_STATES)),
+    check('heavy_job_tickets_priority_check', sql`priority >= 0`),
+    check(
+      'heavy_job_tickets_started_check',
+      sql`(state = 'QUEUED') = (started_at IS NULL) OR state = 'ABANDONED'`,
+    ),
   ],
 );

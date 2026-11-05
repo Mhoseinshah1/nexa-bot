@@ -89,6 +89,7 @@ describe('payment routes per purpose', () => {
       tenantA,
       systemActor('resolve-880101'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-880101',
         telegramUserId: '880101',
         from: { id: 880101, first_name: 'نیما' },

@@ -222,6 +222,7 @@ describe('Rialit, through the one settlement path', () => {
     );
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-rl'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-rl',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

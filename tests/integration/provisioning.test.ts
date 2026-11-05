@@ -110,6 +110,7 @@ describe('provisioning invariants', () => {
      */
     await validatePanelConnection(ctx.container, tenantA, panelA);
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-prov',
       telegramUserId: '910910',
       from: { id: 910910, first_name: 'مریم' },

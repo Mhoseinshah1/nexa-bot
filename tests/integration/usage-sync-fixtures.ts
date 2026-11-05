@@ -324,6 +324,7 @@ export async function resolveCustomer(
   telegramUserId: string,
 ): Promise<UserId> {
   const resolved = await ctx.container.customers.resolveFromUpdate(scope, systemActor('r'), {
+    intake: 'INTERNAL',
     idempotencyKey: `resolve-${telegramUserId}`,
     telegramUserId,
     from: { id: Number(telegramUserId), first_name: 'مریم' },

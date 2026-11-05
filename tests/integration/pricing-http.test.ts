@@ -326,6 +326,7 @@ describe('pricing HTTP surface', () => {
       tenantA,
       customerActor('resolve-http'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-http',
         telegramUserId: '930001',
         from: { id: 930001, first_name: 'زهرا' },

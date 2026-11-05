@@ -257,7 +257,7 @@ describe('row-level security', () => {
 
     it('lets a hosted tenant’s transaction see the installation’s recovery freeze', async () => {
       // The write gate's question is installation-wide; the recovery row is tenant A's.
-      // Asked inside tenant B's unit of work it must still be seen (0316's function).
+      // Asked inside tenant B's unit of work it must still be seen (0317's function).
       await ctx.container.database.db.execute(sql`
         INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at)
         VALUES ('01900000-0000-7000-8000-00000000fe01', ${SEED_IDS.tenantA}, 'UPLOAD',

@@ -73,6 +73,7 @@ describe('gift cards in the bot', () => {
       tenantA,
       systemActor('resolve'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-gift-bot',
         telegramUserId: CUSTOMER,
         from: { id: Number(CUSTOMER), first_name: 'مشتری' },

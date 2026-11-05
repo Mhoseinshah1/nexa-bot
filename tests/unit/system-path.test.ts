@@ -10,7 +10,7 @@ import { SYSTEM_PATH_ALLOWLIST } from './system-path-allowlist';
  * Row-level security binds a tenant only when the checkout knows one. A `@ScopeBound`
  * adapter method called with no `ScopeContext` and nothing bound runs as nexa_system,
  * under the reason `Class.method`; a `withSystemScope('…')` call does so under its
- * literal reason. Each is a read or write that crosses tenants, so each is a decision.
+ * literal reason (or `withSystemScopeIn`, inside a tenant's transaction). Each is a read or write that crosses tenants, so each is a decision.
  * This lists them from the source and compares the list with the committed one: a new
  * unscoped adapter method, or a new explicit reason, fails here until somebody adds it
  * to `system-path-allowlist.ts` on purpose — and a removed one fails until the list
@@ -27,6 +27,17 @@ const ROOT = join(__dirname, '../../apps/api/src');
 const SCOPED_TYPE = /\b\w*Context\b|\bscope\s*[?:]/;
 // A transaction carries its scope too, but only a REQUIRED one: `tx?` may be absent.
 const TRANSACTION_TYPE = /\bTransactionScope\b/;
+
+/**
+ * The calls that name a system-path reason, and which argument holds it: the pool's
+ * `withSystemScope(reason, fn)`, the in-transaction `withSystemScopeIn(tx, reason, fn)`,
+ * and the capacity repository's `acrossTenants(tx, reason, fn)` over the two.
+ */
+const REASON_ARGUMENT: Readonly<Record<string, number>> = {
+  withSystemScope: 0,
+  withSystemScopeIn: 1,
+  acrossTenants: 1,
+};
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -72,14 +83,12 @@ function systemPathEntries(): string[] {
           if (!scoped) entries.add(`${node.name.text}.${member.name.getText()}`);
         }
       }
-      if (
-        ts.isCallExpression(node) &&
-        node.expression.getText() === 'withSystemScope' &&
-        node.arguments[0] !== undefined &&
-        ts.isStringLiteralLike(node.arguments[0]) &&
-        !relative(ROOT, file).endsWith('database-scope.ts')
-      ) {
-        entries.add(`reason: ${node.arguments[0].text}`);
+      if (ts.isCallExpression(node) && !relative(ROOT, file).endsWith('database-scope.ts')) {
+        const at = REASON_ARGUMENT[node.expression.getText()];
+        const reason = at === undefined ? undefined : node.arguments[at];
+        if (reason !== undefined && ts.isStringLiteralLike(reason)) {
+          entries.add(`reason: ${reason.text}`);
+        }
       }
       ts.forEachChild(node, visit);
     };

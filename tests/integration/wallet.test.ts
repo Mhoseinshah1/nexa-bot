@@ -72,6 +72,7 @@ describe('the wallet ledger', () => {
         correlationId: `resolve-${telegramUserId}` as never,
       },
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'زهرا' },

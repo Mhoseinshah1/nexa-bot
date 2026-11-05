@@ -108,6 +108,7 @@ describe('reseller tier fixed price per product (Round 4 PR-G)', () => {
       tenantA,
       customerActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'سارا' },

@@ -323,6 +323,7 @@ describe('Mirza PR2: legacy product review', () => {
       tenantA,
       { ...job, surface: 'TELEGRAM' },
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-lpr',
         telegramUserId: '900777',
         from: { id: 900777, first_name: 'تست' },

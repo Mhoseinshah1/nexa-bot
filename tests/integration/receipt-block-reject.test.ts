@@ -398,6 +398,7 @@ describe('Block User and the rejection reason, from the receipt message', () => 
     it('reads the reason from THIS tenant’s customer row only', async () => {
       // Tenant B has a blocked customer with the SAME Telegram id and a reason of its own.
       const b = await f.ctx.container.customers.resolveFromUpdate(tenantB, systemActor('b-res'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'b-resolve',
         telegramUserId: TG.customer,
         from: { id: Number(TG.customer), first_name: 'b' },
