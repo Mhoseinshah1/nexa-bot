@@ -15,7 +15,13 @@ import type { CurrencyCode } from './money.js';
  * Ours answers it once, here, for everything.
  */
 
-export const TENANT_KINDS = ['PRIMARY', 'RESELLER_BOT'] as const;
+/**
+ * `HOSTED` (phase 6A PR-3): a Nexa bot the installation's owner hosts for someone else — a
+ * full, independent Nexa that shares only the server (`hosting.ts`). A child of the PRIMARY
+ * tenant (the `tenants_parent_check` rule), but not a reseller: it has its own catalogue,
+ * customers and money, and nothing of its parent's.
+ */
+export const TENANT_KINDS = ['PRIMARY', 'RESELLER_BOT', 'HOSTED'] as const;
 export type TenantKind = (typeof TENANT_KINDS)[number];
 
 /** STOPPED is not DELETED. A stopped tenant retains its data and its history. */
