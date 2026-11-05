@@ -2213,6 +2213,20 @@
       "when": 1793829107727,
       "tag": "0315_capacity_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 316,
+      "version": "7",
+      "when": 1793840003594,
+      "tag": "0316_hosted_bots",
+      "breakpoints": true
+    },
+    {
+      "idx": 317,
+      "version": "7",
+      "when": 1793840017092,
+      "tag": "0317_hosting_permission_grant",
+      "breakpoints": true
     }
   ]
 }
