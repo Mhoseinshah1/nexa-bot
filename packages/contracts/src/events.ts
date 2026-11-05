@@ -250,6 +250,13 @@ export const EVENT_TYPES = [
   // whose owner made the change. A creation is the existing `TenantCreated`.
   'HostedBotStateChanged',
   'HostedBotExpiryChanged',
+  // Phase 6A PR-4 (D2): a hosted bot's activation. One setup step ran (token verified, domain
+  // connected, SSL issued, webhook registered, activation link made) or failed; and the hosted
+  // owner redeemed the one-time link and chose their Web Admin username and password. The step
+  // events are recorded on the installation tenant (the owner's act); the redemption on the
+  // HOSTED tenant (its own owner's act). Closed words and ids only: never a token or a link.
+  'HostedBotSetupStepChanged',
+  'HostedBotOwnerActivated',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -856,6 +863,17 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     hostedTenantId: z.string(),
     from: z.string().nullable(),
     to: z.string().nullable(),
+  }),
+  HostedBotSetupStepChanged: z.object({
+    hostedTenantId: z.string(),
+    step: z.enum(['TOKEN', 'DOMAIN', 'SSL', 'WEBHOOK', 'LINK']),
+    outcome: z.enum(['DONE', 'FAILED']),
+    /** The closed error code of a failed step; null when it succeeded. */
+    errorCode: z.string().nullable(),
+  }),
+  HostedBotOwnerActivated: z.object({
+    hostedTenantId: z.string(),
+    ownerAdminId: z.string(),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 
