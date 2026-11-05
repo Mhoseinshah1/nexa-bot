@@ -220,6 +220,7 @@ export async function resetDatabase(db: Database): Promise<void> {
        business_outbound_messages, business_messages, business_conversations,
        telegram_business_connections,
        -- Phase 6A PR-3: the creator panel's register, factor, codes and sessions.
+       hosted_bot_activation_links, hosted_bot_activations,
        hosted_bots, hosting_totp_factors, hosting_recovery_codes, hosting_sessions,
        customers
      RESTART IDENTITY CASCADE` as never,

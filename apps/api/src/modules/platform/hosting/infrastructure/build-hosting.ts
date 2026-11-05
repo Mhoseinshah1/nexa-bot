@@ -73,6 +73,9 @@ export function buildHosting(deps: {
   readonly hostingSection: HostingSectionService;
   readonly hosting: HostingService;
   readonly hostedBotExpiry: HostedBotExpiryService;
+  /** Phase 6A PR-4: what the activation's builder reuses. */
+  readonly hostingRepository: DrizzleHostingRepository;
+  readonly hostingOwner: HostingOwnerGuard;
 } {
   const repository = new DrizzleHostingRepository(deps.db);
   const system = new DrizzleHostedTenantSystemPath(deps.db, {
@@ -134,5 +137,11 @@ export function buildHosting(deps: {
     clock: deps.clock,
     ids: deps.ids,
   });
-  return { hostingSection, hosting, hostedBotExpiry };
+  return {
+    hostingSection,
+    hosting,
+    hostedBotExpiry,
+    hostingRepository: repository,
+    hostingOwner: owner,
+  };
 }

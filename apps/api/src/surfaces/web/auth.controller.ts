@@ -23,7 +23,7 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
 import {
   adminActor,
   anonymousActor,
-  assertOriginAllowed,
+  assertOriginOrHostedDomain,
   readChallengeToken,
   requireSessionToken,
 } from './authenticated-request.js';
@@ -60,11 +60,11 @@ export class AuthController {
     // an attacker who knows any administrator's credentials could sign a
     // victim's browser into THEIR account and watch what the victim then does.
     // The invariant is cheaper to hold than to reason about per-route.
-    assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
+    await assertOriginOrHostedDomain(this.container, request);
 
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
     const actor = anonymousActor(correlationId, request);
-    const scope = this.installationScope();
+    const scope = await this.loginScope(request);
 
     const outcome = await this.container.auth.signIn(
       scope,
@@ -93,7 +93,7 @@ export class AuthController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Body() body: unknown,
   ): Promise<LoginResponse> {
-    assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
+    await assertOriginOrHostedDomain(this.container, request);
     const challenge = readChallengeToken(request, this.isProduction);
     if (challenge === null) {
       throw errors.unauthenticated(
@@ -156,7 +156,7 @@ export class AuthController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<LogoutResponse> {
     const token = requireSessionToken(request, this.isProduction);
-    assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
+    await assertOriginOrHostedDomain(this.container, request);
 
     const { admin, session } = await this.container.auth.authenticate(token);
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
@@ -178,7 +178,7 @@ export class AuthController {
     @Body() body: unknown,
   ): Promise<{ ok: true }> {
     const token = requireSessionToken(request, this.isProduction);
-    assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
+    await assertOriginOrHostedDomain(this.container, request);
 
     const { admin, session } = await this.container.auth.authenticate(token);
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
@@ -203,6 +203,19 @@ export class AuthController {
     // instead of an unexplained 401 on their next click.
     this.clearSessionCookie(reply);
     return { ok: true };
+  }
+
+  /**
+   * Phase 6A PR-4: a request addressed to a VERIFIED hosted domain signs in to THAT hosted
+   * tenant; every other host — unknown names included — keeps the installation's behaviour.
+   * The host is `request.hostname` (Fastify believes `X-Forwarded-Host` only from a peer in
+   * `TRUSTED_PROXY_IPS`), resolved by `HostedOwnerActivationService`, never taken from the body.
+   */
+  private async loginScope(request: FastifyRequest): Promise<TenantContext> {
+    const hosted = await this.container.hostedOwnerActivation.resolveHost(request.hostname);
+    return hosted === null
+      ? this.installationScope()
+      : { tenantId: hosted.hostedTenantId as TenantContext['tenantId'], botInstanceId: null };
   }
 
   /**

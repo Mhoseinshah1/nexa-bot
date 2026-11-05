@@ -11754,8 +11754,10 @@ export const WEB_FA = {
   'web.outbox_event_tenant_status_changed': 'تغییر وضعیت مستأجر',
   'web.outbox_event_hosted_bot_state_changed': 'تغییر وضعیت ربات میزبانی‌شده',
   'web.outbox_event_hosted_bot_expiry_changed': 'تغییر تاریخ انقضای ربات میزبانی‌شده',
-  'web.outbox_event_hosted_bot_setup_step_changed': 'یک مرحلهٔ فعال‌سازی ربات میزبانی‌شده انجام شد یا ناموفق ماند',
-  'web.outbox_event_hosted_bot_owner_activated': 'صاحب ربات میزبانی‌شده با لینک فعال‌سازی وارد شد و نام کاربری و گذرواژه گذاشت',
+  'web.outbox_event_hosted_bot_setup_step_changed':
+    'یک مرحلهٔ فعال‌سازی ربات میزبانی‌شده انجام شد یا ناموفق ماند',
+  'web.outbox_event_hosted_bot_owner_activated':
+    'صاحب ربات میزبانی‌شده با لینک فعال‌سازی وارد شد و نام کاربری و گذرواژه گذاشت',
   'web.outbox_event_bot_instance_registered': 'ثبت ربات',
   'web.outbox_event_bot_instance_status_changed': 'تغییر وضعیت ربات',
   'web.outbox_event_setting_changed': 'تغییر تنظیم',

@@ -3,6 +3,7 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   HEALTH_ROUTES,
+  HOSTED_ACTIVATION_ROUTES,
   IDENTITY_ERROR_CODES,
   MINIAPP_API_PREFIX,
   SESSION_COOKIE_NAME,
@@ -38,6 +39,10 @@ const ANONYMOUS_ADMIN_ROUTES = new Set([
   // Development only (never registered in production): the RecordPing reference write path,
   // acting as SYSTEM_JOB. `dev-system-endpoint.test.ts` pins where it is mounted.
   `POST ${API_PREFIX}/system/ping`,
+  // Phase 6A PR-4: the hosted owner redeems their one-time activation link before they have an
+  // account. The token is the credential; the Origin is checked first (the static list, or the
+  // hosted domain's own).
+  `POST ${API_PREFIX}${HOSTED_ACTIVATION_ROUTES.redeem}`,
 ]);
 
 /** Prefixes that are not the Web Admin at all, each with its own authentication. */
@@ -52,6 +57,9 @@ const NON_ADMIN_PREFIXES = [
   // The customer mini app: Telegram initData and its own bearer session.
   MINIAPP_API_PREFIX,
   '/miniapp',
+  // Phase 6A PR-4: the edge's certificate question for hosted domains. Never proxied by the
+  // edge; answers only the edge's own address (`hosted-activation.test.ts`).
+  '/internal/hosting/',
 ];
 
 function concrete(url: string): string {

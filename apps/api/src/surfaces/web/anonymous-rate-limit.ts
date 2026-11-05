@@ -1,5 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { API_PREFIX, AUTH_ROUTES, PLATFORM_ERROR_CODES, type ErrorResponse } from '@nexa/contracts';
+import {
+  API_PREFIX,
+  AUTH_ROUTES,
+  HOSTED_ACTIVATION_ROUTES,
+  PLATFORM_ERROR_CODES,
+  type ErrorResponse,
+} from '@nexa/contracts';
 
 /**
  * A per-client-address budget for the routes anyone can call without a session (R12 F2).
@@ -37,6 +43,8 @@ export const ANONYMOUS_RATE_LIMITED_PREFIXES: readonly string[] = [
   '/health/',
   '/payments/return/',
   `${API_PREFIX}${AUTH_ROUTES.login}`,
+  // Phase 6A PR-4: the hosted owner's activation link redemption. Anonymous by design.
+  `${API_PREFIX}${HOSTED_ACTIVATION_ROUTES.redeem}`,
 ];
 
 export interface AnonymousRateLimiterOptions {
