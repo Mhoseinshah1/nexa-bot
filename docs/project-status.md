@@ -16,6 +16,7 @@ This file was moved verbatim out of `CLAUDE.md` on 2026-10-24. It holds project 
 - [Automatic renewal (Round 10, D1)](#automatic-renewal-round-10-d1)
 - [Phase 2 control plane](#phase-2-control-plane)
 - [Phase 6 capacity and usernames](#phase-6-capacity-and-usernames)
+- [Phase 6A creator panel](#phase-6a-creator-panel-میزبانیها-pr-3)
 - [Deployment](#deployment)
 - [Backup](#backup)
 - [Cleanup after a Mirza import (v0.9.7)](#cleanup-after-a-mirza-import-v097)
@@ -547,6 +548,17 @@ Four Phase 6B rules, each naming a way to oversell or mis-sell a panel:
   timestamps — deliberately NOT `configurationFingerprint`, which carries
   `status` and `updated_at` and would be invalidated by the act it authorises.
   Lowering a cap below current usage is accepted and terminates nothing.
+
+## Phase 6A creator panel («میزبانی‌ها», PR-3)
+
+Owner decisions, binding (ADR-0038): a hosted bot is a tenant of kind `HOSTED`, child of the
+installation tenant and NOT a reseller sub-tenant; the panel is the installation owner's only
+(installation scope + `hosting.manage` + the system `owner` role); it has its own TOTP factor,
+recovery codes and 12-hour section session, and every sensitive action asks for a fresh code;
+suspension, expiry and deletion stop the bot through the hosted TENANT row's status, which every
+write path's `ScopeActivityReader`, the webhook and Web Admin sign-in already refuse. Creating
+hosted bots stays closed in production until PR-1 (RLS) and PR-5 (isolation proof) are merged:
+the compiled `HOSTED_BOTS_PRODUCTION_RELEASE_MARKER` is flipped by PR-5 and nothing else.
 
 ## Deployment
 

@@ -246,6 +246,13 @@ export const configSchema = z
     DEV_SYSTEM_ENDPOINT_ENABLED: booleanish.default(false),
 
     TELEGRAM_WEBHOOK_ENABLED: booleanish.default(false),
+    /**
+     * Phase 6A PR-3: whether the creator panel may CREATE hosted bots. One of two keys: in
+     * production it opens nothing until the compiled release marker is set too
+     * (`modules/platform/hosting/domain/create-gate.ts`, flipped by PR-5 once tenant
+     * isolation is enforced and proven). Deliberately absent from the deployment template.
+     */
+    HOSTED_BOTS_CREATE_ENABLED: booleanish.default(false),
     // Round 9, C5: where the built mini app (`apps/miniapp/dist`) is read from at boot. Empty
     // (the default outside the image) means the API serves no mini-app document; the image
     // sets it to the copy it carries. Read once, as files: nothing under it is executed.

@@ -1002,6 +1002,11 @@ import {
 import { NewCustomerGate } from './modules/platform/capacity/application/new-customer-gate.js';
 import { HeavyJobGate } from './modules/platform/capacity/application/heavy-job-gate.js';
 import { CapacityMonitor } from './modules/platform/capacity/application/capacity-monitor.js';
+// Phase 6A PR-3: the creator panel.
+import { buildHosting } from './modules/platform/hosting/infrastructure/build-hosting.js';
+import type { HostingSectionService } from './modules/platform/hosting/application/hosting-section.service.js';
+import type { HostingService } from './modules/platform/hosting/application/hosting.service.js';
+import type { HostedBotExpiryService } from './modules/platform/hosting/application/hosted-bot-expiry.service.js';
 import {
   CAPACITY_MONITOR_INTERVAL_MS,
   CapacityMonitorLoop,
@@ -1303,6 +1308,10 @@ export interface Container {
   readonly heavyJobs: HeavyJobGate;
   /** Phase 6A PR-2: the owner's disk, memory and worker-lag alerts (worker loop). */
   readonly capacityMonitorLoop: CapacityMonitorLoop;
+  /** Phase 6A PR-3: the creator panel (owner only, behind its own second factor). */
+  readonly hostingSection: HostingSectionService;
+  readonly hosting: HostingService;
+  readonly hostedBotExpiry: HostedBotExpiryService;
   setInstallationTenant(tenantId: TenantId | null): void;
   readonly recordPing: RecordPingService;
   /**
@@ -2395,6 +2404,38 @@ export function createContainer(
     idempotency,
     scopeActivity: tenants,
     resolver: capacityResolver,
+    installationTenantId: () => installationTenantId,
+  });
+
+  /*
+   * Phase 6A PR-3: the creator panel, «میزبانی‌ها» — the installation owner's hosted bots,
+   * behind their own TOTP factor and 12-hour section session; the expiry sweep runs in the
+   * installation-scoped sweep loop below. The disks are the capacity monitor's two.
+   */
+  const { hostingSection, hosting, hostedBotExpiry } = buildHosting({
+    db: database.db,
+    config,
+    uow,
+    guard,
+    audit,
+    opsLog,
+    outbox,
+    idempotency,
+    scopeActivity: tenants,
+    cipher,
+    hasher,
+    clock,
+    ids,
+    qr: new PngQrCodeEncoder(),
+    admins,
+    roles,
+    sessions,
+    verifyOwnPassword: (scope, actor, password, context, action) =>
+      adminManagement.verifyOwnPassword(scope, actor, password, context, action),
+    capacityLimits,
+    capacityResolver,
+    systemProbe,
+    diskPaths: ['/', config.BACKUP_WORK_DIR],
     installationTenantId: () => installationTenantId,
   });
 
@@ -5283,6 +5324,13 @@ export function createContainer(
         name: 'reseller-expiry',
         everyMs: 0,
         runOnce: async (scope) => resellerExpiryService.runOnce(scope),
+      },
+      {
+        // Phase 6A PR-3: a hosted bot's expiry date is a deadline too. The loop's scope is
+        // the installation's, which owns the register of hosted bots.
+        name: 'hosted-bot-expiry',
+        everyMs: 0,
+        runOnce: async (scope) => hostedBotExpiry.runOnce(scope),
       },
       {
         /*
@@ -9132,6 +9180,9 @@ export function createContainer(
     },
     capacityLimits,
     capacityResolver,
+    hostingSection,
+    hosting,
+    hostedBotExpiry,
     botTurnGuard,
     heavyJobs,
     capacityMonitorLoop,

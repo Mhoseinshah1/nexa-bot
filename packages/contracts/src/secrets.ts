@@ -74,6 +74,11 @@
  * the entity is the batch row's id, so an export moved onto another batch — or another tenant's —
  * fails authentication. The worker purges it (both columns NULL) once the window passes, after
  * which the codes exist only as hashes.
+ *
+ * `hosting.totp_secret` is the creator panel's own RFC 6238 secret (phase 6A PR-3,
+ * `hosting_totp_factors`), separate from the sign-in factor's `admin.totp_secret` so a secret
+ * moved between the two tables fails authentication; the entity is the factor row's id.
+ * Declared with its producer, `HostingSectionService.enrol`.
  */
 export const SECRET_PURPOSES = [
   'bot_instance.token',
@@ -89,6 +94,7 @@ export const SECRET_PURPOSES = [
   'legacy_migration.package_key',
   'backup.archive_password',
   'gift_card.batch_export',
+  'hosting.totp_secret',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 

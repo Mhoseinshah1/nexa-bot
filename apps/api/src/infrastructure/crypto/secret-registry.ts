@@ -4,6 +4,7 @@ import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { Database, Executor } from '../persistence/database.js';
 import {
   adminTotpFactors,
+  hostingTotpFactors,
   gatewayProviderRequests,
   backupArchivePasswords,
   botInstances,
@@ -600,6 +601,65 @@ const adminTotpSecret: SecretColumn = {
   },
 };
 
+/**
+ * Phase 6A PR-3: the creator panel's own TOTP secret (`hosting_totp_factors`), separate from
+ * the sign-in factor's. The entity in the AEAD context is the factor row's own id.
+ */
+const hostingTotpSecret: SecretColumn = {
+  purpose: 'hosting.totp_secret',
+  table: 'hosting_totp_factors',
+  ciphertextColumn: 'totp_secret_ciphertext',
+  keyIdColumn: 'totp_secret_key_id',
+
+  async all(db) {
+    return db
+      .select({
+        ciphertext: hostingTotpFactors.totpSecretCiphertext,
+        keyId: hostingTotpFactors.totpSecretKeyId,
+      })
+      .from(hostingTotpFactors);
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: hostingTotpFactors.id })
+      .from(hostingTotpFactors)
+      .where(cursor === null ? undefined : gt(hostingTotpFactors.id, cursor))
+      .orderBy(asc(hostingTotpFactors.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: hostingTotpFactors.id,
+        tenantId: hostingTotpFactors.tenantId,
+        ciphertext: hostingTotpFactors.totpSecretCiphertext,
+        keyId: hostingTotpFactors.totpSecretKeyId,
+      })
+      .from(hostingTotpFactors)
+      .where(eq(hostingTotpFactors.id, id))
+      .for('update')
+      .limit(1);
+    return row ?? null;
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(hostingTotpFactors)
+      .set({ totpSecretCiphertext: next.ciphertext, totpSecretKeyId: next.keyId })
+      .where(
+        and(
+          eq(hostingTotpFactors.id, id),
+          eq(hostingTotpFactors.totpSecretCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: hostingTotpFactors.id });
+    return updated.length > 0;
+  },
+};
+
 // TB4: a tenant's key for one AI provider (ADR-0034 §8).
 const supportAiProviderApiKey: SecretColumn = {
   purpose: 'support_ai_provider.api_key',
@@ -853,6 +913,7 @@ export const SECRET_COLUMNS: readonly SecretColumn[] = [
   paymentGatewayVerifyKey,
   paymentGatewayRefundCard,
   adminTotpSecret,
+  hostingTotpSecret,
   supportAiProviderApiKey,
   legacyNxpkgPackageKey,
   backupArchivePassword,
