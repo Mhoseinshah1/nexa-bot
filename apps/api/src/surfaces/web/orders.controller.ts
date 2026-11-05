@@ -85,6 +85,11 @@ export class OrdersController {
       },
     });
     // Who each order is for, as Telegram knows them — one read for the page (spec §10).
+    // Phase 6A D0: counted toward the owner's bulk-read alert; never fails the read.
+    await this.container.ownerAlerts.rowsRead(scope, actor, {
+      resource: 'orders',
+      rows: result.items.length,
+    });
     const identities = await this.container.orders.customerIdentities(scope, actor, result.items);
     const labels = await this.labels(scope, actor, result.items);
     return {

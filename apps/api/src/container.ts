@@ -313,6 +313,9 @@ import { LegacyCleanupScheduler } from './modules/platform/legacy-compaction/app
 import { DrizzleLegacyCompactionRepository } from './modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
+import { S3OffsiteUploader } from './modules/platform/backup/infrastructure/s3-offsite-uploader.js';
+import { OwnerSecurityAlerts } from './modules/platform/owner-alerts/application/owner-security-alerts.js';
+import { DrizzleOwnerAlertStore } from './modules/platform/owner-alerts/infrastructure/drizzle-owner-alert.store.js';
 import { RoutedBackupDelivery } from './modules/platform/backup/application/routed-backup-delivery.js';
 import { BackupSchedulePolicy } from './modules/platform/backup/application/backup-schedule.js';
 import { OpsGroupBackupTopicAdapter } from './modules/control/ops-group/application/backup-topic.js';
@@ -1231,6 +1234,12 @@ export interface Container {
   readonly sessions: DrizzleSessionRepository;
   readonly loginThrottle: DrizzleLoginThrottleRepository;
   readonly auth: AuthenticationService;
+  /**
+   * Phase 6A D0: the installation owner's security alerts (`auth.login_new_ip`,
+   * `access.data_exported`, `access.bulk_read`), recorded only in the installation tenant's
+   * scope so they reach the owner's operations group and never a hosted tenant's.
+   */
+  readonly ownerAlerts: OwnerSecurityAlerts;
   readonly adminManagement: AdminManagementService;
   /** Phase D2: an administrator's own second factor, sessions and history; owner recovery. */
   readonly accountSecurity: AccountSecurityService;
@@ -1720,6 +1729,11 @@ export interface Container {
    * event loop would be a two-hour subprocess beside the webhook.
    */
   readonly backup: BackupService;
+  /**
+   * Phase 6A D0: the write-only off-site copy of verified archives (`docs/backup.md` § Off-site
+   * copy). Unconfigured — the default — it sends nothing; `botctl backup offsite test` uses it.
+   */
+  readonly backupOffsite: S3OffsiteUploader;
   readonly backupScheduler: BackupScheduler;
   /**
    * Whether a recovery holds the installation quiesced right now.
@@ -2093,6 +2107,22 @@ export function createContainer(
     uow,
   );
 
+  const ownerAlertStore = new DrizzleOwnerAlertStore(database.db);
+  const ownerAlerts = new OwnerSecurityAlerts({
+    opsLog,
+    knownIps: ownerAlertStore,
+    readWindows: ownerAlertStore,
+    // Lazily: the resolver is built further down, and is only asked at request time.
+    settings: { valueOf: (scope, key, tx) => settingsResolver.valueOf(scope, key, tx) },
+    uow,
+    installationScope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    clock,
+    logger,
+  });
+
   const auth = new AuthenticationService(
     admins,
     roles,
@@ -2109,6 +2139,7 @@ export function createContainer(
     tenants,
     guard,
     { factors: secondFactors, challenges: loginChallenges, cipher },
+    ownerAlerts,
   );
 
   const adminManagement = new AdminManagementService(
@@ -3719,6 +3750,7 @@ export function createContainer(
    */
   const giftCardRepository = new DrizzleGiftCardRepository(database.db);
   const giftCardAdminService = new GiftCardAdminService({
+    ownerAlerts,
     repository: giftCardRepository,
     sealer: new SecretCipherGiftCardSealer(cipher),
     csv: new PresentationGiftCardCsvRenderer(new CachedTenantPresentationReader(tenants, clock)),
@@ -5235,6 +5267,7 @@ export function createContainer(
   });
 
   const reportingService = new ReportingService({
+    ownerAlerts,
     access: new ReportAccess(guard, admins, opsLog),
     repository: new DrizzleReportingRepository(database.db),
     periods: new IntlReportPeriodResolver(),
@@ -7740,6 +7773,7 @@ export function createContainer(
     clock,
   });
   const auditLogService = new AuditLogService({
+    ownerAlerts,
     guard,
     reader: new DrizzleAuditLogReader(database.db),
     audit,
@@ -8086,7 +8120,19 @@ export function createContainer(
     protectedByRecovery: () => recoveryRequests.backupIdsInUse(),
     logger,
   });
+  const backupOffsite = new S3OffsiteUploader({
+    endpoint: config.BACKUP_OFFSITE_ENDPOINT,
+    region: config.BACKUP_OFFSITE_REGION,
+    bucket: config.BACKUP_OFFSITE_BUCKET,
+    accessKeyId: config.BACKUP_OFFSITE_ACCESS_KEY_ID,
+    secretAccessKey: config.BACKUP_OFFSITE_SECRET_ACCESS_KEY,
+    prefix: config.BACKUP_OFFSITE_PREFIX,
+    retentionDays: config.BACKUP_OFFSITE_RETENTION_DAYS,
+    pathStyle: config.BACKUP_OFFSITE_PATH_STYLE,
+    timeoutMs: config.BACKUP_OFFSITE_TIMEOUT_MS,
+  });
   const backup = new BackupService({
+    offsite: backupOffsite,
     diskPreflight: async () => {
       const state = await backupDiskState();
       return state === null
@@ -8205,6 +8251,7 @@ export function createContainer(
     new PgCandidateKeyStore(config.DATABASE_URL, backupTools.liveDatabase),
   );
   const installationKeys = new InstallationKeyService({
+    ownerAlerts,
     keyring,
     loader: installationKeyLoader,
     keys: installationKeyRepository,
@@ -8372,6 +8419,7 @@ export function createContainer(
     logger,
   });
   const backupAdmin = new BackupAdminService({
+    ownerAlerts,
     runs: backupRuns,
     archivePassword: (scope) => backupPasswords.status(scope),
     recoveries: recoveryRequests,
@@ -8970,6 +9018,7 @@ export function createContainer(
     sessions,
     loginThrottle,
     auth,
+    ownerAlerts,
     adminManagement,
     accountSecurity,
     secondFactors,
@@ -9466,6 +9515,7 @@ export function createContainer(
     diagnostics,
     panelMonitor,
     backup,
+    backupOffsite,
     backupScheduler,
     backupHousekeeping,
     backupOrphanSweep,

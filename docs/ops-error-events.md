@@ -181,6 +181,30 @@ The text comes from the template `ops.notification.payment_link_failed` (catalog
 `packages/i18n/src/catalogue.fa.ts`, editable per tenant in the Web Admin). Exactly one
 `علت` line survives — the renderer drops every line whose placeholders are all absent.
 
+## Phase 6A D0 — the installation owner's security alerts
+
+One install hosts the owner's bot and other owners' bots (tenants). These three alerts are
+the PLATFORM owner's: `OwnerSecurityAlerts` records them in the installation tenant's scope
+only, so the projection queues them for the installation operator's operations group
+(SECURITY topic) and never for a hosted tenant's group. No installation tenant yet: nothing.
+
+| Code                   | When                                                                                                                                                                      | Dedupe                   | Context (shown in the group)                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------ |
+| `auth.login_new_ip`    | a Web Admin sign-in on the installation tenant from an address this administrator never signed in from (`admin_known_ips`); the first-ever sign-in only remembers it      | per occurrence           | `adminUsername`, `clientIp`                                  |
+| `access.data_exported` | any export or download: report CSV/XLSX, audit-log CSV, gift-card codes, the Recovery Kit, a backup archive (or part) — from any tenant, addressed to the owner           | per occurrence           | `adminUsername`, `exportKind`, `rowCount`, `format`          |
+| `access.bulk_read`     | one Web Admin list above `security.bulk_read_rows` (500), or one administrator's reads in a `security.bulk_read_window_minutes` (10) window above `…_window_rows` (2 000) | one per admin per window | `adminUsername`, `readResource`, `rowCount`, `windowMinutes` |
+
+- The sign-in alert is written in the transaction that mints the session (with the address
+  row), so the two commit together. An address the trusted-proxy configuration cannot believe
+  is neither remembered nor alerted on.
+- An export is announced BEFORE its file is returned, and fails closed: an export whose alert
+  cannot be recorded is refused. A read never fails because its counter could not be written.
+- Reads counted today: the customers, payments, orders and services lists and the customer
+  record (`users/:id`). The window rows live in the reading administrator's own tenant
+  (`admin_read_windows`, removed a day after their window).
+- Nothing in an alert is a secret, a filter value or a row's content; the Persian title and
+  sentence are the code's (`operational-events.fa.ts`, `operational-event-messages.fa.ts`).
+
 ## Coverage matrix
 
 Visibility: **L** = `operational_events` (Web Admin alerts / ops log), **A** = audit log,

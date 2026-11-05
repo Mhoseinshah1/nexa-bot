@@ -1653,7 +1653,7 @@ main() {
 
   start_data_services
   run_migrations
-  # After the migrations (0315 makes the roles) and before anything starts, so no process
+  # After the migrations (0316 makes the roles) and before anything starts, so no process
   # is ever pointed at a role that cannot log in. A failure leaves the processes on the
   # owner, where row-level security is inert, and says so (ADR-0037).
   nexa_ensure_app_db_role || nexa_warn "row-level security is NOT in force on this installation until 'botctl update' configures the application role."

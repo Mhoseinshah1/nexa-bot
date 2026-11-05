@@ -376,6 +376,25 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
    * R12 F2 item 4: the owner's outbound allow-list. The description is the warning: each
    * address here is one a panel URL may point at although it reaches this server itself.
    */
+  // Phase 6A D0: when a Web Admin read is large enough to alert the owner (`access.bulk_read`).
+  'security.bulk_read_rows': {
+    title: 'web.setting_bulk_read_rows',
+    description: 'web.setting_bulk_read_rows_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_rows' },
+  },
+  'security.bulk_read_window_rows': {
+    title: 'web.setting_bulk_read_window_rows',
+    description: 'web.setting_bulk_read_window_rows_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_rows' },
+  },
+  'security.bulk_read_window_minutes': {
+    title: 'web.setting_bulk_read_window_minutes',
+    description: 'web.setting_bulk_read_window_minutes_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_minutes' },
+  },
   'security.outbound_private_targets': {
     title: 'web.setting_outbound_private_targets',
     description: 'web.setting_outbound_private_targets_desc',

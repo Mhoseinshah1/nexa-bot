@@ -1054,6 +1054,30 @@ and nothing here does it.
 Backups are not rotated automatically. Retention is an operator decision;
 `/var/backups/nexa` is on the disk-space checklist.
 
+This pre-update dump is plaintext and stays on the host. The encrypted, verified archive of
+the backup pipeline is the one that leaves it — to Telegram, and (Phase 6A D0) to a
+write-only, object-locked S3 bucket once its keys are in `nexa.env`; `sudo botctl backup
+offsite test` writes one test object and reports in Persian (`docs/backup.md` § Off-site copy).
+
+## Host hardening: `botctl harden check` (Phase 6A D0)
+
+`sudo botctl harden check` is a read-only review of the host, in Persian, one line per item
+(`PASS`/`WARN`, a stable ASCII id in the second column). It reads files and asks
+`ufw status` and `ss -Hltn`; it never changes, restarts or installs anything, takes no lock,
+and exits 0 whatever it finds — a WARN is advice, not a failure.
+
+| Id              | PASS when                                                                                                                                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ssh-password`  | `PasswordAuthentication no` and `KbdInteractiveAuthentication no`, read as sshd does: `Include`d drop-ins in place (Ubuntu's `50-cloud-init.conf` often sets `yes` first, and the first value wins), no `Match` |
+| `ssh-root`      | `PermitRootLogin no` (`prohibit-password`, the OpenSSH default, is a WARN)                                                                                                                                      |
+| `firewall`      | ufw is active and allows nothing but 80, 443 and the SSH port                                                                                                                                                   |
+| `open-ports`    | nothing but 80, 443 and SSH listens outside loopback — Docker publishes ports around ufw, so this is checked apart from it                                                                                      |
+| `docker-socket` | the socket is not world-accessible, its group has no members, the daemon is not on TCP (daemon.json, a unit or drop-in, 2375/2376) and no compose file mounts it                                                |
+| `config-modes`  | `/etc/nexa` is `0700` and every file in it gives the group and others nothing (it names files, never contents)                                                                                                  |
+| `upgrades`      | unattended-upgrades is installed and `APT::Periodic::Unattended-Upgrade "1"`                                                                                                                                    |
+
+Tests: `tests/deploy/harden-check.test.sh`, against fixture files under `NEXA_HOST_ROOT`.
+
 ## Updating
 
 ```bash

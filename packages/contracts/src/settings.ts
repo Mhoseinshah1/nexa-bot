@@ -483,6 +483,21 @@ export const LEGACY_IMPORT_ADOPTION_CONCURRENCY_MAX = 16;
 export const OUTBOUND_PRIVATE_TARGETS_SETTING_KEY = 'security.outbound_private_targets';
 
 /**
+ * Phase 6A D0: when a read is large enough to alert the installation owner (`access.bulk_read`).
+ * One admin call returning more than `perCall` rows, or one administrator reading more than
+ * `perWindow` rows inside one fixed window of `windowMinutes` (half-open, counted per admin), is
+ * announced in the owner's operations group. Read on the installation tenant only.
+ */
+export const BULK_READ_SETTING_KEYS = {
+  perCall: 'security.bulk_read_rows',
+  perWindow: 'security.bulk_read_window_rows',
+  windowMinutes: 'security.bulk_read_window_minutes',
+} as const;
+export const BULK_READ_PER_CALL_DEFAULT = 500;
+export const BULK_READ_PER_WINDOW_DEFAULT = 2_000;
+export const BULK_READ_WINDOW_MINUTES_DEFAULT = 10;
+
+/**
  * Settings whose edit is a security decision, not configuration: writing one also requires
  * `settings.destructive` (CRITICAL), which the owner role holds and an operator with only
  * `settings.edit` does not. A key here is one that widens what the installation will reach.
@@ -494,6 +509,10 @@ export const OWNER_ONLY_SETTING_KEYS: readonly string[] = [
   LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.basisPoints,
   // NEXA v096 PR-2: how hard an import loads the database and the panel lock.
   LEGACY_IMPORT_ADOPTION_CONCURRENCY_SETTING_KEY,
+  // Phase 6A D0: raising them silences the owner's bulk-read alert.
+  BULK_READ_SETTING_KEYS.perCall,
+  BULK_READ_SETTING_KEYS.perWindow,
+  BULK_READ_SETTING_KEYS.windowMinutes,
 ];
 
 /**
@@ -719,6 +738,47 @@ export const SETTINGS = [
     zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'SENSITIVE',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: BULK_READ_SETTING_KEYS.perCall,
+    description:
+      'Phase 6A D0: one Web Admin list, search or export that returns more than this many rows ' +
+      'is announced to the installation owner (`access.bulk_read`). 0 switches the per-call ' +
+      'alert off.',
+    schema: z.number().int().min(0).max(1_000_000),
+    defaultValue: BULK_READ_PER_CALL_DEFAULT,
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: BULK_READ_SETTING_KEYS.perWindow,
+    description:
+      'Phase 6A D0: one administrator reading more than this many rows through the Web Admin ' +
+      'within one window of `security.bulk_read_window_minutes` is announced to the ' +
+      'installation owner once per window. 0 switches the window alert off.',
+    schema: z.number().int().min(0).max(10_000_000),
+    defaultValue: BULK_READ_PER_WINDOW_DEFAULT,
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: BULK_READ_SETTING_KEYS.windowMinutes,
+    description:
+      'Phase 6A D0: the length, in minutes, of the fixed window `security.bulk_read_window_rows` ' +
+      'counts an administrator’s reads in.',
+    schema: z.number().int().min(1).max(1_440),
+    defaultValue: BULK_READ_WINDOW_MINUTES_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
     configures: null,
     consumer: 'ACTIVE',
   },

@@ -1085,7 +1085,7 @@ nexa_backup_cpu_percent_setting() {
 #
 # Row-level security binds only a role that does not own the tables, so the
 # application connects as `nexa_app` through DATABASE_APP_URL; DATABASE_URL stays the
-# owner's, for migrations, dumps and restores. Migration 0315 creates the roles with no
+# owner's, for migrations, dumps and restores. Migration 0316 creates the roles with no
 # login. This gives `nexa_app` its login and its password — generated here once, then
 # read back on every later run and RE-ASSERTED, so a cluster that lost the role (a
 # fresh volume, a restore) agrees with the file again — and only then writes the URL,

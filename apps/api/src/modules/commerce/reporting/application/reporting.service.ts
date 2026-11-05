@@ -1,3 +1,4 @@
+import type { OwnerExportAlerts } from '../../../platform/owner-alerts/application/ports.js';
 import {
   CONTROL_ERROR_CODES,
   PAYMENT_STATES,
@@ -95,6 +96,8 @@ export interface ReportRangeRequest {
 }
 
 export interface ReportingServiceDeps {
+  /** Phase 6A D0: announces every export to the installation owner before it leaves. */
+  readonly ownerAlerts?: OwnerExportAlerts;
   readonly access: ReportAccess;
   readonly repository: ReportingRepository;
   readonly periods: ReportPeriodResolver;
@@ -824,6 +827,11 @@ export class ReportingService {
       );
     }
     const bytes = format === 'csv' ? this.deps.writer.csv(table) : this.deps.writer.xlsx(table);
+    await this.deps.ownerAlerts?.dataExported(scope, actor, {
+      kind: 'REPORT',
+      rows: table.rows.length,
+      format: `${report} ${format}`,
+    });
     return {
       fileName: `${exportFileStem(report, r, this.deps.periods)}.${format}`,
       contentType:

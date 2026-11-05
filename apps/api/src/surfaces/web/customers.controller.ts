@@ -87,6 +87,11 @@ export class CustomersController {
         ...(page.tag === undefined ? {} : { tagId: page.tag.toLowerCase() }),
       },
     });
+    // Phase 6A D0: counted toward the owner's bulk-read alert; never fails the read.
+    await this.container.ownerAlerts.rowsRead(scope, actor, {
+      resource: 'customers',
+      rows: result.items.length,
+    });
     return {
       customers: result.items.map(toSummary),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
@@ -99,7 +104,10 @@ export class CustomersController {
     // The id is NOT cast here. `CustomerService.get` validates it, so a Telegram admin
     // surface added later cannot reach the repository with `not-a-uuid` and turn a
     // malformed request into a 500 at the `uuid` cast.
-    return { customer: toSummary(await this.container.customers.get(scope, actor, id)) };
+    const customer = await this.container.customers.get(scope, actor, id);
+    // One customer record: counted into the window, so reading many one by one is seen too.
+    await this.container.ownerAlerts.rowsRead(scope, actor, { resource: 'customer', rows: 1 });
+    return { customer: toSummary(customer) };
   }
 
   @Post('users/:id/block')

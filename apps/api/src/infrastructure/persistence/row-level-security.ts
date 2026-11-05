@@ -30,7 +30,7 @@ import type { DatabaseHandle } from './database.js';
 export const APP_ROLE = 'nexa_app';
 /** Reached only by `SET ROLE` from `nexa_app`, for an explicit `SystemContext`. */
 export const SYSTEM_ROLE = 'nexa_system';
-/** The tenant a checkout is bound to (`nexa_current_tenant_id()`, 0315). */
+/** The tenant a checkout is bound to (`nexa_current_tenant_id()`, 0316). */
 export const TENANT_SETTING = 'app.current_tenant_id';
 /** The system scope's reason; the system policy refuses every row without one. */
 export const SYSTEM_REASON_SETTING = 'app.system_reason';
@@ -42,7 +42,7 @@ export const SYSTEM_REASON_SETTING = 'app.system_reason';
 export const TENANT_POLICY = 'nexa_tenant_isolation';
 
 /**
- * ONE policy per table, TO PUBLIC (0315 says why the roles are named inside the
+ * ONE policy per table, TO PUBLIC (0316 says why the roles are named inside the
  * functions, not in `TO`): the system path, or the bound tenant's rows.
  */
 export const TENANT_POLICY_PREDICATE =
@@ -51,7 +51,7 @@ export const TENANT_POLICY_PREDICATE =
 /**
  * The application roles' privileges, re-asserted on every migration run.
  *
- * 0315 granted them once, and default privileges cover what this owner creates later.
+ * 0316 granted them once, and default privileges cover what this owner creates later.
  * What neither covers is a database that LOST them: backups are dumped `--no-acl`, so a
  * recovery's restored candidate holds no grant for nexa_app, and a process connecting
  * as nexa_app to it would be refused on every table. Idempotent and lock-free (a GRANT

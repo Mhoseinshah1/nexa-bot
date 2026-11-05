@@ -32,6 +32,12 @@ export const REHEARSAL_FORCED_SETTINGS = {
   TELEGRAM_WEBHOOK_ENABLED: 'false',
   BACKUP_TELEGRAM_BOT_TOKEN: '',
   BACKUP_TELEGRAM_CHAT_ID: '',
+  // Phase 6A D0: nor to the owner's off-site bucket. Empty is "off" (all five or none).
+  BACKUP_OFFSITE_ENDPOINT: '',
+  BACKUP_OFFSITE_REGION: '',
+  BACKUP_OFFSITE_BUCKET: '',
+  BACKUP_OFFSITE_ACCESS_KEY_ID: '',
+  BACKUP_OFFSITE_SECRET_ACCESS_KEY: '',
   BACKUP_SCHEDULE_ENABLED: 'false',
   PROVISIONER_ENABLED: 'false',
   PANEL_MONITOR_ENABLED: 'false',
@@ -69,6 +75,7 @@ export interface RehearsalMessagingConfig {
   readonly TELEGRAM_WEBHOOK_ENABLED: boolean;
   readonly BACKUP_TELEGRAM_BOT_TOKEN: string;
   readonly BACKUP_TELEGRAM_CHAT_ID: string;
+  readonly BACKUP_OFFSITE_ENDPOINT: string;
   readonly BACKUP_SCHEDULE_ENABLED: boolean;
   readonly PROVISIONER_ENABLED: boolean;
   readonly PANEL_MONITOR_ENABLED: boolean;
@@ -81,6 +88,9 @@ export function messagingProblems(config: RehearsalMessagingConfig): string[] {
   if (config.TELEGRAM_WEBHOOK_ENABLED) problems.push('the Telegram webhook is on');
   if (config.BACKUP_TELEGRAM_BOT_TOKEN !== '' || config.BACKUP_TELEGRAM_CHAT_ID !== '') {
     problems.push('backup delivery to Telegram is configured');
+  }
+  if (config.BACKUP_OFFSITE_ENDPOINT !== '') {
+    problems.push('the off-site backup copy is configured');
   }
   if (config.BACKUP_SCHEDULE_ENABLED) problems.push('the backup schedule is on');
   if (config.PROVISIONER_ENABLED) problems.push('the provisioner is on');

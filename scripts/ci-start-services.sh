@@ -81,7 +81,7 @@ for _ in $(seq 1 30); do
     printf 'ok    postgres answers queries\n'
     # ADR-0037: the application role the integration suite's containers connect as
     # (tests/integration/harness.ts, `testAppDatabaseUrl`), with this throwaway server's
-    # development password. Migration 0315 would create it without a login.
+    # development password. Migration 0316 would create it without a login.
     docker exec -i nexa-ci-postgres psql -U nexa -d postgres -v ON_ERROR_STOP=1 -q <<'SQL' || {
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexa_app') THEN
