@@ -378,7 +378,7 @@ export function executeResultLines(result: BotBootstrapResult, tenantSlug: strin
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const config = loadConfig();
-  const container = createContainer(config, 'worker');
+  const container = createContainer(config, 'worker', { connection: 'owner' });
 
   try {
     // The decrypt-only keys imported from Recovery Kits (ADR-0032). After a

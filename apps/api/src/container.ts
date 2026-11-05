@@ -1900,6 +1900,15 @@ export interface ContainerOptions {
    * and one log line in it makes the document unreadable). Never "off": the lines are kept.
    */
   readonly logTo?: 'stdout' | 'stderr';
+  /**
+   * Which role the process's pool connects as (ADR-0037). `application` — the default, and
+   * what every serving process (`main*.ts`, the API) uses — is `DATABASE_APP_URL`, as
+   * nexa_app, bound by row-level security. `owner` is `DATABASE_URL`, for the OPERATOR's
+   * CLIs (`*.cli.ts`): run by root through `botctl`, installation-wide by design (a rewrap
+   * of every secret column, a bootstrap, a backup), and holding the owner's credential for
+   * their dumps and restores anyway. Named at each call, never inferred.
+   */
+  readonly connection?: 'application' | 'owner';
 }
 
 export function createContainer(
@@ -1941,7 +1950,10 @@ export function createContainer(
   // As nexa_app when the installation has been given its credential, so row-level
   // security binds every statement this process makes (ADR-0037); on the owner until
   // then, where the policies are inert and nothing behaves differently.
-  const applicationDatabaseUrl = config.DATABASE_APP_URL ?? config.DATABASE_URL;
+  const applicationDatabaseUrl =
+    options.connection === 'owner'
+      ? config.DATABASE_URL
+      : (config.DATABASE_APP_URL ?? config.DATABASE_URL);
   const database = createDatabase(
     applicationDatabaseUrl,
     config.DATABASE_POOL_MAX,

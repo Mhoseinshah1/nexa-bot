@@ -151,7 +151,7 @@ import { takeLegacyInventory } from './modules/platform/legacy-importer/applicat
  * `--format json` it is ONE document — a log line in it (the importer's per-section timing,
  * any warning) makes it unreadable to the rehearsal and to every script that captures it.
  */
-export const CLI_CONTAINER: ContainerOptions = { logTo: 'stderr' };
+export const CLI_CONTAINER: ContainerOptions = { logTo: 'stderr', connection: 'owner' };
 
 /**
  * `legacy-import` — the P7 legacy importer (`docs/legacy-migration/importer.md`).

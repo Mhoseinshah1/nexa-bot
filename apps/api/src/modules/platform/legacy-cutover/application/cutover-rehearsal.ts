@@ -49,6 +49,9 @@ export function rehearsalEnvironment(
     ...base,
     ...REHEARSAL_FORCED_SETTINGS,
     DATABASE_URL: input.databaseUrl,
+    // ADR-0037: never the live installation's application connection — it names the live
+    // database, and the rehearsal's is the scratch one above.
+    DATABASE_APP_URL: undefined,
     // R12 F2: the rehearsal's stand-in panels listen on THIS one-off container's edge
     // address (`standinAddress`), and the URL policy refuses the edge network by default.
     // The rehearsal is disposable and isolated, and its own stand-in is the one panel it

@@ -613,7 +613,7 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
-  const container = createContainer(config, 'worker');
+  const container = createContainer(config, 'worker', { connection: 'owner' });
   try {
     if (args.command === 'run') process.exit(await cmdRun(container));
     if (args.command === 'list') process.exit(await cmdList(container, args.limit));
