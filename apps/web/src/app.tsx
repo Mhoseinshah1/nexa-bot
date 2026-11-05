@@ -24,6 +24,7 @@ import { useNavCounters } from './nav-counters';
 import { prefetchNav, type NavPrefetch } from './nav-prefetch';
 import { BottomNav, CommandSearch, Sidebar, Topbar, useCommandShortcut } from './shell';
 import { DashboardPage } from './pages/dashboard';
+import { HostingPage } from './pages/hosting';
 import { PanelsPage, PanelDetailPage, NewPanelPage, ProvidersPage } from './pages/panels';
 import { PanelHealthPage } from './pages/panel-health';
 import { SettingsPage, settingsQuery } from './pages/settings';
@@ -257,6 +258,7 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/appearance',
   '/ops-group',
   '/recovery',
+  '/hosting',
   '/system',
 ];
 
@@ -1395,6 +1397,16 @@ export function resolve(
       element: <AccountPage />,
       crumbs: [{ label: t('web.account_title') }],
       title: t('web.account_title'),
+    };
+  }
+
+  // Phase 6A (D1): the creator panel. `hosting.manage` decides what is drawn; the server
+  // re-checks the owner and the second-factor section session on every call.
+  if (route.path === '/hosting') {
+    return {
+      element: <HostingPage denied={!may('hosting.manage')} />,
+      crumbs: [{ label: t('web.nav_hosting') }],
+      title: t('web.nav_hosting'),
     };
   }
 

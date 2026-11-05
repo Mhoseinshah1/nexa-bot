@@ -20,6 +20,24 @@ import {
   type UpdateIncidentRequest,
 } from '@nexa/contracts';
 import {
+  // Phase 6A (D1): the installation owner's creator panel.
+  HOSTING_ROUTES,
+  type CapacitySetLimitRequest,
+  type CapacitySetLimitResponse,
+  type HostedBotCreateRequest,
+  type HostedBotPurgePreviewResponse,
+  type HostedBotPurgeResponse,
+  type HostedBotResponse,
+  type HostedBotsResponse,
+  type HostingActivateResponse,
+  type HostingEnrolResponse,
+  type HostingProof,
+  type HostingRecoveryCodesResponse,
+  type HostingServerResponse,
+  type HostingSessionResponse,
+  type HostingStatusResponse,
+} from '@nexa/contracts';
+import {
   // Program §8: operator-only customer notes and tags.
   CUSTOMER_CRM_ROUTES,
   customerNoteCreateResponseSchema,
@@ -5770,4 +5788,122 @@ export function disableGiftCardBatch(
   body: GiftCardDisableRequest,
 ): Promise<GiftCardDisableResponse> {
   return post(GIFT_CARD_ROUTES.disable(batchId), body, giftCardDisableResponseSchema);
+}
+
+// --- Phase 6A (D1): «میزبانی‌ها», the installation owner's creator panel ---------------------
+
+/**
+ * The hosting contracts declare TypeScript shapes and no zod response schemas, so the answer is
+ * typed, not parsed. Every request is still built from the contract's own request type, and the
+ * server remains the only judge of what it accepts.
+ */
+function hostingShape<T>(): { parse: (v: unknown) => T } {
+  return { parse: (v) => v as T };
+}
+
+function hostingPath(template: string, tenantId: string): string {
+  return template.replace(':tenantId', encodeURIComponent(tenantId));
+}
+
+/** Where the section stands: the factor, this session's section session, the create switch. */
+export function fetchHostingStatus(): Promise<HostingStatusResponse> {
+  return authedGet(HOSTING_ROUTES.status, hostingShape<HostingStatusResponse>());
+}
+
+export function enrolHostingFactor(password: string): Promise<HostingEnrolResponse> {
+  return post(HOSTING_ROUTES.enrol, { password }, hostingShape<HostingEnrolResponse>());
+}
+
+export function activateHostingFactor(code: string): Promise<HostingActivateResponse> {
+  return post(HOSTING_ROUTES.activate, { code }, hostingShape<HostingActivateResponse>());
+}
+
+export function openHostingSession(proof: HostingProof): Promise<HostingSessionResponse> {
+  return post(HOSTING_ROUTES.openSession, { proof }, hostingShape<HostingSessionResponse>());
+}
+
+export function closeHostingSession(): Promise<{ closed: number }> {
+  return post(HOSTING_ROUTES.closeSession, {}, hostingShape<{ closed: number }>());
+}
+
+export function regenerateHostingRecoveryCodes(
+  proof: HostingProof,
+): Promise<HostingRecoveryCodesResponse> {
+  return post(
+    HOSTING_ROUTES.recoveryCodes,
+    { proof },
+    hostingShape<HostingRecoveryCodesResponse>(),
+  );
+}
+
+export function fetchHostedBots(): Promise<HostedBotsResponse> {
+  return authedGet(HOSTING_ROUTES.bots, hostingShape<HostedBotsResponse>());
+}
+
+export function createHostedBot(body: HostedBotCreateRequest): Promise<HostedBotResponse> {
+  return post(HOSTING_ROUTES.bots, body, hostingShape<HostedBotResponse>());
+}
+
+/** Suspend, activate or soft-delete: one body, three routes. */
+export function actOnHostedBot(
+  action: 'suspend' | 'activateBot' | 'delete',
+  tenantId: string,
+  body: { idempotencyKey: string; proof: HostingProof; reason?: string },
+): Promise<HostedBotResponse> {
+  return post(
+    hostingPath(HOSTING_ROUTES[action], tenantId),
+    body,
+    hostingShape<HostedBotResponse>(),
+  );
+}
+
+export function fetchHostedBotPurgePreview(
+  tenantId: string,
+): Promise<HostedBotPurgePreviewResponse> {
+  return authedGet(
+    hostingPath(HOSTING_ROUTES.purgePreview, tenantId),
+    hostingShape<HostedBotPurgePreviewResponse>(),
+  );
+}
+
+export function purgeHostedBot(
+  tenantId: string,
+  body: { idempotencyKey: string; proof: HostingProof; confirmSlug: string },
+): Promise<HostedBotPurgeResponse> {
+  return post(
+    hostingPath(HOSTING_ROUTES.purge, tenantId),
+    body,
+    hostingShape<HostedBotPurgeResponse>(),
+  );
+}
+
+export function setHostedBotExpiry(
+  tenantId: string,
+  body: { idempotencyKey: string; proof: HostingProof; expiresAt: string | null },
+): Promise<HostedBotResponse> {
+  return post(
+    hostingPath(HOSTING_ROUTES.expiry, tenantId),
+    body,
+    hostingShape<HostedBotResponse>(),
+  );
+}
+
+export function setHostedBotLimit(
+  tenantId: string,
+  body: {
+    idempotencyKey: string;
+    proof: HostingProof;
+    resource: CapacitySetLimitRequest['resource'];
+    limit: CapacitySetLimitRequest['limit'];
+  },
+): Promise<CapacitySetLimitResponse> {
+  return post(
+    hostingPath(HOSTING_ROUTES.setLimit, tenantId),
+    body,
+    hostingShape<CapacitySetLimitResponse>(),
+  );
+}
+
+export function fetchHostingServer(): Promise<HostingServerResponse> {
+  return authedGet(HOSTING_ROUTES.server, hostingShape<HostingServerResponse>());
 }
