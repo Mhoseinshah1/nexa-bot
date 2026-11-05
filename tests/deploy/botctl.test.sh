@@ -6457,6 +6457,10 @@ assert_contains 'the password set on the role is not the one in the file' \
   "$(cat "${FAKE_DIR}/app_role_sql")" "ALTER ROLE nexa_app LOGIN PASSWORD '${app_password}'"
 assert_contains 'the role SQL does not refuse a BYPASSRLS role' \
   "$(cat "${FAKE_DIR}/app_role_sql")" 'rolbypassrls'
+assert_equals 'the session does not stop the server logging the password first' \
+  "SET log_statement = 'none';" "$(head -n 1 "${FAKE_DIR}/app_role_sql")"
+assert_contains 'the password can reach pg_stat_statements' \
+  "$(cat "${FAKE_DIR}/app_role_sql")" 'SET pg_stat_statements.track_utility = off;'
 assert_not_contains 'the password was printed' "$BOTCTL_OUTPUT" "$app_password"
 assert_not_contains 'the password reached an argv' "$(cat "$DOCKER_LOG")" "$app_password"
 assert_equals 'nexa.env was rewritten' "$before" "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"

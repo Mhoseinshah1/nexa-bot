@@ -1136,7 +1136,16 @@ nexa_ensure_app_db_role() {
   nexa_step "configuring the application's database role (row-level security)"
   # Idempotent, and refuses a role that could bypass the policies rather than
   # repairing it silently: somebody granted that, and an operator should know.
+  #
+  # The session first stops the server recording the statement that carries the password:
+  # not in the log (log_statement, the duration and error logs) and not in
+  # pg_stat_statements, which compose preloads. Superuser settings, which a Docker
+  # install's owner holds; an owner that cannot set them is refused rather than logged.
   if ! printf '%s\n' \
+    "SET log_statement = 'none';" \
+    "SET log_min_duration_statement = -1;" \
+    "SET log_min_error_statement = 'panic';" \
+    "SET pg_stat_statements.track_utility = off;" \
     "DO \$\$ BEGIN" \
     "  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexa_system') THEN" \
     "    CREATE ROLE nexa_system NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF;" \

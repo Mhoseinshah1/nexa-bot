@@ -143,8 +143,10 @@ decision, not an accident.
   it always. The pool detects this on its first checkout and does not apply scopes there.
 - `botctl update` (and the installer, and `botctl restart`) then run
   `nexa_ensure_app_db_role` after the migrations: it gives `nexa_app` its login and a
-  generated password (on psql's stdin, never in argv), and only after that succeeds adds
-  `DATABASE_APP_URL` to `/etc/nexa/nexa.env` by whole-file rename. On a later run it reads the
+  generated password (on psql's stdin, never in argv, in a session that has turned off
+  statement logging and `pg_stat_statements` utility tracking first), and only after that succeeds adds
+  `DATABASE_APP_URL` to its own `/etc/nexa/app-database.env` (0600) by rename — `nexa.env`
+  is never rewritten. On a later run it reads the
   password back and re-asserts it, so a cluster that lost the role agrees with the file again.
 - The **first** update into this release runs the outgoing release's `botctl`, which does not
   know the step: the install comes up on the owner, RLS inert. The next `botctl restart` or
@@ -167,5 +169,7 @@ decision, not an accident.
 - A new tenant-owned table needs nothing: the next `migrate` secures it, and the test fails if
   it did not.
 - A new persistence adapter must be `@ScopeBound()`; the boundary check says so.
+- A new entry into the system path (an unscoped public adapter method, a `withSystemScope`
+  reason) fails `tests/unit/system-path.test.ts` until it is added to its allowlist.
 - Cross-tenant reads are now visible (each has a reason) and cost a role switch per checkout.
 - Changing the policy expression means a new policy name and dropping the old one.
