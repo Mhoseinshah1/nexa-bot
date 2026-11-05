@@ -32,7 +32,10 @@ import type {
   TenantRepository,
   TokenReplacementClaims,
 } from '../application/ports.js';
-import { ScopeBound, withSystemScope } from '../../../../infrastructure/persistence/database-scope.js';
+import {
+  ScopeBound,
+  withSystemScope,
+} from '../../../../infrastructure/persistence/database-scope.js';
 
 type TenantRow = typeof tenants.$inferSelect;
 type BotInstanceRow = typeof botInstances.$inferSelect;
