@@ -119,6 +119,17 @@ export const HOSTING_ERROR_CODES = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Operational events (owner only: recorded on the installation tenant)
+// ---------------------------------------------------------------------------
+
+/**
+ * A hosted bot's expiry date passed and the sweep suspended it. Recorded on the INSTALLATION
+ * tenant, so it reaches the owner's operations group and never the hosted bot's own. One per
+ * expiry: the dedupe key carries the tenant and the expiry instant.
+ */
+export const HOSTING_BOT_EXPIRED_CODE = 'hosting.bot_expired';
+
+// ---------------------------------------------------------------------------
 // HTTP
 // ---------------------------------------------------------------------------
 

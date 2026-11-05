@@ -179,6 +179,8 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'capacity.memory_ok': 'حافظهٔ آزاد سرور دوباره کافی است',
   'capacity.worker_lag_growing': 'صف کارهای پس‌زمینه عقب افتاده است',
   'capacity.worker_lag_ok': 'صف کارهای پس‌زمینه دوباره به‌روز است',
+  // Phase 6A PR-3: the creator panel, the owner's operations group only.
+  'hosting.bot_expired': 'تاریخ انقضای یک ربات میزبانی‌شده گذشت و ربات متوقف شد',
 };
 
 /**

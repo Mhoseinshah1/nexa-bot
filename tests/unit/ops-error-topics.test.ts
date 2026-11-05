@@ -145,6 +145,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'capacity.memory_ok': 'SYSTEM',
   'capacity.worker_lag_growing': 'SYSTEM',
   'capacity.worker_lag_ok': 'SYSTEM',
+  // Phase 6A PR-3: the creator panel's expiry sweep, beside them.
+  'hosting.bot_expired': 'SYSTEM',
 };
 
 /** A family code is routed by its members; the family prefix itself is not a code. */
