@@ -43,6 +43,7 @@ import {
 import { gatewaySettlementDeadline } from '../../../modules/commerce/payments/domain/settlement.js';
 import { failureStatusOf } from '../../../modules/commerce/payments/domain/payment-failure-outcome.js';
 import { rialitLinkDeadline } from '../../../modules/commerce/payments/domain/rialit.js';
+import { chooseTonPaysLink } from '../../../modules/commerce/payments/domain/tonpays.js';
 import {
   CARD_INVOICE_ROW,
   cardInvoiceAmountValues,
@@ -1024,7 +1025,9 @@ export function gatewayAttemptScreen(
   ) {
     return cardTransferScreen(payment, invoice, orderId, at, cardFacts);
   }
-  const link = invoice.webInvoiceUrl ?? invoice.invoiceUrl;
+  // TonPays (website) holds two links; the route's «لینک پرداخت» chose one, frozen on the attempt.
+  const chosen = chooseTonPaysLink(invoice.paymentLink, invoice);
+  const link = chosen?.url ?? null;
   if (invoice.creationState === 'CREATED' && link === null) {
     return screen('bot.payment.gateway_no_link', [retry], 'NOTICE');
   }
@@ -1100,7 +1103,11 @@ export function gatewayAttemptScreen(
       ...(linkOpen
         ? [
             {
-              ...inlineLabel(PROVIDER_PAY_BUTTON_KEYS[invoice.provider] ?? 'payment.gateway_pay'),
+              ...inlineLabel(
+                invoice.provider === 'TONPAYS' && chosen?.kind === 'TELEGRAM_BOT'
+                  ? 'payment.tonpays_bot_open'
+                  : (PROVIDER_PAY_BUTTON_KEYS[invoice.provider] ?? 'payment.gateway_pay'),
+              ),
               url: link,
             },
           ]

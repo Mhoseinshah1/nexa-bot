@@ -4,6 +4,7 @@ import type {
   PaymentGatewayProvider,
   PaymentGatewayStatus,
   TenantContext,
+  TonPaysPaymentLink,
   UserId,
 } from '@nexa/contracts';
 
@@ -70,6 +71,12 @@ export interface PaymentGatewayRecord {
    */
   readonly requiresVerifiedPhone?: boolean;
   /**
+   * The TONPAYS route's «لینک پرداخت» (the provider's Telegram bot or web link). Optional on the
+   * record so a narrow test fake need not carry it; absent reads as `TELEGRAM_BOT`. Ignored on
+   * every other route.
+   */
+  readonly tonpaysPaymentLink?: TonPaysPaymentLink;
+  /**
    * Round 6 item 6: until when the PROVIDER's own daily limit hides this route (TetraPay), or
    * null. Not `status`: the operator's switch is untouched, and the route returns by itself
    * when the instant passes. A route is not offered while this is after the clock.
@@ -92,6 +99,7 @@ export type StoredGatewayConfig = PaymentGatewayConfig & {
   readonly customerFeeBasisPoints: number;
   readonly providerUnitRateMinor: bigint | null;
   readonly requiresVerifiedPhone: boolean;
+  readonly tonpaysPaymentLink: TonPaysPaymentLink;
 };
 
 export interface PaymentGatewayRepository {

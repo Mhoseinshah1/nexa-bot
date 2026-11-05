@@ -6,6 +6,8 @@ import {
   PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX,
   PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN,
+  TONPAYS_PAYMENT_LINKS,
+  tonPaysPaymentLinkSchema,
   formatBasisPointsPercent,
   normaliseAllowlistEntry,
   normaliseCustomGatewayBaseUrl,
@@ -17,6 +19,7 @@ import {
   type PaymentGatewayView,
   type PaymentRouteUnofferableReason,
   type SalesCurrencyCode,
+  type TonPaysPaymentLink,
 } from '@nexa/contracts';
 import {
   checkPaymentGatewayCredential,
@@ -147,9 +150,16 @@ const EMPTY_FORM = {
   allowWalletTopup: true,
   /** R11 B7: offered only to customers with a verified phone number. Off by default. */
   requiresVerifiedPhone: false,
+  /** The TONPAYS (website) route's payment link: its Telegram bot by default. */
+  tonpaysPaymentLink: 'TELEGRAM_BOT' as TonPaysPaymentLink,
 };
 
 type FormState = typeof EMPTY_FORM;
+
+const TONPAYS_LINK_LABELS = {
+  TELEGRAM_BOT: 'web.payment_gateway_tonpays_link_bot',
+  WEB: 'web.payment_gateway_tonpays_link_web',
+} as const satisfies Record<TonPaysPaymentLink, string>;
 
 function formOf(gateway: PaymentGatewayView): FormState {
   return {
@@ -168,6 +178,7 @@ function formOf(gateway: PaymentGatewayView): FormState {
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
     requiresVerifiedPhone: gateway.requiresVerifiedPhone,
+    tonpaysPaymentLink: gateway.tonpaysPaymentLink,
   };
 }
 
@@ -503,6 +514,8 @@ export function PaymentGatewaysPage({
         allowWalletTopup: form.allowWalletTopup,
         // R11 B7: always sent as shown, for the reason the two switches above are.
         requiresVerifiedPhone: form.requiresVerifiedPhone,
+        // The link choice exists on the TONPAYS (website) route only; no other form has it.
+        ...(editing === 'TONPAYS' ? { tonpaysPaymentLink: form.tonpaysPaymentLink } : {}),
       };
       /*
        * The key is bound to the whole payload AND to which route is being written, so
@@ -1508,6 +1521,32 @@ export function PaymentGatewaysPage({
                       }
                     />
                   </Field>
+
+                  {editing === 'TONPAYS' && (
+                    <Field
+                      label={t('web.payment_gateway_tonpays_link')}
+                      htmlFor="pg-tonpays-link"
+                      hint={t('web.payment_gateway_tonpays_link_hint')}
+                    >
+                      <select
+                        id="pg-tonpays-link"
+                        className="input"
+                        value={form.tonpaysPaymentLink}
+                        onChange={(event) =>
+                          setForm({
+                            ...form,
+                            tonpaysPaymentLink: tonPaysPaymentLinkSchema.parse(event.target.value),
+                          })
+                        }
+                      >
+                        {TONPAYS_PAYMENT_LINKS.map((value) => (
+                          <option key={value} value={value}>
+                            {t(TONPAYS_LINK_LABELS[value])}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  )}
 
                   {takesCustomerFee(editing) && (
                     <Field
