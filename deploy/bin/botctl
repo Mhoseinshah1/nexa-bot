@@ -1269,7 +1269,7 @@ cmd_backup() {
 # credentials stay in nexa.env and never reach argv or this script's output.
 cmd_backup_offsite() {
   require_installed
-  [ "${1:-}" = test ] && [ "$#" -eq 1 ] || nexa_die "usage: botctl backup offsite test"
+  if [ "${1:-}" != test ] || [ "$#" -ne 1 ]; then nexa_die "usage: botctl backup offsite test"; fi
   nexa_compose run --rm --no-deps -T --entrypoint node api dist/backup.cli.js offsite-test
 }
 
@@ -3369,7 +3369,7 @@ harden_check_upgrades() {
 cmd_harden() {
   local action="${1:-}"
   shift || true
-  [ "$action" = check ] && [ "$#" -eq 0 ] || nexa_die "usage: botctl harden check"
+  if [ "$action" != check ] || [ "$#" -ne 0 ]; then nexa_die "usage: botctl harden check"; fi
   HARDEN_PASS=0
   HARDEN_WARN=0
   HARDEN_SSH_PORT=22
