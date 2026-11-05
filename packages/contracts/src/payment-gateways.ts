@@ -658,6 +658,17 @@ export const PAYMENT_GATEWAY_API_KEY_MAX_LENGTH = 512;
  * unanswerable — and that question has two very different answers, one of which is a
  * misconfiguration the operator has to fix.
  */
+/**
+ * Which of the two links TonPays' standard API returns the customer is sent to (the TONPAYS
+ * route only): `TELEGRAM_BOT` is `invoice_url` (TonPays' own Telegram bot), `WEB` is
+ * `web_invoice_url` (its web page). Default `TELEGRAM_BOT`. When the chosen link is missing
+ * the other one is used; see `chooseTonPaysLink`.
+ */
+export const TONPAYS_PAYMENT_LINKS = ['TELEGRAM_BOT', 'WEB'] as const;
+export type TonPaysPaymentLink = (typeof TONPAYS_PAYMENT_LINKS)[number];
+export const tonPaysPaymentLinkSchema = z.enum(TONPAYS_PAYMENT_LINKS);
+export const DEFAULT_TONPAYS_PAYMENT_LINK: TonPaysPaymentLink = 'TELEGRAM_BOT';
+
 export const PAYMENT_GATEWAY_STATUSES = ['ACTIVE', 'DISABLED'] as const;
 export type PaymentGatewayStatus = (typeof PAYMENT_GATEWAY_STATUSES)[number];
 export const paymentGatewayStatusSchema = z.enum(PAYMENT_GATEWAY_STATUSES);
@@ -1007,6 +1018,12 @@ export const paymentGatewayConfigSchema = z
      * client on the previous release, which never sends it, must not clear it by saving.
      */
     requiresVerifiedPhone: z.boolean().optional(),
+    /**
+     * The TONPAYS route's payment link (the bot or the web page). OPTIONAL, and absent means
+     * "leave the stored choice as it is", for the reason `requiresVerifiedPhone` gives: a
+     * client on the previous release must not reset it by saving. Meaningful for TONPAYS only.
+     */
+    tonpaysPaymentLink: tonPaysPaymentLinkSchema.optional(),
     /**
      * A `FIXED_RATE` route's conversion rate (Package A). OPTIONAL, and absent means
      * "leave the stored rate as it is", for the same reason as the fee: a client that

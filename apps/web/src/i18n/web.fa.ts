@@ -5176,6 +5176,7 @@ export const WEB_FA = {
   'web.ib_button_payment_cancel_confirm': 'تأیید انصراف از پرداخت',
   'web.ib_button_payment_gateway_pay': 'پرداخت آنلاین (لینک درگاه)',
   'web.ib_button_payment_nowpayments_open': 'پرداخت با ارز دیجیتال (NOWPayments)',
+  'web.ib_button_payment_tonpays_bot_open': 'پرداخت در ربات تون‌پیز',
   'web.ib_button_payment_centralpay_open': 'پرداخت با CentralPay',
   'web.ib_button_payment_gateway_check': 'بررسی وضعیت پرداخت',
   'web.ib_button_payment_gateway_card_check': 'بررسی وضعیت (کارت‌به‌کارت درگاه)',
