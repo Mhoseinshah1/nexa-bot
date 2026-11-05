@@ -2227,6 +2227,13 @@
       "when": 1793840017092,
       "tag": "0317_hosting_permission_grant",
       "breakpoints": true
+    },
+    {
+      "idx": 318,
+      "version": "7",
+      "when": 1793851961905,
+      "tag": "0318_hosted_bot_activation",
+      "breakpoints": true
     }
   ]
 }
