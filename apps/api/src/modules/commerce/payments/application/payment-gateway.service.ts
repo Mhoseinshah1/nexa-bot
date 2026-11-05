@@ -29,6 +29,7 @@ import {
   type SalesCurrencyCode,
   type UnitOfWork,
   type UserId,
+  DEFAULT_TONPAYS_PAYMENT_LINK,
   isSettingKey,
   parseUnitRatio,
   takesFixedRate,
@@ -953,6 +954,10 @@ export class PaymentGatewayService {
       ...(input.config.requiresVerifiedPhone === undefined
         ? {}
         : { requiresVerifiedPhone: input.config.requiresVerifiedPhone }),
+      // The TONPAYS link choice, on the same terms: absent keeps the stored one.
+      ...(input.config.tonpaysPaymentLink === undefined
+        ? {}
+        : { tonpaysPaymentLink: input.config.tonpaysPaymentLink }),
     });
     const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
     if (replayed !== null) return replayed;
@@ -995,6 +1000,17 @@ export class PaymentGatewayService {
           // R11 B7: absent keeps the stored verified-phone switch.
           requiresVerifiedPhone:
             input.config.requiresVerifiedPhone ?? before.requiresVerifiedPhone ?? false,
+          /*
+           * The link choice exists on the TONPAYS route only. On any other route a value is
+           * ignored, not refused: the stored one (always the default) is kept, so a client that
+           * sends it everywhere cannot fail a save, and nothing reads it there.
+           */
+          tonpaysPaymentLink:
+            provider === 'TONPAYS'
+              ? (input.config.tonpaysPaymentLink ??
+                before.tonpaysPaymentLink ??
+                DEFAULT_TONPAYS_PAYMENT_LINK)
+              : (before.tonpaysPaymentLink ?? DEFAULT_TONPAYS_PAYMENT_LINK),
         };
         /*
          * A conversion rate exists only on a `FIXED_RATE` route (Package A). Anywhere else
@@ -1917,6 +1933,7 @@ function auditView(gateway: PaymentGatewayRecord): Record<string, unknown> {
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
     requiresVerifiedPhone: gateway.requiresVerifiedPhone ?? false,
+    tonpaysPaymentLink: gateway.tonpaysPaymentLink ?? DEFAULT_TONPAYS_PAYMENT_LINK,
   };
 }
 

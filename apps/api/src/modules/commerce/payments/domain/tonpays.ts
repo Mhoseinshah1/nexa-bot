@@ -5,6 +5,7 @@ import {
   type GatewayApprovalVerdict,
   type Money,
   type TonPaysErrorCode,
+  type TonPaysPaymentLink,
 } from '@nexa/contracts';
 
 /**
@@ -216,3 +217,32 @@ export const INQUIRY_MIN_SPACING_MS = 5_000;
 
 /** Diagnostic inquiries after the deadline, each triggered by a webhook, never more. */
 export const POST_DEADLINE_INQUIRY_MAX = 3;
+
+/** The link a customer is sent to, and which of the provider's two links it is. */
+export interface ChosenTonPaysLink {
+  readonly url: string;
+  readonly kind: TonPaysPaymentLink;
+}
+
+/**
+ * The ONE place that decides which of TonPays' two links the customer is sent to, used by the
+ * bot's payment screen and the mini app alike. `TELEGRAM_BOT` takes `invoice_url`, `WEB` takes
+ * `web_invoice_url`; a missing (null or empty) chosen link falls back to the other one, and
+ * both missing is null. `kind` names the link actually returned, so the bot can label the
+ * button for what it opens. An invoice that never had two links (every other provider has at
+ * most one) simply yields the one it has.
+ */
+export function chooseTonPaysLink(
+  choice: TonPaysPaymentLink | undefined,
+  links: { readonly invoiceUrl: string | null; readonly webInvoiceUrl: string | null },
+): ChosenTonPaysLink | null {
+  const bot =
+    links.invoiceUrl === null || links.invoiceUrl === ''
+      ? null
+      : ({ url: links.invoiceUrl, kind: 'TELEGRAM_BOT' } as const);
+  const web =
+    links.webInvoiceUrl === null || links.webInvoiceUrl === ''
+      ? null
+      : ({ url: links.webInvoiceUrl, kind: 'WEB' } as const);
+  return choice === 'WEB' ? (web ?? bot) : (bot ?? web);
+}

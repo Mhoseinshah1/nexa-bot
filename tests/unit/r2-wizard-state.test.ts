@@ -140,6 +140,8 @@ describe('the gateway invoice screen', () => {
           creationState: 'CREATED',
           webInvoiceUrl: 'https://pay.tonpays.online/i/1',
           invoiceUrl: 'https://t.me/x',
+          // The route chose the web link («لینک پرداخت»); the bot default is pinned elsewhere.
+          paymentLink: 'WEB',
         }),
       },
       null,

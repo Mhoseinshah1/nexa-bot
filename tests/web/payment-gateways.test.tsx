@@ -288,6 +288,61 @@ describe('the gateway form’s purpose switches', () => {
     expect(body['requiresVerifiedPhone']).toBe(true);
   });
 
+  describe('the TonPays «لینک پرداخت»', () => {
+    const openRoute = async (provider: string, extra: Record<string, unknown> = {}) => {
+      const gateway = {
+        ...GATEWAY,
+        provider,
+        topupCashbackPercent: 5,
+        credential: { required: true, setAt: '2026-09-11T08:00:00.000Z' },
+        callbackUrl: 'https://bot.example.com/payments/webhook/x/t-1',
+        ...extra,
+      };
+      const api = stubApi([
+        { url: '/payment-gateways', body: { gateways: [gateway] } },
+        { url: `/payment-gateways/${provider}`, body: { gateway } },
+      ]);
+      renderPage(<PaymentGatewaysPage provider={provider as never} denied={false} mayEdit />);
+      expect(await screen.findByText('5%')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'ویرایش' }));
+      await screen.findByLabelText('هدیهٔ شارژ (درصد)');
+      return api;
+    };
+
+    it('is shown on TONPAYS, reopens as stored, and saves the choice', async () => {
+      const api = await openRoute('TONPAYS', { tonpaysPaymentLink: 'TELEGRAM_BOT' });
+      const select = screen.getByLabelText('لینک پرداخت') as HTMLSelectElement;
+      expect(select.value).toBe('TELEGRAM_BOT');
+      expect(screen.getByRole('option', { name: 'ربات تلگرام تون‌پیز' })).toBeTruthy();
+      expect(screen.getByRole('option', { name: 'صفحهٔ وب تون‌پیز' })).toBeTruthy();
+      expect(screen.getByText(/لینک دیگر نشان داده می‌شود/u)).toBeTruthy();
+      fireEvent.change(select, { target: { value: 'WEB' } });
+      fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+      await waitFor(() => {
+        expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+      });
+      const body = api.calls.find((call) => call.method === 'POST')?.body as Record<
+        string,
+        unknown
+      >;
+      expect(body['tonpaysPaymentLink']).toBe('WEB');
+    });
+
+    it.each(['TONPAYS_TELEGRAM', 'TETRAPAY'])('is not shown on %s', async (provider) => {
+      const api = await openRoute(provider);
+      expect(screen.queryByLabelText('لینک پرداخت')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+      await waitFor(() => {
+        expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+      });
+      const body = api.calls.find((call) => call.method === 'POST')?.body as Record<
+        string,
+        unknown
+      >;
+      expect('tonpaysPaymentLink' in body).toBe(false);
+    });
+  });
+
   it('R11 B7: names the phone rule among the route’s conditions', async () => {
     const ruled = { ...GATEWAY, requiresVerifiedPhone: true };
     stubApi([{ url: '/payment-gateways', body: { gateways: [ruled] } }]);

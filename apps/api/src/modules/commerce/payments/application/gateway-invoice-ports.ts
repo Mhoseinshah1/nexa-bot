@@ -21,6 +21,7 @@ import type {
   ResolvedConversion,
   SalesCurrencyCode,
   TenantContext,
+  TonPaysPaymentLink,
   TonPaysTelegramReceiptMimeType,
 } from '@nexa/contracts';
 
@@ -553,6 +554,12 @@ export interface GatewayInvoiceRecord {
   readonly callbackUrlSent: boolean;
   readonly invoiceUrl: string | null;
   readonly webInvoiceUrl: string | null;
+  /**
+   * Which of the two links above the customer is shown, frozen at open from the route's
+   * `tonpaysPaymentLink` (`chooseTonPaysLink`). Only a TONPAYS attempt has both. Optional on the
+   * record so a narrow test fake need not carry it; absent reads as `TELEGRAM_BOT`.
+   */
+  readonly paymentLink?: TonPaysPaymentLink;
   readonly providerUnit: GatewayProviderUnit;
   readonly sentAmount: bigint;
   /**
@@ -663,6 +670,8 @@ export interface GatewayInvoiceRepository {
       readonly providerUserId?: string | null;
       /** Round 10 C1: an `operatorEndpoint` route's bridge URL, frozen here; null otherwise. */
       readonly endpointBaseUrl?: string | null;
+      /** The route's TonPays link choice, frozen here; the default for every other route. */
+      readonly paymentLink?: TonPaysPaymentLink;
       readonly now: Date;
     },
     tx: unknown,
