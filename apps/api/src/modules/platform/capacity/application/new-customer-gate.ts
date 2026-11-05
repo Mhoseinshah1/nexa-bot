@@ -9,6 +9,7 @@ const MINUTE_MS = 60_000;
  * against a spam wave of fresh accounts.
  *
  * Asked by `CustomerService.resolveFromUpdate` INSIDE its transaction, only when that
+ * transaction runs inside that bot's WEBHOOK TURN (`BotTurnGuard`) and only when that
  * transaction is about to create a customer — a returning customer is never counted and
  * never slowed. Over the limit the call throws a retryable `capacity.new_customer_rate`,
  * which rolls the creation back (nothing is written: no customer, no audit, no event) and
@@ -27,11 +28,15 @@ export class NewCustomerGate {
       readonly clock: Clock;
       readonly limits: Pick<CapacityLimitResolver, 'numberOf'>;
       readonly pressure: Pick<LimitPressureReporter, 'hit'>;
+      /** The bot of the webhook turn running now (`webhookTurnTenant`); undefined outside one. */
+      readonly turnTenant: () => string | undefined;
     },
   ) {}
 
   /** Admits one new customer of `tenantId`, or throws the retryable refusal. */
   async admit(tenantId: string): Promise<void> {
+    // Only the Telegram intake is rate-limited: outside that bot's webhook turn, no limit.
+    if (this.deps.turnTenant() !== tenantId) return;
     const limit = await this.deps.limits.numberOf(tenantId, 'NEW_CUSTOMERS_PER_MINUTE');
     if (!Number.isFinite(limit)) return;
     const minute = Math.floor(this.deps.clock.now().getTime() / MINUTE_MS);

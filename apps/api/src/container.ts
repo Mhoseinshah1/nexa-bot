@@ -998,6 +998,7 @@ import {
   BOT_UPDATE_MAX_WAIT_MS,
   BOT_UPDATE_QUEUE_MAX,
   BotTurnGuard,
+  webhookTurnTenant,
 } from './modules/platform/capacity/application/bot-turn-guard.js';
 import { NewCustomerGate } from './modules/platform/capacity/application/new-customer-gate.js';
 import { HeavyJobGate } from './modules/platform/capacity/application/heavy-job-gate.js';
@@ -2368,6 +2369,7 @@ export function createContainer(
     clock,
     limits: capacityResolver,
     pressure: limitPressure,
+    turnTenant: webhookTurnTenant,
   });
   const systemProbe = new ProcSystemProbe();
   const heavyJobs = new HeavyJobGate({
