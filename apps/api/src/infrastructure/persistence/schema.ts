@@ -5350,13 +5350,14 @@ export const gatewayInvoices = pgTable(
       'gateway_invoices_rialit_check',
       sql`provider <> 'RIALIT' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND octet_length(provider_order_id) <= 64 AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')`,
     ),
+    // The TonPays link choice frozen on an attempt (`TONPAYS_PAYMENT_LINKS`).
+    check('gateway_invoices_payment_link_check', enumCheck('payment_link', TONPAYS_PAYMENT_LINKS)),
     /**
      * Round 10 C1: a custom-gateway attempt is billed in RIAL with no conversion and no bot
      * (the adapter owns the exact x10 from the Toman payable), its `invoice_id` is the shape Nexa
      * generates, it carries the customer's opaque number (`customer_ref`) and the bridge URL it
      * was created against, frozen.
      */
-    check('gateway_invoices_payment_link_check', enumCheck('payment_link', TONPAYS_PAYMENT_LINKS)),
     check(
       'gateway_invoices_custom_check',
       sql`provider <> 'CUSTOM' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^cg_[0-9A-HJKMNP-TV-Z]{26}$' AND provider_user_id IS NOT NULL AND endpoint_base_url IS NOT NULL)`,
