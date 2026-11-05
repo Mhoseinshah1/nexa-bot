@@ -10711,6 +10711,41 @@ export const WEB_FA = {
   'web.err_hosting_create_disabled': 'ساختن ربات میزبانی‌شده روی این نصب فعلاً بسته است.',
   'web.err_hosting_purge_confirmation_mismatch': 'برای پاک‌سازی، شناسهٔ ربات را دقیقاً وارد کنید.',
   'web.err_hosting_enter_not_implemented': '«ورود به پنل» در مرحلهٔ بعد اضافه می‌شود.',
+  // Phase 6A PR-4: the activation of a hosted bot.
+  'web.err_hosting_act_not_configured':
+    'اول توکن ربات و دامنه را وارد کنید. اگر این پیام برای مرحلهٔ دامنه است، سرور هنوز مقصد DNS ندارد: HOSTED_BOTS_CNAME_TARGET یا HOSTED_BOTS_SERVER_IPS را تنظیم کنید.',
+  'web.err_hosting_act_bot_not_active':
+    'این ربات فعال نیست؛ برای ربات متوقف یا حذف‌شده راه‌اندازی انجام نمی‌شود.',
+  'web.err_hosting_act_step_blocked': 'اول مرحله‌های قبلی باید انجام شده باشند.',
+  'web.err_hosting_act_token_malformed':
+    'این شکل توکن ربات تلگرام نیست. توکن را از BotFather کپی کنید.',
+  'web.err_hosting_act_token_rejected':
+    'تلگرام این توکن را قبول نکرد. توکن را دوباره از BotFather بگیرید.',
+  'web.err_hosting_act_token_unreachable': 'به تلگرام دسترسی نشد. کمی بعد دوباره امتحان کنید.',
+  'web.err_hosting_act_token_in_use':
+    'این ربات را یک ربات دیگر روی همین سرور استفاده می‌کند. برای هر ربات میزبانی‌شده یک ربات تلگرام جدا لازم است.',
+  'web.err_hosting_act_token_other_bot':
+    'این ربات میزبانی‌شده قبلاً به یک ربات تلگرام دیگر وصل شده و عوض نمی‌شود.',
+  'web.err_hosting_act_domain_invalid':
+    'دامنه معتبر نیست. فقط نام دامنه را بنویسید، مثل example.com، بدون https:// و بدون مسیر.',
+  'web.err_hosting_act_domain_reserved':
+    'این نام، نام خود سرور است و نمی‌تواند دامنهٔ ربات میزبانی‌شده باشد.',
+  'web.err_hosting_act_domain_taken': 'این دامنه را ربات میزبانی‌شدهٔ دیگری دارد.',
+  'web.err_hosting_act_domain_locked':
+    'صاحب ربات با لینک فعال‌سازی وارد شده است و دامنه دیگر عوض نمی‌شود.',
+  'web.err_hosting_act_dns_not_pointed':
+    'دامنه هنوز به این سرور وصل نیست. رکورد CNAME (یا A) را بررسی کنید؛ گاهی چند دقیقه طول می‌کشد.',
+  'web.err_hosting_act_dns_lookup_failed':
+    'پیدا کردن دامنه به‌موقع جواب نداد. کمی بعد دوباره امتحان کنید.',
+  'web.err_hosting_act_ssl_not_ready':
+    'گواهی SSL هنوز صادر نشده است. صدور خودکار چند ثانیه تا چند دقیقه طول می‌کشد؛ دوباره بررسی کنید.',
+  'web.err_hosting_act_webhook_failed': 'تلگرام وب‌هوک را قبول نکرد. کمی بعد دوباره امتحان کنید.',
+  'web.err_hosting_act_link_invalid':
+    'این لینک فعال‌سازی معتبر نیست. لینک تازه‌ای از مدیر سرور بخواهید.',
+  'web.err_hosting_act_link_expired':
+    'این لینک فعال‌سازی منقضی شده است. لینک تازه‌ای از مدیر سرور بخواهید.',
+  'web.err_hosting_act_link_used': 'این لینک فعال‌سازی قبلاً استفاده شده و دوباره کار نمی‌کند.',
+  'web.err_hosting_act_username_taken': 'این نام کاربری را کس دیگری دارد. نام دیگری انتخاب کنید.',
   'web.err_bot_webhook_origin_unknown': 'نشانی عمومی این نصب تنظیم نشده است؛ وب‌هوک ساخته نشد.',
   'web.err_bot_webhook_refused':
     'تلگرام نشانی وب‌هوک را نپذیرفت. دامنه و گواهی HTTPS را بررسی کنید.',
@@ -12340,6 +12375,68 @@ export const WEB_FA = {
   'web.hosting_action_limits': 'سقف‌ها',
   'web.hosting_action_enter': 'ورود به پنل',
   'web.hosting_enter_later': 'در فاز بعد',
+  'web.hosting_act_title': 'فعال‌سازی ربات',
+  'web.hosting_act_intro':
+    'توکن ربات و دامنه‌ای را که صاحب ربات به این سرور وصل کرده وارد کنید. مرحله‌ها یکی‌یکی انجام می‌شوند و هر کدام را می‌شود دوباره اجرا کرد.',
+  'web.hosting_act_dns_help': 'صاحب ربات باید دامنه را با رکورد CNAME به این نام وصل کند:',
+  'web.hosting_act_dns_help_ip': 'یا با رکورد A / AAAA به این نشانی‌ها:',
+  'web.hosting_act_configure': 'ثبت توکن و دامنه',
+  'web.hosting_act_reconfigure': 'تغییر توکن یا دامنه',
+  'web.hosting_act_configure_hint':
+    'توکن رمزگذاری‌شده نگه داشته می‌شود و هیچ‌جا نشان داده نمی‌شود. برای ثبت، کد تازهٔ شما لازم است.',
+  'web.hosting_act_token_label': 'توکن ربات تلگرام',
+  'web.hosting_act_domain_label': 'دامنه',
+  'web.hosting_act_bot_username': 'ربات',
+  'web.hosting_act_domain_current': 'دامنه',
+  'web.hosting_act_steps_label': 'مرحله‌های فعال‌سازی',
+  'web.hosting_act_step_token_done': 'توکن تأیید شد',
+  'web.hosting_act_step_token_todo': 'تأیید توکن',
+  'web.hosting_act_step_domain_done': 'دامنه وصل شد',
+  'web.hosting_act_step_domain_todo': 'اتصال دامنه',
+  'web.hosting_act_step_ssl_done': 'SSL صادر شد',
+  'web.hosting_act_step_ssl_todo': 'صدور SSL',
+  'web.hosting_act_step_webhook_done': 'وب‌هوک ثبت شد',
+  'web.hosting_act_step_webhook_todo': 'ثبت وب‌هوک',
+  'web.hosting_act_step_link_done': 'لینک فعال‌سازی ساخته شد',
+  'web.hosting_act_step_link_todo': 'ساخت لینک فعال‌سازی',
+  'web.hosting_act_state_done': 'انجام شد',
+  'web.hosting_act_state_pending': 'هنوز نه',
+  'web.hosting_act_state_failed': 'ناموفق',
+  'web.hosting_act_run': 'بررسی دوباره',
+  'web.hosting_act_run_first': 'اجرا',
+  'web.hosting_act_running': 'در حال بررسی…',
+  'web.hosting_act_link_make': 'ساخت لینک فعال‌سازی',
+  'web.hosting_act_link_remake': 'ساخت لینک تازه',
+  'web.hosting_act_link_hint':
+    'لینک 24 ساعت اعتبار دارد و فقط یک بار کار می‌کند. لینک تازه، لینک‌های قبلیِ استفاده‌نشده را باطل می‌کند.',
+  'web.hosting_act_link_once_title': 'این لینک فقط همین یک بار نشان داده می‌شود',
+  'web.hosting_act_link_once_body':
+    'همین حالا آن را برای صاحب ربات بفرستید. بعد از بستن این پنجره، لینک دیگر دیده نمی‌شود و فقط می‌شود لینک تازه ساخت.',
+  'web.hosting_act_link_copy': 'کپی لینک',
+  'web.hosting_act_link_state_active': 'لینک فعال‌سازی آماده و استفاده‌نشده است',
+  'web.hosting_act_link_state_used': 'لینک استفاده شد',
+  'web.hosting_act_link_state_expired': 'لینک منقضی یا باطل شده است',
+  'web.hosting_act_link_expires': 'اعتبار تا',
+  'web.hosting_act_owner_activated': 'صاحب ربات وارد شد و نام کاربری و گذرواژه گذاشت',
+  'web.hosting_act_done': 'لینک را برداشتم',
+  'web.activate_title': 'فعال‌سازی پنل مدیریت',
+  'web.activate_intro':
+    'نام کاربری و گذرواژهٔ ورود به پنل مدیریت ربات خود را انتخاب کنید. این لینک یک‌بار مصرف است.',
+  'web.activate_username': 'نام کاربری',
+  'web.activate_username_hint': 'حروف کوچک انگلیسی، رقم، نقطه، خط تیره و زیرخط؛ دست‌کم 3 نویسه.',
+  'web.activate_display_name': 'نام نمایشی (اختیاری)',
+  'web.activate_password': 'گذرواژه',
+  'web.activate_password_hint': 'دست‌کم 12 نویسه.',
+  'web.activate_password_confirm': 'تکرار گذرواژه',
+  'web.activate_mismatch': 'گذرواژه و تکرارش یکی نیستند.',
+  'web.activate_username_invalid': 'نام کاربری معتبر نیست.',
+  'web.activate_password_short': 'گذرواژه باید دست‌کم 12 نویسه باشد.',
+  'web.activate_submit': 'فعال‌سازی',
+  'web.activate_submitting': 'در حال فعال‌سازی…',
+  'web.activate_no_token': 'این لینک ناقص است. لینک کامل فعال‌سازی را از مدیر سرور بگیرید.',
+  'web.activate_done_title': 'پنل شما فعال شد',
+  'web.activate_done_body': 'حالا با نام کاربری و گذرواژه‌ای که انتخاب کردید وارد شوید.',
+  'web.activate_go_sign_in': 'ورود به پنل',
   'web.hosting_actions_label': 'کارهای این ربات',
   'web.hosting_reason': 'دلیل (اختیاری)',
   'web.hosting_reason_hint': 'در سابقهٔ حسابرسی ثبت می‌شود.',

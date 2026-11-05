@@ -1,10 +1,6 @@
 import { Body, Controller, Get, HttpCode, Inject, Post, Query, Req, Res } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import {
-  API_PREFIX,
-  HOSTED_ACTIVATION_ROUTES,
-  type HostedActivationRedeemResponse,
-} from '@nexa/contracts';
+import { API_PREFIX, type HostedActivationRedeemResponse } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import { matchesTrustedEntry } from '../../infrastructure/trusted-proxy.js';
@@ -58,13 +54,9 @@ function isLoopback(address: string): boolean {
  * admin — the hosted owner redeeming their link, and the edge asking whether to issue a
  * certificate.
  */
-@Controller()
+@Controller(`${API_PREFIX}/hosted-activation`)
 export class HostedActivationController {
-  private readonly budget: DomainCheckBudget;
-
-  constructor(@Inject(CONTAINER) private readonly container: Container) {
-    this.budget = new DomainCheckBudget(() => this.container.clock.now().getTime());
-  }
+  constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
   /**
    * The hosted owner's redemption. Anonymous by design: the link's token is the credential,
@@ -72,7 +64,7 @@ export class HostedActivationController {
    * or the hosted domain's own origin), rate-limited per address with the sign-in route, and
    * never cached.
    */
-  @Post(`${API_PREFIX}${HOSTED_ACTIVATION_ROUTES.redeem}`)
+  @Post('redeem')
   @HttpCode(200)
   async redeem(
     @Req() request: FastifyRequest,
@@ -89,6 +81,21 @@ export class HostedActivationController {
     );
     return { ok: true };
   }
+}
+
+/**
+ * The edge's certificate question, in its own controller under `internal/hosting` — NOT a root
+ * (empty-prefix) one, and deliberately given no handle block in `routes.caddy`: the deployment
+ * test that demands a proxy block for every root route does not apply, because this one must NOT
+ * be reachable from the internet (`hosted-activation.test.ts` pins that it is not routed).
+ */
+@Controller('internal/hosting')
+export class HostedDomainCheckController {
+  private readonly budget: DomainCheckBudget;
+
+  constructor(@Inject(CONTAINER) private readonly container: Container) {
+    this.budget = new DomainCheckBudget(() => this.container.clock.now().getTime());
+  }
 
   /**
    * The edge's on-demand TLS question: `GET /internal/hosting/domain-check?domain=<name>`.
@@ -102,7 +109,7 @@ export class HostedActivationController {
    * public request always does); and it has its own global budget. What it reveals is one bit
    * about a name the caller already named.
    */
-  @Get('internal/hosting/domain-check')
+  @Get('domain-check')
   async domainCheck(
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,

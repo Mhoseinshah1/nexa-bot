@@ -5,6 +5,7 @@ import type {
   BOT_ERROR_CODES,
   BROADCAST_ERROR_CODES,
   CAPACITY_ERROR_CODES,
+  HOSTING_ACTIVATION_ERROR_CODES,
   HOSTING_ERROR_CODES,
   BULK_ERROR_CODES,
   CAMPAIGN_ERROR_CODES,
@@ -63,6 +64,7 @@ export type ContractErrorCode =
   | CodesOf<typeof BROADCAST_ERROR_CODES>
   | CodesOf<typeof CAPACITY_ERROR_CODES>
   | CodesOf<typeof HOSTING_ERROR_CODES>
+  | CodesOf<typeof HOSTING_ACTIVATION_ERROR_CODES>
   | CodesOf<typeof BULK_ERROR_CODES>
   | CodesOf<typeof CAMPAIGN_ERROR_CODES>
   | CodesOf<typeof COMMERCE_ERROR_CODES>
@@ -194,6 +196,27 @@ export const ERROR_TEXT = {
   'hosting.create_disabled': 'web.err_hosting_create_disabled',
   'hosting.purge_confirmation_mismatch': 'web.err_hosting_purge_confirmation_mismatch',
   'hosting.enter_not_implemented': 'web.err_hosting_enter_not_implemented',
+  // Phase 6A PR-4: the activation of a hosted bot.
+  'hosting.activation_not_configured': 'web.err_hosting_act_not_configured',
+  'hosting.activation_bot_not_active': 'web.err_hosting_act_bot_not_active',
+  'hosting.activation_step_blocked': 'web.err_hosting_act_step_blocked',
+  'hosting.activation_token_malformed': 'web.err_hosting_act_token_malformed',
+  'hosting.activation_token_rejected': 'web.err_hosting_act_token_rejected',
+  'hosting.activation_token_unreachable': 'web.err_hosting_act_token_unreachable',
+  'hosting.activation_token_in_use': 'web.err_hosting_act_token_in_use',
+  'hosting.activation_token_other_bot': 'web.err_hosting_act_token_other_bot',
+  'hosting.activation_domain_invalid': 'web.err_hosting_act_domain_invalid',
+  'hosting.activation_domain_reserved': 'web.err_hosting_act_domain_reserved',
+  'hosting.activation_domain_taken': 'web.err_hosting_act_domain_taken',
+  'hosting.activation_domain_locked': 'web.err_hosting_act_domain_locked',
+  'hosting.activation_dns_not_pointed': 'web.err_hosting_act_dns_not_pointed',
+  'hosting.activation_dns_lookup_failed': 'web.err_hosting_act_dns_lookup_failed',
+  'hosting.activation_ssl_not_ready': 'web.err_hosting_act_ssl_not_ready',
+  'hosting.activation_webhook_failed': 'web.err_hosting_act_webhook_failed',
+  'hosting.activation_link_invalid': 'web.err_hosting_act_link_invalid',
+  'hosting.activation_link_expired': 'web.err_hosting_act_link_expired',
+  'hosting.activation_link_used': 'web.err_hosting_act_link_used',
+  'hosting.activation_username_taken': 'web.err_hosting_act_username_taken',
   'bot.webhook_origin_unknown': 'web.err_bot_webhook_origin_unknown',
   'bot.webhook_refused': 'web.err_bot_webhook_refused',
   'bot.webhook_route_unavailable': 'web.err_bot_webhook_route_unavailable',

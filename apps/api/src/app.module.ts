@@ -47,7 +47,10 @@ import { FxController } from './surfaces/web/fx.controller.js';
 import { CapacityController } from './surfaces/web/capacity.controller.js';
 import { HostingController } from './surfaces/web/hosting.controller.js';
 import { HostingActivationController } from './surfaces/web/hosting-activation.controller.js';
-import { HostedActivationController } from './surfaces/web/hosted-activation.controller.js';
+import {
+  HostedActivationController,
+  HostedDomainCheckController,
+} from './surfaces/web/hosted-activation.controller.js';
 import { SupportFaqController } from './surfaces/web/support-faq.controller.js';
 import { TermsController } from './surfaces/web/terms.controller.js';
 import { ClientAppController } from './surfaces/web/client-app.controller.js';
@@ -170,6 +173,7 @@ export class AppModule implements NestModule {
         HostingController as never,
         HostingActivationController as never,
         HostedActivationController as never,
+        HostedDomainCheckController as never,
         SupportFaqController as never,
         TermsController as never,
         ClientAppController as never,

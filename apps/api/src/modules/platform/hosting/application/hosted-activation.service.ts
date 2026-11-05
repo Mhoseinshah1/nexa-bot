@@ -855,27 +855,29 @@ function assertActive(row: HostedBotRow): void {
   }
 }
 
-const KIND_OF: Readonly<Record<string, 'validation' | 'conflict' | 'precondition' | 'upstream'>> = {
-  [CODES.NOT_CONFIGURED]: 'precondition',
-  [CODES.BOT_NOT_ACTIVE]: 'precondition',
-  [CODES.STEP_BLOCKED]: 'precondition',
-  [CODES.TOKEN_MALFORMED]: 'validation',
-  [CODES.TOKEN_REJECTED]: 'validation',
-  [CODES.TOKEN_UNREACHABLE]: 'upstream',
-  [CODES.TOKEN_IN_USE]: 'conflict',
-  [CODES.TOKEN_OTHER_BOT]: 'conflict',
-  [CODES.DOMAIN_INVALID]: 'validation',
-  [CODES.DOMAIN_RESERVED]: 'validation',
-  [CODES.DOMAIN_TAKEN]: 'conflict',
-  [CODES.DOMAIN_LOCKED]: 'precondition',
-  [CODES.DNS_NOT_POINTED]: 'precondition',
-  [CODES.DNS_LOOKUP_FAILED]: 'upstream',
-  [CODES.SSL_NOT_READY]: 'precondition',
-  [CODES.WEBHOOK_FAILED]: 'upstream',
-  [CODES.LINK_INVALID]: 'precondition',
-  [CODES.LINK_EXPIRED]: 'precondition',
-  [CODES.LINK_USED]: 'precondition',
-  [CODES.USERNAME_TAKEN]: 'conflict',
+const KIND_OF: Readonly<
+  Record<string, 'VALIDATION' | 'CONFLICT' | 'PRECONDITION_FAILED' | 'UPSTREAM_UNAVAILABLE'>
+> = {
+  [CODES.NOT_CONFIGURED]: 'PRECONDITION_FAILED',
+  [CODES.BOT_NOT_ACTIVE]: 'PRECONDITION_FAILED',
+  [CODES.STEP_BLOCKED]: 'PRECONDITION_FAILED',
+  [CODES.TOKEN_MALFORMED]: 'VALIDATION',
+  [CODES.TOKEN_REJECTED]: 'VALIDATION',
+  [CODES.TOKEN_UNREACHABLE]: 'UPSTREAM_UNAVAILABLE',
+  [CODES.TOKEN_IN_USE]: 'CONFLICT',
+  [CODES.TOKEN_OTHER_BOT]: 'CONFLICT',
+  [CODES.DOMAIN_INVALID]: 'VALIDATION',
+  [CODES.DOMAIN_RESERVED]: 'VALIDATION',
+  [CODES.DOMAIN_TAKEN]: 'CONFLICT',
+  [CODES.DOMAIN_LOCKED]: 'PRECONDITION_FAILED',
+  [CODES.DNS_NOT_POINTED]: 'PRECONDITION_FAILED',
+  [CODES.DNS_LOOKUP_FAILED]: 'UPSTREAM_UNAVAILABLE',
+  [CODES.SSL_NOT_READY]: 'PRECONDITION_FAILED',
+  [CODES.WEBHOOK_FAILED]: 'UPSTREAM_UNAVAILABLE',
+  [CODES.LINK_INVALID]: 'PRECONDITION_FAILED',
+  [CODES.LINK_EXPIRED]: 'PRECONDITION_FAILED',
+  [CODES.LINK_USED]: 'PRECONDITION_FAILED',
+  [CODES.USERNAME_TAKEN]: 'CONFLICT',
 };
 
 /** One construction for every activation refusal, so its HTTP kind is decided in one place. */
@@ -884,21 +886,12 @@ export function activationError(
   message: string,
   details?: Record<string, unknown>,
 ): NexaError {
-  switch (KIND_OF[code]) {
-    case 'validation':
-      return errors.validation(code, message, details);
-    case 'conflict':
-      return errors.conflict(code, message, details);
-    case 'upstream':
-      return new NexaError({
-        kind: 'UPSTREAM_UNAVAILABLE',
-        code,
-        message,
-        ...(details ? { details } : {}),
-      });
-    default:
-      return errors.preconditionFailed(code, message, details);
-  }
+  return new NexaError({
+    kind: KIND_OF[code] ?? 'PRECONDITION_FAILED',
+    code,
+    message,
+    ...(details ? { details } : {}),
+  });
 }
 
 function parseTenantId(id: string): string {
