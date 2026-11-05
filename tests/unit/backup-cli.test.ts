@@ -265,9 +265,17 @@ describe('the backup CLI as a process', () => {
  * `tests/integration/recovery-failure-drills.test.ts`.
  */
 describe('backup run while a recovery holds the installation', () => {
-  function stub(quiesced: boolean) {
+  function stub(quiesced: boolean, installationTenantId: string | null = null) {
     const calls: string[] = [];
     const container = {
+      installationTenantId,
+      // Phase 6A PR-2: the heavy-job queue. Never admits, so a backup that reached it ran nothing.
+      heavyJobs: {
+        runWhenAdmitted: async () => {
+          calls.push('queued');
+          return { ran: false };
+        },
+      },
       recoveryQuiesced: async () => {
         calls.push('quiesced?');
         return quiesced;
@@ -325,6 +333,23 @@ describe('backup run while a recovery holds the installation', () => {
       process.stdout.write = write;
     }
     expect(calls).toEqual(['quiesced?', 'tenant', 'setTenant', 'run']);
+  });
+
+  it('phase 6A: waits in the installation-wide heavy-job queue, and starts nothing it was not admitted to', async () => {
+    const { container, calls } = stub(false, 'owner');
+    const write = process.stderr.write.bind(process.stderr);
+    let said = '';
+    process.stderr.write = ((chunk: string) => {
+      said += chunk;
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      expect(await cmdRun(container)).toBe(5);
+    } finally {
+      process.stderr.write = write;
+    }
+    expect(calls).toEqual(['quiesced?', 'tenant', 'setTenant', 'queued']);
+    expect(said).toMatch(/heavy-job queue/);
   });
 });
 

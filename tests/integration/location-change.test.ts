@@ -242,6 +242,7 @@ describe('service location change (WP-A6)', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-locations',
       telegramUserId: '940940',
       from: { id: 940940, first_name: 'مریم' },
@@ -1566,6 +1567,7 @@ describe('service location change (WP-A6)', () => {
       const service = await activeService('iso');
       const { nl, fi } = await standardLocations();
       const resolvedB = await ctx.container.customers.resolveFromUpdate(tenantB, systemActor('b'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-locations-b',
         telegramUserId: '950950',
         from: { id: 950950, first_name: 'B' },

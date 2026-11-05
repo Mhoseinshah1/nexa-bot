@@ -44,6 +44,7 @@ import { OpsGroupController } from './surfaces/web/ops-group.controller.js';
 import { AppearanceController } from './surfaces/web/appearance.controller.js';
 import { PaymentGatewaysController } from './surfaces/web/payment-gateways.controller.js';
 import { FxController } from './surfaces/web/fx.controller.js';
+import { CapacityController } from './surfaces/web/capacity.controller.js';
 import { SupportFaqController } from './surfaces/web/support-faq.controller.js';
 import { TermsController } from './surfaces/web/terms.controller.js';
 import { ClientAppController } from './surfaces/web/client-app.controller.js';
@@ -162,6 +163,7 @@ export class AppModule implements NestModule {
         PaymentGatewaysController as never,
         // Package FX: the central exchange rate's status and manual refresh.
         FxController as never,
+        CapacityController as never,
         SupportFaqController as never,
         TermsController as never,
         ClientAppController as never,

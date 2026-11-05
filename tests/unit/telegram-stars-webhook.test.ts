@@ -34,6 +34,8 @@ describe('the Telegram webhook and Stars payment updates', () => {
         recordRefundedPayment: vi.fn(record),
       },
       botRuntime: { handle: vi.fn(async () => undefined) },
+      // Phase 6A PR-2: the bot's fair share, passed straight through here.
+      botTurnGuard: { run: (_tenantId: string, turn: () => Promise<unknown>) => turn() },
       antiSpam: { observe: vi.fn(async () => ({ verdict: 'ALLOWED' })) },
       recordPing: { execute: vi.fn(async () => undefined) },
       opsLog: { record: vi.fn(async () => undefined) },

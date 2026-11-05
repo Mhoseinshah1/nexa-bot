@@ -192,6 +192,7 @@ describe('Migration P7: the legacy importer', () => {
 
     // A legacy user who already used NEXA: matched, never re-created, never overwritten.
     await ctx.container.customers.resolveFromUpdate(tenantA, importerActor('webhook'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'legacy-existing',
       telegramUserId: SYNTHETIC_EXISTING_CUSTOMER,
       from: {
@@ -1574,6 +1575,7 @@ describe('Migration P7: the legacy importer', () => {
     await importer().apply({ ...input('import', snap), mode: 'IMPORT' });
     // An opening nobody imported appears (a second writer, a hand-made row).
     const stray = await ctx.container.customers.resolveFromUpdate(tenantA, importerActor('w2'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'stray',
       telegramUserId: '777777777',
       from: { id: 777777777, first_name: 'Stray' },
@@ -1609,6 +1611,7 @@ describe('Migration P7: the legacy importer', () => {
       tenantA,
       importerActor('w3'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'stray-debtor',
         telegramUserId: '777777778',
         from: { id: 777777778, first_name: 'StrayDebtor' },
@@ -2673,6 +2676,7 @@ describe('Migration P7: the legacy importer', () => {
       tenantA,
       importerActor('webhook-3'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'legacy-prior-opening',
         telegramUserId: '100000003',
         from: { id: 100000003, first_name: 'Prior' },

@@ -143,6 +143,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
     await pinPanelCaption(ctx, owner, panelId);
     customerId = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve'), {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-r3-${CUSTOMER_TG}`,
         telegramUserId: CUSTOMER_TG,
         from: { id: Number(CUSTOMER_TG), first_name: 'سارا' },

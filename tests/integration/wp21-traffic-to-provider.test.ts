@@ -88,6 +88,7 @@ describe('WP21 — a GB figure reaches the panel as bytes', () => {
     panelId = created.view.panel.id;
     await validatePanelConnection(ctx.container, tenantA, panelId);
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-wp21',
       telegramUserId: '930931',
       from: { id: 930931, first_name: 'سارا' },

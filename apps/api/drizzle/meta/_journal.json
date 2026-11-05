@@ -2206,6 +2206,13 @@
       "when": 1793793212756,
       "tag": "0314_customer_phone_not_accepted",
       "breakpoints": true
+    },
+    {
+      "idx": 315,
+      "version": "7",
+      "when": 1793829107727,
+      "tag": "0315_capacity_guards",
+      "breakpoints": true
     }
   ]
 }

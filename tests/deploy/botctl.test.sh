@@ -6381,6 +6381,25 @@ assert_contains '8 GB host' "$(nexa_backup_verify_limits 70 8000)" 'NEXA_BACKUP_
 assert_contains '2 GB host keeps the floor' "$(nexa_backup_verify_limits 70 2000)" 'NEXA_BACKUP_VERIFY_MEMORY=512m'
 assert_contains '64 GB host is capped' "$(nexa_backup_verify_limits 70 64000)" 'NEXA_BACKUP_VERIFY_MEMORY=2048m'
 
+test_case 'phase 6A: container memory limits are shares of the declared host RAM, clamped'
+limits_8g="$(nexa_container_memory_limits 8192)"
+assert_contains '8 GB: postgres 40 %' "$limits_8g" 'NEXA_MEM_POSTGRES=3276m'
+assert_contains '8 GB: api 12 %' "$limits_8g" 'NEXA_MEM_API=983m'
+assert_contains '8 GB: worker 10 %' "$limits_8g" 'NEXA_MEM_WORKER=819m'
+assert_contains '8 GB: monitor 4 %' "$limits_8g" 'NEXA_MEM_MONITOR=327m'
+assert_contains '8 GB: redis fixed' "$limits_8g" 'NEXA_MEM_REDIS=128m'
+assert_contains '2 GB: api keeps its floor' "$(nexa_container_memory_limits 2048)" 'NEXA_MEM_API=384m'
+assert_contains '4 GB: the worker keeps room for a backup' "$(nexa_container_memory_limits 4096)" 'NEXA_MEM_WORKER=512m'
+assert_contains '64 GB: api is capped' "$(nexa_container_memory_limits 65536)" 'NEXA_MEM_API=4096m'
+assert_contains '64 GB: postgres has no cap' "$(nexa_container_memory_limits 65536)" 'NEXA_MEM_POSTGRES=26214m'
+assert_equals 'not a number is refused' 1 "$(nexa_container_memory_limits 8g >/dev/null; echo $?)"
+
+test_case 'phase 6A: postgres is the last process the OOM killer considers'
+compose_text="$(cat "${REPO}/deploy/compose.yml")"
+assert_contains 'postgres has a negative oom_score_adj' "$compose_text" 'oom_score_adj: -900'
+assert_contains 'postgres limit reads deploy.env' "$compose_text" 'mem_limit: ${NEXA_MEM_POSTGRES:-3276m}'
+assert_contains 'api limit reads deploy.env' "$compose_text" 'mem_limit: ${NEXA_MEM_API:-983m}'
+
 test_case 'backup verify: a restart records the limits from the stored setting, and status shows them'
 fake_set backup_cpu_percent 40
 run_botctl restart

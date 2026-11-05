@@ -167,6 +167,7 @@ describe('WP19 — a customer asks for their money back', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-refunds',
       telegramUserId: CUSTOMER_TG,
       from: { id: Number(CUSTOMER_TG), first_name: 'مریم' },
@@ -661,6 +662,7 @@ describe('WP19 — a customer asks for their money back', () => {
   it('answers a request for another customer’s service like one that does not exist', async () => {
     const service = await activeService('other');
     const other = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('o'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-other',
       telegramUserId: '930930',
       from: { id: 930930, first_name: 'علی' },

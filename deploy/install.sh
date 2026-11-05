@@ -1014,6 +1014,8 @@ write_deploy_env() {
   # v0.9.7: the backup-verify service's CPU (the backup CPU setting's default here, before
   # the database exists) and memory limits; botctl update and restart redo it.
   nexa_record_backup_verify_limits
+  # Phase 6A PR-2: every container's memory limit, from the host's RAM.
+  nexa_record_container_memory_limits
 }
 
 # ---------------------------------------------------------------------------

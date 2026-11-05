@@ -92,6 +92,7 @@ describe('financial concurrency', () => {
      */
     await makePanelSellable(ctx.container, tenantA, panelA);
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-concurrency',
       telegramUserId: '900900',
       from: { id: 900900, first_name: 'زهرا' },

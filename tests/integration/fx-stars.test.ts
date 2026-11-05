@@ -235,6 +235,7 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
     }
     maryam = (
       await api.container.customers.resolveFromUpdate(tenantA, systemActor(`r-${String(MARYAM)}`), {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${String(MARYAM)}-${BOT_A}`,
         telegramUserId: String(MARYAM),
         from: { id: MARYAM, first_name: 'Customer' },

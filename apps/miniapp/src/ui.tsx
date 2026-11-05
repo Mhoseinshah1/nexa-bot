@@ -147,6 +147,8 @@ export function TabBar({ current, onSelect }: { current: Tab; onSelect: (tab: Ta
 /** The sentence for a refusal: the mini app's own codes, then the services' common ones. */
 const ERROR_TEXT: Readonly<Record<string, MiniAppKey>> = {
   'miniapp.rate_limited': 'miniapp.rate_limited',
+  // Phase 6A PR-2: the bot's new-customer rate, at the launch — "try again shortly".
+  'capacity.new_customer_rate': 'miniapp.rate_limited',
   'miniapp.not_found': 'miniapp.not_found',
   'miniapp.session_invalid': 'miniapp.reopen',
   'miniapp.unavailable': 'miniapp.unavailable',

@@ -218,6 +218,7 @@ describe('extra users / devices on an existing service (WP-A5)', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-devices',
       telegramUserId: '920920',
       from: { id: 920920, first_name: 'سارا' },
@@ -1015,6 +1016,7 @@ describe('extra users / devices on an existing service (WP-A5)', () => {
       const rate = await offeredRate('iso');
 
       const resolvedB = await ctx.container.customers.resolveFromUpdate(tenantB, systemActor('b'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-devices-b',
         telegramUserId: '930930',
         from: { id: 930930, first_name: 'B' },

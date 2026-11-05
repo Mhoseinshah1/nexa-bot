@@ -193,6 +193,7 @@ describe('Package F — a customer transfers a service to another customer', () 
       inTenantB ? tenantB : tenantA,
       systemActor(`r-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-transfer-${telegramUserId}`,
         telegramUserId,
         from: {

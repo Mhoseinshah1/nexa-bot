@@ -129,6 +129,7 @@ describe('a RickPanel NEW_SERVICE', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-rick',
       telegramUserId: '920920',
       from: { id: 920920, first_name: 'سارا' },

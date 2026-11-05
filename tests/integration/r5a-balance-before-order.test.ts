@@ -80,6 +80,7 @@ describe('balance before/after in the customer messages is in commit order', () 
       tenantA,
       systemActor(`resolve-${telegramId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramId}`,
         telegramUserId: telegramId,
         from: { id: Number(telegramId), first_name: 'نیما', username: `u${telegramId}` },

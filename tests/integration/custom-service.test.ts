@@ -153,6 +153,7 @@ function helpers(f: Fixture) {
   const register = async (telegramUserId: string, startPayload?: string): Promise<UserId> =>
     (
       await ctx.container.customers.resolveFromUpdate(tenantA, customerActor(f.key()), {
+        intake: 'INTERNAL',
         idempotencyKey: f.key(),
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'نگار' },
@@ -616,6 +617,7 @@ describe('Package D — the custom service', () => {
     it('never lets another tenant’s customer buy on this tenant’s location', async () => {
       await offer();
       const b = await f.ctx.container.customers.resolveFromUpdate(tenantB, customerActor(f.key()), {
+        intake: 'INTERNAL',
         idempotencyKey: f.key(),
         telegramUserId: '940099',
         from: { id: 940099, first_name: 'ب' },
@@ -1362,6 +1364,7 @@ describe('Package D — a custom service is provisioned like a purchase (D7)', (
     await validatePanelConnection(ctx.container, tenantA, panelId);
     customerId = (
       await ctx.container.customers.resolveFromUpdate(tenantA, customerActor('r'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-custom-p',
         telegramUserId: '940500',
         from: { id: 940500, first_name: 'سینا' },

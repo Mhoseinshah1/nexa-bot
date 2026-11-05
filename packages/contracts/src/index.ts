@@ -205,3 +205,5 @@ export * from './ops-error-events.js';
 export * from './record-source.js';
 /** R10 D4: gift cards — wallet top-up codes minted in batches and redeemed once. */
 export * from './gift-cards.js';
+/** Phase 6A PR-2: per-bot capacity limits, the heavy-job queue and the owner's capacity alerts. */
+export * from './capacity.js';

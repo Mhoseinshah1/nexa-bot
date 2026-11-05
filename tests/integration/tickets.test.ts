@@ -216,6 +216,7 @@ describe('WP-A7 — support tickets', () => {
       inTenantB ? tenantB : tenantA,
       systemActor(`r-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-ticket-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: firstName },
@@ -1382,6 +1383,7 @@ describe('WP-A7 — support tickets', () => {
     for (let index = 0; index < 21; index += 1) {
       const telegramUserId = String(952_000 + index);
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor(`m-${String(index)}`), {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-mary-${String(index)}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'M', username: `mary${String(index)}` },
@@ -2114,6 +2116,7 @@ describe('HF-A7 — support’s file over HTTP', () => {
     if (match === null) throw new Error('No session cookie.');
     cookie = `${SESSION_COOKIE_NAME}=${match[1] as string}`;
     const resolved = await api.container.customers.resolveFromUpdate(tenantA, systemActor('h'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-ticket-http',
       telegramUserId: CUSTOMER_TG,
       from: { id: Number(CUSTOMER_TG), first_name: 'مریم' },

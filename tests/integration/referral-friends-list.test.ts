@@ -206,6 +206,7 @@ describe('the mini app invited-friends list (R11 B3)', () => {
       tenantA,
       system(`friend-${String(id)}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: key(),
         telegramUserId: String(id),
         from: { id, ...from },

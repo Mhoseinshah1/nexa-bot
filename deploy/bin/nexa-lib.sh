@@ -1048,6 +1048,82 @@ nexa_record_pg_tuning() {
   nexa_ok "PostgreSQL sized for this host: $(printf '%s' "$values" | tr '\n' ' ')"
 }
 
+# Phase 6A PR-2: every container's memory limit, from the host's RAM.
+#
+# The host RAM is DECLARED in deploy.env as NEXA_HOST_MEMORY_MB. An operator may write it by
+# hand (a host whose /proc/meminfo does not describe what the stack may use — a VM with
+# ballooning, a host shared with something else); otherwise install and every update record
+# it from /proc/meminfo, and the limits below follow it. Shares of the host, each clamped:
+#
+#   NEXA_MEM_POSTGRES      40 %, at least 512 MB    (shared_buffers is 25 %, plus work_mem)
+#   NEXA_MEM_API           12 %, 384 MB .. 4 GB     (measured 580 MB at the 100-customer cliff)
+#   NEXA_MEM_WORKER        10 %, 512 MB .. 3 GB     (measured 280-450 MB under load, plus the
+#                                                   backup's dump and archive subprocesses)
+#   NEXA_MEM_MONITOR,
+#   NEXA_MEM_PROVISIONER,
+#   NEXA_MEM_ASSISTANT      4 %, 256 MB .. 1 GB each
+#   NEXA_MEM_RECOVERY       8 %, 384 MB .. 2 GB     (idle unless a restore runs)
+#   NEXA_MEM_REDIS         128 MB                   (maxmemory 64mb)
+#   NEXA_MEM_CADDY          3 %, 128 MB .. 512 MB
+#
+# Limits, not reservations: together they exceed nothing in the normal case, and a runaway
+# process is killed INSIDE its own container instead of the kernel picking a victim for the
+# whole host. Which victim the kernel picks when the host itself runs out is the other half:
+# compose gives postgres a negative oom_score_adj and the application roles a positive one,
+# so the database is the last process the OOM killer considers. Pure, so the arithmetic is
+# tested without Docker.
+# One share: name, host MB, percent, minimum, maximum (0: none).
+_nexa_mem_share() {
+  local v=$(($2 * $3 / 100))
+  [ "$v" -ge "$4" ] || v="$4"
+  [ "$5" -eq 0 ] || [ "$v" -le "$5" ] || v="$5"
+  printf '%s=%sm\n' "$1" "$v"
+}
+
+nexa_container_memory_limits() {
+  local mb="${1:-}"
+  case "$mb" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  [ "$mb" -gt 0 ] || return 1
+  _nexa_mem_share NEXA_MEM_POSTGRES "$mb" 40 512 0
+  _nexa_mem_share NEXA_MEM_API "$mb" 12 384 4096
+  _nexa_mem_share NEXA_MEM_WORKER "$mb" 10 512 3072
+  _nexa_mem_share NEXA_MEM_MONITOR "$mb" 4 256 1024
+  _nexa_mem_share NEXA_MEM_PROVISIONER "$mb" 4 256 1024
+  _nexa_mem_share NEXA_MEM_ASSISTANT "$mb" 4 256 1024
+  _nexa_mem_share NEXA_MEM_RECOVERY "$mb" 8 384 2048
+  printf 'NEXA_MEM_REDIS=128m\n'
+  _nexa_mem_share NEXA_MEM_CADDY "$mb" 3 128 512
+}
+
+# Records NEXA_HOST_MEMORY_MB (only when deploy.env does not already declare one) and the
+# limits it gives. Never fatal: a host whose memory cannot be read and that declares none
+# keeps whatever deploy.env says, and compose's own defaults when it says nothing.
+nexa_record_container_memory_limits() {
+  local file="${NEXA_CONFIG_DIR}/deploy.env" mb values
+  mb="$(nexa_env_value "$file" NEXA_HOST_MEMORY_MB 2>/dev/null || true)"
+  case "$mb" in
+    '' | *[!0-9]*)
+      mb="$(nexa_host_memory_mb 2>/dev/null || true)"
+      case "$mb" in
+        '' | *[!0-9]*)
+          nexa_warn "could not read this host's memory and deploy.env declares no NEXA_HOST_MEMORY_MB; container memory limits stay as recorded."
+          return 0
+          ;;
+      esac
+      nexa_set_deploy_values "NEXA_HOST_MEMORY_MB=${mb}"
+      ;;
+  esac
+  if ! values="$(nexa_container_memory_limits "$mb")"; then
+    nexa_warn "NEXA_HOST_MEMORY_MB=${mb} is not a size in MB; container memory limits stay as recorded."
+    return 0
+  fi
+  # shellcheck disable=SC2086 # one KEY=VALUE per word, none containing a space.
+  nexa_set_deploy_values $values
+  nexa_ok "container memory limits for ${mb} MB of RAM: $(printf '%s' "$values" | tr '\n' ' ')"
+}
+
 # v0.9.7: the Docker limits of the `backup-verify` service, where the backup's verification
 # restore runs (deploy/compose.yml). Two values in deploy.env:
 #

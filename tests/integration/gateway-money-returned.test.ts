@@ -271,6 +271,7 @@ describe('R12 F1 — gateway money for an attempt that can no longer pay its ord
     await validatePanelConnection(ctx.container, tenantA, panelId);
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-m'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-m',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

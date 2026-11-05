@@ -213,6 +213,7 @@ describe('the Telegram management panel', () => {
      * binding is a numeric id, so neither changes anything.
      */
     await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('rename'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'rename-1',
       telegramUserId: '920500',
       from: { id: 920_500, username: 'reviewer-numeric', first_name: 'Not the reviewer' },
@@ -945,6 +946,7 @@ describe('the Telegram management panel', () => {
       tenantA,
       systemActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'زهرا' },

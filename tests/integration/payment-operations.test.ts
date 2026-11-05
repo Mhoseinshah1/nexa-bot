@@ -80,6 +80,7 @@ describe('the Payment Operations Center', () => {
     );
     customerA = (
       await ctx.container.customers.resolveFromUpdate(tenantA, system('ra'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-ops-a',
         telegramUserId: '7100001',
         from: { id: 7100001, first_name: 'آرش' },
@@ -88,6 +89,7 @@ describe('the Payment Operations Center', () => {
     ).customer.id;
     customerB = (
       await ctx.container.customers.resolveFromUpdate(tenantB, system('rb'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-ops-b',
         telegramUserId: '7200002',
         from: { id: 7200002, first_name: 'بهار' },
@@ -552,6 +554,7 @@ describe('the Payment Operations Center', () => {
       const telegramUserId = String(7_300_000 + customerSeq);
       return (
         await ctx.container.customers.resolveFromUpdate(scope, system(`fc-${telegramUserId}`), {
+          intake: 'INTERNAL',
           idempotencyKey: `resolve-eq-${telegramUserId}`,
           telegramUserId,
           from: { id: Number(telegramUserId), first_name: 'آزمون' },

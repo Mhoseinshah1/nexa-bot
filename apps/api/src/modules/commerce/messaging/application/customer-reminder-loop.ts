@@ -1,6 +1,7 @@
 import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import { phasedSweepDue } from '../../../platform/capacity/domain/schedule-offset.js';
 
 /**
  * How often the loop wakes.
@@ -56,6 +57,12 @@ export class CustomerReminderLoop {
       readonly scope: () => TenantContext | null;
       readonly intervalMs: number;
       readonly now: () => number;
+      /**
+       * Phase 6A PR-2: the bot's own phase within each sweep's interval
+       * (`scheduleOffsetMs`), so fifty bots' sweeps do not all fire the same minute. 0 (the
+       * owner's own bot, and the default) keeps "every `everyMs` since the last run".
+       */
+      readonly offsetMs?: (scope: TenantContext, sweep: string, everyMs: number) => number;
       readonly logger: {
         info: (context: Record<string, unknown>, message: string) => void;
         error: (context: Record<string, unknown>, message: string) => void;
@@ -109,7 +116,12 @@ export class CustomerReminderLoop {
       for (const sweep of this.sweeps) {
         const at = this.options.now();
         const last = this.lastRunAt.get(sweep.name);
-        if (last !== undefined && at - last < sweep.everyMs) continue;
+        const offset = this.options.offsetMs?.(scope, sweep.name, sweep.everyMs) ?? 0;
+        if (offset === 0) {
+          if (last !== undefined && at - last < sweep.everyMs) continue;
+        } else if (!phasedSweepDue(at, last ?? null, sweep.everyMs, offset)) {
+          continue;
+        }
         try {
           const told = await sweep.runOnce(scope);
           this.lastRunAt.set(sweep.name, at);

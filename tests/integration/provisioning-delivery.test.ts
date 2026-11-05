@@ -186,6 +186,7 @@ describe('a provisioned service announces itself', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-deliv',
       telegramUserId: '910910',
       from: { id: 910910, first_name: 'مریم' },
@@ -2254,6 +2255,7 @@ describe('a provisioned service announces itself', () => {
     if (token === null) throw new Error('fixture cursor did not encode');
 
     const other = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('other'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-other-cursor',
       telegramUserId: '910911',
       from: { id: 910911, first_name: 'سارا' },

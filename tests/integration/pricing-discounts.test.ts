@@ -128,6 +128,7 @@ describe('discounts reach the order, and confirmation keeps its word', () => {
       scope,
       customerActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'زهرا' },

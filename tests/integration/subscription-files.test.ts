@@ -137,6 +137,7 @@ describe('Package E — RickPanel subscription files', () => {
     const resolve = async (tg: string) =>
       (
         await ctx.container.customers.resolveFromUpdate(tenantA, systemActor(`r-${tg}`), {
+          intake: 'INTERNAL',
           idempotencyKey: `resolve-files-${tg}`,
           telegramUserId: tg,
           from: { id: Number(tg), first_name: 'سارا' },

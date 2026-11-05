@@ -168,6 +168,17 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'telegram.ops_group_update_failed': 'به‌روزرسانی گروه عملیات انجام نشد',
   'telegram.turn_failed': 'پردازش پیام تلگرام شکست خورد',
   'zai.vision_unsupported': 'مدل هوش مصنوعی تصویر را پشتیبانی نمی‌کند',
+  // Phase 6A PR-2: capacity guards, the owner's operations group only.
+  'capacity.bot_limit_pressure': 'یک ربات مدام به سقف ظرفیتش می‌رسد',
+  'capacity.heavy_job_deferred': 'کار سنگین به‌خاطر کمبود حافظه منتظر ماند',
+  'capacity.disk_warning': 'دیسک سرور از ۸۰٪ پر شد',
+  'capacity.disk_warning_cleared': 'دیسک سرور دوباره زیر ۸۰٪ است',
+  'capacity.disk_critical': 'دیسک سرور از ۹۰٪ پر شد',
+  'capacity.disk_critical_cleared': 'دیسک سرور دوباره زیر ۹۰٪ است',
+  'capacity.memory_low': 'حافظهٔ آزاد سرور کم است',
+  'capacity.memory_ok': 'حافظهٔ آزاد سرور دوباره کافی است',
+  'capacity.worker_lag_growing': 'صف کارهای پس‌زمینه عقب افتاده است',
+  'capacity.worker_lag_ok': 'صف کارهای پس‌زمینه دوباره به‌روز است',
 };
 
 /**

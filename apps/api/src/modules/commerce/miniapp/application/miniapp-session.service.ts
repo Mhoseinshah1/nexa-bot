@@ -105,6 +105,7 @@ export interface MiniAppSessionServiceDeps {
         readonly from: unknown;
         readonly botInstanceId: BotInstanceId;
         readonly startPayload?: string | null;
+        readonly intake: 'TELEGRAM' | 'MINIAPP' | 'INTERNAL';
       },
     ): Promise<{ readonly customer: CustomerRecord; readonly arrival: CustomerArrival }>;
   };
@@ -252,6 +253,9 @@ export class MiniAppSessionService {
       from: verdict.from,
       botInstanceId: bot.id,
       startPayload: null,
+      // Phase 6A PR-2: a public intake, held to the bot's new-customer rate (a refusal is the
+      // retryable `capacity.new_customer_rate`, 429, and no customer is created).
+      intake: 'MINIAPP',
     });
 
     const ttlMinutes = await this.deps.settings.valueOf<number>(

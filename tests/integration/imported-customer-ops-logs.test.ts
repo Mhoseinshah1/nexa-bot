@@ -305,6 +305,7 @@ describe('R10 B5: what an imported customer does after the import reaches the op
       tenantA,
       systemActor(`resolve-${tg}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `r10b5-resolve-${tg}`,
         telegramUserId: tg,
         from: { id: Number(tg), first_name: 'مشتری' },

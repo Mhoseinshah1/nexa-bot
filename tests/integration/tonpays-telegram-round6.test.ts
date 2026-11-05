@@ -138,6 +138,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-tg'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-tg',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

@@ -104,6 +104,7 @@ describe('legacy migration: what the migration role refuses', () => {
       tenantA,
       systemJobActor('telegram-update:test', `corr-${telegramUserId}` as CorrelationId),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `lmig-guards-existing-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'existing' },

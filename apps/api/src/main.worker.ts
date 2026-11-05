@@ -8,7 +8,11 @@ import {
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
-import { stalledLoops, type LoopHealth } from './infrastructure/lifecycle/loop-health.js';
+import {
+  stalledLoops,
+  workerHealthVerdict,
+  type LoopHealth,
+} from './infrastructure/lifecycle/loop-health.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
 import { installProcessBackstop } from './infrastructure/lifecycle/process-backstop.js';
 import { loopStatusesForReporting } from './modules/platform/opslog/application/loop-stall-reporter.js';
@@ -51,6 +55,8 @@ async function main(): Promise<void> {
   // work.
   // FIX-05: a stalled loop is also an operational condition, opened and closed here.
   const loopStalls = loopStallReporterFor(container, 'worker');
+  // Phase 6A PR-2: set once every loop below has been started (`workerHealthVerdict`).
+  let loopsStarted = false;
   const heartbeat = startHeartbeat({
     path: config.WORKER_HEARTBEAT_PATH,
     intervalMs: config.WORKER_HEARTBEAT_INTERVAL_MS,
@@ -217,7 +223,13 @@ async function main(): Promise<void> {
         // E5: archive retention, plaintext debris, disk space and the overdue alert. No
         // flag: the volume fills and the plaintext lingers whether the schedule is on or not.
         ['backup-housekeeping', true, () => container.backupHousekeeping.isFresh(at)],
+        // Phase 6A PR-2: the owner's disk, memory and worker-lag alerts.
+        ['capacity-monitor', true, () => container.capacityMonitorLoop.isFresh(at)],
       ];
+      // Booting: not ready, alive, and nothing reported about loops that have not begun.
+      if (!loopsStarted) {
+        return workerHealthVerdict({ started: false, stalledNow: [], stalledBeyondAllowance: [] });
+      }
       const loops = loopsAt(now);
       const stalled = stalledLoops(loops);
       // Not awaited, and it never throws: reporting must not slow or fail the heartbeat.
@@ -396,6 +408,10 @@ async function main(): Promise<void> {
   container.backupHousekeeping.start();
   // E1: the owner's legacy-data compaction, once requested. Idle otherwise.
   container.legacyCompactionExecutor.start();
+  // Phase 6A PR-2: the server's disk, memory and worker lag, for the owner's group only.
+  container.capacityMonitorLoop.start();
+  // Every loop has been started: from the next beat, a loop that is not fresh is stalled.
+  loopsStarted = true;
   container.logger.info(
     {
       environmentDefault: {

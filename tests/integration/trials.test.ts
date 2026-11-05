@@ -146,6 +146,7 @@ describe('a free trial', () => {
       tenantA,
       systemActor(`r-${telegramId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramId}`,
         telegramUserId: telegramId,
         from: { id: Number(telegramId), first_name: 'سارا' },
@@ -1207,6 +1208,7 @@ describe('a free trial', () => {
   it('is scoped to its tenant: another tenant sees no trial', async () => {
     await configureTrial();
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantB, systemActor('rb'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-tenant-b',
       telegramUserId: '970970',
       from: { id: 970970, first_name: 'Bita' },

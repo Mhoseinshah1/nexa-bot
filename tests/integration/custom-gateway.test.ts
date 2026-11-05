@@ -112,6 +112,7 @@ describe('the custom gateway, through the one settlement path', () => {
     );
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-cg'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-cg',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

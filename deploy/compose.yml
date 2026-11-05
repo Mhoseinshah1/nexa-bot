@@ -192,6 +192,13 @@ services:
     # Docker's 64 MB /dev/shm is too small for parallel query's shared memory, which
     # fails with "could not resize shared memory segment" under load.
     shm_size: 512m
+    # Phase 6A PR-2: memory. A limit sized from the host's RAM (NEXA_HOST_MEMORY_MB in
+    # deploy.env; botctl records NEXA_MEM_* at install, update and restart — the defaults
+    # after `:-` are an 8 GB host's), and the LOWEST oom_score_adj of the stack: when the
+    # host itself runs out, the kernel kills an application role, never the database that
+    # holds every customer record. The application roles are positive, below.
+    mem_limit: ${NEXA_MEM_POSTGRES:-3276m}
+    oom_score_adj: -900
     healthcheck:
       # The credentials come from the environment inside the container, so
       # nothing here lands in the command line.
@@ -254,6 +261,8 @@ services:
     # predates them is capped all the same.
     cpus: ${NEXA_BACKUP_VERIFY_CPUS:-0.70}
     mem_limit: ${NEXA_BACKUP_VERIFY_MEMORY:-512m}
+    # Phase 6A PR-2: the first thing the OOM killer takes — a scratch restore, re-run next time.
+    oom_score_adj: 800
     memswap_limit: ${NEXA_BACKUP_VERIFY_MEMORY:-512m}
     shm_size: 128m
     # Ephemeral by construction: the previous start's cluster is removed before the image's
@@ -290,6 +299,8 @@ services:
     image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
     restart: unless-stopped
     init: true
+    # Phase 6A PR-2: memory limit from the host's RAM (deploy.env NEXA_MEM_*).
+    mem_limit: ${NEXA_MEM_REDIS:-128m}
     # Redis stores NOTHING through Phase 2 — see ADR-0022. It is connected and
     # health-checked; the login throttle is Postgres-backed and no queue library
     # is installed. `--save ""` and `--appendonly no` say that deliberately
@@ -427,6 +438,9 @@ services:
 
   api:
     <<: *app-common
+    # Phase 6A PR-2: memory limit from the host's RAM, and above postgres for the OOM killer.
+    mem_limit: ${NEXA_MEM_API:-983m}
+    oom_score_adj: 300
     volumes: *app-volumes
     command: ['node', 'dist/main.js']
     healthcheck:
@@ -447,6 +461,9 @@ services:
 
   worker:
     <<: *app-common
+    # Phase 6A PR-2: memory limit from the host's RAM, and above postgres for the OOM killer.
+    mem_limit: ${NEXA_MEM_WORKER:-819m}
+    oom_score_adj: 500
     volumes: *app-volumes
     command: ['node', 'dist/main.worker.js']
     # A real signal, not "is the process running". The worker serves no HTTP,
@@ -482,6 +499,9 @@ services:
 
   monitor:
     <<: *app-common
+    # Phase 6A PR-2: memory limit from the host's RAM, and above postgres for the OOM killer.
+    mem_limit: ${NEXA_MEM_MONITOR:-327m}
+    oom_score_adj: 500
     command: ['node', 'dist/main.monitor.js']
     # The third process role, from the SAME image. Not an interval inside the
     # API — unattended outbound calls to an operator's panels must not share an
@@ -515,6 +535,9 @@ services:
 
   provisioner:
     <<: *app-common
+    # Phase 6A PR-2: memory limit from the host's RAM, and above postgres for the OOM killer.
+    mem_limit: ${NEXA_MEM_PROVISIONER:-327m}
+    oom_score_adj: 500
     command: ['node', 'dist/main.provisioner.js']
     # The FIFTH process role, from the SAME image, and the one that turns a paid
     # order into a service somebody can actually connect to.
@@ -556,6 +579,9 @@ services:
 
   assistant:
     <<: *app-common
+    # Phase 6A PR-2: memory limit from the host's RAM, and above postgres for the OOM killer.
+    mem_limit: ${NEXA_MEM_ASSISTANT:-327m}
+    oom_score_adj: 700
     command: ['node', 'dist/main.assistant.js']
     # The SIXTH process role (TB5, ADR-0034 §7), from the SAME image: the only one that calls
     # an AI provider in the background.
@@ -609,6 +635,9 @@ services:
   # partial unique index, not by there being one container.
   recovery:
     <<: *app-common
+    # Phase 6A PR-2: memory limit from the host's RAM, and above postgres for the OOM killer.
+    mem_limit: ${NEXA_MEM_RECOVERY:-655m}
+    oom_score_adj: 300
     volumes: *app-volumes
     command: ['node', 'dist/main.recovery.js']
     # The same heartbeat shape the worker and monitor use, for the same reason:
@@ -637,6 +666,9 @@ services:
     image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     restart: unless-stopped
     init: true
+    # Phase 6A PR-2: memory limit from the host's RAM (deploy.env NEXA_MEM_*).
+    mem_limit: ${NEXA_MEM_CADDY:-245m}
+    oom_score_adj: 200
     # The only published ports in the deployment. 80 is needed for the ACME
     # HTTP-01 challenge and for the redirect to HTTPS.
     ports:

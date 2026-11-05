@@ -134,6 +134,17 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'maintenance.legacy_cleanup_backup_destination_ready': 'SYSTEM',
   'maintenance.legacy_cleanup_reconciliation_differs': 'SYSTEM',
   'system.ping': 'SYSTEM',
+  // Phase 6A PR-2: capacity guards, beside the other installation facts.
+  'capacity.bot_limit_pressure': 'SYSTEM',
+  'capacity.heavy_job_deferred': 'SYSTEM',
+  'capacity.disk_warning': 'SYSTEM',
+  'capacity.disk_warning_cleared': 'SYSTEM',
+  'capacity.disk_critical': 'SYSTEM',
+  'capacity.disk_critical_cleared': 'SYSTEM',
+  'capacity.memory_low': 'SYSTEM',
+  'capacity.memory_ok': 'SYSTEM',
+  'capacity.worker_lag_growing': 'SYSTEM',
+  'capacity.worker_lag_ok': 'SYSTEM',
 };
 
 /** A family code is routed by its members; the family prefix itself is not a code. */

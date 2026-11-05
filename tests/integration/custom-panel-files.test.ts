@@ -124,6 +124,7 @@ describe('custom bridge connection files (protocol v1.1)', () => {
       [OTHER_TG, 'نیما'],
     ] as const) {
       const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor(tg), {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${tg}`,
         telegramUserId: tg,
         from: { id: Number(tg), first_name: name },

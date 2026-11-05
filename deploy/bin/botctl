@@ -1677,6 +1677,8 @@ cmd_update() {
   nexa_record_pg_tuning
   # v0.9.7: and the backup-verify limits, read from the backup CPU setting before the start.
   nexa_record_backup_verify_limits
+  # Phase 6A PR-2: and every container's memory limit, from NEXA_HOST_MEMORY_MB.
+  nexa_record_container_memory_limits
 
   # 6. START the target.
   nexa_step "starting ${target}"
@@ -2040,6 +2042,7 @@ cmd_restart() {
   # the new botctl — is what applies it on that installation.
   nexa_record_pg_tuning
   nexa_record_backup_verify_limits
+  nexa_record_container_memory_limits
   nexa_bring_up_with_edge "" "$edge" ||
     nexa_die "the stack restarted but the edge did not adopt the installed configuration (${edge#sha256:}). Run 'botctl logs caddy'."
   nexa_wait_ready || nexa_die "the stack restarted but the API is not ready."

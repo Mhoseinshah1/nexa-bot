@@ -170,6 +170,7 @@ describe('a customer manages the service they bought', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-manage',
       telegramUserId: '910910',
       from: { id: 910910, first_name: 'مریم' },
@@ -662,6 +663,7 @@ describe('a customer manages the service they bought', () => {
   it('refuses another customer’s service with the SAME answer as one that does not exist', async () => {
     const service = await activeService('owner-only');
     await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r2'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-other',
       telegramUserId: '920920',
       from: { id: 920920, first_name: 'سارا' },
@@ -2305,6 +2307,7 @@ describe('a customer manages the service they bought', () => {
       tenantA,
       systemActor('stranger'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-stranger',
         telegramUserId: '111222',
         from: { id: 111222, first_name: 'دیگری' },

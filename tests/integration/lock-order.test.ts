@@ -121,6 +121,7 @@ describe('the order in which an order, its panel and its reservation are locked'
      */
     await makePanelSellable(ctx.container, tenantA, panelA);
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-lock-order',
       telegramUserId: '900700',
       from: { id: 900700, first_name: 'سارا' },

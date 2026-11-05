@@ -81,7 +81,16 @@ export const CUSTOMER_BLOCK_PERMISSION: PermissionKey = 'users.block';
  * schema refuses past while a service silently clamps to something else.
  */
 
+/** Where a customer arrives from; see `resolveFromUpdate`'s `intake`. */
+export type CustomerIntake = 'TELEGRAM' | 'MINIAPP' | 'INTERNAL';
+
 export interface CustomerServiceDeps {
+  /**
+   * Phase 6A PR-2: the bot's new-customer rate (`NEW_CUSTOMERS_PER_MINUTE`). Asked inside the
+   * resolving transaction only when it is about to CREATE a customer; a refusal throws a
+   * retryable error that rolls the creation back (`NewCustomerGate`). Absent: no limit.
+   */
+  readonly newCustomers?: { admit(tenantId: string): Promise<void> };
   readonly repository: CustomerRepository;
   readonly guard: PermissionGuard;
   readonly audit: AuditWriter;
@@ -272,6 +281,14 @@ export class CustomerService {
        * the referral program, and only when this call CREATES the customer (WP9 F2).
        */
       readonly startPayload?: string | null;
+      /**
+       * Phase 6A PR-2 (security review of #410): where this customer arrives from. The two
+       * public intakes, a Telegram update (`TELEGRAM`) and a Mini App launch (`MINIAPP`),
+       * are held to the bot's `NEW_CUSTOMERS_PER_MINUTE`; only an explicitly trusted internal
+       * caller (`INTERNAL`: an import, an operator tool, a test fixture) is not. Required, so
+       * a new intake cannot forget to say which it is.
+       */
+      readonly intake: CustomerIntake;
     },
   ): Promise<{ readonly customer: CustomerRecord; readonly arrival: CustomerArrival }> {
     // 4. Validate at the boundary. A `from` of the wrong shape yields nulls; a
@@ -389,6 +406,12 @@ export class CustomerService {
          */
         const arrival: CustomerArrival =
           customer.status === 'BLOCKED' ? 'BLOCKED' : created ? 'FIRST_SEEN' : 'RETURNING';
+
+        // Over the bot's new-customer rate this throws, and the throw takes the creation
+        // back with it: nothing is written, and Telegram delivers the update again.
+        if (created && input.intake !== 'INTERNAL' && this.deps.newCustomers !== undefined) {
+          await this.deps.newCustomers.admit(scope.tenantId);
+        }
 
         if (created) {
           await this.deps.audit.record(

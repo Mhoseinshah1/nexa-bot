@@ -313,11 +313,24 @@ async function pointAtInstallation(
 
 /** `backup run` refused because a recovery holds the installation. Distinct from BUSY (2). */
 const EXIT_RECOVERY_QUIESCED = 4;
+/**
+ * Phase 6A PR-2: `backup run` waited in the installation-wide heavy-job queue (another heavy
+ * job ran, or free memory stayed below the owner's floor) and was never admitted.
+ */
+const EXIT_HEAVY_QUEUE_TIMEOUT = 5;
+const HEAVY_QUEUE_POLL_MS = 5_000;
+const HEAVY_QUEUE_MAX_WAIT_MS = 30 * 60_000;
 
 async function cmdRun(
   container: Pick<
     Container,
-    'backup' | 'recoveryQuiesced' | 'tenants' | 'setInstallationTenant' | 'logger'
+    | 'backup'
+    | 'recoveryQuiesced'
+    | 'tenants'
+    | 'setInstallationTenant'
+    | 'logger'
+    | 'heavyJobs'
+    | 'installationTenantId'
   >,
 ): Promise<number> {
   /*
@@ -346,7 +359,43 @@ async function cmdRun(
     return EXIT_RECOVERY_QUIESCED;
   }
   await pointAtInstallation(container);
-  const outcome = await container.backup.run('MANUAL');
+  /*
+   * Phase 6A PR-2: through the ONE installation-wide heavy-job queue, like the scheduled
+   * backup: it waits (and says so) while another heavy job runs or free memory is below the
+   * owner's floor, and gives up after HEAVY_QUEUE_MAX_WAIT_MS having started nothing. No
+   * installation tenant (a fresh database): nothing to queue against, it runs as before.
+   */
+  const tenantId = container.installationTenantId;
+  let said = false;
+  const queued =
+    tenantId === null
+      ? { ran: true as const, result: await container.backup.run('MANUAL') }
+      : await container.heavyJobs.runWhenAdmitted(
+          'BACKUP',
+          tenantId,
+          () => container.backup.run('MANUAL'),
+          {
+            pollMs: HEAVY_QUEUE_POLL_MS,
+            maxWaitMs: HEAVY_QUEUE_MAX_WAIT_MS,
+            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+            onWait: (admission) => {
+              if (said || admission.granted) return;
+              said = true;
+              process.stdout.write(
+                admission.reason === 'LOW_MEMORY'
+                  ? 'Waiting: free memory is below the heavy-job floor; the backup starts when it recovers.\n'
+                  : 'Waiting: another heavy job is running; the backup starts when its turn comes.\n',
+              );
+            },
+          },
+        );
+  if (!queued.ran) {
+    process.stderr.write(
+      'The backup waited in the heavy-job queue for 30 minutes and was not admitted. Nothing was started.\n',
+    );
+    return EXIT_HEAVY_QUEUE_TIMEOUT;
+  }
+  const outcome = queued.result;
   if (outcome.kind === 'BUSY') {
     // Not an error the operator caused, and not something to retry behind their
     // back. One backup at a time is the invariant; this is it working.
