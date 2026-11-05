@@ -10694,6 +10694,23 @@ export const WEB_FA = {
     'این ربات در این دقیقه به سقف مشتری تازه رسیده است. کمی بعد دوباره امتحان کنید.',
   'web.err_capacity_limit_invalid': 'این مقدار برای این سقف مجاز نیست.',
   'web.err_capacity_owner_only': 'سقف‌های ظرفیت را فقط مالک نصب می‌تواند ببیند و تغییر دهد.',
+  'web.err_hosting_owner_only': 'بخش «میزبانی‌ها» فقط برای مالک این نصب است.',
+  'web.err_hosting_second_factor_required': 'اول کد دومرحله‌ای بخش میزبانی‌ها را فعال کنید.',
+  'web.err_hosting_second_factor_active': 'کد دومرحله‌ای بخش میزبانی‌ها از قبل فعال است.',
+  'web.err_hosting_enrolment_expired':
+    'فعال‌سازی منقضی شده یا از این نشست شروع نشده است. دوباره شروع کنید.',
+  'web.err_hosting_section_session_required':
+    'برای ورود به بخش میزبانی‌ها کد دومرحله‌ای را وارد کنید.',
+  'web.err_hosting_code_rejected': 'این کد پذیرفته نشد.',
+  'web.err_hosting_code_attempts_locked': 'کدهای نادرست زیادی وارد شد. کمی بعد دوباره امتحان کنید.',
+  'web.err_hosting_bot_not_found': 'چنین ربات میزبانی‌شده‌ای پیدا نشد.',
+  'web.err_hosting_state_conflict': 'این کار در وضعیت فعلی این ربات ممکن نیست. صفحه را تازه کنید.',
+  'web.err_hosting_expiry_passed':
+    'تاریخ انقضای این ربات گذشته است. اول تاریخ تازه بگذارید یا آن را خالی کنید.',
+  'web.err_hosting_slug_taken': 'این شناسه قبلاً استفاده شده است.',
+  'web.err_hosting_create_disabled': 'ساختن ربات میزبانی‌شده روی این نصب فعلاً بسته است.',
+  'web.err_hosting_purge_confirmation_mismatch': 'برای پاک‌سازی، شناسهٔ ربات را دقیقاً وارد کنید.',
+  'web.err_hosting_enter_not_implemented': '«ورود به پنل» در مرحلهٔ بعد اضافه می‌شود.',
   'web.err_bot_webhook_origin_unknown': 'نشانی عمومی این نصب تنظیم نشده است؛ وب‌هوک ساخته نشد.',
   'web.err_bot_webhook_refused':
     'تلگرام نشانی وب‌هوک را نپذیرفت. دامنه و گواهی HTTPS را بررسی کنید.',
