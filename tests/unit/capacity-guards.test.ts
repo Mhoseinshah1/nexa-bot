@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   CAPACITY_ERROR_CODES,
@@ -21,7 +24,6 @@ import {
   scheduleOffsetMs,
 } from '../../apps/api/src/modules/platform/capacity/domain/schedule-offset';
 import {
-  availableMemoryBytes,
   cgroupHeadroomBytes,
   diskUsedPercent,
   memAvailableBytes,
@@ -40,6 +42,7 @@ import { CapacityLimitResolver } from '../../apps/api/src/modules/platform/capac
 import { CapacityMonitor } from '../../apps/api/src/modules/platform/capacity/application/capacity-monitor';
 import { HeavyJobGate } from '../../apps/api/src/modules/platform/capacity/application/heavy-job-gate';
 import { PoolShare } from '../../apps/api/src/modules/platform/capacity/infrastructure/pool-share';
+import { ProcSystemProbe } from '../../apps/api/src/modules/platform/capacity/infrastructure/system-probe';
 import { workerHealthVerdict } from '../../apps/api/src/infrastructure/lifecycle/loop-health';
 
 /** A promise and the function that settles it. */
@@ -365,15 +368,12 @@ describe('the scheduled-work offset', () => {
 });
 
 describe('memory and disk readings', () => {
-  it('reads MemAvailable and the cgroup headroom, and takes the smaller', () => {
+  it('reads MemAvailable and the cgroup headroom', () => {
     expect(memAvailableBytes('MemTotal: 8000 kB\nMemAvailable:   1024 kB\n')).toBe(1024 * 1024);
     expect(memAvailableBytes('MemTotal: 8000 kB\n')).toBeNull();
     expect(cgroupHeadroomBytes('max\n', '100')).toBeNull();
     expect(cgroupHeadroomBytes('1000\n', '400\n')).toBe(600);
     expect(cgroupHeadroomBytes('9223372036854771712', '1')).toBeNull();
-    expect(availableMemoryBytes(5000, 600)).toBe(600);
-    expect(availableMemoryBytes(null, 600)).toBe(600);
-    expect(availableMemoryBytes(5000, null)).toBe(5000);
     expect(diskUsedPercent(1000, 150)).toBe(85);
     expect(diskUsedPercent(0, 0)).toBeNull();
   });
@@ -536,7 +536,7 @@ describe('the server monitor (owner only)', () => {
     let used = 0.85;
     const monitor = new CapacityMonitor({
       probe: {
-        availableMemoryBytes: async () => 4 * 1024 ** 3,
+        memory: async () => ({ hostAvailableBytes: 4 * 1024 ** 3, containerHeadroomBytes: null }),
         disk: async () => ({ totalBytes: 100, availableBytes: Math.round(100 * (1 - used)) }),
       },
       ownerOpsLog: { record, conditionOpen: async () => open },
@@ -573,7 +573,7 @@ describe('the server monitor (owner only)', () => {
     const record = vi.fn();
     const monitor = new CapacityMonitor({
       probe: {
-        availableMemoryBytes: async () => 1,
+        memory: async () => ({ hostAvailableBytes: 1, containerHeadroomBytes: null }),
         disk: async () => ({ totalBytes: 1, availableBytes: 0 }),
       },
       ownerOpsLog: { record, conditionOpen: async () => true },
@@ -601,7 +601,12 @@ describe('the heavy-job gate', () => {
         purgeFinished: vi.fn(),
       },
       limits: { numberOf: async () => 768 },
-      probe: { availableMemoryBytes: async () => 100 * 1024 * 1024 },
+      probe: {
+        memory: async () => ({
+          hostAvailableBytes: 100 * 1024 * 1024,
+          containerHeadroomBytes: null,
+        }),
+      },
       ownerOpsLog: { record, conditionOpen: async () => false },
       clock: fixedClock(),
       ids: { uuid: () => 'ticket' } as never,
@@ -613,6 +618,75 @@ describe('the heavy-job gate', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ code: 'capacity.heavy_job_deferred' }),
     );
+  });
+});
+
+describe('memory: the host reserve and a container’s headroom are separate (Codex P1 #410)', () => {
+  function gateWith(memory: {
+    hostAvailableBytes: number | null;
+    containerHeadroomBytes: number | null;
+  }) {
+    const record = vi.fn(async (_event: unknown) => undefined);
+    const gate = new HeavyJobGate({
+      repository: {
+        enqueue: vi.fn(async () => undefined),
+        tryStart: vi.fn(async () => 'RUNNING' as const),
+        heartbeat: vi.fn(async () => undefined),
+        finish: vi.fn(async () => undefined),
+        purgeFinished: vi.fn(async () => 0),
+      },
+      // The default floor: 768 MB of the HOST.
+      limits: { numberOf: async () => 768 },
+      probe: { memory: async () => memory },
+      ownerOpsLog: { record, conditionOpen: async () => false },
+      clock: fixedClock(),
+      ids: { uuid: () => 'ticket' } as never,
+      installationTenantId: () => 'owner',
+    });
+    return gate;
+  }
+
+  it('admits a backup from a worker capped at 819 MB using 450 MB while the host has 4 GB free', async () => {
+    const MB = 1024 * 1024;
+    const admission = await gateWith({
+      hostAvailableBytes: 4096 * MB,
+      containerHeadroomBytes: (819 - 450) * MB,
+    }).attempt('BACKUP', 'owner', null);
+    expect(admission.granted).toBe(true);
+  });
+
+  it('still holds it when the host is short, or the container itself is at its limit', async () => {
+    const MB = 1024 * 1024;
+    expect(
+      (
+        await gateWith({ hostAvailableBytes: 500 * MB, containerHeadroomBytes: 300 * MB }).attempt(
+          'BACKUP',
+          'owner',
+          null,
+        )
+      ).granted,
+    ).toBe(false);
+    expect(
+      (
+        await gateWith({ hostAvailableBytes: 4096 * MB, containerHeadroomBytes: 40 * MB }).attempt(
+          'BACKUP',
+          'owner',
+          null,
+        )
+      ).granted,
+    ).toBe(false);
+  });
+
+  it('the probe reports the host’s MemAvailable and the cgroup headroom as two readings', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexa-probe-'));
+    writeFileSync(join(dir, 'meminfo'), 'MemTotal: 8388608 kB\nMemAvailable: 4194304 kB\n');
+    writeFileSync(join(dir, 'memory.max'), String(819 * 1024 * 1024));
+    writeFileSync(join(dir, 'memory.current'), String(500 * 1024 * 1024));
+    const probe = new ProcSystemProbe({ meminfo: join(dir, 'meminfo'), cgroupRoot: dir });
+    expect(await probe.memory()).toEqual({
+      hostAvailableBytes: 4096 * 1024 * 1024,
+      containerHeadroomBytes: 319 * 1024 * 1024,
+    });
   });
 });
 
@@ -632,7 +706,7 @@ describe('the heavy-job queue, waited on', () => {
         purgeFinished: vi.fn(async () => 0),
       },
       limits: { numberOf: async () => 1 },
-      probe: { availableMemoryBytes: async () => null },
+      probe: { memory: async () => ({ hostAvailableBytes: null, containerHeadroomBytes: null }) },
       ownerOpsLog: { record: vi.fn(async () => undefined), conditionOpen: async () => false },
       clock: fixedClock(),
       ids: { uuid: () => `ticket-${String((n += 1))}` } as never,
@@ -705,6 +779,61 @@ describe('the database share', () => {
     await Promise.all(turns);
     expect(waits).toHaveBeenCalledTimes(2);
     expect(share.snapshot('bot')).toEqual({ held: 0, waiting: 0 });
+  });
+
+  it('a turn that never got its first permit is a retryable deferral; one that already used the database is not (Codex P1 #410)', async () => {
+    const fake = fakePool();
+    const share = new PoolShare({ maxWaitMs: 20 });
+    share.install(fake.pool as never);
+    const hold = deferred();
+    const holder = share.run(
+      'bot',
+      1,
+      async () => {
+        const c = await (fake.pool.connect() as Promise<{ release(): void }>);
+        await hold.promise;
+        c.release();
+      },
+      vi.fn(),
+    );
+    await flush();
+    const first = await share
+      .run('bot', 1, () => fake.pool.connect() as Promise<unknown>, vi.fn())
+      .catch((error: unknown) => error);
+    expect(isCapacityDeferral(first)).toBe(true);
+    // Wrapped by the query layer, it is still found.
+    expect(isCapacityDeferral(new Error('Failed query', { cause: first }))).toBe(true);
+    const later = await share
+      .run(
+        'bot',
+        1,
+        async () => {
+          hold.resolve();
+          await holder;
+          const c = await (fake.pool.connect() as Promise<{ release(): void }>);
+          c.release();
+          const blocker = share.run(
+            'bot',
+            1,
+            async () => {
+              const b = await (fake.pool.connect() as Promise<{ release(): void }>);
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              b.release();
+            },
+            vi.fn(),
+          );
+          await flush();
+          try {
+            return await (fake.pool.connect() as Promise<unknown>);
+          } finally {
+            await blocker;
+          }
+        },
+        vi.fn(),
+      )
+      .catch((error: unknown) => error);
+    expect(later).toBeInstanceOf(Error);
+    expect(isCapacityDeferral(later)).toBe(false);
   });
 
   it('another bot, and work outside any turn, go straight to the pool', async () => {

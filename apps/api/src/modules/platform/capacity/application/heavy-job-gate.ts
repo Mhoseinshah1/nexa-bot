@@ -14,6 +14,14 @@ import type { HeavyJobQueueRepository, OwnerOpsLog, SystemProbe } from './ports.
  * running job refreshes it every quarter of this.
  */
 export const HEAVY_JOB_LEASE_MS = 10 * 60_000;
+/**
+ * The headroom THIS container (the one that runs the job's dump and archive subprocesses)
+ * must still have below its own cgroup limit. Separate from the owner's host floor, which is
+ * about the server's reserve: a container's headroom is bounded by its own limit (the worker
+ * gets at least 512 MB, deploy/bin/nexa-lib.sh) and is never compared with the host floor.
+ */
+export const HEAVY_JOB_MIN_CONTAINER_HEADROOM_BYTES = 96 * 1024 * 1024;
+
 /** Finished tickets are kept this long, then deleted. */
 export const HEAVY_JOB_TICKET_RETENTION_MS = 7 * 86_400_000;
 
@@ -24,6 +32,7 @@ export type HeavyJobAdmission =
       readonly ticketId: string | null;
       readonly reason: 'LOW_MEMORY' | 'QUEUED';
       readonly availableMemoryBytes?: number;
+      readonly containerHeadroomBytes?: number | null;
     };
 
 /**
@@ -50,7 +59,7 @@ export class HeavyJobGate {
     private readonly deps: {
       readonly repository: HeavyJobQueueRepository;
       readonly limits: Pick<CapacityLimitResolver, 'numberOf'>;
-      readonly probe: Pick<SystemProbe, 'availableMemoryBytes'>;
+      readonly probe: Pick<SystemProbe, 'memory'>;
       readonly ownerOpsLog: OwnerOpsLog;
       readonly clock: Clock;
       readonly ids: IdGenerator;
@@ -73,8 +82,12 @@ export class HeavyJobGate {
       installation,
       'INSTALLATION_HEAVY_JOB_MIN_FREE_MEMORY_MB',
     );
-    const available = await this.deps.probe.availableMemoryBytes();
-    if (available !== null && Number.isFinite(floorMb) && available < floorMb * 1024 * 1024) {
+    const { hostAvailableBytes: available, containerHeadroomBytes: headroom } =
+      await this.deps.probe.memory();
+    const hostShort =
+      available !== null && Number.isFinite(floorMb) && available < floorMb * 1024 * 1024;
+    const containerShort = headroom !== null && headroom < HEAVY_JOB_MIN_CONTAINER_HEADROOM_BYTES;
+    if (hostShort || containerShort) {
       if (ticketId !== null) {
         await this.deps.repository.heartbeat(
           ticketId,
@@ -85,15 +98,29 @@ export class HeavyJobGate {
         .record({
           code: CAPACITY_HEAVY_JOB_DEFERRED_CODE,
           severity: 'WARN',
-          message:
-            `کار سنگین «${kind}» منتظر ماند: حافظهٔ آزاد سرور ` +
-            `${String(Math.floor(available / 1024 / 1024))} مگابایت است و دست‌کم ` +
-            `${String(floorMb)} مگابایت لازم است. بعداً خودکار شروع می‌شود.`,
+          message: hostShort
+            ? `کار سنگین «${kind}» منتظر ماند: حافظهٔ آزاد سرور ` +
+              `${String(Math.floor((available ?? 0) / 1024 / 1024))} مگابایت است و دست‌کم ` +
+              `${String(floorMb)} مگابایت لازم است. بعداً خودکار شروع می‌شود.`
+            : `کار سنگین «${kind}» منتظر ماند: کانتینر اجراکننده به سقف حافظهٔ خودش نزدیک است ` +
+              `(${String(Math.floor((headroom ?? 0) / 1024 / 1024))} مگابایت جا). بعداً خودکار شروع می‌شود.`,
           dedupeKey: opsAggregationKey(`${CAPACITY_HEAVY_JOB_DEFERRED_CODE}:${kind}`, now),
-          context: { kind, tenantId, availableBytes: available, floorMb },
+          context: {
+            kind,
+            tenantId,
+            availableBytes: available,
+            containerHeadroomBytes: headroom,
+            floorMb,
+          },
         })
         .catch(() => undefined);
-      return { granted: false, ticketId, reason: 'LOW_MEMORY', availableMemoryBytes: available };
+      return {
+        granted: false,
+        ticketId,
+        reason: 'LOW_MEMORY',
+        ...(available === null ? {} : { availableMemoryBytes: available }),
+        containerHeadroomBytes: headroom,
+      };
     }
 
     let id = ticketId;

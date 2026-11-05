@@ -1057,7 +1057,8 @@ nexa_record_pg_tuning() {
 #
 #   NEXA_MEM_POSTGRES      40 %, at least 512 MB    (shared_buffers is 25 %, plus work_mem)
 #   NEXA_MEM_API           12 %, 384 MB .. 4 GB     (measured 580 MB at the 100-customer cliff)
-#   NEXA_MEM_WORKER        10 %, 384 MB .. 3 GB     (measured 280 MB under load)
+#   NEXA_MEM_WORKER        10 %, 512 MB .. 3 GB     (measured 280-450 MB under load, plus the
+#                                                   backup's dump and archive subprocesses)
 #   NEXA_MEM_MONITOR,
 #   NEXA_MEM_PROVISIONER,
 #   NEXA_MEM_ASSISTANT      4 %, 256 MB .. 1 GB each
@@ -1087,7 +1088,7 @@ nexa_container_memory_limits() {
   [ "$mb" -gt 0 ] || return 1
   _nexa_mem_share NEXA_MEM_POSTGRES "$mb" 40 512 0
   _nexa_mem_share NEXA_MEM_API "$mb" 12 384 4096
-  _nexa_mem_share NEXA_MEM_WORKER "$mb" 10 384 3072
+  _nexa_mem_share NEXA_MEM_WORKER "$mb" 10 512 3072
   _nexa_mem_share NEXA_MEM_MONITOR "$mb" 4 256 1024
   _nexa_mem_share NEXA_MEM_PROVISIONER "$mb" 4 256 1024
   _nexa_mem_share NEXA_MEM_ASSISTANT "$mb" 4 256 1024

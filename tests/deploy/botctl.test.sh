@@ -6389,6 +6389,7 @@ assert_contains '8 GB: worker 10 %' "$limits_8g" 'NEXA_MEM_WORKER=819m'
 assert_contains '8 GB: monitor 4 %' "$limits_8g" 'NEXA_MEM_MONITOR=327m'
 assert_contains '8 GB: redis fixed' "$limits_8g" 'NEXA_MEM_REDIS=128m'
 assert_contains '2 GB: api keeps its floor' "$(nexa_container_memory_limits 2048)" 'NEXA_MEM_API=384m'
+assert_contains '4 GB: the worker keeps room for a backup' "$(nexa_container_memory_limits 4096)" 'NEXA_MEM_WORKER=512m'
 assert_contains '64 GB: api is capped' "$(nexa_container_memory_limits 65536)" 'NEXA_MEM_API=4096m'
 assert_contains '64 GB: postgres has no cap' "$(nexa_container_memory_limits 65536)" 'NEXA_MEM_POSTGRES=26214m'
 assert_equals 'not a number is refused' 1 "$(nexa_container_memory_limits 8g >/dev/null; echo $?)"

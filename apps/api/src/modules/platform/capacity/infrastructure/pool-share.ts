@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Pool, PoolClient } from 'pg';
+import { CAPACITY_ERROR_CODES, NexaError } from '@nexa/contracts';
 import type { DbShare } from '../application/bot-turn-guard.js';
 
 /**
@@ -34,6 +35,8 @@ interface ShareContext {
   clients: number;
   /** Whether the turn holds one of its bot's permits. */
   hasPermit: boolean;
+  /** Whether the turn has ever held one: before that, nothing of it has touched the database. */
+  everHeld: boolean;
   /** The permit being taken, shared by the turn's concurrent checkouts. */
   permit: Promise<void> | null;
 }
@@ -50,7 +53,10 @@ export class PoolShare implements DbShare {
   constructor(private readonly options: { readonly maxWaitMs: number }) {}
 
   run<T>(key: string, limit: number, fn: () => Promise<T>, onWait: () => void): Promise<T> {
-    return this.storage.run({ key, limit, onWait, clients: 0, hasPermit: false, permit: null }, fn);
+    return this.storage.run(
+      { key, limit, onWait, clients: 0, hasPermit: false, everHeld: false, permit: null },
+      fn,
+    );
   }
 
   /** What a key holds now: for tests and metrics. */
@@ -98,6 +104,7 @@ export class PoolShare implements DbShare {
       if (context.permit === null) {
         context.permit = this.acquire(context).then(() => {
           context.hasPermit = true;
+          context.everHeld = true;
         });
       }
       const pending = context.permit;
@@ -165,7 +172,23 @@ export class PoolShare implements DbShare {
       const timer = setTimeout(() => {
         const at = lane.waiters.indexOf(admit);
         if (at >= 0) lane.waiters.splice(at, 1);
-        reject(new Error('timeout exceeded when trying to connect (bot database share)'));
+        /*
+         * Codex P1 on #410: a turn whose FIRST checkout never got a permit has read and
+         * written nothing, so it is handed back to Telegram exactly like a full update queue —
+         * a retryable capacity deferral the webhook answers 429, and Telegram redelivers. A
+         * turn that already used the database fails like any exhausted pool instead: part of
+         * it may have committed, and running it again from the start is not a replay.
+         */
+        reject(
+          context.everHeld
+            ? new Error('timeout exceeded when trying to connect (bot database share)')
+            : new NexaError({
+                kind: 'RATE_LIMITED',
+                code: CAPACITY_ERROR_CODES.UPDATE_QUEUE_FULL,
+                message: 'This bot is busy in the database. Deliver the update again shortly.',
+                retryable: true,
+              }),
+        );
       }, this.options.maxWaitMs);
       timer.unref?.();
       lane.waiters.push(admit);

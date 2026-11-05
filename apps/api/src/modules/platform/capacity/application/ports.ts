@@ -51,7 +51,18 @@ export interface OwnerOpsLog {
 
 /** What the server has left. Each answers null when it cannot tell. */
 export interface SystemProbe {
-  availableMemoryBytes(): Promise<number | null>;
+  /**
+   * Memory, two separate answers (Codex P1 on #410): what the HOST still has
+   * (`/proc/meminfo` MemAvailable — the reserve that keeps PostgreSQL and every other role out
+   * of the OOM killer) and what THIS container may still grow by before its own cgroup limit
+   * (`memory.max - memory.current`). They are different questions with different thresholds
+   * and must never be folded into one number: a worker capped at 819 MB has under 768 MB of
+   * headroom by construction, whatever the host has free.
+   */
+  memory(): Promise<{
+    readonly hostAvailableBytes: number | null;
+    readonly containerHeadroomBytes: number | null;
+  }>;
   /** The volume holding `path`, in bytes. */
   disk(
     path: string,

@@ -84,7 +84,9 @@ export class CapacityMonitor {
       );
     }
 
-    const available = await this.deps.probe.availableMemoryBytes();
+    // The HOST's reserve: the owner is told when the server runs short, not when this
+    // worker's own container nears its limit.
+    const available = (await this.deps.probe.memory()).hostAvailableBytes;
     if (available !== null) {
       const floorMb = await this.deps.limits.numberOf(
         installation,
