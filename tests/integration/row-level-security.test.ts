@@ -262,9 +262,18 @@ describe('row-level security', () => {
         INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at)
         VALUES ('01900000-0000-7000-8000-00000000fe01', ${SEED_IDS.tenantA}, 'UPLOAD',
                 'QUIESCING', 'QUIESCE', now(), now())`);
-      await expect(ctx.container.uow.run(tenantB, async () => undefined)).rejects.toMatchObject({
-        code: 'recovery.quiesced',
-      });
+      try {
+        await expect(ctx.container.uow.run(tenantB, async () => undefined)).rejects.toMatchObject({
+          code: 'recovery.quiesced',
+        });
+      } finally {
+        // Not left for the next FILE: `reset` runs only in this file's own cases, and a
+        // later suite that boots an application before resetting would find the
+        // installation frozen (CI shard 6: broadcast-http, tetrapay-bot-return).
+        await ctx.container.database.db.execute(
+          sql`DELETE FROM recovery_requests WHERE id = '01900000-0000-7000-8000-00000000fe01'`,
+        );
+      }
     });
   });
 });
