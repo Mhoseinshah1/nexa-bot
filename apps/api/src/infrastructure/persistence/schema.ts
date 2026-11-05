@@ -129,6 +129,7 @@ import {
   REFUND_CHANNELS,
   REFUND_STATES,
   PAYMENT_GATEWAY_STATUSES,
+  TONPAYS_PAYMENT_LINKS,
   PAYMENT_RECEIPT_KINDS,
   RECEIPT_CAPTURE_CLOSE_REASONS,
   ADMIN_AMOUNT_CAPTURE_CLOSE_REASONS,
@@ -5025,6 +5026,11 @@ export const gatewayInvoices = pgTable(
     callbackUrlSent: boolean('callback_url_sent').notNull().default(false),
     invoiceUrl: text('invoice_url'),
     webInvoiceUrl: text('web_invoice_url'),
+    /**
+     * Which of the two links above the customer is shown (`TONPAYS_PAYMENT_LINKS`), frozen at
+     * open from the route's `tonpays_payment_link`. Only a TONPAYS attempt has both links.
+     */
+    paymentLink: text('payment_link').notNull().default('TELEGRAM_BOT'),
     providerUnit: text('provider_unit').notNull(),
     sentAmount: bigint('sent_amount', { mode: 'bigint' }).notNull(),
     requestAmount: bigint('request_amount', { mode: 'bigint' }),
@@ -5350,6 +5356,7 @@ export const gatewayInvoices = pgTable(
      * generates, it carries the customer's opaque number (`customer_ref`) and the bridge URL it
      * was created against, frozen.
      */
+    check('gateway_invoices_payment_link_check', enumCheck('payment_link', TONPAYS_PAYMENT_LINKS)),
     check(
       'gateway_invoices_custom_check',
       sql`provider <> 'CUSTOM' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^cg_[0-9A-HJKMNP-TV-Z]{26}$' AND provider_user_id IS NOT NULL AND endpoint_base_url IS NOT NULL)`,
@@ -6028,6 +6035,14 @@ export const paymentGateways = pgTable(
      */
     requiresVerifiedPhone: boolean('requires_verified_phone').notNull().default(false),
     /**
+     * The TONPAYS (website) route's «لینک پرداخت»: which of the provider's two links the
+     * customer is sent to, `TELEGRAM_BOT` (`invoice_url`) or `WEB` (`web_invoice_url`). Default
+     * `TELEGRAM_BOT`. Meaningful for TONPAYS only and ignored on every other route; each
+     * attempt snapshots it onto its `gateway_invoices` row, so changing it redirects only new
+     * attempts.
+     */
+    tonpaysPaymentLink: text('tonpays_payment_link').notNull().default('TELEGRAM_BOT'),
+    /**
      * A `FIXED_RATE` route's conversion (Package A): sales-currency minor units per ONE
      * provider unit — for Telegram Stars in a Toman installation, the owner's
      * `toman_per_star`. Null until an operator sets it, and a fixed-rate route cannot be
@@ -6065,6 +6080,10 @@ export const paymentGateways = pgTable(
     index('payment_gateways_tenant_sort_idx').on(table.tenantId, table.sortOrder, table.provider),
     check('payment_gateways_provider_check', enumCheck('provider', PAYMENT_GATEWAY_PROVIDERS)),
     check('payment_gateways_status_check', enumCheck('status', PAYMENT_GATEWAY_STATUSES)),
+    check(
+      'payment_gateways_tonpays_payment_link_check',
+      enumCheck('tonpays_payment_link', TONPAYS_PAYMENT_LINKS),
+    ),
     check(
       'payment_gateways_bounds_currency_check',
       nullableEnumCheck('bounds_currency', CURRENCY_CODES),
