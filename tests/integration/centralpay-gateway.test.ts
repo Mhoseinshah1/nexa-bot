@@ -164,6 +164,7 @@ describe('CentralPay, through the one settlement path', () => {
     );
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-cp'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-cp',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },
@@ -878,6 +879,7 @@ describe('CentralPay, through the one settlement path', () => {
       offsetMs = 0;
       const other = (
         await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-cp-2'), {
+          intake: 'INTERNAL',
           idempotencyKey: 'resolve-cp-2',
           telegramUserId: '910912',
           from: { id: 910912, first_name: 'سارا' },

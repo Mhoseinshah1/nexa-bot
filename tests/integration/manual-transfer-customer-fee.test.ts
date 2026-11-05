@@ -86,6 +86,7 @@ describe('the card-to-card customer fee', () => {
       tenantA,
       customerActor('resolve-mfee'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-mfee',
         telegramUserId: '930001',
         from: { id: 930001, first_name: 'مریم' },

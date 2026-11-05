@@ -279,6 +279,7 @@ describe('R11 A9: price lists show the personal discount the invoice charges', (
       tenantA,
       customerActor(`resolve-${String(USER)}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${String(USER)}`,
         telegramUserId: String(USER),
         from: { id: USER, first_name: 'سارا' },

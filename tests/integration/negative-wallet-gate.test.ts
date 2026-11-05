@@ -85,6 +85,7 @@ describe('a negative wallet blocks purchase until it is topped up', () => {
       tenantA,
       customerActor('resolve-negative'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-negative',
         telegramUserId: '930001',
         from: { id: 930001, first_name: 'زهرا' },

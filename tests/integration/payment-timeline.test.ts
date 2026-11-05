@@ -519,6 +519,7 @@ describe('payment timeline', () => {
       tenantA,
       systemActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'زهرا' },

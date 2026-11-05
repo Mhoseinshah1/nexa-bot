@@ -31,7 +31,6 @@ import {
 import {
   BotTurnGuard,
   isCapacityDeferral,
-  webhookTurnTenant,
 } from '../../apps/api/src/modules/platform/capacity/application/bot-turn-guard';
 import {
   LIMIT_PRESSURE_THRESHOLD,
@@ -424,17 +423,6 @@ describe('a bot turn inside its fair share', () => {
     expect(hit).toHaveBeenCalledTimes(1);
   });
 
-  it('marks the turn as that bot’s webhook turn, and nothing outside it', async () => {
-    const guard = new BotTurnGuard({
-      limits: limits(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY),
-      limiter: new KeyedConcurrencyLimiter({ maxQueuedPerKey: 1, maxWaitMs: 1_000 }),
-      dbShare: share,
-      pressure: { hit: vi.fn() },
-    });
-    expect(await guard.run('t', async () => webhookTurnTenant())).toBe('t');
-    expect(webhookTurnTenant()).toBeUndefined();
-  });
-
   it('a different error is not a deferral', () => {
     expect(isCapacityDeferral(new Error('x'))).toBe(false);
   });
@@ -469,24 +457,17 @@ describe('the new-customer rate', () => {
   it('admits N per minute per bot, then refuses retryably; the next minute starts over', async () => {
     const clock = fixedClock();
     const hit = vi.fn();
-    let inTurn: string | undefined = 't';
     const gate = new NewCustomerGate({
       clock,
       limits: { numberOf: async () => 2 },
       pressure: { hit },
-      turnTenant: () => inTurn,
     });
     await gate.admit('t');
     await gate.admit('t');
     const refused = await gate.admit('t').catch((error: unknown) => error);
     expect(isNexaError(refused) && refused.code).toBe(CAPACITY_ERROR_CODES.NEW_CUSTOMER_RATE);
     expect(isCapacityDeferral(refused)).toBe(true);
-    // Outside that bot's webhook turn (an import, a test, an operator tool): never limited.
-    inTurn = undefined;
-    for (let i = 0; i < 10; i += 1) await gate.admit('t');
-    inTurn = 'other';
-    await gate.admit('t');
-    inTurn = 't';
+    await gate.admit('other');
     clock.advance(60_000);
     await expect(gate.admit('t')).resolves.toBeUndefined();
     expect(hit).toHaveBeenCalledWith('t', 'NEW_CUSTOMERS_PER_MINUTE');
@@ -497,7 +478,6 @@ describe('the new-customer rate', () => {
       clock: fixedClock(),
       limits: { numberOf: async () => Number.POSITIVE_INFINITY },
       pressure: { hit: vi.fn() },
-      turnTenant: () => 'owner',
     });
     for (let i = 0; i < 500; i += 1) await gate.admit('owner');
   });

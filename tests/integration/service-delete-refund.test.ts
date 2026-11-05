@@ -110,6 +110,7 @@ describe('Item 11 — an operator deletes a service and refunds it to the wallet
     await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-delete-refund',
       telegramUserId: CUSTOMER_TG,
       from: { id: Number(CUSTOMER_TG), first_name: 'سارا' },

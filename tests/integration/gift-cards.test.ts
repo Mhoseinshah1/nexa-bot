@@ -141,6 +141,7 @@ describe('gift cards', () => {
       scope,
       customerActor(key()),
       {
+        intake: 'INTERNAL',
         idempotencyKey: key(),
         telegramUserId: telegramId,
         from: { id: Number(telegramId), first_name: 'مشتری', username: `u${telegramId}` },

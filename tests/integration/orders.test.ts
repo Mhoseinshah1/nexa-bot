@@ -129,6 +129,7 @@ describe('orders, up to the payment boundary', () => {
       scope,
       systemActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'زهرا' },

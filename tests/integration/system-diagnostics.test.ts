@@ -86,6 +86,7 @@ describe('system diagnostics', () => {
     panelId = created.view.panel.id;
     await validatePanelConnection(ctx.container, tenantA, panelId);
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('d'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-diag',
       telegramUserId: '930930',
       from: { id: 930930, first_name: 'Diag' },

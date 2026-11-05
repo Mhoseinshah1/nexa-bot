@@ -134,6 +134,7 @@ describe('the Service Operations Center (program §13)', () => {
     customerId: UserId;
   }> {
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: key('resolve'),
       telegramUserId: String(telegramId),
       from: { id: telegramId, first_name: 'Customer' },

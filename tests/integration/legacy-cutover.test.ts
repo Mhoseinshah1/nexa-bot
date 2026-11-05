@@ -192,6 +192,7 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     mapping = parsePanelMapping(mappingText, tenantA.tenantId as unknown as string);
     p1Product = product.id;
     await ctx.container.customers.resolveFromUpdate(tenantA, job('webhook'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'pr6-existing',
       telegramUserId: SYNTHETIC_EXISTING_CUSTOMER,
       from: { id: Number(SYNTHETIC_EXISTING_CUSTOMER), first_name: 'Existing' },

@@ -626,6 +626,7 @@ describe('the mini-app surface', () => {
       const botMarker = ctx.container.clock.now();
       const botCustomer = (
         await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+          intake: 'INTERNAL',
           idempotencyKey: 'resolve-bot-user',
           telegramUserId: String(botUser),
           from: { id: botUser, first_name: 'ربات' },
@@ -871,6 +872,7 @@ describe('the mini-app surface', () => {
       const botUser = 700399;
       const botCustomer = (
         await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+          intake: 'INTERNAL',
           idempotencyKey: 'resolve-receipt-bot',
           telegramUserId: String(botUser),
           from: { id: botUser, first_name: 'ربات' },

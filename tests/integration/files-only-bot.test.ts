@@ -127,6 +127,7 @@ describe('files only, no subscription link (R11 A4): the bot', () => {
       [OTHER_TG, 'نیما'],
     ] as const) {
       const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor(tg), {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${tg}`,
         telegramUserId: tg,
         from: { id: Number(tg), first_name: name },

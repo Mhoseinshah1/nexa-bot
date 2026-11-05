@@ -157,6 +157,7 @@ describe('R10 D1 — automatic renewal', () => {
 
   async function resolve(telegramUserId: string): Promise<UserId> {
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, botActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: `resolve-${telegramUserId}`,
       telegramUserId,
       from: { id: Number(telegramUserId), first_name: 'سارا' },

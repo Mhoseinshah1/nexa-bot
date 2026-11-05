@@ -93,6 +93,7 @@ describe('reseller sensitive changes need a written reason', () => {
       tenantA,
       customerActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: firstName },

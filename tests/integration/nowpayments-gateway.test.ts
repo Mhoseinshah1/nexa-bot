@@ -217,6 +217,7 @@ describe('NOWPayments, through the one settlement path', () => {
     );
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-np'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-np',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },

@@ -114,6 +114,7 @@ describe('the customer reminder opt-out (R11 B6)', () => {
       tenantA,
       systemActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'زهرا' },

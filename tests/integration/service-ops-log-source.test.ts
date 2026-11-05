@@ -377,6 +377,7 @@ describe('hotfix v0.8.2-e: one service log per purchase and per service action, 
       tenantA,
       systemActor(`resolve-${String(telegramUserId)}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `hf-e-resolve-${String(telegramUserId)}`,
         telegramUserId: String(telegramUserId),
         from: { id: telegramUserId, first_name: 'مشتری' },

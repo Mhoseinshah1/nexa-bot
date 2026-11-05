@@ -149,6 +149,7 @@ describe('a RickPanel subscription rotation', () => {
     await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
+      intake: 'INTERNAL',
       idempotencyKey: 'resolve-rot',
       telegramUserId: '930930',
       from: { id: 930930, first_name: 'سارا' },

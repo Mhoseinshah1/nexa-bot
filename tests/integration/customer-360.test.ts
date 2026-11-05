@@ -152,6 +152,7 @@ describe('Customer 360 — backend controls', () => {
       tenantA,
       systemActor(`r-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-360-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: firstName },

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { CAPACITY_ERROR_CODES, NexaError, isNexaError } from '@nexa/contracts';
 import { LimiterDeferral, type KeyedConcurrencyLimiter } from '../domain/keyed-limiter.js';
 import type { CapacityLimitResolver } from './capacity-limit-resolver.js';
@@ -11,19 +10,6 @@ import type { LimitPressureReporter } from './limit-pressure.js';
  */
 export interface DbShare {
   run<T>(key: string, limit: number, fn: () => Promise<T>, onWait: () => void): Promise<T>;
-}
-
-/**
- * The bot whose Telegram customer turn is running in this async context, if any. The
- * new-customer rate is a guard on the Telegram intake (a spam wave of fresh accounts), so
- * it applies inside a webhook turn only — never to a service call made by an import, an
- * operator tool or a test, which create customers for their own reasons.
- */
-const webhookTurn = new AsyncLocalStorage<string>();
-
-/** The tenant of the webhook turn running here, or undefined outside one. */
-export function webhookTurnTenant(): string | undefined {
-  return webhookTurn.getStore();
 }
 
 /** How many of one bot's updates may wait for a turn in this process. */
@@ -57,11 +43,7 @@ export class BotTurnGuard {
     },
   ) {}
 
-  run<T>(tenantId: string, turn: () => Promise<T>): Promise<T> {
-    return webhookTurn.run(tenantId, () => this.runInShare(tenantId, turn));
-  }
-
-  private async runInShare<T>(tenantId: string, turn: () => Promise<T>): Promise<T> {
+  async run<T>(tenantId: string, turn: () => Promise<T>): Promise<T> {
     const [updates, connections] = await Promise.all([
       this.deps.limits.numberOf(tenantId, 'UPDATE_CONCURRENCY'),
       this.deps.limits.numberOf(tenantId, 'DB_CONNECTIONS'),

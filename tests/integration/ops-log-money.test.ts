@@ -100,6 +100,7 @@ describe('the operations log’s money, through the real SQL', () => {
       tenantA,
       systemActor(`resolve-${telegramId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramId}`,
         telegramUserId: telegramId,
         from: { id: Number(telegramId), first_name: 'نیما', username: `u${telegramId}` },

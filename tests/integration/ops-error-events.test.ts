@@ -254,6 +254,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
   async function customer(scope: TenantContext, telegramId: string, bot: string): Promise<UserId> {
     return (
       await ctx.container.customers.resolveFromUpdate(scope, systemActor(`resolve-${telegramId}`), {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramId}`,
         telegramUserId: telegramId,
         from: { id: Number(telegramId), first_name: 'آزمون' },

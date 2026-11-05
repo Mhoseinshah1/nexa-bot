@@ -168,6 +168,7 @@ describe('the mini app notification centre', () => {
       tenantB,
       systemActor(`b-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `b-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'ب' },
@@ -288,6 +289,7 @@ describe('the mini app notification centre', () => {
         tenantA,
         systemActor(`q-${telegramUserId}`),
         {
+          intake: 'INTERNAL',
           idempotencyKey: `q-${telegramUserId}`,
           telegramUserId,
           from: { id: Number(telegramUserId), first_name: 'زهرا' },

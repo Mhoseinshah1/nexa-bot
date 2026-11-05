@@ -100,6 +100,7 @@ describe('gateway health', () => {
     );
     customerA = (
       await ctx.container.customers.resolveFromUpdate(tenantA, system('a'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'gh-a',
         telegramUserId: '7300001',
         from: { id: 7300001, first_name: 'سینا' },
@@ -108,6 +109,7 @@ describe('gateway health', () => {
     ).customer.id;
     customerB = (
       await ctx.container.customers.resolveFromUpdate(tenantB, system('b'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'gh-b',
         telegramUserId: '7300002',
         from: { id: 7300002, first_name: 'نگار' },

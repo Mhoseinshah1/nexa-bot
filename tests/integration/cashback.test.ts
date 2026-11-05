@@ -111,6 +111,7 @@ describe('cashback is earned once, at delivery, and a refund takes its share bac
       tenantA,
       customerActor('resolve-cashback'),
       {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-cashback',
         telegramUserId: '920001',
         from: { id: 920001, first_name: 'زهرا' },
@@ -643,6 +644,7 @@ describe('cashback is earned once, at delivery, and a refund takes its share bac
       tenantA,
       customerActor(key()),
       {
+        intake: 'INTERNAL',
         idempotencyKey: key(),
         telegramUserId: '920099',
         from: { id: 920099, first_name: 'رهگذر' },

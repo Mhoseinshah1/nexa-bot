@@ -93,6 +93,7 @@ describe('R8 A4: the admin wallet adjustment in the operations group', () => {
       tenantA,
       systemActor(`resolve-${telegramId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramId}`,
         telegramUserId: telegramId,
         from: { id: Number(telegramId), first_name: 'مریم', username: `u${telegramId}` },

@@ -135,6 +135,7 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
       tenantA,
       customerActor(`resolve-${telegramUserId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramUserId}`,
         telegramUserId,
         from: { id: Number(telegramUserId), first_name: 'سارا' },

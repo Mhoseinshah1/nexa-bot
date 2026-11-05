@@ -434,6 +434,7 @@ describe('product categories — the admin service', () => {
         tenantA,
         systemActor('snap-resolve'),
         {
+          intake: 'INTERNAL',
           idempotencyKey: 'snap-resolve',
           telegramUserId: '910001',
           from: { id: 910_001, first_name: 'زهرا' },
@@ -514,6 +515,7 @@ describe('product categories — the admin service', () => {
         tenantA,
         systemActor('race-resolve'),
         {
+          intake: 'INTERNAL',
           idempotencyKey: 'race-resolve',
           telegramUserId: '910002',
           from: { id: 910_002, first_name: 'زهرا' },

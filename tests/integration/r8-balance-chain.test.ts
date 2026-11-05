@@ -101,6 +101,7 @@ describe('balance before → after chains in commit order under concurrent write
       tenantA,
       systemActor(`resolve-${telegramId}`),
       {
+        intake: 'INTERNAL',
         idempotencyKey: `resolve-${telegramId}`,
         telegramUserId: telegramId,
         from: { id: Number(telegramId), first_name: 'سارا' },

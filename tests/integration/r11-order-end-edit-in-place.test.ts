@@ -174,6 +174,7 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
     await validatePanelConnection(ctx.container, tenantA, panelId);
     maryam = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-m'), {
+        intake: 'INTERNAL',
         idempotencyKey: 'resolve-m',
         telegramUserId: MARYAM,
         from: { id: Number(MARYAM), first_name: 'مریم' },
