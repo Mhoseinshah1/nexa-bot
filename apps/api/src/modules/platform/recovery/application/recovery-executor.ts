@@ -11,6 +11,7 @@ import {
   type OperationalEventRecorder,
   type RecoveryFailureCode,
   type ScopeContext,
+  type TenantId,
 } from '@nexa/contracts';
 import type { BackupService } from '../../backup/application/backup.service.js';
 import { CutoverJournalUnreadable, isCutoverFailure } from './ports.js';
@@ -25,6 +26,8 @@ import type {
 import type { RecoveryService } from './recovery.service.js';
 import type { RecoveryKeyCoverage } from './installation-key.ports.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import { isTenantForeignKeyViolation } from '../../../../infrastructure/lifecycle/installation-tenant-guard.js';
+import { runBoundedWrite } from './recovery-write-retry.js';
 
 /**
  * The destructive half of a recovery, in its own process.
@@ -90,6 +93,12 @@ export interface RecoveryExecutorDeps {
   readonly clock: Clock;
   readonly opsLog: OperationalEventRecorder;
   readonly scope: () => ScopeContext | null;
+  /**
+   * Re-resolves the installation tenant when the database under this process was replaced
+   * (a restore whose tenant id differs from the cached one). `verify` resolves to the tenant
+   * in use afterwards. Absent in tests that do not exercise a restore.
+   */
+  readonly tenantGuard?: { verify(): Promise<TenantId | null> };
   readonly leaseOwner: string;
   readonly tickIntervalMs: number;
   /**
@@ -162,6 +171,12 @@ export class RecoveryExecutor {
    */
   private runInFlight = false;
   private lastTickAt: number | null = null;
+  /**
+   * Requests whose row could not be written after the bounded attempts, with the tenant that
+   * was in use then. Not attempted again while that tenant is still the one in use: the
+   * failure was reported once, and the tenant guard decides what changes next.
+   */
+  private readonly writeExhausted = new Map<string, string | null>();
 
   constructor(private readonly deps: RecoveryExecutorDeps) {}
 
@@ -215,6 +230,70 @@ export class RecoveryExecutor {
     if (this.runInFlight) return true;
     if (this.lastTickAt === null) return false;
     return nowMs - this.lastTickAt <= this.deps.tickIntervalMs * 3;
+  }
+
+  private currentTenantId(): TenantId | null {
+    const scope = this.deps.scope();
+    return scope !== null && !isSystemContext(scope) ? scope.tenantId : null;
+  }
+
+  /**
+   * Writes a `recovery_requests` row with a bounded number of attempts.
+   *
+   * `build` is evaluated on EVERY attempt, so a tenant the guard re-resolved between
+   * attempts is the one the next row carries. A tenant foreign-key violation asks the guard
+   * to verify (it never retries the write itself). After the last attempt the failure is
+   * reported ONCE and later calls for the same request return false without touching the
+   * database, until the tenant in use changes. Never throws.
+   */
+  private async writeRequestRow(
+    id: string,
+    build: () => RecoveryRequestRow,
+    /**
+     * `lastChance`: one more attempt after the series gave up, for the failure path of the
+     * run that owns the request (it happens once per run, so it cannot loop). Not reported
+     * again; the caller says what it could not record.
+     */
+    options: { readonly lastChance?: boolean } = {},
+  ): Promise<boolean> {
+    const tenantNow = this.currentTenantId();
+    if (options.lastChance !== true) {
+      if (this.writeExhausted.has(id) && this.writeExhausted.get(id) === tenantNow) return false;
+      this.writeExhausted.delete(id);
+    }
+    const sleep =
+      this.deps.sleep ??
+      ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms).unref()));
+    const result = await runBoundedWrite({
+      op: () => this.deps.requests.reassert(build()),
+      sleep,
+      ...(options.lastChance === true ? { attempts: 1 } : {}),
+      onFailure: async (error, attempt) => {
+        this.deps.logger.error(
+          { recoveryId: id, attempt, err: rootMessage(error) },
+          'a recovery request row could not be written',
+        );
+        if (isTenantForeignKeyViolation(error)) await this.deps.tenantGuard?.verify();
+      },
+    });
+    if (result.ok) return true;
+    if (options.lastChance === true) return false;
+    this.writeExhausted.set(id, this.currentTenantId());
+    this.deps.logger.error(
+      { recoveryId: id, attempts: result.attempts, err: rootMessage(result.error) },
+      'a recovery request row could not be written; giving up until the installation tenant changes',
+    );
+    await this.report({
+      code: 'recovery.run_failed',
+      severity: 'CRITICAL',
+      message: `ثبت وضعیت بازیابی ${id} در پایگاه داده پس از چند تلاش ممکن نشد؛ لاگ سرور را بررسی کنید.`,
+      context: { recoveryId: id, attempts: result.attempts },
+      dedupeKey: `recovery.${id}.request_write`,
+    });
+    // The guard decides: a re-resolved tenant lets the next tick try once more; a tenant
+    // that is gone with no primary exits the process so Docker restarts it.
+    await this.deps.tenantGuard?.verify();
+    return false;
   }
 
   async tick(): Promise<void> {
@@ -436,8 +515,9 @@ export class RecoveryExecutor {
        * with the fact logged. A row invented under the wrong tenant would be
        * worse than no row: it would be a recovery attributed to somebody.
        */
-      const scope = this.deps.scope();
-      const tenantId = scope !== null && !isSystemContext(scope) ? scope.tenantId : null;
+      // The database may have been replaced since this process cached its tenant.
+      await this.deps.tenantGuard?.verify();
+      const tenantId = this.currentTenantId();
       if (tenantId === null) {
         this.deps.logger.error(
           {
@@ -452,9 +532,9 @@ export class RecoveryExecutor {
       }
 
       const now = this.deps.clock.now();
-      await this.deps.requests.reassert({
+      const written = await this.writeRequestRow(id, () => ({
         id,
-        tenantId,
+        tenantId: this.currentTenantId() ?? tenantId,
         source: 'UPLOAD',
         state: 'FAILED',
         stage: 'CLEANUP',
@@ -490,7 +570,9 @@ export class RecoveryExecutor {
         // to keep this row for ever.
         cutoverAt: entry.phase === 'RENAMED' ? now : null,
         failureCode: 'recovery.internal',
-      });
+      }));
+      // Not recorded: the journal stays (it is the record) and is not retried every tick.
+      if (!written) continue;
 
       this.deps.logger.error(
         {
@@ -766,9 +848,12 @@ export class RecoveryExecutor {
          * The journal on disk is the other half of this, and it is what a restarted
          * executor reads — this covers the case where the process survives.
          */
-        await this.deps.requests
-          .reassert({
+        const recorded = await this.writeRequestRow(
+          request.id,
+          () => ({
             ...request,
+            // The tenant of the database that is live now, not the claim-time one.
+            tenantId: this.currentTenantId() ?? request.tenantId,
             state: 'FAILED',
             stage: 'CLEANUP',
             updatedAt: this.deps.clock.now(),
@@ -779,22 +864,23 @@ export class RecoveryExecutor {
             candidateDatabase: done.candidateDatabase,
             displacedDatabase: done.displacedDatabase,
             cutoverAt: done.cutoverAt,
-          })
-          .catch((writeError) => {
-            // The database that is live now may be unreachable — that is the
-            // whole reason this branch exists — and the journal on disk is what
-            // survives it. Reported rather than swallowed.
-            this.deps.logger.error(
-              {
-                recoveryId: request.id,
-                code,
-                displacedDatabase: done.displacedDatabase,
-                candidateDatabase: done.candidateDatabase,
-                err: rootMessage(writeError),
-              },
-              'a failed recovery could not be recorded in any database; the cutover journal is the record',
-            );
-          });
+          }),
+          { lastChance: true },
+        );
+        if (!recorded) {
+          // The database that is live now may be unreachable — that is the
+          // whole reason this branch exists — and the journal on disk is what
+          // survives it. Reported rather than swallowed.
+          this.deps.logger.error(
+            {
+              recoveryId: request.id,
+              code,
+              displacedDatabase: done.displacedDatabase,
+              candidateDatabase: done.candidateDatabase,
+            },
+            'a failed recovery could not be recorded in any database; the cutover journal is the record',
+          );
+        }
       }
       await this.deps.requests.transition({
         id: request.id,
@@ -1207,6 +1293,11 @@ export class RecoveryExecutor {
       at: this.deps.clock.now(),
     });
 
+    // The restored database carries ITS tenant, which need not be the one this process
+    // cached at startup (a backup from another install). Re-resolved before any row is
+    // written, so the request below is not an insert under a tenant that no longer exists.
+    await this.deps.tenantGuard?.verify();
+
     // ---- RE-ASSERT, then READINESS ---------------------------------------
     //
     // Every statement from here lands in the RESTORED database, because the
@@ -1238,7 +1329,17 @@ export class RecoveryExecutor {
       finishedAt: null,
       failureCode: null,
     };
-    await this.deps.requests.reassert(reasserted);
+    if (
+      !(await this.writeRequestRow(id, () => ({
+        ...reasserted,
+        tenantId: this.currentTenantId() ?? reasserted.tenantId,
+      })))
+    ) {
+      throw new RecoveryAbort(
+        'recovery.internal',
+        'The cutover completed and the request could not be written into the restored database.',
+      );
+    }
     if (done.cutoverAt !== null) await this.supersedeLegacyImports(id, done.cutoverAt);
 
     // Keys that came back INSIDE the restored backup rather than through an

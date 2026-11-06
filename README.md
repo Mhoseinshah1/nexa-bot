@@ -187,6 +187,7 @@ username and password you chose. Then open your bot in Telegram and send
 | `botctl secrets disable-v1`                            | stop reading v1 ciphertext, once the check passes                            |
 | `botctl admin check-2fa --username NAME`               | whether an administrator has two-step sign-in on                             |
 | `botctl admin reset-2fa --username NAME --reason TEXT` | owner recovery: remove an administrator's two-step sign-in (audited)         |
+| `botctl admin reset-password USERNAME`                 | owner recovery: set a new password, typed twice and hidden (audited)         |
 
 `cutover preflight` and `cutover rehearse` take more options, and `secrets
 rewrap` takes `--batch N` and `--max N`; `botctl --help` and

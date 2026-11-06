@@ -164,6 +164,9 @@ export async function resolveInstallationTenant(container: Container): Promise<v
 
   const primary = await container.tenants.findPrimary();
   container.setInstallationTenant(primary?.id ?? null);
+  // A restore replaces the database under this long-running role; its cached tenant is
+  // then re-resolved, or the role exits to be restarted. See InstallationTenantGuard.
+  container.installationTenantGuard.start();
 
   // R12 F2 item 4: the owner's outbound allow-list, read on the tenant just resolved and
   // kept fresh on a timer in every role, so a change in the Web Admin reaches the monitor,

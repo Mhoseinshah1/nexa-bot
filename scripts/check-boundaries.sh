@@ -201,6 +201,17 @@ else
   pass "the server-side 2FA reset is not reachable from any surface"
 fi
 
+# The same argument for the forgotten-PASSWORD recovery (`botctl admin reset-password`):
+# it sets a password with no caller to authorize, so no surface may import it.
+RESET_PASSWORD_LEAK=$(grep -rn "server-password-recovery\|ServerPasswordRecovery\|resetPasswordFromServer" \
+  apps/api/src/surfaces apps/api/src/container.ts apps/api/src/app.module.ts 2>/dev/null || true)
+if [ -n "$RESET_PASSWORD_LEAK" ]; then
+  fail "A surface reaches the server-side password reset" "$RESET_PASSWORD_LEAK" \
+       "Owner password recovery is a CLI (src/admin-password-reset.cli.ts), not an endpoint."
+else
+  pass "the server-side password reset is not reachable from any surface"
+fi
+
 # --- The Telegram bot bootstrap is not reachable from a surface -------------
 # The same argument, for the same reason, about a different credential.
 # `BotBootstrapService` accepts a bot token and writes it encrypted without

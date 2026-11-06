@@ -38,6 +38,7 @@ export const WEB_FA = {
   'web.password': 'گذرواژه',
   'web.signing_in': 'در حال ورود…',
   'web.sign_in_failed': 'نام کاربری یا گذرواژه نادرست است.',
+  'web.sign_in_server_error': 'خطای سرور؛ لاگ‌ها را بررسی کنید.',
   'web.rate_limited': 'تلاش‌های ناموفق زیاد بوده است. کمی بعد دوباره تلاش کنید.',
   'web.roles': 'نقش‌ها',
   'web.administrators': 'مدیران',
