@@ -3012,6 +3012,100 @@ assert_equals "reset-password with --tenant failed" 0 "$BOTCTL_STATUS"
 assert_contains "--tenant was not forwarded" \
   "$(docker_log)" "dist/admin-password-reset.cli.js --username owner --tenant acme"
 
+# --- customers prune-empty ---------------------------------------------------------------
+# The listing is read-only: no lock, no backup, no confirmation. `--apply` backs up FIRST, asks
+# on the terminal, and only the right answer reaches the deleting call.
+
+test_case "botctl customers prune-empty only lists: no lock, no backup, no question"
+reset_docker_log
+exec 9>>"$NEXA_LOCK_FILE"
+flock -x 9
+run_botctl customers prune-empty </dev/null
+flock -u 9
+exec 9>&-
+assert_equals "the listing failed while the lock was held" 0 "$BOTCTL_STATUS"
+assert_contains "the listing did not reach the CLI" "$(docker_log)" "dist/customers-prune.cli.js list"
+assert_not_contains "the listing deleted" "$(docker_log)" "customers-prune.cli.js apply"
+assert_not_contains "the listing took a backup" "$(docker_log)" "pg_dump"
+assert_contains "the listing was not printed in Persian" "$BOTCTL_OUTPUT" "مشتریان بدون هیچ وابستگی"
+
+test_case "botctl customers prune-empty forwards --tenant and refuses an unknown option"
+reset_docker_log
+run_botctl customers prune-empty --tenant acme </dev/null
+assert_contains "--tenant was not forwarded" "$(docker_log)" "customers-prune.cli.js list --tenant acme"
+run_botctl customers prune-empty --everything </dev/null
+assert_fails "an unknown option was accepted" test "$BOTCTL_STATUS" -eq 0
+run_botctl customers nonsense </dev/null
+assert_fails "an unknown customers subcommand was accepted" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the usage does not name prune-empty" "$BOTCTL_OUTPUT" "prune-empty"
+
+test_case "botctl customers prune-empty --apply is a long command: refused on a bare terminal"
+reset_docker_log
+tty_botctl_answers "حذف" -- customers prune-empty --apply
+assert_fails "an apply ran on a terminal outside tmux" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the tmux line was not printed" "$BOTCTL_OUTPUT" "tmux new -s nexa-customers-prune"
+assert_not_contains "something ran before the refusal" "$(docker_log)" "customers-prune.cli.js"
+
+test_case "botctl customers prune-empty --apply backs up first, then deletes on the right answer"
+fake_set prune_count 3
+reset_docker_log
+TMUX=test-session tty_botctl_answers "حذف" -- customers prune-empty --apply
+assert_equals "the apply failed" 0 "$BOTCTL_STATUS"
+log="$(docker_log)"
+backup_at="$(printf '%s\n' "$log" | grep -n 'exec -T postgres pg_dump' | sed -n '1p' | cut -d: -f1)"
+apply_at="$(printf '%s\n' "$log" | grep -n 'customers-prune.cli.js apply' | sed -n '1p' | cut -d: -f1)"
+assert_ok "no backup was taken" test -n "$backup_at"
+assert_ok "the delete was not reached" test -n "$apply_at"
+assert_ok "the delete ran before the backup" test "${backup_at:-9999}" -lt "${apply_at:-0}"
+assert_contains "the confirmed count was not passed" "$log" "apply --expect-count 3 --typed حذف"
+dump="$(find "$NEXA_BACKUP_DIR" -name '*before-customers-prune*.sql.gz' -print -quit)"
+assert_ok "the backup is not labelled for the prune" test -n "$dump"
+
+test_case "botctl customers prune-empty --apply accepts the count as the answer"
+reset_docker_log
+TMUX=test-session tty_botctl_answers "3" -- customers prune-empty --apply
+assert_equals "the apply with the count failed" 0 "$BOTCTL_STATUS"
+assert_contains "the count was not passed" "$(docker_log)" "apply --expect-count 3 --typed 3"
+
+test_case "botctl customers prune-empty --apply with a wrong answer is refused by the CLI and fails"
+# The fake CLI cannot judge; what botctl owes is that the typed text reaches the CLI as is and
+# that a CLI refusal is a non-zero exit with the backup path named.
+reset_docker_log
+fake_set prune_apply_exit 1
+TMUX=test-session tty_botctl_answers "yes" -- customers prune-empty --apply
+assert_fails "a refused delete exited zero" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the refusal was not reported in Persian" "$BOTCTL_OUTPUT" "حذف انجام نشد"
+assert_contains "the typed text did not reach the CLI" "$(docker_log)" "--typed yes"
+fake_set prune_apply_exit 0
+
+test_case "botctl customers prune-empty --apply stops before the question when nothing is empty"
+fake_set prune_count 0
+reset_docker_log
+TMUX=test-session tty_botctl_answers "حذف" -- customers prune-empty --apply
+assert_equals "an empty list was an error" 0 "$BOTCTL_STATUS"
+assert_not_contains "a backup was taken for nothing" "$(docker_log)" "pg_dump"
+assert_not_contains "a delete ran for nothing" "$(docker_log)" "customers-prune.cli.js apply"
+fake_set prune_count 3
+
+test_case "botctl customers prune-empty --apply deletes nothing when the backup fails"
+reset_docker_log
+fake_set exec_exit 1
+TMUX=test-session tty_botctl_answers "حذف" -- customers prune-empty --apply
+assert_fails "a failed backup did not stop the delete" test "$BOTCTL_STATUS" -eq 0
+assert_not_contains "the delete ran after a failed backup" "$(docker_log)" "customers-prune.cli.js apply"
+fake_set exec_exit 0
+
+test_case "botctl customers prune-empty --apply takes the update lock"
+reset_docker_log
+exec 9>>"$NEXA_LOCK_FILE"
+flock -x 9
+TMUX=test-session tty_botctl_answers "حذف" -- customers prune-empty --apply
+flock -u 9
+exec 9>&-
+assert_fails "an apply ran while the lock was held" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the lock refusal was not explained" "$BOTCTL_OUTPUT" "already running"
+assert_not_contains "a delete ran under a held lock" "$(docker_log)" "customers-prune.cli.js apply"
+
 test_case "an unknown admin subcommand is refused with the usage"
 run_botctl admin nonsense
 assert_fails "an unknown admin subcommand was accepted" test "$BOTCTL_STATUS" -eq 0
