@@ -101,6 +101,7 @@ import type {
   SalesCurrencyCode,
 } from '@nexa/contracts';
 
+import { InstallationTenantGuard } from './infrastructure/lifecycle/installation-tenant-guard.js';
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { readFileSync } from 'node:fs';
 import { rename, stat } from 'node:fs/promises';
@@ -1822,6 +1823,11 @@ export interface Container {
    */
   readonly keyring: InstallationKeyring;
   readonly installationKeyLoader: InstallationKeyLoader;
+  /**
+   * Keeps this role's cached installation tenant true after the database under it is
+   * replaced by a restore. Started by `resolveInstallationTenant`, stopped by `shutdown`.
+   */
+  readonly installationTenantGuard: InstallationTenantGuard;
   /** R12 F2: the owner's outbound allow-list the URL policy consults (refreshed per role). */
   readonly outboundAllowList: OutboundAllowList;
   readonly installationKeyRepository: DrizzleInstallationKeyRepository;
@@ -8512,6 +8518,30 @@ export function createContainer(
     disk: backupDiskState,
   });
 
+  /*
+   * The installation tenant is cached once at startup, so a restore whose tenant id differs
+   * from the running one leaves every role writing tenant-owned rows under an id that no
+   * longer exists. The guard re-resolves it, or exits so the role restarts.
+   */
+  const applyInstallationTenant = (tenantId: TenantId | null): void => {
+    installationTenantId = tenantId;
+    // The dispatcher runs for the installation but the rate ceiling is a
+    // tenant setting. One install serves one customer (ADR-0001), so the
+    // primary tenant's ceiling is the installation's — stated here rather
+    // than assumed somewhere further down.
+    notificationDispatcher.setRateLimitScope(
+      tenantId === null ? null : { tenantId, botInstanceId: null },
+    );
+  };
+  const installationTenantGuard = new InstallationTenantGuard({
+    getCurrent: () => installationTenantId,
+    setCurrent: applyInstallationTenant,
+    tenantExists: async (tenantId) => (await tenants.findById(tenantId)) !== null,
+    findPrimary: async () => (await tenants.findPrimary())?.id ?? null,
+    exit: (code) => process.exit(code),
+    logger,
+  });
+
   const recoveryExecutor = new RecoveryExecutor({
     requests: recoveryRequests,
     recovery: recoveryService,
@@ -8564,6 +8594,7 @@ export function createContainer(
         : { tenantId: installationTenantId, botInstanceId: null },
     leaseOwner,
     tickIntervalMs: config.RECOVERY_TICK_MS,
+    tenantGuard: installationTenantGuard,
     logger,
   });
 
@@ -9135,16 +9166,8 @@ export function createContainer(
     botTurnGuard,
     heavyJobs,
     capacityMonitorLoop,
-    setInstallationTenant(tenantId: TenantId | null) {
-      installationTenantId = tenantId;
-      // The dispatcher runs for the installation but the rate ceiling is a
-      // tenant setting. One install serves one customer (ADR-0001), so the
-      // primary tenant's ceiling is the installation's — stated here rather
-      // than assumed somewhere further down.
-      notificationDispatcher.setRateLimitScope(
-        tenantId === null ? null : { tenantId, botInstanceId: null },
-      );
-    },
+    setInstallationTenant: applyInstallationTenant,
+    installationTenantGuard,
     recordPing,
     customers: customerService,
     customerControls: customerControlService,
@@ -9716,6 +9739,7 @@ export function createContainer(
       });
     },
     async shutdown() {
+      installationTenantGuard.stop();
       installationKeyLoader.stop();
       outboundAllowList.stop();
       // Round 8 (B1): the in-flight backup dies with this process; its plaintext goes now
