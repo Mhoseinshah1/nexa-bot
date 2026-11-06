@@ -564,7 +564,68 @@ botctl admin reset-2fa --username NAME --reason TEXT
                            owner recovery: remove two-step sign-in (audited)
 botctl admin reset-password USERNAME [--tenant SLUG]
                            owner recovery: set a new password, typed twice and hidden (audited)
+botctl customers prune-empty [--tenant SLUG]
+                           list the customers nothing refers to (changes nothing)
+botctl customers prune-empty --apply [--tenant SLUG]
+                           back up, confirm on the terminal, delete only those (audited)
 ```
+
+### `botctl customers prune-empty`: removing the customers a group join created
+
+Before the group-join fix, a user joining a GROUP created a customer row. Those rows own nothing,
+and they make the Mirza import's fresh-target check (zero customers) fail. This is the clean-up.
+Nothing else in the system deletes a customer (`schema.ts`: there is no delete path), so the rule
+is narrow, and every part of it is a test (`tests/integration/customers-prune.test.ts`).
+
+**The listing** (the default) takes no lock and asks nothing. It prints, in Persian, a count and
+one tab-separated line per customer (id, Telegram id, name, created at, UTC).
+
+**What counts as a dependent.** A customer is listed only if NO row refers to it, found at run
+time and not from a list in the code:
+
+- every foreign key whose referenced table is `customers` (`pg_constraint`; composite keys join
+  on all their columns), about 70 tables today: orders, payments, services, wallet entries (the
+  ledger), tickets, referrals, gift cards, notifications, captures, resellers and so on;
+- every column in the `public` schema named `customer_id` or ending in `_customer_id` that NO
+  foreign key covers (`cashback_reversals`, `order_cashback`, `refunds`, `reseller_minimum_notices`,
+  `service_username_reservations` and others today). A reference nobody declared is still a
+  reference, and a table added later is covered without anyone editing a list;
+- two fixed references that have neither: `telegram_wizards.subject_id` and
+  `legacy_import_map.entity_id` where `entity_type = 'CUSTOMER'`.
+
+It lists only a customer the bot itself registered (`source = 'NEXA'`), not blocked (deleting the
+row would lift the block), with no phone and no personal discount. The listing counts the others
+that have no dependents and says they stay.
+
+**What is deliberately NOT a dependent**, and stays as history: the `customer.registered` audit
+row (append-only, no foreign key), the `CustomerRegistered` outbox event (its consumer returns
+when the customer no longer exists) and the aggregate sequence. The update's idempotency row
+(`request_idempotency`, namespace TELEGRAM, whose result names the customer) is deleted WITH the
+customer: left behind, a redelivery of that update would find no customer, resolve again and
+then collide with its own old key.
+
+**Why deletion is safe here.** No trigger refuses `DELETE` on `customers`; the append-only
+triggers are on the ledger and audit tables, which a customer with no dependents has no rows in;
+no foreign key into `customers` is `ON DELETE CASCADE` or `SET NULL`, so a delete can only be
+refused, never silently remove history; and a row that appears under a lock is caught below.
+
+**`--apply`**, in this order, all under the update lock and (on an interactive terminal) inside
+tmux like any long command:
+
+1. prints the listing and the count; with zero it stops;
+2. takes a backup with the same function `botctl backup` and `botctl update` use, and stops if
+   it fails;
+3. asks you to type «حذف» or the count on the TERMINAL (not stdin); anything else stops it;
+4. deletes, in ONE transaction: it locks the apparently-empty customers `FOR UPDATE`, checks
+   again with a fresh statement (so a dependent committed while it waited is seen), refuses if
+   more are empty than you confirmed, deletes exactly those, and writes one audit row
+   (`customers.prune_empty`, actor `SYSTEM_JOB`, with the ids). A customer that gained a
+   dependent after the listing is simply not deleted. It also refuses when the installation has
+   stopped accepting work.
+
+The one gap is a dependent in a table with NO foreign key written between the second check and the
+commit; the `FOR UPDATE` lock stops every table that has one. If you are ever in doubt, restoring
+the backup it took (or a clean one from before the customers arrived) is the other way back.
 
 ### Long commands run inside tmux
 

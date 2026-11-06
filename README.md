@@ -188,6 +188,8 @@ username and password you chose. Then open your bot in Telegram and send
 | `botctl admin check-2fa --username NAME`               | whether an administrator has two-step sign-in on                             |
 | `botctl admin reset-2fa --username NAME --reason TEXT` | owner recovery: remove an administrator's two-step sign-in (audited)         |
 | `botctl admin reset-password USERNAME`                 | owner recovery: set a new password, typed twice and hidden (audited)         |
+| `botctl customers prune-empty`                         | list the customers with no dependent row (changes nothing)                   |
+| `botctl customers prune-empty --apply`                 | back up, confirm on the terminal, delete only those (audited)                |
 
 `cutover preflight` and `cutover rehearse` take more options, and `secrets
 rewrap` takes `--batch N` and `--max N`; `botctl --help` and

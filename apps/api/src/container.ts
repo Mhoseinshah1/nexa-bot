@@ -494,6 +494,8 @@ import { WalletService } from './modules/commerce/wallet/application/wallet.serv
 import { MigrationOpeningBalanceService } from './modules/commerce/wallet/application/migration-opening-balance.service.js';
 import { CustomerBotLinkService } from './modules/commerce/customers/application/customer-bot-link.service.js';
 import { DrizzleCustomerBotLinkRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-bot-link.repository.js';
+import { CustomerPruneService } from './modules/commerce/customers/application/customer-prune.service.js';
+import { DrizzleCustomerPruneRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-prune.repository.js';
 import { LegacyReviewQueueService } from './modules/platform/legacy-import/application/legacy-review-queue.service.js';
 import { LegacyAdoptionService } from './modules/commerce/legacy-adoption/application/legacy-adoption.service.js';
 // legacy-materialize: ended services
@@ -1491,6 +1493,8 @@ export interface Container {
   readonly legacyReviewQueue: LegacyReviewQueueService;
   /** OI-1: the cutover command that links imported customers to a bot (`customers-link-bot.cli.ts`). */
   readonly customerBotLink: CustomerBotLinkService;
+  /** `botctl customers prune-empty` (`customers-prune.cli.ts`): never reachable from a surface. */
+  readonly customerPrune: CustomerPruneService;
   /** The one-time Mirza import's MATERIALIZE and BOT_LINK phases, as the executor uses them. */
   readonly legacyMaterializePort: LegacyMaterializePort;
   readonly legacyBotLinkPort: LegacyBotLinkPort;
@@ -3122,6 +3126,16 @@ export function createContainer(
   });
   const customerBotLink = new CustomerBotLinkService({
     repository: new DrizzleCustomerBotLinkRepository(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    clock,
+    scopeActivity: tenants,
+  });
+  const customerPrune = new CustomerPruneService({
+    repository: new DrizzleCustomerPruneRepository(database.db),
     guard,
     uow,
     audit,
@@ -9242,6 +9256,7 @@ export function createContainer(
     legacyCutover,
     legacyReviewQueue,
     customerBotLink,
+    customerPrune,
     legacyMaterializePort,
     legacyBotLinkPort,
     legacyAdoption,
