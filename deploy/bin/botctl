@@ -138,6 +138,10 @@ botctl — operate a Nexa installation
   botctl admin reset-2fa --username NAME --reason TEXT
                                            owner recovery: remove an administrator's two-step
                                            sign-in and end their sessions (audited)
+  botctl admin reset-password USERNAME [--tenant SLUG]
+                                           owner recovery: set a new password (typed twice, hidden;
+                                           never an argument), clear the sign-in lockout, end their
+                                           sessions (audited)
 
 Long commands — backup, restore, update, rollback, cutover rehearse, secrets rewrap — refuse
 to start on an SSH terminal that is not inside tmux or screen, because a dropped connection
@@ -178,6 +182,11 @@ is replaced on the bot's page in the Web Admin, not here.
 `admin reset-2fa` is the way back for an administrator who lost both their
 authenticator and their backup codes. It never sets a password and never signs
 anybody in: they still need their password, and enrol a new device afterwards.
+
+`admin reset-password` is the way back for an administrator who forgot their password.
+It asks for the new one twice on the terminal with echo off, passes it to the container on
+standard input (never an argument), clears that administrator's failed-sign-in lockout and
+ends their sessions. Their two-step sign-in is untouched (that is `reset-2fa`).
 
 `secrets migrate-config` and `secrets disable-v1` are the only commands that
 edit /etc/nexa/nexa.env. Neither generates, changes or prints key material.
@@ -2043,9 +2052,14 @@ cmd_restart() {
   nexa_record_pg_tuning
   nexa_record_backup_verify_limits
   nexa_record_container_memory_limits
-  nexa_bring_up_with_edge "" "$edge" ||
-    nexa_die "the stack restarted but the edge did not adopt the installed configuration (${edge#sha256:}). Run 'botctl logs caddy'."
-  nexa_wait_ready || nexa_die "the stack restarted but the API is not ready."
+  # `up -d` is bounded too (NEXA_UP_TIMEOUT, default 300 s): a daemon that stops answering
+  # must end this command with a message, not leave the operator at a silent prompt.
+  NEXA_COMPOSE_TIMEOUT="${NEXA_UP_TIMEOUT:-300}" nexa_bring_up_with_edge "" "$edge" ||
+    nexa_die "the stack restarted but the edge did not adopt the installed configuration (${edge#sha256:}), or docker did not answer within ${NEXA_UP_TIMEOUT:-300}s. Run 'botctl logs caddy'."
+  if ! nexa_wait_ready; then
+    nexa_report_unready
+    nexa_die "the stack restarted but it is not ready: the roles did not become healthy within ${NEXA_READY_TIMEOUT:-180}s (details above)."
+  fi
   # Persisted, so the next plain `compose up` by anything else starts the edge
   # under the same generation rather than the one deploy.env happened to carry.
   nexa_set_deploy_values "NEXA_EDGE_CONFIG=${edge}"
@@ -2549,10 +2563,67 @@ cmd_admin() {
       nexa_compose run --rm --no-deps -T --entrypoint node api \
         dist/admin-2fa-reset.cli.js "$@"
       ;;
+    reset-password)
+      cmd_admin_reset_password "$@"
+      ;;
     *)
-      nexa_die "usage: botctl admin <check-2fa|reset-2fa> --username NAME [--reason TEXT] [--tenant SLUG]"
+      nexa_die "usage: botctl admin <check-2fa|reset-2fa|reset-password> [--username NAME --reason TEXT | USERNAME] [--tenant SLUG]"
       ;;
   esac
+}
+
+# Owner recovery for a forgotten PASSWORD: `botctl admin reset-password USERNAME [--tenant SLUG]`.
+#
+# The new password is typed here, twice, with echo off, from the TERMINAL (never stdin: a
+# pipe would be a script holding a plaintext password), and reaches the container on ITS
+# STANDARD INPUT and nowhere else. Not as an argument, not in the environment: either is
+# visible in `ps`, in `docker inspect` and in the compose log. `printf` is a builtin, so
+# the value is not in any process's argv on the way either.
+cmd_admin_reset_password() {
+  local username="" tenant=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --tenant)
+        [ "$#" -ge 2 ] && [ -n "$2" ] || nexa_die "--tenant needs a slug."
+        tenant="$2"
+        shift 2
+        ;;
+      -*) nexa_die "unknown option $1. usage: botctl admin reset-password USERNAME [--tenant SLUG]" ;;
+      *)
+        [ -z "$username" ] || nexa_die "only one username. usage: botctl admin reset-password USERNAME [--tenant SLUG]"
+        username="$1"
+        shift
+        ;;
+    esac
+  done
+  [ -n "$username" ] || nexa_die "usage: botctl admin reset-password USERNAME [--tenant SLUG]"
+
+  # A write, so it takes the lock an update takes: never interleaved with a migration.
+  nexa_acquire_lock 0
+
+  local password="" confirm=""
+  printf 'رمز عبور جدید برای «%s»: ' "$username" >&2
+  IFS= read -rs password </dev/tty || nexa_die "could not read the password from the terminal."
+  printf '\n' >&2
+  printf 'تکرار رمز عبور: ' >&2
+  IFS= read -rs confirm </dev/tty || nexa_die "could not read the password from the terminal."
+  printf '\n' >&2
+  [ -n "$password" ] || nexa_die "رمز عبور خالی است؛ چیزی تغییر نکرد."
+  if [ "$password" != "$confirm" ]; then
+    password="" confirm=""
+    nexa_die "دو رمز یکسان نیستند؛ چیزی تغییر نکرد."
+  fi
+  confirm=""
+
+  local args=(--username "$username")
+  [ -z "$tenant" ] || args+=(--tenant "$tenant")
+  # `-T`: no pseudo-terminal, so the container's stdin is the pipe and the password is not echoed.
+  local status=0
+  printf '%s\n' "$password" |
+    nexa_compose run --rm --no-deps -T --entrypoint node api \
+      dist/admin-password-reset.cli.js "${args[@]}" || status=$?
+  password=""
+  [ "$status" -eq 0 ] || nexa_die "رمز عبور تغییر نکرد (کد ${status}). پیام بالا را ببینید."
 }
 
 # ---------------------------------------------------------------------------
