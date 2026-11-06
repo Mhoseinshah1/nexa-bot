@@ -38,6 +38,7 @@ import {
   typedMessageOf,
   type CallbackOrigin,
 } from './wizard-state.js';
+import { isGroupChatUpdate } from './chat-kind.js';
 import type { BotRuntimeDeps } from './runtime/deps.js';
 import {
   type MainMenuRoutes,
@@ -420,6 +421,10 @@ export class BotRuntime {
   ): Promise<BotTurnResult> {
     const command = intentOf(input.update, await this.menuFor(scope, input.update));
     const { intent } = command;
+
+    // A group, supergroup or channel is never a customer's chat: no customer is resolved,
+    // created or touched, whatever the update is (see `groupChatTurn`).
+    if (isGroupChatUpdate(input.update)) return this.groupChatTurn(scope, actor, command, input);
 
     /*
      * 0. Anti-spam (WP20, brief §3.4), before any work.
@@ -2867,6 +2872,72 @@ export class BotRuntime {
       await this.deps.invoiceScreens?.refresh(scope, directive.paymentId);
     }
     return edited.outcome;
+  }
+
+  /**
+   * An update from a group, supergroup or channel — the operations log group, typically.
+   *
+   * No customer is resolved, created or touched here, and nothing is counted by anti-spam
+   * (a rule about customers). The only thing a group can legitimately send this runtime is an
+   * ADMINISTRATOR's tap on a button the bot posted there («پروفایل کاربر», a receipt decision,
+   * a reseller action), and that goes to the same `adminTurn` door as in a private chat, which
+   * resolves the binding by Telegram id and re-checks its own permission. A tap by anybody
+   * else, or on any other button, is only acknowledged; a typed message is ignored. Nothing is
+   * ever sent into the group: replies go to a private chat only.
+   *
+   * A receipt-review tap on a message already decided is answered with the truthful notice,
+   * like the private-chat gate does.
+   */
+  private async groupChatTurn(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: BotCommand,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update: unknown;
+      readonly telegramUserId: string;
+    },
+  ): Promise<BotTurnResult> {
+    const done = (reply: PendingReply | null): BotTurnResult => ({
+      intent: command.intent,
+      arrival: null,
+      customerId: null,
+      replyKey: reply?.key ?? null,
+      orderId: reply?.orderId ?? null,
+      sent: 'NOT_ATTEMPTED',
+    });
+    if (!isCallbackQueryUpdate(input.update)) return done(null);
+
+    let reply: PendingReply | null = null;
+    if (ADMIN_INTENTS.has(command.intent)) {
+      const state = this.deps.messageState;
+      const origin = callbackOriginOf(input.update);
+      if (state !== undefined && origin !== null && REVIEW_TAP_INTENTS.has(command.intent)) {
+        const ref = this.refOf(input.botInstanceId, origin);
+        const record = await state.findReview(scope, ref);
+        if (
+          (record?.finalisedAt ?? null) !== null ||
+          (record === null && (await state.reviewTapIsRetired(scope, ref)))
+        ) {
+          const toast =
+            record === null
+              ? {}
+              : await adminReviewFlow.repeatedReviewToast(
+                  this,
+                  scope,
+                  actor,
+                  input.telegramUserId,
+                  record.paymentId,
+                );
+          await this.stopSpinner(scope, command, input.botInstanceId, toast.toast);
+          return done(null);
+        }
+      }
+      reply = await adminFlow.adminTurn(this, scope, actor, command, input);
+    }
+    await this.stopSpinner(scope, command, input.botInstanceId, reply?.toast);
+    return done(reply);
   }
 
   async stopSpinner(
