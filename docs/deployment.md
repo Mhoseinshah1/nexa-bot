@@ -553,7 +553,7 @@ botctl backup              a verified, timestamped PostgreSQL dump
 botctl update <version>    update to a version
 botctl rollback            return to the previous release
 botctl logs [service]      follow logs
-botctl restart             restart the stack
+botctl restart             restart the stack (gives up after NEXA_READY_TIMEOUT, default 180 s, and names the role that is not healthy)
 botctl restart background  restart worker, monitor and provisioner (after an import or a restore)
 botctl cutover preflight   the MirzaBot cutover's read-only checklist (docs/cutover/): PASS/FAIL per check
 botctl cutover rehearse PACKAGE --key-file FILE --owner-telegram-id N
@@ -562,6 +562,8 @@ botctl admin check-2fa --username NAME
                            whether an administrator has two-step sign-in on
 botctl admin reset-2fa --username NAME --reason TEXT
                            owner recovery: remove two-step sign-in (audited)
+botctl admin reset-password USERNAME [--tenant SLUG]
+                           owner recovery: set a new password, typed twice and hidden (audited)
 ```
 
 ### Long commands run inside tmux
@@ -3178,6 +3180,20 @@ neither one signs anybody in:
    botctl admin check-2fa --username owner          # prints on, pending or off
    botctl admin reset-2fa --username owner --reason "lost phone, identity checked in person"
    ```
+
+   A forgotten PASSWORD (as opposed to a lost authenticator) is the same kind of recovery:
+
+   ```
+   botctl admin reset-password owner
+   ```
+
+   It asks for the new password twice on the terminal with echo off, passes it to the
+   container on standard input (never as an argument), and in one transaction stores the
+   hash (the application's own hasher and its 12-character minimum), clears that
+   administrator's sign-in lockout counter, ends their sessions and records
+   `admin.password_reset` as `SYSTEM_JOB` (`via: SERVER_CLI`). Two-step sign-in is untouched.
+   It takes the update lock. Outside an installed host: `pnpm admin:password-reset
+--username NAME [--tenant SLUG]` with the password piped on standard input.
 
    Outside an installed host the same CLI is `pnpm admin:2fa-reset --username NAME
 --reason TEXT [--tenant SLUG] [--check]` (`admin:2fa-reset:dev` from source). It takes

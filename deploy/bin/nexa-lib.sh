@@ -158,8 +158,16 @@ nexa_env_value() {
 # non-secret interpolation values; the per-service `env_file:` entries inside
 # the compose file supply the application configuration, and the Docker daemon
 # reads those as root so no container needs permission to.
+#
+# NEXA_COMPOSE_TIMEOUT (seconds), when set, bounds THIS call. A `compose ps` or `up -d`
+# against a wedged daemon never returns on its own, and every wait built on it then
+# hangs with it: the operator sees a command that does nothing and has no way to tell
+# "slow" from "stuck". Unset means unbounded, which is what a pull or a migration run
+# needs; the callers that must never hang set it for the one call (`NEXA_COMPOSE_TIMEOUT=20
+# nexa_compose ps`, which bash scopes to that call). `--kill-after` because a client that
+# ignores TERM would otherwise outlive the deadline it was given.
 nexa_compose() {
-  docker compose \
+  ${NEXA_COMPOSE_TIMEOUT:+timeout --kill-after=5 "$NEXA_COMPOSE_TIMEOUT"} docker compose \
     --env-file "${NEXA_CONFIG_DIR}/deploy.env" \
     -f "${NEXA_DEPLOY_DIR}/compose.yml" \
     "$@"
@@ -524,14 +532,28 @@ nexa_wait_ready() {
   # So: `status` passes 5 and always gets 5; `update` and `rollback` pass
   # nothing and take the variable, which is what the smoke test lowers so a
   # failure case does not take three minutes to prove.
-  local timeout="${1:-${NEXA_READY_TIMEOUT:-180}}" waited=0 state required
+  local timeout="${1:-${NEXA_READY_TIMEOUT:-180}}" state required out
+  # A WALL-CLOCK deadline. The loop used to add 3 per poll, which counts the sleep and
+  # nothing else: each `compose ps` takes its own time (seconds on a loaded host, for ever
+  # on a wedged daemon), so a "180 second" wait took however long it took. Elapsed time is
+  # measured against the clock, and each poll is itself bounded by what is left.
+  local deadline now remaining poll_limit
+  deadline=$(($(date +%s) + timeout))
+  # Which required service last held the wait back, and in what state; read by
+  # `nexa_report_unready` when the wait gives up. Reset per wait.
+  NEXA_UNREADY_SERVICE=""
+  NEXA_UNREADY_STATE=""
   # Resolved once per wait, not once per poll: the compose file does not change
   # underneath a single wait, and re-reading it every two seconds would put a
   # `compose config` between every poll of a release that is trying to start.
   required="$(nexa_required_services)"
   [ -n "$required" ] ||
     nexa_die "the active compose file defines none of the services readiness requires (${NEXA_READY_SERVICES}). Refusing to call this installation ready."
-  while [ "$waited" -lt "$timeout" ]; do
+  while now="$(date +%s)" && [ "$now" -lt "$deadline" ]; do
+    remaining=$((deadline - now))
+    # At most 20 s per poll (a healthy `ps` answers in well under one), and never past the
+    # deadline. A poll that times out yields no output, which reads as "not ready yet".
+    poll_limit=$((remaining < 20 ? remaining : 20))
     # SC2016: the single quotes are the point. This is Python source, and the
     # shell must not expand anything inside it — an interpolated value here
     # would be code, not data.
@@ -543,8 +565,8 @@ nexa_wait_ready() {
     # between a failed release being backed out in seconds and in six minutes
     # (this wait, then the back-out's own).
     # shellcheck disable=SC2086
-    state="$(nexa_compose ps --all --format json $required 2>/dev/null |
-      NEXA_REQUIRED_SERVICES="$required" python3 -c '
+    out="$(NEXA_COMPOSE_TIMEOUT="$poll_limit" nexa_compose ps --all --format json $required 2>/dev/null |
+      NEXA_VERDICT_WITH_SERVICE=1 NEXA_REQUIRED_SERVICES="$required" python3 -c '
 import json, sys
 raw = sys.stdin.read().strip()
 if not raw:
@@ -649,23 +671,53 @@ def verdict(service):
 import os
 required = os.environ.get("NEXA_REQUIRED_SERVICES", "").split()
 verdicts = [verdict(service) for service in required]
-if any(v in ("exited", "dead") for v in verdicts):
-    print(next(v for v in verdicts if v in ("exited", "dead")))
-elif all(v == "healthy" for v in verdicts):
-    print("healthy")
+# The answer is one word, as every caller reads it. With NEXA_VERDICT_WITH_SERVICE set
+# (the readiness wait does) it is "<word><TAB><service>", so a timeout can say WHICH role
+# held it back rather than only that something did.
+pairs = list(zip(required, verdicts))
+chosen = next(((s, v) for s, v in pairs if v in ("exited", "dead")), None)
+if chosen is None and not all(v == "healthy" for v in verdicts):
+    chosen = next(((s, v) for s, v in pairs if v != "healthy"), None)
+word = chosen[1] if chosen else "healthy"
+if os.environ.get("NEXA_VERDICT_WITH_SERVICE") and chosen:
+    print(word + "\t" + chosen[0])
 else:
-    print(next((v for v in verdicts if v != "healthy"), ""))
+    print(word)
 ' 2>/dev/null || true)"
+    state="${out%%$'\t'*}"
+    if [ "$state" != "$out" ]; then
+      NEXA_UNREADY_SERVICE="${out#*$'\t'}"
+      NEXA_UNREADY_STATE="$state"
+    fi
 
     case "$state" in
       healthy) return 0 ;;
       # `exited` and `dead` will not become healthy by waiting.
       exited | dead) return 1 ;;
     esac
-    sleep 3
-    waited=$((waited + 3))
+    # Never sleep past the deadline either.
+    now="$(date +%s)"
+    remaining=$((deadline - now))
+    [ "$remaining" -gt 0 ] || break
+    sleep $((remaining < 3 ? remaining : 3))
   done
   return 1
+}
+
+# Said when a readiness wait gave up, in Persian, for the operator who is looking at a
+# terminal: WHICH role is not ready, its state, and the tail of its log — the line that
+# says why is almost always in the last few. Every docker call here is bounded, so the
+# report cannot hang the command that is already reporting a failure. Reads the
+# NEXA_UNREADY_* variables the wait left; with none (nothing was listed) it says so.
+nexa_report_unready() {
+  local service="${NEXA_UNREADY_SERVICE:-}" state="${NEXA_UNREADY_STATE:-}"
+  if [ -z "$service" ]; then
+    nexa_warn "سرویسی آماده نشد، اما نتوانستم تشخیص دهم کدام. «botctl status» را اجرا کنید."
+    return 0
+  fi
+  nexa_warn "سرویس «${service}» آماده نشد (وضعیت: ${state:-نامشخص}). آخرین خطوط لاگ آن:"
+  NEXA_COMPOSE_TIMEOUT=20 nexa_compose logs --no-color --tail 20 "$service" 2>&1 | tail -n 20 >&2 || true
+  nexa_warn "برای دیدن لاگ کامل: botctl logs ${service}"
 }
 
 # --- The update lock ---------------------------------------------------------
