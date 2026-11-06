@@ -143,7 +143,16 @@ botctl — operate a Nexa installation
                                            never an argument), clear the sign-in lockout, end their
                                            sessions (audited)
 
-Long commands — backup, restore, update, rollback, cutover rehearse, secrets rewrap — refuse
+  botctl customers prune-empty [--tenant SLUG]
+                             list the customers with no order, payment, service, wallet entry,
+                             ticket, referral or any other row (the rows a group join used to
+                             leave behind). Changes nothing
+  botctl customers prune-empty --apply [--tenant SLUG]
+                             back up, ask for «حذف» (or the count) on the terminal, then delete
+                             only those still empty, in one transaction (audited)
+
+Long commands — backup, restore, update, rollback, cutover rehearse, secrets rewrap, customers
+prune-empty --apply — refuse
 to start on an SSH terminal that is not inside tmux or screen, because a dropped connection
 would end the run part-way. Start them in tmux; botctl prints the exact line:
 
@@ -187,6 +196,12 @@ anybody in: they still need their password, and enrol a new device afterwards.
 It asks for the new one twice on the terminal with echo off, passes it to the container on
 standard input (never an argument), clears that administrator's failed-sign-in lockout and
 ends their sessions. Their two-step sign-in is untouched (that is `reset-2fa`).
+
+`customers prune-empty` exists because a group join used to create a customer, and the Mirza
+import wants an installation with none. The listing needs no lock and no confirmation. `--apply`
+takes the update lock, takes a backup (`botctl backup`) and only then asks; it deletes the
+customers that STILL have no dependent row inside the deleting transaction, never more than the
+count you confirmed. If it is ever in doubt, restoring the clean backup is the other way.
 
 `secrets migrate-config` and `secrets disable-v1` are the only commands that
 edit /etc/nexa/nexa.env. Neither generates, changes or prints key material.
@@ -2627,6 +2642,98 @@ cmd_admin_reset_password() {
 }
 
 # ---------------------------------------------------------------------------
+# customers — `botctl customers prune-empty [--apply] [--tenant SLUG]`
+# ---------------------------------------------------------------------------
+#
+# Before the group-join fix a user joining a GROUP created a customer row, and the Mirza
+# import's fresh-target check wants none. The listing is read-only: no lock, no confirmation.
+#
+# `--apply` is a destructive bulk operation, so it follows the project's rule in order:
+# the counted preview (the listing), the update lock (never interleaved with a migration),
+# a BACKUP (the same `cmd_backup` an update uses), a typed confirmation read from the
+# TERMINAL (not stdin: a pipe would be a script confirming for you), and only then the delete.
+# The CLI checks the confirmation again and deletes, in one transaction, the customers that
+# are STILL empty - never more than the count shown.
+cmd_customers() {
+  require_installed
+  local action="${1:-}"
+  shift || true
+  case "$action" in
+    prune-empty) cmd_customers_prune_empty "$@" ;;
+    *) nexa_die "usage: botctl customers prune-empty [--apply] [--tenant SLUG]" ;;
+  esac
+}
+
+cmd_customers_prune_empty() {
+  local apply=0 tenant=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --apply)
+        apply=1
+        shift
+        ;;
+      --tenant)
+        if [ "$#" -lt 2 ] || [ -z "$2" ]; then nexa_die "--tenant needs a slug."; fi
+        tenant="$2"
+        shift 2
+        ;;
+      *) nexa_die "unknown option $1. usage: botctl customers prune-empty [--apply] [--tenant SLUG]" ;;
+    esac
+  done
+  local tenant_args=()
+  [ -z "$tenant" ] || tenant_args=(--tenant "$tenant")
+
+  if [ "$apply" -eq 0 ]; then
+    # Read-only: no lock, no confirmation, nothing written.
+    nexa_compose run --rm --no-deps -T --entrypoint node api \
+      dist/customers-prune.cli.js list "${tenant_args[@]}" </dev/null ||
+      nexa_die "فهرست مشتریان گرفته نشد. پیام بالا را ببینید."
+    return 0
+  fi
+
+  botctl_long_command customers-prune
+  # A write, so it takes the lock an update takes. Held from here to the end, backup included.
+  nexa_acquire_lock 0
+
+  nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/customers-prune.cli.js list "${tenant_args[@]}" </dev/null ||
+    nexa_die "فهرست مشتریان گرفته نشد؛ چیزی حذف نشد."
+  local count
+  count="$(nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/customers-prune.cli.js list --count "${tenant_args[@]}" </dev/null)" ||
+    nexa_die "تعداد مشتریان گرفته نشد؛ چیزی حذف نشد."
+  count="${count//[[:space:]]/}"
+  case "$count" in
+    '' | *[!0-9]*) nexa_die "پاسخ نامعتبر برای تعداد مشتریان؛ چیزی حذف نشد." ;;
+  esac
+  if [ "$count" -eq 0 ]; then
+    nexa_ok "مشتری‌ای برای حذف نیست."
+    return 0
+  fi
+
+  # The backup FIRST, through the function `botctl backup` and `update` use. In a subshell:
+  # cmd_backup reports its failures through `nexa_die`, which exits, and the operator must be
+  # told that nothing was deleted.
+  nexa_step "پشتیبان‌گیری پیش از حذف"
+  local backup_file
+  backup_file="$(cmd_backup "before-customers-prune")" ||
+    nexa_die "پشتیبان‌گیری ناموفق بود؛ چیزی حذف نشد."
+  nexa_ok "پشتیبان آماده است: ${backup_file}"
+
+  # Typed on the TERMINAL, never stdin.
+  local typed=""
+  printf 'این کار %s مشتری را برای همیشه حذف می‌کند (بازگشت فقط با بازگردانی پشتیبان). برای ادامه «حذف» یا عدد %s را تایپ کنید: ' \
+    "$count" "$count" >&2
+  IFS= read -r typed </dev/tty || nexa_die "تأیید از ترمینال خوانده نشد؛ چیزی حذف نشد."
+
+  local status=0
+  nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/customers-prune.cli.js apply --expect-count "$count" --typed "$typed" "${tenant_args[@]}" </dev/null ||
+    status=$?
+  [ "$status" -eq 0 ] || nexa_die "حذف انجام نشد (کد ${status}). پیام بالا را ببینید؛ پشتیبان: ${backup_file}"
+}
+
+# ---------------------------------------------------------------------------
 # roles — keep a background role switched off
 # ---------------------------------------------------------------------------
 #
@@ -3181,7 +3288,7 @@ main() {
   # --allow-foreground, anywhere on a long command's line, is botctl's and not the command's
   # (botctl_long_command). Everything else is kept, in order, for the refusal's tmux line.
   case "${1:-} ${2:-}" in
-    'backup '* | 'restore '* | 'update '* | 'rollback '* | 'cutover rehearse' | 'secrets rewrap')
+    'backup '* | 'restore '* | 'update '* | 'rollback '* | 'cutover rehearse' | 'secrets rewrap' | 'customers prune-empty')
       local arg kept=()
       for arg in "$@"; do
         if [ "$arg" = "--allow-foreground" ]; then BOTCTL_ALLOW_FOREGROUND=1; else kept+=("$arg"); fi
@@ -3210,6 +3317,7 @@ main() {
     secrets) cmd_secrets "$@" ;;
     telegram) cmd_telegram "$@" ;;
     admin) cmd_admin "$@" ;;
+    customers) cmd_customers "$@" ;;
     logs) cmd_logs "$@" ;;
     restart) cmd_restart "$@" ;;
     -h | --help | help | '') usage ;;

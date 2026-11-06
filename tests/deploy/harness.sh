@@ -985,6 +985,20 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
         # installer's own `owner_state` — the pipeline included — is what the
         # tests exercise.
         case "$*" in
+          *'customers-prune.cli.js'*)
+            # `botctl customers prune-empty`: the listing prints a Persian line carrying the
+            # count (`prune_count`); `list --count` prints just the number; `apply` is recorded
+            # in the docker log, whose argv the test reads, and may be made to fail.
+            case "$*" in
+              *' list --count'*) printf '%s\n' "$(read_state prune_count 3)"; exit "$(read_state prune_list_exit 0)" ;;
+              *' list'*)
+                printf 'مشتریان بدون هیچ وابستگی: %s مورد\n' "$(read_state prune_count 3)"
+                exit "$(read_state prune_list_exit 0)"
+                ;;
+              *' apply '*) exit "$(read_state prune_apply_exit 0)" ;;
+            esac
+            exit 0
+            ;;
           *'admin-password-reset.cli.js'*)
             # `botctl admin reset-password`: what the one-off container received on STDIN.
             # Argv is in the docker log, which a test greps for the password to prove it

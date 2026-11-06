@@ -34,6 +34,7 @@ ENTRYPOINTS=(
   dist/provision-installation.cli.js
   dist/admin-2fa-reset.cli.js
   dist/admin-password-reset.cli.js
+  dist/customers-prune.cli.js
 )
 missing=""
 for entry in "${ENTRYPOINTS[@]}"; do
@@ -58,6 +59,7 @@ run node --input-type=module -e "
   await import('/app/dist/bootstrap-owner.cli.js');
   await import('/app/dist/admin-2fa-reset.cli.js');
   await import('/app/dist/admin-password-reset.cli.js');
+  await import('/app/dist/customers-prune.cli.js');
   const api = await import('/app/dist/bootstrap.js');
   const worker = await import('/app/dist/container.js');
 
