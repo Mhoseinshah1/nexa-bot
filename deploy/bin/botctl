@@ -2584,7 +2584,7 @@ cmd_admin_reset_password() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --tenant)
-        [ "$#" -ge 2 ] && [ -n "$2" ] || nexa_die "--tenant needs a slug."
+        if [ "$#" -lt 2 ] || [ -z "$2" ]; then nexa_die "--tenant needs a slug."; fi
         tenant="$2"
         shift 2
         ;;
