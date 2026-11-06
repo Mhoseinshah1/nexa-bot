@@ -242,6 +242,29 @@ describe('the listing', () => {
     for (const kept of [blocked, imported, withPhone]) expect(await exists(kept)).toBe(true);
   });
 
+  it('keeps a customer whose stored choice lives on the row: opt-outs and exemptions', async () => {
+    // Codex P2 on #414: a /stop is stored on the customer itself, with no dependent row.
+    // Pruned, the next private message would re-register them opted back into broadcasts.
+    const plain = await groupJoin();
+    const kept: string[] = [];
+    for (const column of [
+      'marketing_opt_out_at',
+      'reminders_opt_out_at',
+      'channel_membership_exempt_at',
+      'phone_verification_exempt_at',
+    ]) {
+      const id = await groupJoin();
+      await db().execute(
+        sql`UPDATE customers SET ${sql.identifier(column)} = now() WHERE id = ${id}`,
+      );
+      kept.push(id);
+    }
+    const listing = await prune().list(tenantA, ACTOR);
+    expect(listing.candidates.map((c) => c.id)).toEqual([plain]);
+    expect((await prune().apply(tenantA, ACTOR, { expectedCount: 1 })).deleted).toBe(1);
+    for (const id of kept) expect(await exists(id)).toBe(true);
+  });
+
   it('treats the import map as a dependent even for a bot-registered row', async () => {
     const mapped = await groupJoin();
     await db().execute(sql`

@@ -142,10 +142,20 @@ export function noDependents(dependents: readonly DependentReference[]): SQL {
  * bot itself registered (not an import), in good standing (a block is an operator's
  * decision, and deleting the customer would lift it), with no data an operator or the
  * customer entered (a phone, a personal discount).
+ *
+ * Nor a stored CHOICE that lives on the row itself: a promotional or reminder opt-out
+ * (`/stop`), an operator's channel-membership or phone-verification exemption, or a phone
+ * flow left to resume. Each is written with only audit, outbox and idempotency rows beside
+ * it, so the dependent check does not see it; deleting the row would drop it, and the
+ * person's next private message would re-register them without it — opted back into
+ * broadcasts, or gated again by a check an operator had lifted for them.
  */
 function pruneable(tenantId: string): SQL {
   return sql`c.tenant_id = ${tenantId} AND c.status = 'ACTIVE' AND c.source = 'NEXA'
-    AND c.phone_number IS NULL AND c.personal_discount_percent = 0`;
+    AND c.phone_number IS NULL AND c.personal_discount_percent = 0
+    AND c.marketing_opt_out_at IS NULL AND c.reminders_opt_out_at IS NULL
+    AND c.channel_membership_exempt_at IS NULL AND c.phone_verification_exempt_at IS NULL
+    AND c.phone_resume IS NULL`;
 }
 
 interface CandidateRow {
