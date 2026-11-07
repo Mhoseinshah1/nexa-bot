@@ -134,7 +134,7 @@ export function reportText(report: TenantMoneyReport): string {
 
 async function main(): Promise<void> {
   const args = parseReportArgs(process.argv.slice(2));
-  const container = createContainer(loadConfig(), 'worker');
+  const container = createContainer(loadConfig(), 'worker', { connection: 'owner' });
   try {
     const tenant =
       args.tenantSlug === null

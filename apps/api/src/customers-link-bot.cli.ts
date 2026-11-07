@@ -102,7 +102,7 @@ export function reportLine(report: CustomerBotLinkReport): string {
 
 async function main(): Promise<void> {
   const args = parseLinkBotArgs(process.argv.slice(2), process.env);
-  const container = createContainer(loadConfig(), 'worker');
+  const container = createContainer(loadConfig(), 'worker', { connection: 'owner' });
   try {
     const tenant =
       args.tenantSlug === null

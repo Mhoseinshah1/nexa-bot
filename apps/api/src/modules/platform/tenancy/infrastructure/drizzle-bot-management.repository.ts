@@ -21,6 +21,7 @@ import type {
   ExpectedWebhookSecretDigests,
 } from '../application/bot-management-ports.js';
 import type { DrizzleBotInstanceRepository } from './drizzle-tenant.repository.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
@@ -41,6 +42,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
  * cipher context (`purpose`, tenant, row). A second copy of that context would be a
  * second place where it could disagree with the one that encrypted.
  */
+@ScopeBound()
 export class DrizzleBotManagementRepository implements BotManagementRepository {
   constructor(
     private readonly db: Database,

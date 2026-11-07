@@ -25,6 +25,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { RoleRepository } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
@@ -42,6 +43,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
  * than returned. A stale row left behind by a removed permission must not
  * silently keep granting something the catalog no longer defines.
  */
+@ScopeBound()
 export class DrizzleRoleRepository implements RoleRepository {
   constructor(
     private readonly db: Database,

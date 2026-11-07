@@ -67,6 +67,8 @@ function run(exception: unknown): { captured: Captured; logged: unknown[] } {
     logger: { error: vi.fn((context: unknown) => logged.push(context)) },
     // No installation tenant: the operations-log report returns before writing.
     installationTenantId: null,
+    // The restore guard sees every unhandled failure; only a tenant FK violation acts.
+    installationTenantGuard: { onWriteError: vi.fn() },
   } as unknown as Container;
   const host = {
     switchToHttp: () => ({

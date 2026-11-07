@@ -29,6 +29,7 @@ import type {
   SupportPaymentFact,
   SupportServiceCardFact,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Whether a payment is «under review» (ADR-0034 §4): its recorded outcome is ambiguous, or
@@ -61,6 +62,7 @@ export function underReviewCondition(): SQL {
  * column the payload does not carry is never even fetched — a payment's `reference`,
  * `external_reference` and notes, an order's quote and discount code.
  */
+@ScopeBound()
 export class DrizzleSupportContextReader implements SupportContextReader {
   constructor(private readonly db: Database) {}
 

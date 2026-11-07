@@ -10,6 +10,7 @@ import type {
 } from '../application/ports.js';
 import type { DatabaseInspection, RestoreEngine } from '../../recovery/application/ports.js';
 import type { AppliedMigration } from '../../../../infrastructure/persistence/migration-state.js';
+import { APPLICATION_ROLE_GRANTS_SQL } from '../../../../infrastructure/persistence/row-level-security.js';
 import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
 import {
   CPU_QUOTA_UNLIMITED,
@@ -638,6 +639,37 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
         code: PLATFORM_ERROR_CODES.BACKUP_TOOL_FAILED,
         message: 'pg_restore did not complete against the requested target.',
         details: { exitCode: restore.code, stderr: restore.stderr.slice(0, 2000) },
+      });
+    }
+    // A recovery's candidate gets the application roles' grants back (ADR-0037): the dump
+    // is `--no-acl`, and without them every process connecting as nexa_app would be
+    // refused on every table the moment the candidate became the live database. Not for
+    // a verification, whose scratch server has no Nexa roles and serves no process.
+    if (!verifying) await this.grantApplicationRoles(name, env);
+  }
+
+  private async grantApplicationRoles(name: string, env: NodeJS.ProcessEnv): Promise<void> {
+    const granted = await run(
+      this.bin('psql'),
+      [
+        '--no-psqlrc',
+        '--quiet',
+        '--set',
+        'ON_ERROR_STOP=1',
+        '--dbname',
+        name,
+        '--command',
+        APPLICATION_ROLE_GRANTS_SQL,
+      ],
+      env,
+      60_000,
+    );
+    if (granted.code !== 0) {
+      throw new NexaError({
+        kind: 'INTERNAL',
+        code: PLATFORM_ERROR_CODES.BACKUP_TOOL_FAILED,
+        message: "The restored database's application-role grants could not be applied.",
+        details: { exitCode: granted.code, stderr: granted.stderr.slice(0, 2000) },
       });
     }
   }

@@ -40,6 +40,7 @@ import type {
   LegacyHistoryRepository,
   NewLegacyHistoryRecord,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Rows per INSERT: 11 parameters a row, so 5 000 rows stay under PostgreSQL's 65 535 binds. */
 const INSERT_CHUNK = 5000;
@@ -48,6 +49,7 @@ const INSERT_CHUNK = 5000;
  * `legacy_history_records` in PostgreSQL. Append-only: INSERT … ON CONFLICT DO NOTHING and
  * SELECTs, nothing else — the table's triggers refuse UPDATE and DELETE for every role.
  */
+@ScopeBound()
 export class DrizzleLegacyHistoryRepository implements LegacyHistoryRepository {
   constructor(private readonly db: Database) {}
 

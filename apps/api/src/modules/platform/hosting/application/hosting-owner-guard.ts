@@ -20,6 +20,29 @@ import type { PermissionGuard } from '../../access/application/permission-guard.
 /** The creator panel's permission. CRITICAL; seeded to `owner` only. */
 export const HOSTING_PERMISSION: PermissionKey = 'hosting.manage';
 
+/**
+ * The permission list a Web Admin session is SHOWN (chrome only, never an authorization):
+ * `hosting.manage` stays only for the installation owner — the installation tenant's
+ * administrator holding the system `owner` role, rules (1) and (4) of `HostingOwnerGuard`.
+ * A hosted or reseller bot's owner holds every key in their own tenant, so without this the
+ * «میزبانی‌ها» link would be drawn in every hosted bot's Web Admin. The server still refuses
+ * every hosting route to anyone else; this only decides whether the link is drawn.
+ */
+export function withoutForeignHostingPermission(
+  permissions: readonly PermissionKey[],
+  session: {
+    readonly tenantId: string;
+    readonly roleKeys: readonly string[];
+    readonly installationTenantId: string | null;
+  },
+): PermissionKey[] {
+  const owner =
+    session.installationTenantId !== null &&
+    session.tenantId.toLowerCase() === session.installationTenantId.toLowerCase() &&
+    session.roleKeys.includes(OWNER_ROLE_KEY);
+  return owner ? [...permissions] : permissions.filter((key) => key !== HOSTING_PERMISSION);
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**

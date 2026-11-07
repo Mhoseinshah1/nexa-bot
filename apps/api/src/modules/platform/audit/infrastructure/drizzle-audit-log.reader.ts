@@ -25,6 +25,7 @@ import type {
   AuditLogReader,
   AuditLogRecord,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The audit log browser's reads (Phase D1, `docs/audit-log.md`).
@@ -40,6 +41,7 @@ import type {
  * one implementation, because a row is read for years and the redactor has learned keys
  * since (`subscription`, `passphrase`) that older rows were written without.
  */
+@ScopeBound()
 export class DrizzleAuditLogReader implements AuditLogReader {
   constructor(private readonly db: Database) {}
 

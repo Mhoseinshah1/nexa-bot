@@ -17,10 +17,11 @@ import {
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { toItem } from '../../apps/api/src/surfaces/web/customer-direct-messages.controller';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

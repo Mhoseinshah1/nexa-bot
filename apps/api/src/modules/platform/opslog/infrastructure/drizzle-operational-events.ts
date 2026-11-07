@@ -16,6 +16,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { redactRecord } from '../../../../infrastructure/redaction.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Operational events: what the system did.
@@ -29,6 +30,7 @@ import { redactRecord } from '../../../../infrastructure/redaction.js';
  * day with no way to suppress or resolve them. `recoversCode` records that a
  * condition cleared, so a fixed problem stops looking broken.
  */
+@ScopeBound()
 export class DrizzleOperationalEventRecorder implements OperationalEventRecorder {
   constructor(
     private readonly db: Database,

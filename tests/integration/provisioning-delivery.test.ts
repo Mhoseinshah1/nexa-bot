@@ -2474,10 +2474,12 @@ describe('a provisioned service announces itself', () => {
       tapUpdate(`r:${service?.id ?? ''}`, 'supergroup'),
     );
 
-    expect(result.replyKey).toBe('bot.service.not_found');
-    // NOT_ATTEMPTED because `privateChatIdOf` refuses a group, so `handle` has nowhere
-    // to send the refusal either. The customer sees nothing, which is right: the tap
-    // came from a chat this bot will not talk to about a subscription.
+    // A group is never a customer's chat (fix/group-updates-no-customer): a non-admin tap
+    // there is only acknowledged, so no customer is resolved and no service is looked up,
+    // let alone resent. The customer sees nothing, which is right: the tap came from a
+    // chat this bot will not talk to about a subscription.
+    expect(result.replyKey).toBeNull();
+    expect(result.customerId, 'no customer is resolved from a group tap').toBeNull();
     expect(result.sent, 'and nothing was sent anywhere').toBe('NOT_ATTEMPTED');
     expect(messages().length).toBe(before);
   });

@@ -258,6 +258,95 @@ server.
 **Above 45 MiB** the archive is delivered in parts (§ The archive, above). The old
 "retained on the server" notice is gone: nothing above the ceiling stays home any more.
 
+## Off-site copy: S3-compatible, write-only, object-locked (Phase 6A D0)
+
+After DELIVER, every run that may leave the host (not a `deliver: false` run, not a cutover
+rehearsal) copies the VERIFIED archive to S3-compatible object storage — AWS S3, MinIO,
+Cloudflare R2, Backblaze B2, Wasabi. It is OFF until the owner sets all five of endpoint,
+region, bucket and the key pair in `/etc/nexa/nexa.env`; one alone is refused at boot.
+
+| Variable                           | Default | Notes                                                                    |
+| ---------------------------------- | ------- | ------------------------------------------------------------------------ |
+| `BACKUP_OFFSITE_ENDPOINT`          | empty   | An http(s) origin with no path: `https://s3.eu-central-1.amazonaws.com`. |
+| `BACKUP_OFFSITE_REGION`            | empty   | `eu-central-1`; `auto` for R2.                                           |
+| `BACKUP_OFFSITE_BUCKET`            | empty   |                                                                          |
+| `BACKUP_OFFSITE_ACCESS_KEY_ID`     | empty   | A key that can PUT and nothing else (policy below).                      |
+| `BACKUP_OFFSITE_SECRET_ACCESS_KEY` | empty   |                                                                          |
+| `BACKUP_OFFSITE_PREFIX`            | `nexa/` | Objects land at `<prefix><backup id>/<part file>` and `…/index.json`.    |
+| `BACKUP_OFFSITE_RETENTION_DAYS`    | `0`     | > 0: each object under COMPLIANCE object lock for that many days.        |
+| `BACKUP_OFFSITE_PATH_STYLE`        | `true`  | `false` for virtual-hosted (`bucket.endpoint`) requests.                 |
+| `BACKUP_OFFSITE_TIMEOUT_MS`        | 10 min  | Per object; a part is at most 45 MiB.                                    |
+
+**What is sent.** The same ≤ 45 MiB parts Telegram gets — byte ranges of the one verified,
+encrypted archive — each re-read and compared with the SHA-256 recorded after verification,
+and sent with that digest as `x-amz-content-sha256` and its `Content-MD5`, so the store
+refuses a body that differs. Then `index.json` (backup id, time, format, sizes and digests;
+no key, no credential), LAST: an index present means every part before it landed. Nothing
+is encrypted again: the archive is already ciphertext under the installation's key (or the
+7-Zip password), so the bucket holds nothing readable without the Recovery Kit.
+
+**Write-only.** The client is one hand-written Signature V4 `PutObject` (no SDK: the whole
+client is one request shape, pinned to AWS's own test vectors in
+`tests/unit/backup-offsite.test.ts`). It never lists, reads or deletes. With a retention set
+every PUT carries `x-amz-object-lock-mode: COMPLIANCE` and
+`x-amz-object-lock-retain-until-date` (upload time + the days), and both are signed. In
+COMPLIANCE mode nobody — not the key, not the account root — can delete the version or
+shorten the date before it passes. Create the bucket **with Object Lock enabled** (it also
+turns versioning on; a PUT to an existing key adds a version, it never replaces one).
+
+**The policy the owner creates.** Give the installation its own IAM user (or MinIO/R2/B2
+key) and attach exactly this, with the bucket name filled in:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "NexaWriteOnly",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:PutObjectRetention"],
+      "Resource": "arn:aws:s3:::BUCKET/nexa/*"
+    },
+    {
+      "Sid": "NexaNeverDeletes",
+      "Effect": "Deny",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketVersioning",
+        "s3:PutObjectLockConfiguration",
+        "s3:BypassGovernanceRetention"
+      ],
+      "Resource": ["arn:aws:s3:::BUCKET", "arn:aws:s3:::BUCKET/*"]
+    }
+  ]
+}
+```
+
+No `s3:ListBucket`, no `s3:GetObject`: a stolen key can add objects and nothing else. Old
+copies are expired by a lifecycle rule YOU set from your own account (after the lock date),
+never by this installation. Restoring from the bucket is the owner's: download the parts with
+their own credentials, then `botctl restore` as for parts from Telegram.
+
+**Failure.** An upload that does not complete — refused, unreachable, timed out, a part whose
+bytes no longer match — opens ONE installation-wide `backup.offsite_failed` (WARN, the owner's
+ops group, BACKUPS topic), with counts and the provider's status code, never a key or URL. The
+run stays `SUCCEEDED`, Telegram delivery is unaffected, and **nothing removes the local
+archive** because of it (local retention is unchanged). The next run whose copy lands records
+`backup.offsite_ok`. Objects already uploaded stay, locked.
+
+**Before relying on it:** `sudo botctl backup offsite test` writes one small object under
+`<prefix>offsite-test/` — locked for ONE day when a retention is set, which proves the bucket
+accepts the lock headers — and reports in Persian: success with the bucket name and lock
+state, or the status and a hint (key or policy refused; Object Lock not enabled on the
+bucket; endpoint unreachable). Exit 0 written, 1 refused, 3 not configured. It needs no
+database and no lock, and the credentials never leave `nexa.env`.
+
+`deploy/bin/botctl backup` (the pre-update `pg_dump`) is NOT copied off-site: it is plaintext
+and local by design (§ Relationship to `botctl backup`).
+
 ## The automatic schedule
 
 «بکاپ و بازیابی» → «زمان‌بندی بکاپ خودکار» in the Web Admin: a switch, and an interval
@@ -446,9 +535,9 @@ the log, or an error message.
 
 Stated because ADR-0011 required these and V1 does not have them.
 
-**No off-server copy.** The archive lives on the same server as the database it
-protects, plus whatever Telegram holds. A host that is lost loses both. Getting
-the artifact somewhere else is manual, today.
+**No off-server copy unless you configure one.** By default the archive lives on the same
+server as the database it protects, plus whatever Telegram holds. Phase 6A D0 adds the
+write-only, object-locked S3 copy above; it is off until its credentials are set.
 
 **The off-host copy is Telegram, in parts (OQ-E5-OFFHOST, resolved).** Delivery of every
 part to the BACKUPS topic is the off-host copy, whatever the archive's size. A partial
@@ -553,6 +642,7 @@ closed by its `_ok` twin only when open — a healthy installation records nothi
 | `backup.delivery_failed`         | WARN     | a verified run's archive did not leave the host (`FAILED_DEFINITIVE` or `OUTCOME_UNKNOWN`)                               | `backup.delivery_ok`, a later run that delivered (or had no destination configured)                                           |
 | `backup.cleanup_failed`          | ERROR    | a run, the debris sweep, or archive retention left plaintext, a scratch database or a directory behind                   | `backup.cleanup_ok`, when no plaintext is left on disk and EVERY leftover any run recorded (paths, scratch databases) is gone |
 | `backup.disk_threshold_exceeded` | WARN     | free space on `BACKUP_WORK_DIR`'s volume is below max(1 GiB, 1.5 × (last dump + last archive))                           | `backup.disk_threshold_ok`                                                                                                    |
+| `backup.offsite_failed`          | WARN     | the off-site (S3) copy of a verified archive did not complete; the local archive is kept                                 | `backup.offsite_ok`, a later run whose copy landed                                                                            |
 | `backup.interval_exceeded`       | ERROR    | **overdue**: the schedule is on and the last verified backup is older than the interval × 2 (`BACKUP_OVERDUE_TOLERANCE`) | `backup.interval_ok`, when a verified backup lands or the schedule is switched off                                            |
 
 The overdue alert is evaluated in the WORKER, so it catches a scheduler that is

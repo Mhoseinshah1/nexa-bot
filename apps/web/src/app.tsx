@@ -1852,6 +1852,12 @@ function Brand() {
  */
 function messageFor(error: unknown): string {
   if (error instanceof ApiError && error.code === 'auth.rate_limited') return t('web.rate_limited');
+  // An internal failure (the database refused the write, a role is mid-restore) is NOT a
+  // wrong password: saying so sends the operator to retype credentials that were right
+  // while the real cause sits in the server's log.
+  if (error instanceof ApiError && (error.status >= 500 || error.kind === 'INTERNAL')) {
+    return t('web.sign_in_server_error');
+  }
   return t('web.sign_in_failed');
 }
 

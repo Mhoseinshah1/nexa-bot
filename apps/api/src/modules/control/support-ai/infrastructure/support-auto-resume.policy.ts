@@ -12,6 +12,7 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import type { AutoResumePolicy } from '../../../commerce/business-chats/application/ports.js';
 import type { DrizzleSupportAiConfigRepository } from './drizzle-support-ai.repository.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 export const SUPPORT_AI_RESUME_AFTER_MINUTES_KEY =
   'support.ai.resume_after_minutes' satisfies SettingKey;
@@ -21,6 +22,7 @@ export const SUPPORT_AI_RESUME_AFTER_MINUTES_KEY =
  * each in the inbound message's transaction. The window is 0 (never) unless the support AI is in
  * `AUTO_REPLY_SAFE`: a conversation nobody would answer automatically stays with its person.
  */
+@ScopeBound()
 export class SupportAutoResumePolicy implements AutoResumePolicy {
   constructor(
     private readonly deps: {

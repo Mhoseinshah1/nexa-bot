@@ -28,6 +28,7 @@ import type {
   NewGiftCardBatch,
   NewGiftCardCode,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Rows per INSERT: 1000 codes × 5 columns stays far below PostgreSQL's parameter ceiling. */
 const INSERT_CHUNK = 1000;
@@ -79,6 +80,7 @@ const COUNT_COLUMNS = {
 };
 
 /** Gift card batches, codes and refused attempts, in PostgreSQL. Every query carries the tenant. */
+@ScopeBound()
 export class DrizzleGiftCardRepository implements GiftCardRepository, GiftCardSweepRepository {
   constructor(private readonly db: Database) {}
 

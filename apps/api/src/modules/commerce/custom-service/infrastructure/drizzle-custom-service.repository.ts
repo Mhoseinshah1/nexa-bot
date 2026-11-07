@@ -28,6 +28,7 @@ import {
   type OrderCustomServiceTerms,
   type OrderCustomServiceTermsRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The class of the tenant's custom-service rules lock. It says what the lock is ABOUT, so
@@ -76,6 +77,7 @@ function ruleColumns(write: CustomServiceRuleWrite) {
 }
 
 /** Custom-service price rules, in PostgreSQL. Every query carries the tenant. */
+@ScopeBound()
 export class DrizzleCustomServiceRuleRepository implements CustomServiceRuleRepository {
   constructor(private readonly db: Database) {}
 
@@ -180,6 +182,7 @@ export class DrizzleCustomServiceRuleRepository implements CustomServiceRuleRepo
 }
 
 /** Custom-service locations, joined to their panel's operator name. */
+@ScopeBound()
 export class DrizzleCustomServiceLocationRepository implements CustomServiceLocationRepository {
   constructor(private readonly db: Database) {}
 
@@ -282,6 +285,7 @@ export class DrizzleCustomServiceLocationRepository implements CustomServiceLoca
 }
 
 /** The frozen terms of each custom order. */
+@ScopeBound()
 export class DrizzleOrderCustomServiceTermsRepository implements OrderCustomServiceTermsRepository {
   constructor(private readonly db: Database) {}
 

@@ -33,6 +33,7 @@ import type {
   NewLegacyInvoiceArchiveRun,
   StagedLegacyInvoice,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type RunRow = typeof legacyInvoiceArchiveRuns.$inferSelect;
 type ArchiveRow = typeof legacyInvoiceArchive.$inferSelect;
@@ -124,6 +125,7 @@ const LATEST_VISIBLE: SQL = sql`NOT EXISTS (SELECT 1 FROM legacy_invoice_archive
     AND nb.invoice_key = ${legacyInvoiceArchive.invoiceKey}
     AND nb.revision > ${legacyInvoiceArchive.revision})`;
 
+@ScopeBound()
 export class DrizzleLegacyInvoiceArchiveRepository implements LegacyInvoiceArchiveRepository {
   constructor(private readonly db: Database) {}
 

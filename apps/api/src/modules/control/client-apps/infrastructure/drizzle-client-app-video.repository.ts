@@ -11,6 +11,7 @@ import type {
   ClientAppVideoRepository,
   InboundTutorialVideo,
 } from '../application/client-app-video.service.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The advisory-lock CLASS for one video identity; distinct from every other class. */
 export const CLIENT_APP_VIDEO_LOCK_CLASS = 0x5654;
@@ -19,6 +20,7 @@ export const CLIENT_APP_VIDEO_LOCK_CLASS = 0x5654;
  * Spec §7: the tutorial video references, one per (tenant, app, bot). Every query carries the
  * tenant, and the bot: a `file_id` is valid only for the bot that received it.
  */
+@ScopeBound()
 export class DrizzleClientAppVideoRepository implements ClientAppVideoRepository {
   constructor(private readonly db: Database) {}
 

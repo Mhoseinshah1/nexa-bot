@@ -30,6 +30,7 @@ import {
   starsSuccessfulPaymentOf,
 } from './stars-updates.js';
 import { opsConnectAttemptOf, opsMembershipChangeOf } from './ops-group-updates.js';
+import { isGroupChatUpdate } from './chat-kind.js';
 import { handleBusinessUpdate } from './business-updates.js';
 import { capacityDeferralOf } from '../../modules/platform/capacity/application/bot-turn-guard.js';
 import { businessUpdateOf } from '../../modules/commerce/business-chats/domain/telegram-business.js';
@@ -428,7 +429,18 @@ export class TelegramWebhookController {
      * it, because a swallowed error with no trace is the legacy system's `catch {}`.
      */
     const telegramUserId = telegramUserIdOf(update);
-    if (telegramUserId !== null) {
+    /*
+     * Only a private chat is a customer contact. A join, leave, pin or plain message in a
+     * group (the operations log group included) or a channel post never reaches the runtime:
+     * it would create a customer, move `last_seen_at` and post «کاربر جدید». The ONE group
+     * update that does reach it is a TAPPED BUTTON, which the runtime answers on the
+     * administrator path without resolving a customer (`BotRuntime.handle`).
+     */
+    const customerTurn =
+      telegramUserId !== null &&
+      (!isGroupChatUpdate(update) ||
+        (update as { callback_query?: unknown }).callback_query !== undefined);
+    if (telegramUserId !== null && customerTurn) {
       try {
         /*
          * Phase 6A PR-2: inside the bot's fair share — at most its `UPDATE_CONCURRENCY` turns

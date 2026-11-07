@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { outboxMessages } from '../../../../infrastructure/persistence/schema.js';
+import { withSystemScope } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Retention for the transactional outbox (Round 4 PR-E, E3).
@@ -22,13 +23,16 @@ import { outboxMessages } from '../../../../infrastructure/persistence/schema.js
  *     second policy nobody asked for.
  *
  * Batched: one short DELETE of at most `limit` ids, so no statement holds a long lock.
+ *
+ * Cross-tenant by nature, so on the system path under a named reason (ADR-0037).
  */
 export async function purgePublishedOutboxBefore(
   db: Database,
   cutoff: Date,
   limit: number,
 ): Promise<number> {
-  const result = await db.execute(sql`
+  const result = await withSystemScope('outbox retention: published messages', () =>
+    db.execute(sql`
     DELETE FROM ${outboxMessages}
      WHERE id IN (
        SELECT candidate.id FROM ${outboxMessages} AS candidate
@@ -36,6 +40,7 @@ export async function purgePublishedOutboxBefore(
           AND candidate.published_at < ${cutoff}
         LIMIT ${limit}
      )
-  `);
+  `),
+  );
   return result.rowCount ?? 0;
 }

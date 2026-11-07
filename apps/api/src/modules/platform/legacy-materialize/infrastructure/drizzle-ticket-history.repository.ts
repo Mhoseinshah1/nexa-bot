@@ -25,6 +25,7 @@ import {
   type TicketHistoryRepository,
   type TicketWrite,
 } from '../application/ticket-history.step.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * A password hash that is not one: `ScryptPasswordHasher.verify` parses the stored value
@@ -51,6 +52,7 @@ export class MirzaImportAdminCollision extends Error {
   }
 }
 
+@ScopeBound()
 export class DrizzleTicketHistoryRepository implements TicketHistoryRepository {
   constructor(
     private readonly db: Database,

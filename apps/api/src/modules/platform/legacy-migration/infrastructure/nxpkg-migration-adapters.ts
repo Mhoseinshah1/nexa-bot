@@ -40,6 +40,7 @@ import { errorKind } from '../domain/import-lifecycle.js';
 import { SERVICE_CANDIDATE_CATEGORIES } from '../../legacy-importer/application/decisions.js';
 import { PLAN_DIGEST_FORMAT_OUTDATED } from '../../legacy-importer/application/plan.js';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { runInventory } from '../../../../legacy-import-inventory.js';
 import { freshCutoverFingerprints } from '../../../../legacy-import-cutover.js';
@@ -194,6 +195,7 @@ interface Opened {
   readonly pkg: NxpkgPackage;
 }
 
+@ScopeBound()
 export class NxpkgMigrationAdapters
   implements PackageVerifier, MigrationRunner, FreshTargetGuard, HistoryIngestPort
 {

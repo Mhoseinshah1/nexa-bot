@@ -1,9 +1,16 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { API_PREFIX, AUTH_ROUTES } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { adminLoginThrottle } from '../../apps/api/src/infrastructure/persistence/schema';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * Client IP behind a reverse proxy, over real HTTP.

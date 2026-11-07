@@ -25,6 +25,7 @@ import type {
   CommercialActionRecord,
   CommercialActionRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Commercial actions, in PostgreSQL.
@@ -33,6 +34,7 @@ import type {
  * through `nexa_reject_mutation`, and a method that tried would be a method whose only
  * outcome is an exception from a trigger. What was bought is what was bought.
  */
+@ScopeBound()
 export class DrizzleCommercialActionRepository implements CommercialActionRepository {
   constructor(private readonly db: Database) {}
 

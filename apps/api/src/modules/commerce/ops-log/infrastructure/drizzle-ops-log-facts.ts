@@ -24,6 +24,7 @@ import type {
   ServiceFact,
   TicketFact,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = Record<string, unknown>;
 
@@ -55,6 +56,7 @@ const list = (values: readonly string[]): ReturnType<typeof sql> =>
  * is derived from.
  * Every query names the tenant; an id of another tenant's row answers null.
  */
+@ScopeBound()
 export class DrizzleOpsLogFacts implements OpsLogFacts {
   constructor(private readonly db: Database) {}
 

@@ -12,11 +12,13 @@ import {
 } from '../application/wallet-history.step.js';
 import { MIRZA_SOURCE, type PlannedRepository } from '../application/materialize-support.js';
 import type { MaterializeContext } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Rows per INSERT: 14 parameters a row, so 4 000 rows stay under PostgreSQL's 65 535. */
 const CHUNK = 4000;
 
 /** `wallet_history_imports`: Mirza's wallet log beside the ledger, never part of it. */
+@ScopeBound()
 export class DrizzleWalletHistoryRepository implements PlannedRepository<WalletHistoryWrite> {
   constructor(
     private readonly db: Database,

@@ -31,6 +31,7 @@ import type {
   ServiceLocationRecord,
   ServiceLocationRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The operator's locations and the customers' change requests, in PostgreSQL (WP-A6).
@@ -44,6 +45,7 @@ import type {
  */
 export const SERVICE_LOCATION_WRITE_LOCK_CLASS = 0x4c43;
 
+@ScopeBound()
 export class DrizzleServiceLocationRepository implements ServiceLocationRepository {
   constructor(private readonly db: Database) {}
 
@@ -221,6 +223,7 @@ export class DrizzleServiceLocationRepository implements ServiceLocationReposito
   }
 }
 
+@ScopeBound()
 export class DrizzleLocationChangeRepository implements LocationChangeRepository {
   constructor(private readonly db: Database) {}
 

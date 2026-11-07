@@ -11,6 +11,7 @@ import {
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { resellerMinimumValues } from '../../resellers/infrastructure/drizzle-reseller-minimum-facts.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * WP-A9: what the three non-service reminders render, read at send time from their subject.
@@ -24,6 +25,7 @@ import { resellerMinimumValues } from '../../resellers/infrastructure/drizzle-re
  * `null` means the subject is gone, and the dispatcher then sends nothing — a reminder
  * with an empty reference or a missing amount is worse than silence.
  */
+@ScopeBound()
 export class DrizzleCustomerReminderFactsReader {
   constructor(private readonly db: Database) {}
 

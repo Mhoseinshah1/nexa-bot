@@ -6,7 +6,7 @@ import {
   type BotInstanceId,
   type TenantContext,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { TelegramCustomerMessenger } from '../../apps/api/src/modules/commerce/messaging/infrastructure/telegram-customer-messenger';
 import { TelegramBroadcastTransport } from '../../apps/api/src/modules/commerce/broadcasts/infrastructure/telegram-broadcast.transport';
@@ -17,7 +17,7 @@ import {
   perBotWebhookSecret,
   perBotWebhookSecretFingerprint,
 } from '../../apps/api/src/modules/platform/tenancy/application/webhook-secret';
-import { migrateOnce, resetDatabase, SEED_IDS, tenantA, testConfig } from './harness';
+import { createApiApp, migrateOnce, resetDatabase, SEED_IDS, tenantA, testConfig } from './harness';
 
 /**
  * Roadmap D1–D3 (Telegram robustness): every send uses the RIGHT bot, and a send whose

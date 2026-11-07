@@ -18,6 +18,7 @@ import type {
   StoredMainMenuLayout,
   StoredMainMenuRevision,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
@@ -90,6 +91,7 @@ function encode(value: unknown): SQL {
  * version AND the published revision. Zero rows is a conflict the caller reports; a lock the
  * caller holds is a courtesy, the predicate is the rule.
  */
+@ScopeBound()
 export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderRepository {
   constructor(private readonly db: Database) {}
 

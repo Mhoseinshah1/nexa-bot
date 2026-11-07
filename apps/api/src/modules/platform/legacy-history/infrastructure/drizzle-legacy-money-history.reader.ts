@@ -17,6 +17,7 @@ import type {
   CustomerMoneyFacts,
   LegacyMoneyHistoryReader,
 } from '../application/legacy-money-history.service.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Mirza `.nxpkg` importer — the money history's aggregates, READ ONLY.
@@ -49,6 +50,7 @@ const big = (value: unknown): bigint => BigInt(String(value ?? '0'));
 const int = (value: unknown): number => Number(value ?? 0);
 const str = (value: unknown): string | null => (typeof value === 'string' ? value : null);
 
+@ScopeBound()
 export class DrizzleLegacyMoneyHistoryReader implements LegacyMoneyHistoryReader {
   constructor(private readonly db: Pick<Database, 'transaction'>) {}
 

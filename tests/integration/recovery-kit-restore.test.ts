@@ -5,7 +5,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PLATFORM_ERROR_CODES, type ActorContext } from '@nexa/contracts';
-import { createContainer, type Container } from '../../apps/api/src/container';
+import { type Container } from '../../apps/api/src/container';
 import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { readArchiveHeader } from '../../apps/api/src/modules/platform/backup/infrastructure/archive';
@@ -16,7 +16,7 @@ import {
 } from '../../apps/api/src/infrastructure/crypto/recovery-kit';
 import { wrapInstallationKey } from '../../apps/api/src/infrastructure/crypto/installation-keyring';
 import { PgCandidateKeyStore } from '../../apps/api/src/modules/platform/recovery/infrastructure/installation-key-adapters';
-import { adminActorFor, createAdmin, tenantA, testConfig } from './harness';
+import { createTestContainer, adminActorFor, createAdmin, tenantA, testConfig } from './harness';
 
 /**
  * Bare-metal recovery with a Recovery Kit, end to end, against a real
@@ -101,7 +101,7 @@ describe('restoring another installation’s backup with its Recovery Kit', () =
     const workRoot = await mkdtemp(join(tmpdir(), 'nexa-kit-backups-'));
     const recoveryRoot = await mkdtemp(join(tmpdir(), 'nexa-kit-recovery-'));
     roots.push(workRoot, recoveryRoot);
-    const container = createContainer(
+    const container = createTestContainer(
       testConfig({
         DATABASE_URL: url.toString(),
         BACKUP_WORK_DIR: workRoot,
@@ -332,7 +332,7 @@ describe('restoring another installation’s backup with its Recovery Kit', () =
     // Rotate: same database, a container whose ACTIVE key is kek-a.
     const url = new URL(testConfig().DATABASE_URL);
     url.pathname = `/${a.database}`;
-    const rotated = createContainer(
+    const rotated = createTestContainer(
       testConfig({
         DATABASE_URL: url.toString(),
         BACKUP_WORK_DIR: a.workRoot,

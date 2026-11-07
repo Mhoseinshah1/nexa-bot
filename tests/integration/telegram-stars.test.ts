@@ -21,7 +21,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository';
@@ -31,6 +31,7 @@ import {
 } from '../../apps/api/src/modules/commerce/payments/application/telegram-stars-payment.service';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

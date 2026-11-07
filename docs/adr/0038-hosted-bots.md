@@ -83,15 +83,28 @@ Creating is refused unless `HOSTED_BOTS_CREATE_ENABLED` is on AND, in any NODE_E
 The marker is a code constant (`null` today); PR-5 sets it once RLS (PR-1) and the isolation proof
 (PR-5) are merged, editing `tests/unit/hosting-create-gate.test.ts` in the same commit.
 
-### Cross-tenant work: one port, for the RLS merge
+### Cross-tenant work: one port, on the RLS system path
 
 Every read or write the panel makes in another tenant's rows goes through
 `HostedTenantSystemPath` (`DrizzleHostedTenantSystemPath`), each method taking a `SystemContext`
 whose reason is `hosting.<operation>`: the directory rows, customer counts, owner and bot
 usernames, provisioning a hosted tenant's roles and first owner, its tenant status, closing it on a
-purge, the purge preview. At the merge with ADR-0037 these are what route through the system path;
-`provision` and `closeForPurge` write hosted-tenant rows (admins, roles, admin_sessions,
-bot_instances) inside the owner's transaction and need the system path for that statement span.
+purge, the purge preview. Each runs on the ADR-0037 system path under its own literal reason
+(`hosting: …`, pinned in `tests/unit/system-path-allowlist.ts`): `withSystemScopeIn` on the owner's
+transaction when there is one — `provision` and `closeForPurge` write hosted-tenant rows (tenants,
+admins, roles, admin_sessions, bot_instances) inside it, and row-level security would otherwise
+confine them to the installation tenant — and `withSystemScope` on the pool for the list's facts
+and the purge preview. The installation-wide last backup time is read the same way. The panel's own
+tables (`hosted_bots`, `hosting_sessions`, `hosting_totp_factors`, `hosting_recovery_codes`) carry
+the installation tenant's `tenant_id`, so the discovered tenant policy and the default grants cover
+them; `tests/integration/hosting-panel.test.ts` runs as `nexa_app`.
+
+A HOSTED tenant is never the role's cached installation tenant: every role resolves `findPrimary()`
+(kind PRIMARY) at boot, and the fail-closed guard (PR #411) never re-resolves on a hosted tenant's
+behalf; a role that had recorded one as HOSTED and saw it vanish stops its scope and alerts the
+owner. The session's permission list drops `hosting.manage` for anyone but the installation
+tenant's `owner`, so the «میزبانی‌ها» link is not drawn in a hosted bot's Web Admin (chrome only;
+`HostingOwnerGuard` refuses the routes).
 
 ### «ورود به پنل» (enter) — designed for 6B, stubbed now
 

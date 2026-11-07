@@ -148,6 +148,11 @@ export class ServicesController {
       },
     });
     // Who each service is for, as Telegram knows them — one read for the page (spec §10).
+    // Phase 6A D0: counted toward the owner's bulk-read alert; never fails the read.
+    await this.container.ownerAlerts.rowsRead(scope, actor, {
+      resource: 'services',
+      rows: result.items.length,
+    });
     const identities = await this.container.serviceAdmin.customerIdentities(
       scope,
       actor,

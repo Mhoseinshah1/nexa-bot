@@ -15,6 +15,7 @@ import type {
   ServiceRefundPushRecord,
   ServiceRefundPushRepository,
 } from '../application/service-refund-push-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof serviceRefundRequestPushes.$inferSelect;
 
@@ -46,6 +47,7 @@ function toRecord(row: Row): ServiceRefundPushRecord {
  * lease, a send is stamped before it leaves, and an outcome is recorded only on a row still
  * PENDING — so a row the reaper has already made UNKNOWN is never re-opened by a straggler.
  */
+@ScopeBound()
 export class DrizzleServiceRefundPushRepository implements ServiceRefundPushRepository {
   constructor(private readonly db: Database) {}
 

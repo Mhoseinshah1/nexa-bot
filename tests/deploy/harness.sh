@@ -769,6 +769,13 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
         exit 0
         ;;
       ps)
+        # `ps_hang`: a daemon that stops answering. `exec` so the sleeper IS the process
+        # the caller's `timeout` signals; a child left behind would outlive the test.
+        # Only the readiness poll (`ps --all --format json`): the edge check inside `up`
+        # also calls `ps`, and a test of the WAIT must get past it to reach the wait.
+        case "$*" in
+          *'--all'*) [ "$(read_state ps_hang 0)" = "0" ] || exec sleep 600 ;;
+        esac
         # A `case` rather than `printf | grep -q`: the pipeline form takes the
         # WRONG BRANCH if printf is killed by SIGPIPE when grep matches early,
         # which would make the fake answer with the table format where JSON was
@@ -948,6 +955,7 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
       # release does" is expressible. With one global value the back-out could
       # never succeed, and the branch that reports it had no coverage.
       up)
+        [ "$(read_state up_hang 0)" = "0" ] || exec sleep 600
         _up_status="$(read_state "up_exit_${NEXA_IMAGE##*@}" "$(read_state up_exit 0)")"
         # A forced recreation of JUST the edge, which is what botctl falls back
         # to when `up -d` left the container alone.
@@ -977,6 +985,27 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
         # installer's own `owner_state` — the pipeline included — is what the
         # tests exercise.
         case "$*" in
+          *'customers-prune.cli.js'*)
+            # `botctl customers prune-empty`: the listing prints a Persian line carrying the
+            # count (`prune_count`); `list --count` prints just the number; `apply` is recorded
+            # in the docker log, whose argv the test reads, and may be made to fail.
+            case "$*" in
+              *' list --count'*) printf '%s\n' "$(read_state prune_count 3)"; exit "$(read_state prune_list_exit 0)" ;;
+              *' list'*)
+                printf 'مشتریان بدون هیچ وابستگی: %s مورد\n' "$(read_state prune_count 3)"
+                exit "$(read_state prune_list_exit 0)"
+                ;;
+              *' apply '*) exit "$(read_state prune_apply_exit 0)" ;;
+            esac
+            exit 0
+            ;;
+          *'admin-password-reset.cli.js'*)
+            # `botctl admin reset-password`: what the one-off container received on STDIN.
+            # Argv is in the docker log, which a test greps for the password to prove it
+            # is not there; the stdin is recorded here so the test can prove it IS here.
+            cat >"${FAKE_DIR}/password_stdin"
+            exit "$(read_state password_cli_exit 0)"
+            ;;
           *'cutover-rehearse.cli.js'*)
             # `botctl cutover rehearse`: what the one-off container received. The secret is
             # recorded from the ENVIRONMENT (argv is in the docker log, which a test reads
@@ -1071,6 +1100,14 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
         # v0.9.7: the one SELECT botctl makes for the backup CPU setting. Empty is
         # "nothing stored"; `backup_cpu_query_fails` is a database that did not answer.
         case "$*" in
+          # ADR-0037: the application role's SQL arrives on stdin (it carries the
+          # password, which must never be an argument). Kept for the assertions;
+          # `app_role_fails` is a database that refused it.
+          *ON_ERROR_STOP=1*)
+            cat >"${FAKE_DIR}/app_role_sql"
+            [ "$(read_state app_role_fails 0)" != 1 ] || exit 1
+            exit 0
+            ;;
           *backup.cpu_limit_percent*)
             [ "$(read_state backup_cpu_query_fails 0)" != 1 ] || exit 1
             printf '%s\n' "$(read_state backup_cpu_percent '')"
@@ -1101,7 +1138,12 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
       # `compose restart SERVICE...` (`botctl restart background`): restarts what is
       # running, from the image it was created from. `restart_exit` models a refusal.
       restart) exit "$(read_state restart_exit 0)" ;;
-      logs) exit 0 ;;
+      # `logs_<service>` holds what `compose logs <service>` prints, when a test sets it.
+      logs)
+        for _arg in "$@"; do _svc="$_arg"; done
+        cat "${FAKE_DIR}/logs_${_svc}" 2>/dev/null
+        exit 0
+        ;;
       *) exit 0 ;;
     esac
     ;;

@@ -3,6 +3,7 @@ import { money, type CurrencyCode, type TenantContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { RecipientFacts, RecipientFactsReader } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * What a broadcast's placeholders are filled from, read at send time: the recipient's own
@@ -22,6 +23,7 @@ export interface RecipientServiceCounts {
   ): Promise<{ readonly listed: number; readonly serving: number }>;
 }
 
+@ScopeBound()
 export class DrizzleRecipientFactsReader implements RecipientFactsReader {
   constructor(
     private readonly db: Database,

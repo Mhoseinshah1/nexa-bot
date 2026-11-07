@@ -30,6 +30,7 @@ import { provisioningOperations, services } from '../../../../infrastructure/per
 import { redactStoredText } from '../../../../infrastructure/redaction.js';
 import type { OperationDraft, OperationRecord, OperationRepository } from '../application/ports.js';
 import { BACKOFF_BASE_MS, RECONCILE_ROUNDS } from '../application/provision-executor.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Local alias so the predicate below reads as the rule rather than as a constant. */
 const MAX_ATTEMPTS = OPERATION_MAX_ATTEMPTS;
@@ -134,6 +135,7 @@ function toRecord(row: Row): OperationRecord {
  * written out as a WHERE clause. Two replicas are the normal case on every rolling
  * update, and the correctness does not depend on there being one.
  */
+@ScopeBound()
 export class DrizzleOperationRepository implements OperationRepository {
   constructor(private readonly db: Database) {}
 

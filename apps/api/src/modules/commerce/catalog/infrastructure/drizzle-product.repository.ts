@@ -43,6 +43,7 @@ import type {
   ProductRepository,
   ProductSearch,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Products, in PostgreSQL.
@@ -117,6 +118,7 @@ function viewClause(view: ProductListView): SQL {
   return view === 'ARCHIVE' ? archivedClause() : sql`NOT ${archivedClause()}`;
 }
 
+@ScopeBound()
 export class DrizzleProductRepository implements ProductRepository {
   constructor(private readonly db: Database) {}
 
@@ -788,6 +790,7 @@ function toRecord(row: typeof products.$inferSelect): ProductRecord {
  * whether such a product sells, and conflating "not yours" with "not usable right now"
  * here would give an operator a not-found for a panel they are looking straight at.
  */
+@ScopeBound()
 export class DrizzlePanelDirectory implements PanelDirectory {
   constructor(private readonly db: Database) {}
 
@@ -815,6 +818,7 @@ export class DrizzlePanelDirectory implements PanelDirectory {
  * database, and a row filtered afterwards has already been handed to code that must then
  * remember to throw it away.
  */
+@ScopeBound()
 export class DrizzleProductCategoryRepository implements ProductCategoryRepository {
   constructor(private readonly db: Database) {}
 

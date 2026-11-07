@@ -254,6 +254,48 @@ export interface BackupArchivePart {
   readonly filename: string;
 }
 
+/**
+ * Phase 6A D0: the off-site copy of a VERIFIED archive, in S3-compatible object storage.
+ *
+ * Write-only by construction: the port has no list, read or delete, so nothing in this
+ * installation can remove history it has sent, and a compromised server holding these
+ * credentials cannot either once the bucket policy in `docs/backup.md` is in place. With a
+ * retention set, every object is written under COMPLIANCE object lock until the retain-until
+ * instant. Never throws: every way an upload can fail is an outcome, and none of them touches
+ * the local archive.
+ */
+export type OffsiteUploadOutcome =
+  | { readonly kind: 'NOT_CONFIGURED' }
+  | {
+      readonly kind: 'UPLOADED';
+      readonly objects: number;
+      readonly bytes: number;
+      /** Null when no retention is configured (no object-lock headers were sent). */
+      readonly lockedUntil: Date | null;
+    }
+  | {
+      readonly kind: 'FAILED';
+      /** Objects that did land before the failure: they stay, locked if a lock was asked. */
+      readonly uploaded: number;
+      readonly expected: number;
+      /** Status code and the provider's error code only — never a URL, key or signature. */
+      readonly detail: string;
+    };
+
+export interface OffsiteBackupUploader {
+  readonly configured: boolean;
+  upload(input: {
+    readonly backupId: string;
+    readonly archivePath: string;
+    readonly parts: readonly BackupArchivePart[];
+    /** Written beside the parts as `index.json`: ids, sizes and digests, never a secret. */
+    readonly index: Readonly<Record<string, unknown>>;
+    readonly now: Date;
+  }): Promise<OffsiteUploadOutcome>;
+  /** One small object under `<prefix>offsite-test/`, locked for one day when a lock is set. */
+  testUpload(now: Date): Promise<OffsiteUploadOutcome>;
+}
+
 /** Splits an archive into parts. One pass over the file; see `archive-parts.ts`. */
 export interface BackupPartPlanner {
   plan(input: {

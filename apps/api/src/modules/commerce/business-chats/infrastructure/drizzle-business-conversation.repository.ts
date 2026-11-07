@@ -57,6 +57,7 @@ import type {
   ConversationTransition,
 } from '../application/ports.js';
 import type { BusinessPhotoReference } from '../domain/telegram-business.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * TB2 persistence: conversations, the bounded transcript and the outbound lane, plus the one
@@ -155,6 +156,7 @@ function buttonsOf(value: unknown): BusinessOutboundButtons | null {
 
 const PREVIEW_CHARS = 120;
 
+@ScopeBound()
 export class DrizzleBusinessConversationRepository implements BusinessConversationRepository {
   constructor(private readonly db: Database) {}
 
@@ -474,6 +476,7 @@ export class DrizzleBusinessConversationRepository implements BusinessConversati
   }
 }
 
+@ScopeBound()
 export class DrizzleBusinessMessageRepository implements BusinessMessageRepository {
   constructor(private readonly db: Database) {}
 
@@ -713,6 +716,7 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
   }
 }
 
+@ScopeBound()
 export class DrizzleBusinessOutboundRepository implements BusinessOutboundRepository {
   constructor(private readonly db: Database) {}
 
@@ -1190,6 +1194,7 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
 }
 
 /** TB7 — one row per handoff, and the AI's operator-facing note. */
+@ScopeBound()
 export class DrizzleBusinessEscalationRepository implements BusinessEscalationRepository {
   constructor(private readonly db: Database) {}
 
@@ -1304,6 +1309,7 @@ export class DrizzleBusinessEscalationRepository implements BusinessEscalationRe
   }
 }
 
+@ScopeBound()
 export class DrizzleBusinessCustomerLookup implements BusinessCustomerLookup {
   constructor(private readonly db: Database) {}
 

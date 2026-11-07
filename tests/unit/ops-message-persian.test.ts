@@ -66,6 +66,8 @@ describe('operational messages read in Persian', () => {
       code.startsWith('capacity.') ||
       // Phase 6A PR-3: the hosted-bot expiry sweep writes its Persian sentence at the source.
       code === 'hosting.bot_expired' ||
+      // PR #411: the installation tenant guard writes its Persian sentence at the source.
+      code === 'tenancy.cached_tenant_vanished' ||
       code.startsWith('panel.health.') ||
       code === 'telegram.customer_send_ok' ||
       code === 'telegram.customer_send_failed' ||

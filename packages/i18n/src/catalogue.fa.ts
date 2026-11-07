@@ -1357,6 +1357,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.route_name_tonpays': 'درگاه پرداخت تون پی وبسایت',
   'bot.payment.route_name_tonpays_telegram': 'درگاه پرداخت تون پی تلگرام',
   'bot.payment.route_name_nowpayments': 'پرداخت با ارز دیجیتال',
+  'bot.payment.tonpays_bot_pay_button': '💳 پرداخت در ربات تون‌پیز',
   'bot.payment.nowpayments_pay_button': '💳 پرداخت با ارز دیجیتال',
   'bot.payment.nowpayments_in_review':
     '🕓 پرداخت ارز دیجیتال شما دریافت شده و در انتظار تأیید شبکه است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} پایان مهلت تأیید: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید نهایی درگاه در همین پیام نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',

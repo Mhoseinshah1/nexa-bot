@@ -7,6 +7,7 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import { withinTransaction } from '../transaction-boundary.js';
+import { withDatabaseScope } from './database-scope.js';
 import { assertInstallationWritable, type InstallationWriteGate } from './write-gate.js';
 import type { Database, Executor } from './database.js';
 
@@ -16,12 +17,12 @@ import type { Database, Executor } from './database.js';
  * Domain changes, the audit row and the outbox rows commit together or not at
  * all. Every business write runs inside one of these.
  *
- * `withTenant(tenantId, fn)` is deliberately shaped the way Postgres row-level
- * security would need it — a transaction with the tenant bound for its whole
- * duration. Phase 0 enforces tenant scoping in the repository layer only
- * (see docs/adr/0004-tenant-isolation.md); if RLS is adopted later, it becomes
- * one `SET LOCAL app.current_tenant_id` inside this method rather than a sweep
- * over every read in the codebase.
+ * Row-level security (ADR-0037, superseding ADR-0004): every transaction opened
+ * here is bound to its scope for its whole duration — a tenant's id, or the
+ * system role with the system scope's reason — and so is every bare-pool read
+ * made while `fn` runs (`withDatabaseScope`, `database-scope.ts`). The binding is
+ * applied to the connection when it is checked out, before `BEGIN`, so the
+ * transaction's first statement already runs under it.
  */
 
 export interface TransactionScope {
@@ -49,29 +50,31 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
     // enforced in none, and the outbox relay runs consumers inside its claim
     // transaction by design.
     return withinTransaction(transactionLabelFor(scope), () =>
-      this.db.transaction(async (tx) => {
-        /*
-         * THE QUIESCE GATE, and this is the only place it could go.
-         *
-         * ADR-0028 § 5. Every durable write in this codebase opens its
-         * transaction here, so a recovery that has shut the installation is
-         * enforced by construction rather than by ten call sites remembering to
-         * ask. `CLAUDE.md` records what the alternative costs: panels was the one
-         * module that skipped the scope-activity check, and a tenant an operator
-         * had stopped was given new panels and a background monitor.
-         *
-         * INSIDE the transaction, as its first statement, for the same reason
-         * `runAuthorizedMutation` re-checks the permission here: nothing this
-         * transaction will commit has happened yet, so a quiesce that committed
-         * before this read cannot be overtaken.
-         *
-         * `runSnapshot` below is deliberately NOT gated. It is the
-         * consistent-READ path, and an operator supervising a recovery is
-         * reading.
-         */
-        await assertInstallationWritable(this.gate, scope, { tx, scope });
-        return fn({ tx, scope });
-      }),
+      withDatabaseScope(scope, () =>
+        this.db.transaction(async (tx) => {
+          /*
+           * THE QUIESCE GATE, and this is the only place it could go.
+           *
+           * ADR-0028 § 5. Every durable write in this codebase opens its
+           * transaction here, so a recovery that has shut the installation is
+           * enforced by construction rather than by ten call sites remembering to
+           * ask. `CLAUDE.md` records what the alternative costs: panels was the one
+           * module that skipped the scope-activity check, and a tenant an operator
+           * had stopped was given new panels and a background monitor.
+           *
+           * INSIDE the transaction, as its first statement, for the same reason
+           * `runAuthorizedMutation` re-checks the permission here: nothing this
+           * transaction will commit has happened yet, so a quiesce that committed
+           * before this read cannot be overtaken.
+           *
+           * `runSnapshot` below is deliberately NOT gated. It is the
+           * consistent-READ path, and an operator supervising a recovery is
+           * reading.
+           */
+          await assertInstallationWritable(this.gate, scope, { tx, scope });
+          return fn({ tx, scope });
+        }),
+      ),
     );
   }
 
@@ -91,9 +94,11 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
    */
   async runSnapshot<T>(scope: ScopeContext, fn: (tx: TransactionScope) => Promise<T>): Promise<T> {
     return withinTransaction(transactionLabelFor(scope), () =>
-      this.db.transaction(async (tx) => fn({ tx, scope }), {
-        isolationLevel: 'repeatable read',
-      }),
+      withDatabaseScope(scope, () =>
+        this.db.transaction(async (tx) => fn({ tx, scope }), {
+          isolationLevel: 'repeatable read',
+        }),
+      ),
     );
   }
 
@@ -130,20 +135,8 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
   }
 
   /**
-   * Convenience wrapper for the common tenant-scoped case.
-   *
-   * DELIBERATELY UNUSED, and not to be removed as dead code.
-   *
-   * This is the seam Postgres row-level security would attach to: a transaction
-   * with the tenant bound for its whole duration, so adopting RLS becomes one
-   * `SET LOCAL app.current_tenant_id` here rather than a sweep over every read
-   * in the codebase (ADR-0004). Callers use `run` with an explicit scope today
-   * because the repository layer enforces scoping; the value of this method is
-   * the shape it holds open, not the line it saves.
-   *
-   * A dead-code sweep will find it. It has been found and kept on purpose —
-   * twice now. If such a check is ever automated, exempt this method by name
-   * and cite ADR-0004 rather than deleting it and rediscovering why it existed.
+   * `run` for a tenant: the transaction, and every checkout `fn` makes, bound to
+   * that tenant for row-level security (ADR-0037). The seam ADR-0004 held open.
    */
   async withTenant<T>(tenant: TenantContext, fn: (tx: TransactionScope) => Promise<T>): Promise<T> {
     return this.run(tenant, fn);

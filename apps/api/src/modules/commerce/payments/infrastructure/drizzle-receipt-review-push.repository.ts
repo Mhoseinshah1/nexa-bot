@@ -17,6 +17,7 @@ import type {
   ReceiptReviewPushRecord,
   ReceiptReviewPushRepository,
 } from '../application/receipt-review-push-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof receiptReviewPushes.$inferSelect;
 
@@ -48,6 +49,7 @@ function toRecord(row: Row): ReceiptReviewPushRecord {
  * lease, a send is stamped before it leaves, and an outcome is recorded only on a row still
  * PENDING — so a row the reaper has already made UNKNOWN is never re-opened by a straggler.
  */
+@ScopeBound()
 export class DrizzleReceiptReviewPushRepository implements ReceiptReviewPushRepository {
   constructor(private readonly db: Database) {}
 

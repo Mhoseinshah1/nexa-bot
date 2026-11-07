@@ -20,6 +20,7 @@ import type {
   AdminAmountCaptureRecord,
   AdminAmountCaptureRepository,
 } from '../application/admin-amount-capture-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The advisory-lock CLASS for an administrator's amount capture. Its own class, distinct
@@ -32,6 +33,7 @@ export const ADMIN_AMOUNT_CAPTURE_LOCK_CLASS = 0x4143;
  * carries the tenant, and every close and every amount is conditional on the row still
  * being open, so two taps arriving together produce one change.
  */
+@ScopeBound()
 export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRepository {
   constructor(private readonly db: Database) {}
 

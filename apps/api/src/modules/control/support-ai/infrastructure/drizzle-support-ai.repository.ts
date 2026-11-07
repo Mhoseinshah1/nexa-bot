@@ -26,6 +26,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SupportAiCredential } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 function exec(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
@@ -64,6 +65,7 @@ export interface SupportAiCredentialState {
  * for the length of one provider call; `states` selects timestamps and breaker facts — never
  * the ciphertext — so no response builder can acquire a key. Nothing here logs.
  */
+@ScopeBound()
 export class DrizzleSupportAiCredentialStore {
   constructor(
     private readonly db: Database,
@@ -453,6 +455,7 @@ export interface StoredSupportAiConfig {
 }
 
 /** TB4 — the per-tenant configuration row (ADR-0021 optimistic versioning). */
+@ScopeBound()
 export class DrizzleSupportAiConfigRepository {
   constructor(private readonly db: Database) {}
 
@@ -553,6 +556,7 @@ export class DrizzleSupportAiConfigRepository {
 }
 
 /** TB4 — telemetry: one row per provider call, never a prompt or a response (ADR-0034 §9). */
+@ScopeBound()
 export class DrizzleSupportAiRunRecorder {
   constructor(private readonly db: Database) {}
 

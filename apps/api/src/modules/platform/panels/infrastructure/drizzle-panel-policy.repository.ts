@@ -4,6 +4,7 @@ import type { Database } from '../../../../infrastructure/persistence/database.j
 import { panelPolicies } from '../../../../infrastructure/persistence/schema.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelPolicyRepository, StoredPanelPolicy } from '../application/panel-policy.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * `panel_policies`, one row per configured panel (WP-A8).
@@ -12,6 +13,7 @@ import type { PanelPolicyRepository, StoredPanelPolicy } from '../application/pa
  * another tenant's panel unstorable, so a policy can only ever apply to the panel it
  * was written for.
  */
+@ScopeBound()
 export class DrizzlePanelPolicyRepository implements PanelPolicyRepository {
   constructor(private readonly db: Database) {}
 

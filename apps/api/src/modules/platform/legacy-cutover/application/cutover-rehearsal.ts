@@ -32,6 +32,12 @@ export const REHEARSAL_FORCED_SETTINGS = {
   TELEGRAM_WEBHOOK_ENABLED: 'false',
   BACKUP_TELEGRAM_BOT_TOKEN: '',
   BACKUP_TELEGRAM_CHAT_ID: '',
+  // Phase 6A D0: nor to the owner's off-site bucket. Empty is "off" (all five or none).
+  BACKUP_OFFSITE_ENDPOINT: '',
+  BACKUP_OFFSITE_REGION: '',
+  BACKUP_OFFSITE_BUCKET: '',
+  BACKUP_OFFSITE_ACCESS_KEY_ID: '',
+  BACKUP_OFFSITE_SECRET_ACCESS_KEY: '',
   BACKUP_SCHEDULE_ENABLED: 'false',
   PROVISIONER_ENABLED: 'false',
   PANEL_MONITOR_ENABLED: 'false',
@@ -49,6 +55,9 @@ export function rehearsalEnvironment(
     ...base,
     ...REHEARSAL_FORCED_SETTINGS,
     DATABASE_URL: input.databaseUrl,
+    // ADR-0037: never the live installation's application connection — it names the live
+    // database, and the rehearsal's is the scratch one above.
+    DATABASE_APP_URL: undefined,
     // R12 F2: the rehearsal's stand-in panels listen on THIS one-off container's edge
     // address (`standinAddress`), and the URL policy refuses the edge network by default.
     // The rehearsal is disposable and isolated, and its own stand-in is the one panel it
@@ -66,6 +75,7 @@ export interface RehearsalMessagingConfig {
   readonly TELEGRAM_WEBHOOK_ENABLED: boolean;
   readonly BACKUP_TELEGRAM_BOT_TOKEN: string;
   readonly BACKUP_TELEGRAM_CHAT_ID: string;
+  readonly BACKUP_OFFSITE_ENDPOINT: string;
   readonly BACKUP_SCHEDULE_ENABLED: boolean;
   readonly PROVISIONER_ENABLED: boolean;
   readonly PANEL_MONITOR_ENABLED: boolean;
@@ -78,6 +88,9 @@ export function messagingProblems(config: RehearsalMessagingConfig): string[] {
   if (config.TELEGRAM_WEBHOOK_ENABLED) problems.push('the Telegram webhook is on');
   if (config.BACKUP_TELEGRAM_BOT_TOKEN !== '' || config.BACKUP_TELEGRAM_CHAT_ID !== '') {
     problems.push('backup delivery to Telegram is configured');
+  }
+  if (config.BACKUP_OFFSITE_ENDPOINT !== '') {
+    problems.push('the off-site backup copy is configured');
   }
   if (config.BACKUP_SCHEDULE_ENABLED) problems.push('the backup schedule is on');
   if (config.PROVISIONER_ENABLED) problems.push('the provisioner is on');

@@ -15,14 +15,22 @@ import {
   type BotInstanceId,
   type TenantContext,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   TOKEN_REPLACEMENT_COMPLETED_CODE,
   TOKEN_REPLACEMENT_INCOMPLETE_CODE,
 } from '../../apps/api/src/modules/platform/tenancy/application/bot-management.service';
 import { startFakeTelegramBotApi, type FakeTelegramBotApi } from '../support/fake-telegram-bot-api';
-import { createAdmin, migrateOnce, resetDatabase, SEED_IDS, tenantA, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  SEED_IDS,
+  tenantA,
+  testConfig,
+} from './harness';
 import { perBotWebhookSecret } from '../../apps/api/src/modules/platform/tenancy/application/webhook-secret';
 
 /**

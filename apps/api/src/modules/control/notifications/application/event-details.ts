@@ -63,6 +63,15 @@ export const DETAIL_KEYS: readonly string[] = [
   'httpStatus',
   // v0.9.7: the legacy cleanup's before → after table sizes (MiB). Sizes only, never a value.
   'sizes',
+  // Phase 6A D0: the owner's security alerts — who, from where, what and how much. An admin
+  // username and a sign-in address, never a filter value or a row's content.
+  'adminUsername',
+  'clientIp',
+  'exportKind',
+  'readResource',
+  'rowCount',
+  'windowMinutes',
+  'format',
 ];
 
 /**

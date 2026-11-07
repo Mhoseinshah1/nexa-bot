@@ -18,6 +18,7 @@ import type { Database, Executor } from '../../../../infrastructure/persistence/
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SupportAnalyticsFacts, SupportAnalyticsWindow } from '../domain/support-analytics.js';
 import { SUPPORT_AI_DRAFT_SUPERSEDED_CODE } from './drizzle-support-ai-job.repository.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * TB10 — the support analytics, read (program §46–§47). Seven grouped statements, each
@@ -39,6 +40,7 @@ import { SUPPORT_AI_DRAFT_SUPERSEDED_CODE } from './drizzle-support-ai-job.repos
  */
 const SNAPSHOT = { isolationLevel: 'repeatable read', accessMode: 'read only' } as const;
 
+@ScopeBound()
 export class DrizzleSupportAnalyticsReader {
   constructor(private readonly db: Pick<Database, 'transaction'>) {}
 

@@ -25,6 +25,7 @@ import type {
   ServiceReminderSnapshot,
   ServiceReminderSnapshotReader,
 } from '../application/service-reminder.ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** What both candidate queries select, in the order they select it. */
 interface CandidateRow {
@@ -145,6 +146,7 @@ function toCandidate(row: CandidateRow): ServiceReminderCandidate {
  * builder it would be three nested `sql` fragments in a `where` and harder to read than
  * the statement itself.
  */
+@ScopeBound()
 export class DrizzleServiceReminderRepository implements ServiceReminderRepository {
   constructor(private readonly db: Database) {}
 
@@ -525,6 +527,7 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
  * transaction, moments before a network call. One object holding both would let a
  * future edit enqueue a reminder from inside the send loop.
  */
+@ScopeBound()
 export class DrizzleServiceReminderSnapshotReader implements ServiceReminderSnapshotReader {
   constructor(private readonly db: Database) {}
 

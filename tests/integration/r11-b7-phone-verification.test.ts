@@ -465,6 +465,39 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
     });
   });
 
+  describe('the TonPays payment-link choice', () => {
+    it('saves on TONPAYS, is kept when an update is silent, and is ignored on another route', async () => {
+      const gateways = f.ctx.container.paymentGateways;
+      expect(
+        (
+          await gateways.configure(tenantA, f.owner, {
+            idempotencyKey: 'cfg-link-web',
+            provider: 'TONPAYS',
+            config: { ...OPEN, tonpaysPaymentLink: 'WEB' },
+          })
+        ).tonpaysPaymentLink,
+      ).toBe('WEB');
+      expect(
+        (
+          await gateways.configure(tenantA, f.owner, {
+            idempotencyKey: 'cfg-link-silent',
+            provider: 'TONPAYS',
+            config: { ...OPEN, displayName: 'تون‌پیز' },
+          })
+        ).tonpaysPaymentLink,
+      ).toBe('WEB');
+      expect(
+        (
+          await gateways.configure(tenantA, f.owner, {
+            idempotencyKey: 'cfg-link-transfer',
+            provider: 'MANUAL_TRANSFER',
+            config: { ...OPEN, tonpaysPaymentLink: 'WEB' },
+          })
+        ).tonpaysPaymentLink,
+      ).toBe('TELEGRAM_BOT');
+    });
+  });
+
   // -------------------------------------------------------------------------------------
   // Privacy
   // -------------------------------------------------------------------------------------

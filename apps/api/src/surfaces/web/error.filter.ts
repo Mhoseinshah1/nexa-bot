@@ -39,6 +39,10 @@ export class DomainErrorFilter implements ExceptionFilter {
       // the stack repeats, and renders a non-Error throw as what it is rather
       // than `[object Object]`.
       this.container.logger.error({ err: exception }, 'Unhandled failure');
+      // A write that failed on a tenant foreign key means this process's cached tenant no
+      // longer exists (the database was replaced by a restore): the guard re-resolves it.
+      // It never retries the failed request; the operator's next attempt uses the new one.
+      this.container.installationTenantGuard.onWriteError(exception);
       // FIX-05: and to the operations log. Not awaited — the answer to the client never
       // waits on it — and it never throws (`recordQuietly`).
       void this.reportUnhandled(exception, host, status, correlationId);

@@ -31,6 +31,7 @@ import type {
   SupportAiToolReader,
   SupportAiToolSettings,
 } from '../application/support-ai-tools.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The services «سرویس‌های من» offers a link for (`ProvisioningService.isDeliverable`). */
 const DELIVERABLE_STATES = ['ACTIVE', 'SUSPENDED', 'EXPIRED'] as const;
@@ -41,6 +42,7 @@ const CHECK_PAYMENTS = 5;
  * columns and puts the tenant AND the conversation's customer in its WHERE: a service or payment
  * of anybody else is unreachable from here by construction (cross-cutting item 1).
  */
+@ScopeBound()
 export class DrizzleSupportAiToolReader implements SupportAiToolReader {
   constructor(
     private readonly deps: {

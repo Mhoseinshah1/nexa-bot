@@ -21,6 +21,10 @@ import {
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
+  ScopeBound,
+  withSystemScope,
+} from '../../../../infrastructure/persistence/database-scope.js';
+import {
   backupRuns,
   hostedBots,
   hostingRecoveryCodes,
@@ -81,6 +85,7 @@ function toFactor(row: FactorRow): HostingFactorRow {
  * method is tenant-scoped through `requireTenantId`; no method here reads a hosted tenant's
  * own rows (that is `DrizzleHostedTenantSystemPath`).
  */
+@ScopeBound()
 export class DrizzleHostingRepository implements HostingRepository {
   constructor(private readonly db: Database) {}
 
@@ -505,14 +510,19 @@ export class DrizzleHostingRepository implements HostingRepository {
     return out;
   }
 
-  async lastSucceededBackupAt(): Promise<Date | null> {
+  async lastSucceededBackupAt(scope: ScopeContext): Promise<Date | null> {
     // `backup_runs` is installation-wide (one dump holds every tenant); it has no tenant.
-    const [row] = await this.db
-      .select({ finishedAt: backupRuns.finishedAt })
-      .from(backupRuns)
-      .where(and(eq(backupRuns.state, 'SUCCEEDED'), isNotNull(backupRuns.finishedAt)))
-      .orderBy(desc(backupRuns.finishedAt))
-      .limit(1);
+    // The owner's scope is checked, then the read is the installation's (ADR-0037), as
+    // `DrizzleBackupRunRepository.lastSucceededAt` reads it.
+    requireTenantId(scope);
+    const [row] = await withSystemScope('hosting: last successful installation backup', () =>
+      this.db
+        .select({ finishedAt: backupRuns.finishedAt })
+        .from(backupRuns)
+        .where(and(eq(backupRuns.state, 'SUCCEEDED'), isNotNull(backupRuns.finishedAt)))
+        .orderBy(desc(backupRuns.finishedAt))
+        .limit(1),
+    );
     return row?.finishedAt ?? null;
   }
 }

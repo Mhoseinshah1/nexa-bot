@@ -37,6 +37,7 @@ import {
 } from '../application/demotions.js';
 import type { FreshTargetCheck, FreshTargetOptions } from '../application/fresh-target.js';
 import { freshTargetCounts } from './nxpkg-fresh-target.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Migration P7 — NEXA's side of the importer: batched lookups and tenant aggregates the
@@ -63,6 +64,7 @@ function list(values: readonly string[]): SQL {
   );
 }
 
+@ScopeBound()
 export class DrizzleLegacyImporterRepository
   implements
     LegacyImporterDestination,

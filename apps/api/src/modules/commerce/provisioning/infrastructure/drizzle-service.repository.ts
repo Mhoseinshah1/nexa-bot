@@ -61,6 +61,7 @@ import type {
   ServiceRepository,
   ServiceSearch,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The advisory-lock CLASS for `lockLifecycle` ("SL"): a refund request's deletion and a paid
@@ -222,6 +223,7 @@ const NO_PAID_ACTION_WAITING = sql`NOT EXISTS (
      AND waiting.state IN ('PLANNED', 'IN_FLIGHT')
 )`;
 
+@ScopeBound()
 export class DrizzleServiceRepository implements ServiceRepository {
   constructor(private readonly db: Database) {}
 

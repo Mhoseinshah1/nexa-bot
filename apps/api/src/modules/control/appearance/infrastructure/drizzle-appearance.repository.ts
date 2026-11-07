@@ -28,6 +28,7 @@ import type {
   AppearanceRepository,
   StoredAppearanceSlot,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
@@ -90,6 +91,7 @@ function toBot(row: BotRow): AppearanceBotRecord {
  * fingerprint ever leaves this repository — the rule `DrizzleBotManagementRepository`
  * states for the same table.
  */
+@ScopeBound()
 export class DrizzleAppearanceRepository implements AppearanceRepository {
   constructor(private readonly db: Database) {}
 

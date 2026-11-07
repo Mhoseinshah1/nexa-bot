@@ -17,11 +17,12 @@ import {
   SESSION_COOKIE_NAME,
 } from '@nexa/contracts';
 import { money, type PanelId, type ProductId } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { AudienceFixtures } from './audience-fixtures';
 import {
+  createApiApp,
   createAdmin,
   migrateOnce,
   resetDatabase,

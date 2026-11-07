@@ -12,6 +12,7 @@ import type {
   OutboxDiagnostics,
   ProvisioningDiagnostics,
 } from '../application/diagnostics.service.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The diagnostics reads (WP16 D2). Each predicate is the one the sweep that owns the
@@ -34,6 +35,7 @@ import type {
  */
 const SNAPSHOT = { isolationLevel: 'repeatable read', accessMode: 'read only' } as const;
 
+@ScopeBound()
 export class DrizzleDiagnosticsReader implements DiagnosticsReader {
   constructor(private readonly db: Database) {}
 

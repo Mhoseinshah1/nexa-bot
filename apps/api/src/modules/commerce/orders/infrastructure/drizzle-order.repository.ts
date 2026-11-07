@@ -56,6 +56,7 @@ import type {
   OrderSearch,
   OrderTotalsRecord,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The payment states that keep an `AWAITING_PAYMENT` order OPEN past its deadline — ONE list,
@@ -92,6 +93,7 @@ function orderHasPaymentIn(states: readonly string[]): SQL {
  * returns another tenant's row and leaves the caller holding something it should never
  * have seen.
  */
+@ScopeBound()
 export class DrizzleOrderRepository implements OrderRepository {
   constructor(private readonly db: Database) {}
 

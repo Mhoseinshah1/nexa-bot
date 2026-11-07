@@ -7,6 +7,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { FeatureFlagRepository, StoredFeatureFlag } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof featureFlagStates.$inferSelect;
 
@@ -25,6 +26,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
 
+@ScopeBound()
 export class DrizzleFeatureFlagRepository implements FeatureFlagRepository {
   constructor(private readonly db: Database) {}
 

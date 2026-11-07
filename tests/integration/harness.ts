@@ -14,6 +14,7 @@ import { connectionIdentityOf } from '../../apps/api/src/modules/platform/panels
 import { DrizzlePanelRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
 import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { Redis } from 'ioredis';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import {
   createContainer,
   type Container,
@@ -23,7 +24,37 @@ import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config
 import type { AppConfig } from '../../apps/api/src/infrastructure/config/config.schema';
 import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
-import type { Database } from '../../apps/api/src/infrastructure/persistence/database';
+import {
+  createDatabase,
+  type Database,
+  type DatabaseHandle,
+} from '../../apps/api/src/infrastructure/persistence/database';
+import type { TenantId, TenantKind } from '@nexa/contracts';
+
+/**
+ * The kinds `seed` gives its tenants (PR #411). A role records its tenant's kind where it
+ * sets its scope (`resolveInstallationTenant` passes `primary.kind`), and the tenant guard
+ * fails closed on a vanished tenant whose kind it never recorded. A case that points the
+ * container at a SEEDED tenant without naming a kind gets that tenant's real kind here, the
+ * way a booted role would have it; any other id stays UNKNOWN, as in production. Without
+ * this, the guard's timer firing inside `resetDatabase` (the tenants are truncated, then
+ * re-seeded) saw an UNKNOWN tenant gone and took the exit path on every such tick.
+ * `installation-tenant-guard-rls.test.ts` checks this table against the seeded rows.
+ */
+export const SEEDED_TENANT_KINDS: Readonly<Record<string, TenantKind>> = {
+  [SEED_IDS.tenantA]: 'PRIMARY',
+  [SEED_IDS.tenantB]: 'RESELLER_BOT',
+  [SEED_IDS.tenantBReseller]: 'RESELLER_BOT',
+};
+
+/** `Container.setInstallationTenant` that records a seeded tenant's own kind when none is given. */
+function withSeededKinds(target: Container): Container['setInstallationTenant'] {
+  return (tenantId: TenantId | null, kind?: TenantKind | null) =>
+    target.setInstallationTenant(
+      tenantId,
+      kind === undefined && tenantId !== null ? SEEDED_TENANT_KINDS[tenantId] : kind,
+    );
+}
 
 /**
  * Integration tests run against a real PostgreSQL and a real Redis.
@@ -40,14 +71,41 @@ import type { Database } from '../../apps/api/src/infrastructure/persistence/dat
 
 export const TEST_KEK = randomBytes(32).toString('base64');
 
+/** The OWNER's URL: migrations, the per-test reset, fixtures and assertions. */
+export function testOwnerDatabaseUrl(): string {
+  return (
+    process.env.TEST_DATABASE_URL ??
+    process.env.DATABASE_URL ??
+    'postgres://nexa:nexa@127.0.0.1:5432/nexa_test'
+  );
+}
+
+/**
+ * The APPLICATION's URL for the same database, as `nexa_app` (ADR-0037).
+ *
+ * The suite's containers connect through it, so every statement the application makes
+ * in a test is bound by row-level security exactly as in production: a repository read
+ * that reached the pool without a bound tenant RAISES here instead of passing on an
+ * owner connection the policies never see. `TEST_DATABASE_APP_URL` overrides; the
+ * default is the owner's URL with the development credential `scripts/dev-services.sh`
+ * and CI create (`nexa_app` / `nexa_app`).
+ */
+export function testAppDatabaseUrl(ownerUrl: string = testOwnerDatabaseUrl()): string {
+  const explicit = process.env.TEST_DATABASE_APP_URL;
+  if (explicit !== undefined && explicit !== '') return explicit;
+  const url = new URL(ownerUrl);
+  url.username = 'nexa_app';
+  url.password = 'nexa_app';
+  return url.toString();
+}
+
 export function testConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): AppConfig {
+  const ownerUrl = overrides['DATABASE_URL'] ?? testOwnerDatabaseUrl();
   return loadConfig({
     NODE_ENV: 'development',
     LOG_LEVEL: 'error',
-    DATABASE_URL:
-      process.env.TEST_DATABASE_URL ??
-      process.env.DATABASE_URL ??
-      'postgres://nexa:nexa@127.0.0.1:5432/nexa_test',
+    DATABASE_URL: ownerUrl,
+    DATABASE_APP_URL: testAppDatabaseUrl(ownerUrl),
     REDIS_URL: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
     SECRETS_KEK: TEST_KEK,
     SECRETS_KEK_ID: 'test-1',
@@ -121,6 +179,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        notification_delivery_attempts, notification_released_claims, notifications,
        template_revisions, template_overrides, setting_values, feature_flag_states,
        admin_login_throttle, admin_sessions, admin_permission_overrides,
+       -- Phase 6A D0: the owner security alerts' remembered addresses and read windows.
+       admin_known_ips, admin_read_windows,
        -- Phase D2: the second factor, its backup codes and pending sign-ins.
        admin_totp_factors, admin_backup_codes, admin_login_challenges,
        admin_roles, role_permissions, roles, admins,
@@ -245,6 +305,8 @@ export function seededCategoryFor(scope: { readonly tenantId: unknown }): string
 
 export interface TestContext {
   readonly container: Container;
+  /** The application pool the container's wiring uses, as nexa_app (ADR-0037). */
+  readonly applicationDatabase: DatabaseHandle;
   reset(): Promise<void>;
   close(): Promise<void>;
 }
@@ -256,10 +318,21 @@ export async function createTestContext(
   const config = testConfig(overrides);
   await migrateOnce(config.DATABASE_URL);
 
-  const container = createContainer(config, 'worker', containerOptions);
+  const application = createContainer(config, 'worker', containerOptions);
+  /*
+   * Two handles on one database (ADR-0037). The container's own wiring — every
+   * repository, the unit of work — holds the APPLICATION pool, as nexa_app, so the code
+   * under test runs under row-level security. `container.database`, which the cases use
+   * to build fixtures and to read back what happened across tenants, is the OWNER's
+   * handle: a fixture is not application code, and an assertion that another tenant's
+   * row is untouched has to be able to see it.
+   */
+  const owner = createDatabase(config.DATABASE_URL, 4);
+  const container = withOwnerDatabase(application, owner);
 
   return {
     container,
+    applicationDatabase: application.database,
     async reset() {
       // In-memory container state has to be reset too, not just the tables.
       // `installationTenantId` is set by `resolveInstallationTenant` at a process
@@ -273,7 +346,84 @@ export async function createTestContext(
       await seed(container.database.db, container.cipher);
     },
     async close() {
-      await container.shutdown();
+      try {
+        await application.shutdown();
+      } finally {
+        await owner.close();
+      }
+    },
+  };
+}
+
+/**
+ * The container as a test sees it: `database` is the OWNER's handle, everything else is
+ * the container's own (ADR-0037). The wiring inside keeps the application pool, as
+ * nexa_app, so the code under test is bound by row-level security; the case's fixtures
+ * and its cross-tenant assertions are not application code and read as the owner.
+ */
+function withOwnerDatabase(application: Container, owner: DatabaseHandle): Container {
+  return new Proxy(application, {
+    get(target, property, receiver) {
+      if (property === 'database') return owner;
+      if (property === 'setInstallationTenant') return withSeededKinds(target);
+      return Reflect.get(target, property, receiver) as unknown;
+    },
+  });
+}
+
+/**
+ * `createContainer` for a test that builds a process root itself: the container as
+ * `main*.ts` builds it, as nexa_app, with the case's `container.database` on the owner
+ * (`withOwnerDatabase`), closed by `shutdown`.
+ */
+export function createTestContainer(
+  config: AppConfig,
+  role: Parameters<typeof createContainer>[1],
+  options?: ContainerOptions,
+): Container {
+  const application = createContainer(config, role, options);
+  const owner = createDatabase(config.DATABASE_URL, 4);
+  const shutdown = application.shutdown.bind(application);
+  return new Proxy(application, {
+    get(target, property, receiver) {
+      if (property === 'database') return owner;
+      if (property === 'setInstallationTenant') return withSeededKinds(target);
+      if (property === 'shutdown') {
+        return async (...args: Parameters<typeof shutdown>) => {
+          try {
+            return await shutdown(...args);
+          } finally {
+            await owner.close();
+          }
+        };
+      }
+      return Reflect.get(target, property, receiver) as unknown;
+    },
+  });
+}
+
+/**
+ * `createApiApp` for a test: the production application, as nexa_app, with the case's
+ * `container.database` on the owner (`withOwnerDatabase`).
+ */
+export async function createApiApp(config?: AppConfig): Promise<ApiApp> {
+  const resolved = config ?? testConfig();
+  // Imported when a case asks for the HTTP app, never at module load: the bootstrap pulls
+  // in the Nest module and its parameter decorators, and the rehearsal's panels helper —
+  // run by tsx outside the API's compiler settings — imports this file for its fixtures.
+  const { createApiApp: createProductionApiApp } = await import('../../apps/api/src/bootstrap');
+  const api = await createProductionApiApp(resolved);
+  const owner = createDatabase(resolved.DATABASE_URL, 4);
+  return {
+    app: api.app,
+    routes: api.routes,
+    container: withOwnerDatabase(api.container, owner),
+    async close() {
+      try {
+        await api.close();
+      } finally {
+        await owner.close();
+      }
     },
   };
 }

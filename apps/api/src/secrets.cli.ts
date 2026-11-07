@@ -454,7 +454,7 @@ async function rewrapInstallationKeys(
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const config = loadConfig();
-  const container = createContainer(config, 'worker');
+  const container = createContainer(config, 'worker', { connection: 'owner' });
 
   try {
     // The imported decrypt-only keys (ADR-0032), so a rewrap can read a secret a

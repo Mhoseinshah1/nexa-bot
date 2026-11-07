@@ -10,6 +10,7 @@ import type {
   DiscountCodeCaptureRecord,
   DiscountCodeCaptureRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Discount-code windows, in PostgreSQL (`docs/wp8-pricing-audit.md` P11).
@@ -22,6 +23,7 @@ import type {
  * SAME advisory lock, because the two windows answer one question — what does this
  * customer's next plain message mean — and must never both be open.
  */
+@ScopeBound()
 export class DrizzleDiscountCodeCaptureRepository implements DiscountCodeCaptureRepository {
   constructor(private readonly db: Database) {}
 

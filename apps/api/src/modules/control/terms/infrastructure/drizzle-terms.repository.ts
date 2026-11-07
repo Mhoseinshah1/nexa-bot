@@ -28,6 +28,7 @@ import {
   type TermsRepository,
   type TermsVersionRecord,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 const creator = alias(admins, 'terms_creator');
 const publisher = alias(admins, 'terms_publisher');
@@ -82,6 +83,7 @@ const ONE_DRAFT = 'terms_versions_one_draft_key';
  * Every query carries the tenant predicate, the id lookups included: an id is a UUID and
  * would find another tenant's row without it.
  */
+@ScopeBound()
 export class DrizzleTermsRepository implements TermsRepository {
   constructor(private readonly db: Database) {}
 

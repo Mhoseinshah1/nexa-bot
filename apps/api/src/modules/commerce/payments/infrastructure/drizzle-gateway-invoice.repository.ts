@@ -13,8 +13,13 @@ import type {
   PaymentId,
   SalesCurrencyCode,
   TenantContext,
+  TonPaysPaymentLink,
 } from '@nexa/contracts';
-import { PAYMENT_GATEWAY_DESCRIPTORS, PAYMENT_GATEWAY_PROVIDERS } from '@nexa/contracts';
+import {
+  DEFAULT_TONPAYS_PAYMENT_LINK,
+  PAYMENT_GATEWAY_DESCRIPTORS,
+  PAYMENT_GATEWAY_PROVIDERS,
+} from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -36,6 +41,7 @@ import type {
   GatewayInvoiceRecord,
   GatewayInvoiceRepository,
 } from '../application/gateway-invoice-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof gatewayInvoices.$inferSelect;
 
@@ -106,6 +112,8 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     callbackUrlSent: row.callbackUrlSent,
     invoiceUrl: row.invoiceUrl,
     webInvoiceUrl: row.webInvoiceUrl,
+    // Constrained by a CHECK built from the contract enum.
+    paymentLink: row.paymentLink as TonPaysPaymentLink,
     providerUnit: row.providerUnit as GatewayProviderUnit,
     sentAmount: row.sentAmount,
     conversionRateMinor: row.conversionRateMinor,
@@ -164,6 +172,7 @@ function cooldownUntil(policy: GatewayCardChangePolicy | null, now: Date): Date 
  * The external gateway's side of each payment attempt (WP11A). Every statement names the
  * tenant; none resolves a provider identifier globally.
  */
+@ScopeBound()
 export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository {
   constructor(private readonly db: Database) {}
 
@@ -185,6 +194,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly botInstanceId: string | null;
       readonly providerUserId?: string | null;
       readonly endpointBaseUrl?: string | null;
+      readonly paymentLink?: TonPaysPaymentLink;
       readonly now: Date;
     },
     tx: unknown,
@@ -200,6 +210,8 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         providerUserId: input.providerUserId ?? null,
         // Round 10 C1: the bridge this attempt is created against, frozen (written once).
         endpointBaseUrl: input.endpointBaseUrl ?? null,
+        // The route's TonPays link choice, frozen with the attempt.
+        paymentLink: input.paymentLink ?? DEFAULT_TONPAYS_PAYMENT_LINK,
         creationState: 'CREATING',
         providerUnit: input.providerUnit,
         sentAmount: input.sentAmount,
@@ -320,18 +332,16 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
      * tenants sharing one merchant account share its order namespace, and the partial unique
      * index `gateway_invoices_centralpay_order_id_key` is the same rule for a racing writer.
      * Existence only — nothing about the other attempt leaves this method.
+     *
+     * Through `nexa_gateway_order_id_taken` (0317), not a SELECT: this runs inside the
+     * paying tenant's transaction, where row-level security would hide every other
+     * tenant's invoice and the answer would quietly become "this tenant only"
+     * (ADR-0037). The function answers the one existence question as the owner.
      */
-    const [row] = await this.exec(tx)
-      .select({ one: sql<number>`1` })
-      .from(gatewayInvoices)
-      .where(
-        and(
-          eq(gatewayInvoices.provider, provider),
-          eq(gatewayInvoices.providerOrderId, providerOrderId),
-        ),
-      )
-      .limit(1);
-    return row !== undefined;
+    const result = await this.exec(tx).execute<{ taken: boolean }>(
+      sql`SELECT nexa_gateway_order_id_taken(${provider}, ${providerOrderId}) AS taken`,
+    );
+    return result.rows[0]?.taken === true;
   }
 
   async customerNumberFor(

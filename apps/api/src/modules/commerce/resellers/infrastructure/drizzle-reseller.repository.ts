@@ -55,6 +55,7 @@ import type {
   ResellerWrite,
   TierWrite,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The stored form of "every subject of this kind". */
 const EVERY_SUBJECT = '*';
@@ -130,6 +131,7 @@ function displayName(row: {
 }
 
 /** Tiers, grants, resellers and purchase terms, in PostgreSQL. Every query carries the tenant. */
+@ScopeBound()
 export class DrizzleResellerRepository implements ResellerRepository {
   constructor(private readonly db: Database) {}
 

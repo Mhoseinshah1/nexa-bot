@@ -26,12 +26,13 @@ import {
   type ServiceOperatorAction,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   validatePanelConnection,

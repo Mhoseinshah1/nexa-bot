@@ -15,6 +15,7 @@ import type {
   ClaimedCommandSync,
   CommandSyncStatusRecord,
 } from '../application/bot-command-sync-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
@@ -28,6 +29,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
  * an ACTIVE bot's token for outbound use. What is read from `bot_instances` is the status,
  * the username and `commands_revision`.
  */
+@ScopeBound()
 export class DrizzleBotCommandSyncRepository implements BotCommandSyncRepository {
   constructor(private readonly db: Database) {}
 

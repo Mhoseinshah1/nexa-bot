@@ -83,7 +83,7 @@ export function parseResetArgs(argv: readonly string[]): ResetArgs {
 async function main(): Promise<void> {
   const args = parseResetArgs(process.argv.slice(2));
   const config = loadConfig();
-  const container = createContainer(config, 'worker');
+  const container = createContainer(config, 'worker', { connection: 'owner' });
   try {
     const tenant =
       args.tenantSlug === null
