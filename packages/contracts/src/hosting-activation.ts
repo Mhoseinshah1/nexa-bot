@@ -52,6 +52,8 @@ export const HOSTING_ACTIVATION_ERROR_CODES = {
   TOKEN_IN_USE: 'hosting.activation_token_in_use',
   /** The token is a DIFFERENT bot than the one this hosted bot is already bound to. */
   TOKEN_OTHER_BOT: 'hosting.activation_token_other_bot',
+  /** Same Telegram bot, but not the token already stored: replacing a stored token is not done here. */
+  TOKEN_DIFFERS: 'hosting.activation_token_differs',
   DOMAIN_INVALID: 'hosting.activation_domain_invalid',
   /** The domain is one of this server's own names. */
   DOMAIN_RESERVED: 'hosting.activation_domain_reserved',
