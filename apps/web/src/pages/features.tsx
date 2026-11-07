@@ -30,6 +30,7 @@ import {
   type FeatureCategory,
 } from './features-catalogue';
 import { ErrorReport, registryLabel } from './settings';
+import { AutoDeletePreviewSentence } from './auto-delete-preview';
 import { TechnicalDetails } from '../ui/technical-details';
 
 /**
@@ -374,7 +375,16 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
         <ConfirmDialog
           title={title}
           question={t(confirmEnable.question)}
-          detail={t(confirmEnable.detail)}
+          detail={
+            // PR-3: switching the automatic deletion on repeats how many it would delete.
+            flag.key === 'service_auto_delete' ? (
+              <>
+                {t(confirmEnable.detail)} <AutoDeletePreviewSentence />
+              </>
+            ) : (
+              t(confirmEnable.detail)
+            )
+          }
           confirmLabel={t(confirmEnable.confirmLabel)}
           cancelLabel={t('web.feature_confirm_cancel')}
           onConfirm={() => {

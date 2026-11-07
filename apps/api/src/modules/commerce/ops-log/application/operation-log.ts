@@ -1,7 +1,12 @@
 import type { Clock, TenantContext } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { publish } from './publish.js';
-import { giftFailure, serviceChanged, type ServiceChange } from './presenters.js';
+import {
+  giftFailure,
+  serviceAutoDeleted,
+  serviceChanged,
+  type ServiceChange,
+} from './presenters.js';
 import type { OpsLogFacts, OpsLogLane, OpsLogWords } from './ports.js';
 
 /** What the outcome announcer calls once an operation has terminally succeeded. */
@@ -55,7 +60,13 @@ export class OperationLog implements OperationLogHook {
     tx: TransactionScope,
   ): Promise<void> {
     const operation = await this.deps.facts.operation(scope, operationId, tx);
-    if (operation === null || operation.state !== 'SUCCEEDED' || operation.orderId === null) return;
+    if (operation === null || operation.state !== 'SUCCEEDED') return;
+    // PR-3: an automatic deletion's TERMINATE — the deletion's own log, once per operation.
+    if (operation.type === 'TERMINATE') {
+      await this.autoDeleted(scope, operation.id, operation.serviceId, operation.completedAt, tx);
+      return;
+    }
+    if (operation.orderId === null) return;
     const kind = CHANGES[operation.type];
     if (kind === undefined) return;
 
@@ -104,6 +115,31 @@ export class OperationLog implements OperationLogHook {
       words: this.deps.words,
     });
     await publish(this.deps.lane, scope, tx, built, { dedupeKey: `oplog:op:${operationId}` });
+  }
+
+  private async autoDeleted(
+    scope: TenantContext,
+    operationId: string,
+    serviceId: string,
+    completedAt: Date | null,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const cycle = await this.deps.facts.autoDeleteOfOperation(scope, operationId, tx);
+    if (cycle === null) return;
+    const service = await this.deps.facts.service(scope, serviceId, tx);
+    if (service === null) return;
+    const customer = await this.deps.facts.customer(scope, service.customerId, tx);
+    const built = serviceAutoDeleted({
+      service,
+      customer,
+      cause: cycle.cause,
+      days: cycle.days,
+      at: completedAt ?? this.deps.clock.now(),
+      words: this.deps.words,
+    });
+    await publish(this.deps.lane, scope, tx, built, {
+      dedupeKey: `oplog:auto-delete:${operationId}`,
+    });
   }
 
   async operationFailed(

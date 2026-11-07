@@ -418,6 +418,16 @@ export interface CustomerNotificationDeps {
     ): Promise<{ readonly values: TemplateValues; readonly serviceId: string } | null>;
   };
   /**
+   * PR-3: what the automatic-deletion warning renders, read at send time from the run row the
+   * notification names (ADR 0030 §1). Null sends nothing.
+   */
+  readonly autoDelete?: {
+    noticeFacts(
+      scope: TenantContext,
+      runId: string,
+    ): Promise<{ readonly values: TemplateValues; readonly serviceId: string } | null>;
+  };
+  /**
    * The inline buttons a kind carries, derived from what its subject names — never stored,
    * so the lane still carries no payload. Supplied by the composition root, because the
    * callback vocabulary is the Telegram surface's and this application service must not
@@ -1120,6 +1130,15 @@ export class CustomerNotificationService {
     ) {
       if (this.deps.autoRenew === undefined) return null;
       const facts = await this.deps.autoRenew.noticeFacts(scope, row.kind, row.subjectId);
+      if (facts === null) return null;
+      return {
+        values: facts.values,
+        buttons: this.deps.buttonsFor?.(row.kind, { serviceId: facts.serviceId }) ?? [],
+      };
+    }
+    if (row.kind === 'SERVICE_AUTO_DELETE_WARNING') {
+      if (this.deps.autoDelete === undefined) return null;
+      const facts = await this.deps.autoDelete.noticeFacts(scope, row.subjectId);
       if (facts === null) return null;
       return {
         values: facts.values,

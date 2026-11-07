@@ -2269,6 +2269,13 @@
       "when": 1794066749051,
       "tag": "0323_reseller_request_draft_step_key",
       "breakpoints": true
+    },
+    {
+      "idx": 324,
+      "version": "7",
+      "when": 1794071048848,
+      "tag": "0324_service_auto_delete",
+      "breakpoints": true
     }
   ]
 }

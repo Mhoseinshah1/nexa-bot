@@ -364,6 +364,10 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   evidence: 'مبنای تأیید',
   expired: 'وضعیت اعلان پایان اعتبار',
   expiresAt: 'زمان انقضا',
+  // NEXA-OWNER-BATCH-1 PR-3: the automatic deletion.
+  deleteAt: 'زمان حذف خودکار',
+  deleteCause: 'علت حذف خودکار',
+  deleteDays: 'تعداد روز پیش از حذف',
   expiry: 'وضعیت یادآور انقضا',
   failed: 'تعداد فرمت‌های ناموفق',
   failure: 'نوع خطا',
@@ -2913,6 +2917,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'یادآور روز انقضای سرویس',
     'در روز پایان اعتبار و پیش از پایان آن فرستاده می‌شود و زمان دقیق انقضا را می‌گوید.',
   ],
+  'bot.service.auto_delete_warning': [
+    'هشدار حذف خودکار سرویس',
+    'یک بار در هر دوره، پیش از آن‌که سرویس منقضی یا معلق به‌طور خودکار حذف شود (به اندازهٔ «ساعت هشدار پیش از حذف»)؛ دکمهٔ تمدید دارد و اگر سرویس تمدید شود فرستاده نمی‌شود.',
+  ],
   'bot.service.auto_renew_funds_short': [
     'کمبود موجودی برای تمدید خودکار',
     'یک بار در هر دوره، وقتی تمدید خودکار سرویس به‌خاطر کافی نبودن موجودی کیف پول انجام نشد؛ مبلغی کسر نشده و با شارژ کیف پول پیش از پایان اعتبار، سرویس خودکار تمدید می‌شود.',
@@ -4618,6 +4626,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'ops.log.link_changed': [
     'گزارش سرویس: تغییر لینک',
     'وقتی لینک اشتراک یک سرویس عوض می‌شود؛ چه کسی خواسته و چندمین بار در ۳۰ روز گذشته است.',
+  ],
+  'ops.log.service_auto_deleted': [
+    'گزارش سرویس: حذف خودکار',
+    'وقتی حذف خودکار، سرویس پایان‌یافته‌ای را از پنل حذف می‌کند؛ نام کاربری سرویس، علت و چند روز پس از آن.',
   ],
   'ops.log.trial_created': [
     'گزارش سرویس: اکانت تست',

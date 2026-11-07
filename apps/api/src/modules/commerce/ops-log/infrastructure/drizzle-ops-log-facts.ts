@@ -1,5 +1,11 @@
 import { sql } from 'drizzle-orm';
-import { maskPhoneNumber, money, type CurrencyCode, type TenantContext } from '@nexa/contracts';
+import {
+  maskPhoneNumber,
+  money,
+  type AutoDeleteCause,
+  type CurrencyCode,
+  type TenantContext,
+} from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -541,6 +547,22 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
                  ) AS username`,
     );
     return str(row?.['username']);
+  }
+
+  async autoDeleteOfOperation(
+    scope: TenantContext,
+    operationId: string,
+    tx: TransactionScope,
+  ): Promise<{ readonly cause: AutoDeleteCause; readonly days: number } | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.rows(
+      tx,
+      sql`SELECT cause, days FROM service_auto_delete_runs
+           WHERE tenant_id = ${tenantId} AND operation_id = ${operationId} AND state = 'PLANNED'
+           LIMIT 1`,
+    );
+    if (row === undefined) return null;
+    return { cause: String(row['cause']) as AutoDeleteCause, days: Number(row['days']) };
   }
 
   async operation(

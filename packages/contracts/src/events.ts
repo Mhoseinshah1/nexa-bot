@@ -251,6 +251,12 @@ export const EVENT_TYPES = [
   // the SERVICE. Ids, amounts in minor units with their currency, and closed words only.
   'ServiceAutoRenewChanged',
   'ServiceAutoRenewRunSettled',
+  // NEXA-OWNER-BATCH-1 PR-3: automatic deletion. A due cycle of an EXPIRED or SUSPENDED
+  // service was scheduled (and its customer warned, when a warning is configured), and its
+  // deletion was planned as a provisioning TERMINATE with reason AUTO_DELETE. Aggregate is the
+  // SERVICE. Ids, closed words and the configured day count only.
+  'ServiceAutoDeleteScheduled',
+  'ServiceAutoDeletePlanned',
   // Phase 6A PR-3 (D1): the creator panel. A hosted bot's lifecycle state moved (the owner's
   // suspend / activate / delete / purge, or the expiry sweep's EXPIRE), and its expiry date
   // was set or cleared. Aggregate is the hosted TENANT; recorded on the installation tenant,
@@ -870,6 +876,24 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     outcome: z.enum(['RENEWED', 'FUNDS_SHORT', 'REFUSED']),
     refusal: z.enum(['PRICE_ROSE', 'CONSENT_WITHDRAWN', 'NOT_RENEWABLE']).nullable(),
     orderId: z.string().nullable(),
+  }),
+  ServiceAutoDeleteScheduled: z.object({
+    serviceId: z.string(),
+    customerId: z.string(),
+    runId: z.string(),
+    cause: z.enum(['TRAFFIC', 'TIME', 'SUSPENDED']),
+    days: z.number().int(),
+    warned: z.boolean(),
+    deleteAfter: z.string(),
+  }),
+  ServiceAutoDeletePlanned: z.object({
+    serviceId: z.string(),
+    customerId: z.string(),
+    runId: z.string(),
+    cause: z.enum(['TRAFFIC', 'TIME', 'SUSPENDED']),
+    days: z.number().int(),
+    operationId: z.string(),
+    reason: z.literal('AUTO_DELETE'),
   }),
   HostedBotStateChanged: z.object({
     hostedTenantId: z.string(),

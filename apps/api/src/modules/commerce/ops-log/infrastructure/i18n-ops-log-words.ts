@@ -163,6 +163,8 @@ export const i18nOpsLogWords: OpsLogWords = {
       INFO: 'ℹ️ اطلاع',
     })[klass] ?? '⚠️ هشدار',
   cleanupLine: (countText) => W.report.cleanup(countText),
+  autoDeletedLine: (countText) => W.report.autoDeleted(countText),
+  autoDeleteCause: (cause) => W.autoDeleteCause[cause],
   compactionLine: (applied, parts) =>
     applied ? W.report.compaction.applied(parts) : W.report.compaction.dryRun(parts),
   compactionClass: (cls) => pick(W.report.compaction.classes, cls, cls),

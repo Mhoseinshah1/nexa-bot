@@ -181,6 +181,17 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
              AND COALESCE(resolved_at, updated_at) < ${end}`,
     );
 
+    // PR-3: the services the automatic deletion removed in the day — a TERMINATE it planned
+    // that SUCCEEDED inside [start, end).
+    const [autoDeleted] = await this.rows(
+      tx,
+      sql`SELECT count(*)::int AS n
+            FROM service_auto_delete_runs r
+            JOIN provisioning_operations o ON o.tenant_id = r.tenant_id AND o.id = r.operation_id
+           WHERE r.tenant_id = ${tenantId} AND r.state = 'PLANNED' AND o.state = 'SUCCEEDED'
+             AND o.completed_at >= ${start} AND o.completed_at < ${end}`,
+    );
+
     // --- Round 9 C3: the data compaction's passes of the day (part of L30) -------------
     const compactionRuns = await this.rows(
       tx,
@@ -348,6 +359,7 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
       failedPayments: num(failed?.['n']),
       openTickets: num(tickets?.['n']),
       expiredPayments: num(expired?.['n']),
+      autoDeleted: num(autoDeleted?.['n']),
       compaction,
       refunds,
       commissions,

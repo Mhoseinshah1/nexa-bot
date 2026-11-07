@@ -663,6 +663,28 @@ export const FEATURE_FLAGS = [
     configuredBy: ['auto_renew.lead_hours'],
   },
   {
+    key: 'service_auto_delete',
+    description:
+      'NEXA-OWNER-BATCH-1 PR-3: «حذف خودکار سرویس». On, the worker deletes an EXPIRED or ' +
+      'SUSPENDED service from its panel once it has been in that state for the configured ' +
+      'number of days (by traffic, by time, or suspended; each 0 = off), through the same ' +
+      'provisioning TERMINATE an operator\u2019s «پایان سرویس» plans, with no refund and no ' +
+      'wallet change. The customer is warned once beforehand with a renew button; a renewal, ' +
+      'an open order or payment, or a stopped bot keeps the service. Deletions are planned at ' +
+      'most service.auto_delete.max_per_minute per panel. Off by default; off stops new ' +
+      'warnings and deletions at once.',
+    defaultEnabled: false,
+    // TENANT_WIDE: it removes customers' accounts from panels without anybody's tap at the time.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [
+      'service.auto_delete.after_traffic_days',
+      'service.auto_delete.after_time_days',
+      'service.auto_delete.after_suspend_days',
+      'service.auto_delete.warn_hours',
+      'service.auto_delete.max_per_minute',
+    ],
+  },
+  {
     key: 'miniapp_stars_invoice',
     description:
       'Round 11, B5: pay an order with Telegram Stars INSIDE the mini app ' +

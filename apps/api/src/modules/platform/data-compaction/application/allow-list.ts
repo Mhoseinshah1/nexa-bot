@@ -298,6 +298,12 @@ export const CUSTOMER_NOTIFICATION_COMPACTION: Readonly<
     compact: 'NEVER',
     reason: 'Rare, and the only record that the reseller was told why their prices changed.',
   },
+  SERVICE_AUTO_DELETE_WARNING: {
+    compact: 'NEVER',
+    reason:
+      'PR-3: the only record that the customer was warned before their service was deleted ' +
+      'automatically; one per (service, due cycle).',
+  },
   RESELLER_REQUEST_MESSAGE: {
     compact: 'NEVER',
     reason: 'The only delivery record of what an operator wrote to an applicant; rare.',

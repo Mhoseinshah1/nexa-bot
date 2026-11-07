@@ -73,6 +73,8 @@ const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
   'SERVICE_AUTO_RENEW_PRICE_CHANGED',
   // Round 11, C2: answered from the notification's customer and the reseller row.
   'RESELLER_EXPIRED',
+  // PR-3: answered from the auto-delete run, its service's current cycle and the flag.
+  'SERVICE_AUTO_DELETE_WARNING',
 ];
 
 /**
@@ -147,6 +149,8 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     if (kind === 'SERVICE_AUTO_RENEW_FUNDS_SHORT' || kind === 'SERVICE_AUTO_RENEW_PRICE_CHANGED') {
       return this.autoRenewNoticeHolds(tenantId, kind, subjectId, now);
     }
+    if (kind === 'SERVICE_AUTO_DELETE_WARNING')
+      return this.autoDeleteWarningHolds(tenantId, subjectId);
     /*
      * Phase E3: a notice holds while its incident is still SCHEDULED or ACTIVE and the
      * notice is younger than `INCIDENT_NOTICE_STALE_AFTER_MS` by the dispatcher's clock.
@@ -346,6 +350,30 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
          AND r.status = 'SUSPENDED'
          AND r.expiry_suspended_at IS NOT NULL
          AND n.created_at = r.expiry_suspended_at
+       LIMIT 1`);
+    return result.rows.length > 0;
+  }
+
+  /**
+   * PR-3: "this service will be deleted" holds while the cycle is still SCHEDULED, the service
+   * is still in the cycle's state since the cycle's moment (not renewed, resumed or
+   * terminated), still owned by the customer it was scheduled under (not transferred), and the
+   * feature is on.
+   */
+  private async autoDeleteWarningHolds(tenantId: string, subjectId: string): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1
+        FROM service_auto_delete_runs r
+        JOIN services s
+          ON s.tenant_id = r.tenant_id AND s.id = r.service_id
+         AND s.state = r.cycle_state AND s.state_since = r.cycle_since
+         AND s.customer_id = r.customer_id
+       WHERE r.tenant_id = ${tenantId}
+         AND r.id = ${subjectId}
+         AND r.state = 'SCHEDULED'
+         AND COALESCE((SELECT f.enabled FROM feature_flag_states f
+                        WHERE f.tenant_id = r.tenant_id AND f.flag_key = 'service_auto_delete'),
+                      ${featureFlagDefinition('service_auto_delete').defaultEnabled})
        LIMIT 1`);
     return result.rows.length > 0;
   }

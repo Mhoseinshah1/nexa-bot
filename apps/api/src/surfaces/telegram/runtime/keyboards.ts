@@ -28,6 +28,8 @@ const EXPIRY_NOTIFICATION_KINDS: ReadonlySet<CustomerNotificationKind> = new Set
   'SERVICE_EXPIRY_SECOND',
   'SERVICE_EXPIRY_DAY',
   'SERVICE_EXPIRED',
+  // PR-3: the automatic-deletion warning offers the same renewal and card.
+  'SERVICE_AUTO_DELETE_WARNING',
 ]);
 /** R12 F3 item 1: the service reminders that point at the traffic allowance. */
 const USAGE_NOTIFICATION_KINDS: ReadonlySet<CustomerNotificationKind> = new Set([

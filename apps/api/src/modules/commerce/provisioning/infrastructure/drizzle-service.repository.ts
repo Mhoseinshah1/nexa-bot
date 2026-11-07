@@ -19,6 +19,7 @@ import {
   providerUsernameLookupSchema,
   SERVICE_REFUND_REQUEST_ACTIVE_STATES,
   SERVICE_TERMINAL_STATES,
+  UNLIMITED_TRAFFIC_BYTES,
   type ListSearchTerm,
 } from '@nexa/contracts';
 import type {
@@ -222,6 +223,18 @@ const NO_PAID_ACTION_WAITING = sql`NOT EXISTS (
      AND (waiting.type <> 'CHANGE_LOCATION' OR waiting.order_id IS NOT NULL)
      AND waiting.state IN ('PLANNED', 'IN_FLIGHT')
 )`;
+
+/**
+ * NEXA-OWNER-BATCH-1 PR-3: why a service expires, from data it already has — its traffic used
+ * had reached a FINITE limit (a read usage, `UNLIMITED_TRAFFIC_BYTES` = 0 is no limit) →
+ * TRAFFIC; otherwise TIME. The same rule `isAllowanceUsedUp` applies on the card, and the
+ * automatic deletion's `CAUSE` applies for a row expired before the column existed.
+ */
+const SERVICE_EXPIRY_CAUSE_SQL = sql<string>`CASE
+  WHEN ${services.usageSyncedAt} IS NOT NULL
+   AND ${services.trafficLimitBytes} <> ${sql.raw(String(UNLIMITED_TRAFFIC_BYTES))}
+   AND ${services.trafficUsedBytes} >= ${services.trafficLimitBytes}
+  THEN 'TRAFFIC' ELSE 'TIME' END`;
 
 @ScopeBound()
 export class DrizzleServiceRepository implements ServiceRepository {
@@ -564,6 +577,8 @@ export class DrizzleServiceRepository implements ServiceRepository {
         // The constraint's two halves, both written here so neither can be forgotten.
         ...(becomingLive ? { provisionedAt: now } : {}),
         ...(to === 'TERMINATED' ? { terminatedAt: now } : {}),
+        // PR-3: the clock of the state it now holds (`state_since`), only when it moved.
+        ...(to === from ? {} : { stateSince: now }),
         updatedAt: now,
       })
       .where(and(eq(services.tenantId, tenantId), eq(services.id, id), eq(services.state, from)))
@@ -1487,6 +1502,8 @@ export class DrizzleServiceRepository implements ServiceRepository {
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const patch: Record<string, unknown> = { state: to, updatedAt: now };
+    // PR-3: a renewal that revives an EXPIRED service starts its new state's clock.
+    if (to !== from) patch['stateSince'] = now;
     if (allowance.expiresAt !== null) patch['expiresAt'] = allowance.expiresAt;
     if (allowance.trafficLimitBytes !== null) {
       patch['trafficLimitBytes'] = allowance.trafficLimitBytes;
@@ -1565,7 +1582,17 @@ export class DrizzleServiceRepository implements ServiceRepository {
 
       const rows = await this.exec(tx)
         .update(services)
-        .set({ state: 'EXPIRED', updatedAt: now })
+        .set({
+          state: 'EXPIRED',
+          /*
+           * PR-3: the moment and the cause, written by the statement that expires it, so
+           * neither is ever inferred later. TRAFFIC when the READ usage had reached a FINITE
+           * limit — `isAllowanceUsedUp`'s rule, in SQL — and TIME otherwise.
+           */
+          stateSince: now,
+          expiryCause: SERVICE_EXPIRY_CAUSE_SQL,
+          updatedAt: now,
+        })
         .where(
           and(
             eq(services.tenantId, tenantId),

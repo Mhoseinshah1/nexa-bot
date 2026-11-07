@@ -590,6 +590,22 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: 'web.feature_service_auto_renew_off_effect',
     confirmEnable: null,
   },
+  // NEXA-OWNER-BATCH-1 PR-3: switching ON asks first, repeating the preview's N (features.tsx);
+  // switching OFF stops new warnings and deletions at once and asks too.
+  service_auto_delete: {
+    title: 'web.feature_service_auto_delete_title',
+    summary: 'web.feature_service_auto_delete_summary',
+    category: 'panel',
+    where: ['background', 'bot', 'ops_group'],
+    offEffect: 'web.feature_service_auto_delete_off_effect',
+    related: { path: '/settings', label: 'web.nav_settings' },
+    disableEffect: 'web.feature_service_auto_delete_off_effect',
+    confirmEnable: {
+      question: 'web.feature_service_auto_delete_on_question',
+      detail: 'web.feature_service_auto_delete_on_detail',
+      confirmLabel: 'web.feature_service_auto_delete_on_confirm',
+    },
+  },
   // R11 B5: Stars paid inside the mini app. Off sends customers to the bot's chat invoice
   // again; that invoice stays payable and nothing already paid changes, so it does not ask.
   miniapp_stars_invoice: {
