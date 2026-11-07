@@ -1,8 +1,11 @@
-import type { TenantContext } from '@nexa/contracts';
 import { CUSTOMER_NOTIFICATION_SWEEP_LIMIT } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { CustomerNotificationService } from './customer-notification.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * The timer that drives the customer notification lane, and the readiness it earns.
@@ -72,7 +75,8 @@ export class CustomerNotificationLoop {
   constructor(
     private readonly lane: CustomerNotificationService,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => number;
       readonly logger: {
@@ -137,23 +141,24 @@ export class CustomerNotificationLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
       /*
-       * No tenant yet is a healthy pass that did nothing.
+       * Once per tenant (Phase 6A PR-6), each its own bounded batch in its own scope.
        *
-       * The installation's tenant is a ROW, so a worker booted before `pnpm provision`
-       * has none — and an installation with no tenant has no customers to tell, so this
-       * loop is doing its job exactly. Reporting it stale would make a fresh install
-       * unhealthy for a reason the operator cannot act on.
+       * No tenant yet is a healthy pass that did nothing. The installation's tenant is a
+       * ROW, so a worker booted before `pnpm provision` has none — and an installation
+       * with no tenant has no customers to tell, so this loop is doing its job exactly.
+       * Reporting it stale would make a fresh install unhealthy for a reason the operator
+       * cannot act on.
        */
-      if (scope === null) {
-        this.progress.record(this.options.now());
-        return;
-      }
-      const report = await this.lane.deliverDue(scope, CUSTOMER_NOTIFICATION_SWEEP_LIMIT);
-      if (report.claimed > 0) {
-        this.options.logger.info({ ...report }, 'customer notifications dispatched');
-      }
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        const report = await this.lane.deliverDue(scope, CUSTOMER_NOTIFICATION_SWEEP_LIMIT);
+        if (report.claimed > 0) {
+          this.options.logger.info(
+            { tenantId: scope.tenantId, ...report },
+            'customer notifications dispatched',
+          );
+        }
+      });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       /*

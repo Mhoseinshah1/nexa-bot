@@ -103,6 +103,7 @@ import type {
 } from '@nexa/contracts';
 
 import { InstallationTenantGuard } from './infrastructure/lifecycle/installation-tenant-guard.js';
+import { TenantFanOut } from './infrastructure/lifecycle/tenant-pass.js';
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { readFileSync } from 'node:fs';
 import { rename, stat } from 'node:fs/promises';
@@ -2408,6 +2409,22 @@ export function createContainer(
   });
 
   let installationTenantId: TenantId | null = null;
+
+  /*
+   * Phase 6A PR-6: the worker serves every ACTIVE tenant, not only the installation's.
+   * Each per-tenant loop below is given `tenantFanOut.pass(<loop>, …)` as its `scope`
+   * instead of the one fixed installation scope, and runs its SAME pass once per active
+   * tenant (`infrastructure/lifecycle/tenant-pass.ts`). Installation-wide work (backups,
+   * recovery, compaction, the owner's restart and stall reports) keeps the installation
+   * scope. Nothing is served before the installation has a tenant, and there is no
+   * fallback to it: a tenant that is not ACTIVE is not served.
+   */
+  const tenantFanOut = new TenantFanOut({
+    activeTenants: () => tenants.activeTenantIds(),
+    installationTenantId: () => installationTenantId,
+    now: () => clock.now().getTime(),
+    logger,
+  });
 
   /*
    * Phase 6A PR-2: capacity guards. The per-bot limits (`tenant_capacity_limits`, cached per
@@ -6632,10 +6649,9 @@ export function createContainer(
       logger,
     }),
     {
-      scope: () =>
-        installationTenantId === null
-          ? null
-          : { tenantId: installationTenantId, botInstanceId: null },
+      scope: tenantFanOut.pass('customer-notifications', {
+        budgetMs: CUSTOMER_NOTIFICATION_INTERVAL_MS,
+      }),
       intervalMs: CUSTOMER_NOTIFICATION_INTERVAL_MS,
       now: () => clock.now().getTime(),
       logger,

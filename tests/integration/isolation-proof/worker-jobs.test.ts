@@ -247,15 +247,11 @@ describe('isolation proof (PR-5) — worker jobs', () => {
   });
 
   /*
-   * PR-6 CANDIDATE (a hosted-bot functional gap, not a leak — it fails CLOSED). Every per-
-   * tenant loop the worker runs takes its scope from `installationTenantId` (container.ts:
-   * the customer notification lane, service and customer reminders, payment expiry, the
-   * gateway inquiry lane, broadcasts, campaigns, bulk operations, receipt-review pushes, the
-   * provisioner, …), so it serves the installation's PRIMARY only. A hosted tenant's due
-   * customer notification is never sent by the worker — nor, by the same wiring, are its
-   * reminders raised, its broadcasts dispatched, its gateway payments inquired or its
-   * services provisioned. Nothing crosses tenants; the hosted bot is simply not served.
-   * The assertion is the property; `it.fails` until PR-6 makes the loops iterate tenants.
+   * Phase 6A PR-6 (was PR-5's `it.fails`). Every per-tenant loop the worker runs used to take
+   * its scope from `installationTenantId`, so it served the installation's PRIMARY only and a
+   * hosted tenant's due notification was never sent. The loops now take a `TenantFanOut`
+   * pass (`infrastructure/lifecycle/tenant-pass.ts`) and run their same pass once per ACTIVE
+   * tenant, each in its own scope.
    */
   const pendingFor = async (tenantId: string) =>
     (
@@ -279,16 +275,13 @@ describe('isolation proof (PR-5) — worker jobs', () => {
     expect(await pendingFor(hosted.tenantId)).toBeGreaterThan(0);
   });
 
-  it.fails(
-    'PR-6: the worker’s notification loop delivers a hosted tenant’s due message',
-    async () => {
-      const hosted = world.tenants.HOSTED_2;
-      world.telegram.calls.length = 0;
-      for (let i = 0; i < 3; i += 1) await world.api.container.customerNotificationLoop.tick();
-      expect(await pendingFor(hosted.tenantId)).toBe(0);
-      expect(
-        world.telegram.calls.filter((call) => call.botId === hosted.telegramBotId).length,
-      ).toBeGreaterThan(0);
-    },
-  );
+  it('the worker’s notification loop delivers a hosted tenant’s due message, through its own bot', async () => {
+    const hosted = world.tenants.HOSTED_2;
+    world.telegram.calls.length = 0;
+    for (let i = 0; i < 3; i += 1) await world.api.container.customerNotificationLoop.tick();
+    expect(await pendingFor(hosted.tenantId)).toBe(0);
+    expect(
+      world.telegram.calls.filter((call) => call.botId === hosted.telegramBotId).length,
+    ).toBeGreaterThan(0);
+  });
 });
