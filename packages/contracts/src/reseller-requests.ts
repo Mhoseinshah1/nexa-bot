@@ -100,8 +100,8 @@ export type ResellerRequestErrorCode =
  * Telegram caps `callback_data` at 64 bytes: a UUID is 36, an id pair is 43 (base64url).
  */
 export const RESELLER_REQUEST_CALLBACKS = {
-  /** `rq:<action>:<draftId>` — back, skip, send, edit. */
-  step: 'rq:',
+  /** `rrs:<action>:<draftId>` — back, skip, send, edit. */
+  step: 'rrs:',
   /** `rqr:<requestId>` — the customer's «پاسخ». */
   reply: 'rqr:',
   /** `rqa:<requestId>` — the group's «✅ تأیید»: the tier list, in the operator's private chat. */
@@ -120,7 +120,8 @@ export const RESELLER_REQUEST_CALLBACKS = {
   rejectPlain: 'rqp:',
 } as const;
 
-export const RESELLER_REQUEST_STEP_ACTIONS = ['b', 's', 'x', 'e'] as const;
+/** g = start the questions, s = skip, b = back, x = send, e = edit. */
+export const RESELLER_REQUEST_STEP_ACTIONS = ['g', 's', 'b', 'x', 'e'] as const;
 export type ResellerRequestStepAction = (typeof RESELLER_REQUEST_STEP_ACTIONS)[number];
 
 // --- The wire -------------------------------------------------------------------------------
@@ -434,6 +435,10 @@ export const RESELLER_REQUEST_TEMPLATES = [
   tpl(
     'bot.admin.reseller_request.start_bot',
     'PR-2: a tap in the group by an administrator who has never opened the bot in a private chat, where the bot can write to them only after /start.',
+  ),
+  tpl(
+    'bot.admin.reseller_request.cancelled',
+    'PR-2: the operator cancelled a prompt; nothing was sent.',
   ),
   tpl('bot.admin.reseller_request.not_implemented', 'PR-2: approval is not available yet.'),
   tpl('bot.admin.reseller_request.button_confirm', 'PR-2: the operator’s «تأیید نهایی».'),

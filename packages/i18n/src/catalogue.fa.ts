@@ -1777,10 +1777,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.reseller_request.summary':
     '📋 خلاصهٔ درخواست شما\n\n{answers}\n\nاگر درست است «ارسال» را بزنید، وگرنه «ویرایش».',
   'bot.reseller_request.submitted':
-    '✅ درخواست شما ثبت شد.\nشمارهٔ درخواست: {number}\nنتیجه و هر پیام مدیریت همین‌جا برایتان فرستاده می‌شود.',
+    '{icon:success} درخواست شما ثبت شد.\nشمارهٔ درخواست: {number}\nنتیجه و هر پیام مدیریت همین‌جا برایتان فرستاده می‌شود.',
   'bot.reseller_request.already_reseller': 'شما هم‌اکنون نماینده هستید و نیازی به درخواست نیست.',
   'bot.reseller_request.status_pending':
-    '⏳ درخواست نمایندگی شما (شمارهٔ {number}) در انتظار بررسی است.',
+    '{icon:time} درخواست نمایندگی شما (شمارهٔ {number}) در انتظار بررسی است.',
   'bot.reseller_request.status_conversing':
     '💬 درخواست نمایندگی شما (شمارهٔ {number}) در حال گفتگو با مدیریت است. پیام‌های مدیریت را با دکمهٔ «پاسخ» جواب بدهید.',
   'bot.reseller_request.cooldown':
@@ -1790,12 +1790,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'پاسخ باید خالی نباشد و حداکثر {max} نویسه باشد. دوباره بنویسید.',
   'bot.reseller_request.approved':
     '🎉 درخواست نمایندگی شما تأیید شد و اکنون با سطح «{tier}» نماینده هستید.',
-  'bot.reseller_request.rejected': '❌ درخواست نمایندگی شما تأیید نشد.\n📝 دلیل: {reason}',
+  'bot.reseller_request.rejected':
+    '{icon:error} درخواست نمایندگی شما تأیید نشد.\n📝 دلیل: {reason}',
   'bot.reseller_request.message_from_owner':
     '💬 پیام مدیریت دربارهٔ درخواست نمایندگی شما (شمارهٔ {number})\n\n{text}',
   'bot.reseller_request.reply_prompt':
     'پاسخ خود را برای درخواست شمارهٔ {number} بنویسید یا یک عکس بفرستید.',
-  'bot.reseller_request.reply_sent': '✅ پاسخ شما به درخواست اضافه شد.',
+  'bot.reseller_request.reply_sent': '{icon:success} پاسخ شما به درخواست اضافه شد.',
   'bot.reseller_request.thread_closed': 'دربارهٔ این درخواست تصمیم گرفته شده و گفتگو بسته است.',
   'bot.reseller_request.button_start': '▶️ شروع',
   'bot.reseller_request.button_skip': '⏭ رد کردن',
@@ -1820,6 +1821,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'دربارهٔ این درخواست قبلاً تصمیم گرفته شده یا سطح انتخابی دیگر وجود ندارد؛ چیزی تغییر نکرد.',
   'bot.admin.reseller_request.start_bot':
     'برای ادامه، ربات را یک بار در چت خصوصی باز کنید (/start) و دوباره دکمه را بزنید.',
+  'bot.admin.reseller_request.cancelled': 'انصراف داده شد؛ چیزی فرستاده نشد.',
   'bot.admin.reseller_request.not_implemented': 'تأیید درخواست هنوز در دسترس نیست.',
   'bot.admin.reseller_request.button_confirm': '✅ تأیید نهایی',
   'bot.admin.reseller_request.button_cancel': '✖️ انصراف',
