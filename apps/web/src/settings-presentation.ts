@@ -816,6 +816,37 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
       }),
     },
   },
+  // NEXA-OWNER-BATCH-1 PR-3: the automatic deletion of finished services (0 = off).
+  'service.auto_delete.after_traffic_days': {
+    title: 'web.setting_auto_delete_after_traffic_days',
+    description: 'web.setting_auto_delete_after_traffic_days_desc',
+    group: 'services',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  'service.auto_delete.after_time_days': {
+    title: 'web.setting_auto_delete_after_time_days',
+    description: 'web.setting_auto_delete_after_time_days_desc',
+    group: 'services',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  'service.auto_delete.after_suspend_days': {
+    title: 'web.setting_auto_delete_after_suspend_days',
+    description: 'web.setting_auto_delete_after_suspend_days_desc',
+    group: 'services',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  'service.auto_delete.warn_hours': {
+    title: 'web.setting_auto_delete_warn_hours',
+    description: 'web.setting_auto_delete_warn_hours_desc',
+    group: 'services',
+    control: { kind: 'integer', unit: 'web.unit_hours' },
+  },
+  'service.auto_delete.max_per_minute': {
+    title: 'web.setting_auto_delete_max_per_minute',
+    description: 'web.setting_auto_delete_max_per_minute_desc',
+    group: 'services',
+    control: { kind: 'integer' },
+  },
   // Round 10, D1: how long before a service's deadline its automatic renewal runs.
   'auto_renew.lead_hours': {
     title: 'web.setting_auto_renew_lead_hours',

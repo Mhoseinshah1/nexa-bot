@@ -369,6 +369,8 @@ describe('the feature flag registry', () => {
       'rich_messages',
       'rich_plan_table',
       'rich_premium_emoji',
+      // NEXA-OWNER-BATCH-1 PR-3: «حذف خودکار سرویس». Off by default, and every day count 0.
+      'service_auto_delete',
       // Round 10, D1. Off by default; the customer's «تمدید خودکار» switch and the sweep it
       // switches on are reachable, and off stops every new run while consents are kept.
       'service_auto_renew',

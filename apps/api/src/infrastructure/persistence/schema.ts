@@ -24,6 +24,10 @@ import {
   AUTO_RENEW_PREFERENCE_SOURCES,
   AUTO_RENEW_REFUSALS,
   AUTO_RENEW_RUN_STATES,
+  AUTO_DELETE_CAUSES,
+  AUTO_DELETE_RUN_STATES,
+  AUTO_DELETE_SERVICE_STATES,
+  SERVICE_EXPIRY_CAUSES,
   BACKUP_ARCHIVE_FORMATS,
   CAPACITY_LIMIT_MODES,
   CAPACITY_RESOURCES,
@@ -7775,6 +7779,20 @@ export const services = pgTable(
      * before. The keyset's indexes are built online (`online-indexes.ts`).
      */
     originalStartedAt: timestamptz('original_started_at'),
+    /**
+     * NEXA-OWNER-BATCH-1 PR-3: when the service entered its CURRENT state, as this installation
+     * knows it — written by the transition that moved it, from the Clock. NULL is "not known":
+     * a row that predates the column, or one an import wrote. The automatic deletion stamps
+     * such an EXPIRED or SUSPENDED row with the moment it first sees it, and never back-dates
+     * it, so nothing is due the instant the column exists.
+     */
+    stateSince: timestamptz('state_since'),
+    /**
+     * PR-3: why an EXPIRED service expired (`SERVICE_EXPIRY_CAUSES`), written by the expiry
+     * that moved it: its traffic used had reached a finite limit → TRAFFIC, otherwise TIME.
+     * Read only while the state is EXPIRED; NULL for a row that expired before the column.
+     */
+    expiryCause: text('expiry_cause'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
@@ -7843,6 +7861,8 @@ export const services = pgTable(
       .on(table.tenantId, table.createdAt)
       .where(sql`state = 'UNRECONCILED'`),
     check('services_state_check', enumCheck('state', SERVICE_STATES)),
+    check('services_expiry_cause_check', nullableEnumCheck('expiry_cause', SERVICE_EXPIRY_CAUSES)),
+
     check('services_traffic_check', sql`traffic_limit_bytes >= 0 AND traffic_used_bytes >= 0`),
     check(
       'services_device_limit_check',
@@ -18114,6 +18134,92 @@ export const serviceAutoRenewRuns = pgTable(
           AND consented_total_minor >= 0
           AND (quoted_total_minor IS NULL OR quoted_total_minor >= 0)`,
     ),
+  ],
+);
+
+/**
+ * NEXA-OWNER-BATCH-1 PR-3: one DUE CYCLE of one service's automatic deletion.
+ *
+ * A cycle is the service's stay in one finished state (`cycle_state`, EXPIRED or SUSPENDED)
+ * since one moment (`cycle_since`, the service's `state_since` when the row was written).
+ * UNIQUE on (tenant, service, `cycle_since`): two worker replicas, or a pass that overran, both
+ * reach the same due service and only one INSERT schedules it — so a cycle is warned at most
+ * once. A renewal or a resume moves `services.state_since`, so the old row stops matching and
+ * the next stay is a new cycle with a new row.
+ *
+ * `PLANNED` is written in the transaction that plans the provisioning `TERMINATE`
+ * (`operation_id`), conditional on `SCHEDULED`: a cycle's deletion is planned exactly once,
+ * and every key the TERMINATE takes derives from this row's id. `planned_at` is what the
+ * per-panel rate limit counts. `service_label`, `cause` and `days` are the snapshot the warning
+ * and the operations log render (ADR 0030 §1).
+ */
+export const serviceAutoDeleteRuns = pgTable(
+  'service_auto_delete_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    panelId: uuid('panel_id').notNull(),
+    /** One of `AUTO_DELETE_SERVICE_STATES`. */
+    cycleState: text('cycle_state').notNull(),
+    cycleSince: timestamptz('cycle_since').notNull(),
+    /** One of `AUTO_DELETE_CAUSES`. */
+    cause: text('cause').notNull(),
+    /** The day count the cycle was measured by when it was scheduled. */
+    days: integer('days').notNull(),
+    serviceLabel: text('service_label').notNull(),
+    /** The earliest moment the deletion may be planned: the due moment, and the warning's lead. */
+    deleteAfter: timestamptz('delete_after').notNull(),
+    /** When the one warning was raised; null when none is configured. */
+    warnedAt: timestamptz('warned_at'),
+    /** One of `AUTO_DELETE_RUN_STATES`. */
+    state: text('state').notNull(),
+    operationId: uuid('operation_id'),
+    plannedAt: timestamptz('planned_at'),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    unique('service_auto_delete_runs_cycle_key').on(
+      table.tenantId,
+      table.serviceId,
+      table.cycleSince,
+    ),
+    index('service_auto_delete_runs_due_idx')
+      .on(table.tenantId, table.deleteAfter)
+      .where(sql`state = 'SCHEDULED'`),
+    index('service_auto_delete_runs_panel_planned_idx')
+      .on(table.tenantId, table.panelId, table.plannedAt)
+      .where(sql`state = 'PLANNED'`),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_auto_delete_runs_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_auto_delete_runs_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'service_auto_delete_runs_panel_fk',
+    }),
+    check('service_auto_delete_runs_state_check', enumCheck('state', AUTO_DELETE_RUN_STATES)),
+    check('service_auto_delete_runs_cause_check', enumCheck('cause', AUTO_DELETE_CAUSES)),
+    check(
+      'service_auto_delete_runs_cycle_state_check',
+      enumCheck('cycle_state', AUTO_DELETE_SERVICE_STATES),
+    ),
+    check(
+      'service_auto_delete_runs_planned_check',
+      sql`(state = 'PLANNED') = (operation_id IS NOT NULL AND planned_at IS NOT NULL)`,
+    ),
+    check('service_auto_delete_runs_days_check', sql`days >= 1`),
   ],
 );
 

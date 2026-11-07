@@ -2255,6 +2255,13 @@
       "when": 1794029480276,
       "tag": "0321_hosted_bot_activation",
       "breakpoints": true
+    },
+    {
+      "idx": 322,
+      "version": "7",
+      "when": 1794062715526,
+      "tag": "0322_service_auto_delete",
+      "breakpoints": true
     }
   ]
 }

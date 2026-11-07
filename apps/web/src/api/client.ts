@@ -1,4 +1,9 @@
 import {
+  SERVICE_AUTO_DELETE_PREVIEW_ROUTE,
+  serviceAutoDeletePreviewResponseSchema,
+  type ServiceAutoDeletePreviewResponse,
+} from '@nexa/contracts';
+import {
   // Phase E3: incidents and maintenance windows.
   INCIDENT_ROUTES,
   incidentBannerResponseSchema,
@@ -1261,6 +1266,14 @@ export function saveSetting(input: {
 }): Promise<SettingWriteResponse> {
   const { key, ...body } = input;
   return post(CONTROL_ROUTES.setting(key), body, settingWriteResponseSchema);
+}
+
+/**
+ * NEXA-OWNER-BATCH-1 PR-3: how many services the automatic deletion would remove in the next
+ * day, per cause, with the stored settings. A server count; the page never derives it.
+ */
+export function fetchAutoDeletePreview(): Promise<ServiceAutoDeletePreviewResponse> {
+  return authedGet(SERVICE_AUTO_DELETE_PREVIEW_ROUTE, serviceAutoDeletePreviewResponseSchema);
 }
 
 export function fetchFeatureFlags(): Promise<FeatureFlagListResponse> {

@@ -504,6 +504,34 @@ unique (service, period) run row; the flag off stops new runs immediately.
   the owner's consent and its ceiling where the money moves.
 - **No order for money that is not there.** The wallet is read before any draft.
 
+## Automatic deletion of finished services (NEXA-OWNER-BATCH-1 PR-3)
+
+Owner spec, binding (Mirza «کرون حذف»): flag `service_auto_delete` OFF by default; settings
+`service.auto_delete.{after_traffic_days, after_time_days, after_suspend_days}` (0 = off, the
+default), `warn_hours` (24) and `max_per_minute` (30, per panel). An EXPIRED or SUSPENDED service
+in that state for the configured days is deleted through the SAME provisioning `TERMINATE` the
+Web Admin's «پایان سرویس» plans (`planAutoDeleteWithin`), audit reason `AUTO_DELETE`, no refund
+and no wallet change; one warning per due cycle with the renew button; never a renewed/resumed
+service, one with an open order, an undecided payment (PENDING, a receipt under review, or
+UNKNOWN), an open operation or refund request, nor any service of a stopped tenant. Trials and
+reseller services are included. Ops-group log per deletion; the nightly cleanup line counts them.
+Lead decisions (PR-3):
+
+- **The cause** is stored when the service expires (`services.expiry_cause`): traffic used ≥ a
+  finite limit (a read usage) → TRAFFIC, else TIME. The clock is `services.state_since`, written
+  by the transition. A row with no clock (it predates the column, or an import wrote it) is
+  stamped with the moment the worker first sees it — never back-dated, never guessed — so nothing
+  imported or already lying expired is due at the switch-on. The stamping runs with the flag off
+  too (it sends and deletes nothing), so the preview means something before the switch-on.
+- **A cycle** is (service, `state_since`); a renewal or a resume starts a new one. The run row is
+  unique per cycle, so the warning is sent once and the TERMINATE planned once (key derived from
+  the run); a TERMINATE that fails is never planned again.
+- **The deletion waits** at least `warn_hours` after the warning, and is judged against the
+  settings at deletion time (a raised or zeroed day count holds it back). The warning is not held
+  by quiet hours, which would eat that window.
+- **The rate limit** is applied where the TERMINATE enters the provisioning queue, serialised per
+  panel; the sweep runs every minute in the customer-reminder fan-out (`TenantFanOut`).
+
 ## Phase 2 control plane
 
 Three Phase 2 rules that are easy to break by accident:

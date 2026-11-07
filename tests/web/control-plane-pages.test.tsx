@@ -531,6 +531,8 @@ describe('the feature presentation catalogue', () => {
       // WP-A9: a reminder the customer relies on stops silently, like the families below.
       'payment_pending_reminders',
       'referrals',
+      // NEXA-OWNER-BATCH-1 PR-3: off stops new warnings and deletions; the operator is told so.
+      'service_auto_delete',
       // Round 10, D1: off stops every automatic renewal at once; opted-in services lapse.
       'service_auto_renew',
       'service_expired_notice',
@@ -557,9 +559,12 @@ describe('the enable-confirmation policy', () => {
     // at once (no balance moves, but customers stop being able to claim), so it asks too.
     // NEXA v095 PR-4 A: turning the phone verification ON makes it mandatory for every
     // customer with no verified number at once, so it asks too.
+    // NEXA-OWNER-BATCH-1 PR-3: turning the automatic deletion ON deletes customers' services
+    // from panels from then on, so it asks — and repeats how many the next day would delete.
     expect(asking).toEqual([
       'phone_verification',
       'referral_abuse_guard',
+      'service_auto_delete',
       'terms_enforcement',
       'terms_reprompt_on_new_version',
     ]);

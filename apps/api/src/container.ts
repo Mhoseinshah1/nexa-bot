@@ -843,6 +843,8 @@ import { DrizzleOperationCardRepository } from './modules/commerce/provisioning/
 import { ServiceTransferService } from './modules/commerce/provisioning/application/service-transfer.service.js';
 import { ServiceAutoRenewService } from './modules/commerce/provisioning/application/service-auto-renew.service.js';
 import { DrizzleServiceAutoRenewRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-auto-renew.repository.js';
+import { ServiceAutoDeleteService } from './modules/commerce/provisioning/application/service-auto-delete.service.js';
+import { DrizzleServiceAutoDeleteRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-auto-delete.repository.js';
 import { DrizzleUsageSnapshotRepository } from './modules/commerce/provisioning/infrastructure/drizzle-usage-snapshot.repository.js';
 import { UsageSnapshotService } from './modules/commerce/provisioning/application/usage-snapshots.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
@@ -1441,6 +1443,8 @@ export interface Container {
   readonly serviceTransfers: ServiceTransferService;
   /** Round 10, D1: «تمدید خودکار» — the customer's switch and the worker's sweep. */
   readonly serviceAutoRenew: ServiceAutoRenewService;
+  /** NEXA-OWNER-BATCH-1 PR-3: «حذف خودکار سرویس» — the sweep and the Web Admin's preview. */
+  readonly serviceAutoDelete: ServiceAutoDeleteService;
   /** R11 B2: the usage snapshots behind the mini app's chart (`service_usage_chart`). */
   readonly usageSnapshots: UsageSnapshotService;
   /** WP-A7: support tickets, for the bot and the Web Admin alike. */
@@ -5414,6 +5418,26 @@ export function createContainer(
     ids,
     logger,
   });
+  /*
+   * NEXA-OWNER-BATCH-1 PR-3: automatic deletion. Not a new deletion path: the sweep plans the
+   * provisioning TERMINATE an operator's «پایان سرویس» plans (`planAutoDeleteWithin`) as a
+   * SYSTEM_JOB, and the provisioner carries it out with its own claim and backoff.
+   */
+  const serviceAutoDeleteService = new ServiceAutoDeleteService({
+    repository: new DrizzleServiceAutoDeleteRepository(database.db),
+    services: serviceRepository,
+    provisioning: provisioningService,
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    notifier: customerNotifier,
+    guard,
+    outbox,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+    logger,
+  });
   const customerReminderLoop = new CustomerReminderLoop(
     [
       {
@@ -5461,6 +5485,19 @@ export function createContainer(
         runOnce: async (scope) => {
           const report = await serviceAutoRenewService.runOnce(scope);
           return report.renewed + report.short + report.refused;
+        },
+      },
+      {
+        /*
+         * NEXA-OWNER-BATCH-1 PR-3: every pass (each minute), because the per-panel rate limit
+         * is per minute: a backlog drains at `max_per_minute` and never in a burst. The flag
+         * is read inside the pass; with it off only unknown clocks are stamped.
+         */
+        name: 'service-auto-delete',
+        everyMs: 0,
+        runOnce: async (scope) => {
+          const report = await serviceAutoDeleteService.runOnce(scope);
+          return report.scheduled + report.planned;
         },
       },
     ],
@@ -6482,6 +6519,8 @@ export function createContainer(
       serviceTransfers: serviceTransferService,
       // Round 10, D1: the two automatic-renewal notices, read from the run row they name.
       autoRenew: serviceAutoRenewService,
+      // PR-3: the automatic-deletion warning, read from the run row it names.
+      autoDelete: serviceAutoDeleteService,
       // WP-A7: support's reply, read from the ticket message the notification names.
       tickets: ticketService,
       // Phase A2: an operator's direct message, read from the message row it names.
@@ -9378,6 +9417,7 @@ export function createContainer(
     subscriptionFiles: subscriptionFileService,
     serviceTransfers: serviceTransferService,
     serviceAutoRenew: serviceAutoRenewService,
+    serviceAutoDelete: serviceAutoDeleteService,
     usageSnapshots: usageSnapshotService,
     tickets: ticketService,
     ticketCategories: ticketCategoryService,

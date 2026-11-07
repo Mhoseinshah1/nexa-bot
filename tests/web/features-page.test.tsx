@@ -260,4 +260,29 @@ describe('a feature’s related settings read as words, never as JSON', () => {
     expect(text).not.toContain('amountMinor');
     expect(text).not.toContain('{"');
   });
+
+  it('asks before switching the automatic deletion on, repeating how many the next day deletes (PR-3)', async () => {
+    const api = stubApi([
+      { url: '/features', body: { flags: all() } },
+      {
+        url: '/services/auto-delete/preview',
+        body: { windowHours: 24, traffic: 3, time: 2, suspended: 1, total: 6, enabled: false },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+    await screen.findByRole('tablist');
+    fireEvent.click(tabFor('panel'));
+    fireEvent.click(
+      await screen.findByRole('switch', { name: t('web.feature_service_auto_delete_title') }),
+    );
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(t('web.feature_service_auto_delete_on_question'))).toBeTruthy();
+    await waitFor(() => expect(dialog.textContent).toContain(t('web.auto_delete_preview_tail')));
+    // N is the server's count (the total in bold), and each cause's.
+    expect(within(dialog).getByText('6').tagName).toBe('STRONG');
+    expect(dialog.textContent).toContain(`${t('web.auto_delete_preview_traffic')} 3`);
+    expect(dialog.textContent).toContain(`${t('web.auto_delete_preview_suspended')} 1`);
+    // Nothing is switched on behind the open question.
+    expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
+  });
 });

@@ -615,6 +615,41 @@ export const WEB_FA = {
   'web.feature_wallet_admin_notice_off_effect':
     'تا وقتی خاموش است، تغییرهای دستی موجودی به مشتری گفته نمی‌شود و روشن کردن دوباره، پیام تغییرهای این مدت را نمی‌فرستد.',
   'web.feature_service_auto_renew_title': 'تمدید خودکار سرویس',
+  // NEXA-OWNER-BATCH-1 PR-3: the automatic deletion of finished services.
+  'web.feature_service_auto_delete_title': 'حذف خودکار سرویس‌های پایان‌یافته',
+  'web.feature_service_auto_delete_summary':
+    'سرویس منقضی یا معلق، پس از تعداد روزی که در تنظیمات «سرویس‌ها» تعیین می‌کنید، از پنل حذف می‌شود؛ همان «پایان سرویس» ادمین، بدون بازگشت وجه. مشتری یک بار پیش از حذف با دکمهٔ تمدید باخبر می‌شود و سرویس تمدیدشده یا دارای سفارش و پرداخت باز حذف نمی‌شود.',
+  'web.feature_service_auto_delete_off_effect':
+    'هشدار و حذف تازه‌ای انجام نمی‌شود؛ حذف‌هایی که پیش‌تر در صف پنل گذاشته شده‌اند ادامه می‌یابند.',
+  'web.feature_service_auto_delete_on_question': 'حذف خودکار سرویس‌ها روشن شود؟',
+  'web.feature_service_auto_delete_on_detail':
+    'از این پس سرویس‌های منقضی و معلق طبق تنظیمات، پس از هشدار به مشتری، از پنل حذف می‌شوند و این کار برگشت‌پذیر نیست.',
+  'web.feature_service_auto_delete_on_confirm': 'بله، روشن شود',
+  'web.auto_delete_preview_lead': 'با این تنظیمات،',
+  'web.auto_delete_preview_tail': 'سرویس در ۲۴ ساعت آینده حذف می‌شود',
+  'web.auto_delete_preview_traffic': 'پایان حجم:',
+  'web.auto_delete_preview_time': 'پایان زمان:',
+  'web.auto_delete_preview_suspended': 'معلق:',
+  'web.auto_delete_preview_separator': '،',
+  'web.auto_delete_preview_note':
+    'شمارش سرور است و تا حداکثر حذف در دقیقه برای هر پنل، آرام‌آرام انجام می‌شود.',
+  'web.auto_delete_preview_loading': 'در حال شمارش سرویس‌هایی که حذف می‌شوند…',
+  'web.auto_delete_preview_unavailable': 'شمار سرویس‌هایی که حذف می‌شوند خوانده نشد.',
+  'web.setting_auto_delete_after_traffic_days': 'حذف پس از پایان حجم',
+  'web.setting_auto_delete_after_traffic_days_desc':
+    'چند روز پس از آن‌که سرویس به‌خاطر پایان حجم منقضی شد، از پنل حذف شود. ۰ یعنی خاموش.',
+  'web.setting_auto_delete_after_time_days': 'حذف پس از پایان زمان',
+  'web.setting_auto_delete_after_time_days_desc':
+    'چند روز پس از آن‌که زمان سرویس تمام شد، از پنل حذف شود. ۰ یعنی خاموش.',
+  'web.setting_auto_delete_after_suspend_days': 'حذف پس از تعلیق',
+  'web.setting_auto_delete_after_suspend_days_desc':
+    'چند روز پس از آن‌که سرویس معلق شد، از پنل حذف شود. ۰ یعنی خاموش.',
+  'web.setting_auto_delete_warn_hours': 'هشدار پیش از حذف',
+  'web.setting_auto_delete_warn_hours_desc':
+    'چند ساعت پیش از حذف، یک پیام با دکمهٔ تمدید برای مشتری فرستاده شود. سرویس زودتر از این پس از هشدار حذف نمی‌شود. ۰ یعنی بدون هشدار.',
+  'web.setting_auto_delete_max_per_minute': 'حداکثر حذف در دقیقه برای هر پنل',
+  'web.setting_auto_delete_max_per_minute_desc':
+    'حذف‌ها با این سرعت در صف پنل گذاشته می‌شوند تا پنل یک‌باره زیر بار نرود.',
   'web.feature_service_auto_renew_summary':
     'مشتری می‌تواند برای هر سرویس خود از ربات یا مینی‌اپ «تمدید خودکار» را روشن کند. چند ساعت پیش از پایان اعتبار، سرویس از موجودی کیف پول و با همان قیمت‌گذاری تمدید معمول تمدید می‌شود، مشروط بر اینکه موجودی کافی باشد و قیمت از مبلغ مورد توافق مشتری بیشتر نشده باشد.',
   'web.feature_service_auto_renew_off_effect':
@@ -7171,6 +7206,7 @@ export const WEB_FA = {
   'web.opslog_type_referral_commission': 'پورسانت معرف',
   'web.opslog_type_signup_gift': 'هدیهٔ عضویت',
   'web.opslog_type_gift_card': 'کارت هدیه (استفاده و ساخت دسته)',
+  'web.opslog_type_service_auto_deleted': 'حذف خودکار سرویس پایان‌یافته',
   'web.opslog_type_service_created': 'ساخت سرویس بعد از خرید',
   'web.opslog_type_service_created_wallet': 'خرید با موجودی کیف پول',
   'web.opslog_type_service_renewed': 'تمدید سرویس',
@@ -11470,6 +11506,7 @@ export const WEB_FA = {
   'web.pay_notice_service_auto_renew_funds_short': 'کمبود موجودی برای تمدید خودکار',
   'web.pay_notice_service_auto_renew_price_changed': 'تغییر مبلغ تمدید خودکار',
   'web.pay_notice_reseller_expired': 'پایان مهلت نمایندگی',
+  'web.pay_notice_service_auto_delete_warning': 'هشدار حذف خودکار سرویس',
   'web.pay_provider_pending': 'در انتظار',
   'web.pay_provider_processing': 'در حال پردازش',
   'web.pay_provider_completed': 'تکمیل‌شده',
@@ -11894,6 +11931,8 @@ export const WEB_FA = {
   'web.outbox_event_gift_card_batch_disabled': 'غیرفعال شدن دستهٔ کارت هدیه',
   'web.outbox_event_service_auto_renew_changed': 'تغییر تمدید خودکار سرویس',
   'web.outbox_event_service_auto_renew_run_settled': 'نتیجهٔ یک تمدید خودکار',
+  'web.outbox_event_service_auto_delete_scheduled': 'زمان‌بندی حذف خودکار یک سرویس',
+  'web.outbox_event_service_auto_delete_planned': 'حذف خودکار یک سرویس در صف پنل',
   'web.outbox_aggregate_admin': 'مدیر',
   'web.outbox_aggregate_bot_instance': 'ربات',
   'web.outbox_aggregate_broadcast': 'پیام همگانی',
