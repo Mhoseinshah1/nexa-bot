@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_EXPLICIT_MAIN_MENU, type ExplicitMainMenu } from '@nexa/contracts';
+import {
+  DEFAULT_MAIN_MENU_LAYOUT,
+  explicitFromLegacy,
+  type ExplicitMainMenu,
+} from '@nexa/contracts';
 import {
   DRAG_THRESHOLD_PX,
   autoScrollStep,
@@ -18,6 +22,13 @@ import {
   placeInNewRow,
   removeToPool,
 } from '../../apps/web/src/pages/bot-buttons/model';
+
+/**
+ * The plain starting layout these tests were written against: the registry packed two to a row,
+ * every style `default`. The shipped default (`DEFAULT_EXPLICIT_MAIN_MENU`) is Mirza's arrangement
+ * since NEXA-OWNER-BATCH-1 PR-1; the drag, style and inspector mechanics are layout-independent.
+ */
+const DEFAULT_EXPLICIT_MAIN_MENU = explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT);
 
 /**
  * The builder's drag rules as PURE functions (owner, 2026-10-02): what a drop does, when it

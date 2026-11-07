@@ -477,6 +477,28 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // NEXA-OWNER-BATCH-1 PR-1: the services list's search row, one switch per button, both off by
+  // default. A display choice (nothing is lost, the search itself is unchanged), so no confirmation.
+  services_search_label_button: {
+    title: 'web.feature_services_search_label_button_title',
+    summary: 'web.feature_services_search_label_button_summary',
+    category: 'customer',
+    where: ['bot'],
+    offEffect: 'web.feature_services_search_label_button_off',
+    related: { path: '/bot-buttons', label: 'web.nav_bot_buttons' },
+    disableEffect: null,
+    confirmEnable: null,
+  },
+  services_search_button: {
+    title: 'web.feature_services_search_button_title',
+    summary: 'web.feature_services_search_button_summary',
+    category: 'customer',
+    where: ['bot'],
+    offEffect: 'web.feature_services_search_button_off',
+    related: { path: '/bot-buttons', label: 'web.nav_bot_buttons' },
+    disableEffect: null,
+    confirmEnable: null,
+  },
   // R10 D3: off withdraws an offer (every price is the ordinary one again); nothing is lost.
   personal_discount: {
     title: 'web.feature_personal_discount_title',

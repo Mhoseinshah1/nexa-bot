@@ -210,16 +210,17 @@ describe('the button builder (round T, T1)', () => {
       )
     ).rows.map((row) => row.action);
 
-  /** The keyboard a tenant that never used the builder has always had. */
+  /** The default keyboard of a tenant that never used the builder (PR-1: Mirza's rows). */
   const DEFAULT_ROWS = rowsOfLabels([
-    ['catalog', 'services'],
-    ['wallet', 'help'],
+    ['catalog'],
+    ['wallet', 'services'],
     ['apps'],
+    ['help'],
     ['tickets'],
   ]);
 
   describe('a tenant that never published', () => {
-    it('keeps the legacy keyboard byte for byte, styles default, no icons', async () => {
+    it('draws the Mirza default keyboard (styled, no icons) until anything is saved, then the legacy one byte for byte', async () => {
       const legacyOnly = new MainMenuLayout({
         settings: container.settingsResolver,
         features: container.featureFlagResolver,
@@ -227,11 +228,21 @@ describe('the button builder (round T, T1)', () => {
         templates: container.templateResolver,
       });
       expect(await container.mainMenu.rowsFor(tenantA)).toEqual(DEFAULT_ROWS);
-      expect(await container.mainMenu.rowsFor(tenantA)).toEqual(await legacyOnly.rowsFor(tenantA));
-      for (const button of (await keyboard()).flat()) {
-        expect(button.style).toBe('default');
-        expect(button.iconSlot).toBeNull();
-      }
+      // The stand-in without the source cannot tell a default from a saved value: it keeps the old packing.
+      expect(await legacyOnly.rowsFor(tenantA)).not.toEqual(DEFAULT_ROWS);
+      expect((await keyboard()).flat().map((button) => button.style)).toEqual([
+        'success',
+        'success',
+        'success',
+        'success',
+        'success',
+        'default',
+      ]);
+      for (const button of (await keyboard()).flat()) expect(button.iconSlot).toBeNull();
+      // The builder's draft is seeded with that same default.
+      expect((await builder().view(tenantA, owner)).draft.layout).toEqual(
+        DEFAULT_EXPLICIT_MAIN_MENU,
+      );
       // A stored legacy arrangement is followed exactly as before.
       await container.settingsService.set(tenantA, owner, {
         idempotencyKey: key(),

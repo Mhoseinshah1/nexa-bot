@@ -168,7 +168,12 @@ export class BotMenuBuilderService {
     const { snapshot: pinned, setting } = await this.deps.source.fromState(scope, state);
     const answer = pinned.source;
     const row = state.layout;
-    const head = headOf(row, explicitFromLegacy(pinned.legacy), setting.version);
+    // With nothing saved in `bot.main_menu` the seed is the default keyboard, the one the bot draws.
+    const seed =
+      pinned.legacyIsDefault === true
+        ? DEFAULT_EXPLICIT_MAIN_MENU
+        : explicitFromLegacy(pinned.legacy);
+    const head = headOf(row, seed, setting.version);
     const [described, live, bots, customButtons, customMenuEnabled] = await Promise.all([
       this.deps.mainMenu.describeFor(scope, { gatesForHidden: true, pinned }),
       this.deps.mainMenu.rowsFor(scope, { pinned }),
@@ -307,7 +312,7 @@ export class BotMenuBuilderService {
        */
       const setting = await this.deps.settings.resolve(scope, 'bot.main_menu', tx);
       const target =
-        command.seed === 'LIVE'
+        command.seed === 'LIVE' && setting.source !== 'DEFAULT'
           ? explicitFromLegacy(setting.value as readonly MainMenuLayoutEntry[])
           : DEFAULT_EXPLICIT_MAIN_MENU;
       if (
