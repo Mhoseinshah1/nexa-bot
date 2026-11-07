@@ -220,7 +220,7 @@ describe('the button builder (round T, T1)', () => {
   ]);
 
   describe('a tenant that never published', () => {
-    it('draws the Mirza default keyboard (styled, no icons) until anything is saved, then the legacy one byte for byte', async () => {
+    it('draws the Mirza default keyboard (styled, no icons) while nothing is saved', async () => {
       const legacyOnly = new MainMenuLayout({
         settings: container.settingsResolver,
         features: container.featureFlagResolver,
@@ -243,7 +243,16 @@ describe('the button builder (round T, T1)', () => {
       expect((await builder().view(tenantA, owner)).draft.layout).toEqual(
         DEFAULT_EXPLICIT_MAIN_MENU,
       );
-      // A stored legacy arrangement is followed exactly as before.
+    });
+
+    it('keeps the legacy keyboard byte for byte, styles default, no icons', async () => {
+      // PR-1: once an owner SAVED bot.main_menu, the old packing and plain styles apply exactly as before.
+      const legacyOnly = new MainMenuLayout({
+        settings: container.settingsResolver,
+        features: container.featureFlagResolver,
+        trials: { anyOffered: () => Promise.resolve(false) },
+        templates: container.templateResolver,
+      });
       await container.settingsService.set(tenantA, owner, {
         idempotencyKey: key(),
         key: 'bot.main_menu',
@@ -254,6 +263,10 @@ describe('the button builder (round T, T1)', () => {
         expectedVersion: null,
       });
       expect(await container.mainMenu.rowsFor(tenantA)).toEqual(await legacyOnly.rowsFor(tenantA));
+      for (const button of (await keyboard()).flat()) {
+        expect(button.style).toBe('default');
+        expect(button.iconSlot).toBeNull();
+      }
       const view = await builder().view(tenantA, owner);
       expect(view.source).toBe('LEGACY');
       expect(view.superseded).toBe(false);
