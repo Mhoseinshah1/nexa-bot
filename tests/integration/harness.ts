@@ -29,6 +29,32 @@ import {
   type Database,
   type DatabaseHandle,
 } from '../../apps/api/src/infrastructure/persistence/database';
+import type { TenantId, TenantKind } from '@nexa/contracts';
+
+/**
+ * The kinds `seed` gives its tenants (PR #411). A role records its tenant's kind where it
+ * sets its scope (`resolveInstallationTenant` passes `primary.kind`), and the tenant guard
+ * fails closed on a vanished tenant whose kind it never recorded. A case that points the
+ * container at a SEEDED tenant without naming a kind gets that tenant's real kind here, the
+ * way a booted role would have it; any other id stays UNKNOWN, as in production. Without
+ * this, the guard's timer firing inside `resetDatabase` (the tenants are truncated, then
+ * re-seeded) saw an UNKNOWN tenant gone and took the exit path on every such tick.
+ * `installation-tenant-guard-rls.test.ts` checks this table against the seeded rows.
+ */
+export const SEEDED_TENANT_KINDS: Readonly<Record<string, TenantKind>> = {
+  [SEED_IDS.tenantA]: 'PRIMARY',
+  [SEED_IDS.tenantB]: 'RESELLER_BOT',
+  [SEED_IDS.tenantBReseller]: 'RESELLER_BOT',
+};
+
+/** `Container.setInstallationTenant` that records a seeded tenant's own kind when none is given. */
+function withSeededKinds(target: Container): Container['setInstallationTenant'] {
+  return (tenantId: TenantId | null, kind?: TenantKind | null) =>
+    target.setInstallationTenant(
+      tenantId,
+      kind === undefined && tenantId !== null ? SEEDED_TENANT_KINDS[tenantId] : kind,
+    );
+}
 
 /**
  * Integration tests run against a real PostgreSQL and a real Redis.
@@ -336,6 +362,7 @@ function withOwnerDatabase(application: Container, owner: DatabaseHandle): Conta
   return new Proxy(application, {
     get(target, property, receiver) {
       if (property === 'database') return owner;
+      if (property === 'setInstallationTenant') return withSeededKinds(target);
       return Reflect.get(target, property, receiver) as unknown;
     },
   });
@@ -357,6 +384,7 @@ export function createTestContainer(
   return new Proxy(application, {
     get(target, property, receiver) {
       if (property === 'database') return owner;
+      if (property === 'setInstallationTenant') return withSeededKinds(target);
       if (property === 'shutdown') {
         return async (...args: Parameters<typeof shutdown>) => {
           try {

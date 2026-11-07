@@ -5,7 +5,14 @@ import { API_PREFIX, AUTH_ROUTES, type TenantId } from '@nexa/contracts';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { tenants } from '../../apps/api/src/infrastructure/persistence/schema';
-import { createApiApp, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  createApiApp,
+  migrateOnce,
+  resetDatabase,
+  SEEDED_TENANT_KINDS,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * The installation tenant guard (#413) on an install that hosts many tenants (ADR-0037).
@@ -126,6 +133,11 @@ async function expectFailsClosedThroughALogin(): Promise<void> {
 }
 
 describe('the installation tenant guard under row-level security', () => {
+  it('the harness records each seeded tenant with the kind the seed gives it', async () => {
+    const rows = await db().select({ id: tenants.id, kind: tenants.kind }).from(tenants);
+    expect(Object.fromEntries(rows.map((row) => [row.id, row.kind]))).toEqual(SEEDED_TENANT_KINDS);
+  });
+
   it('keeps the installation tenant while it exists', async () => {
     await expect(guard().verify()).resolves.toBe(tenantA.tenantId);
     expect(container().installationTenantId).toBe(tenantA.tenantId);

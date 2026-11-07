@@ -13,7 +13,7 @@ import {
  * drop the `failClosed` branch (hosted before/after, unknown, dedupe cases); fall back on an
  * UNKNOWN kind; drop the `stopScope` call; drop the `alerted` dedupe; drop the UNKNOWN exit;
  * drop re-recording the adopted primary; never fall back (the #413 restore cases); record
- * every kind as UNKNOWN in `record`.
+ * every kind as UNKNOWN in `record`; drop the catch in `run` (an exit that throws rejects).
  */
 const OLD = 'tenant-old' as never;
 const NEW = 'tenant-new' as never;
@@ -258,6 +258,31 @@ describe('InstallationTenantGuard.verify', () => {
     await guard.verify();
     expect(state.exits).toEqual([1]);
     expect(state.errors).toHaveLength(1);
+  });
+
+  it('never rejects when exit throws (a runner stub), on either exit path', async () => {
+    for (const recorded of ['PRIMARY', null] as const) {
+      const { state } = world({ cached: OLD, existing: [], primary: null });
+      const guard = new InstallationTenantGuard({
+        getCurrent: () => state.current as never,
+        setCurrent: () => undefined,
+        stopScope: () => {
+          state.current = null;
+        },
+        tenantKind: async () => null,
+        findPrimary: async () => null,
+        alertOwner: async () => false,
+        exit: (code) => {
+          state.exits.push(code);
+          throw new Error('process.exit unexpectedly called');
+        },
+        logger: { warn: (c) => state.warns.push(c), error: (c) => state.errors.push(c) },
+      });
+      guard.record(OLD, recorded);
+      await expect(guard.verify()).resolves.not.toBe(NEW);
+      expect(state.exits).toEqual([1]);
+      expect(state.errors.some((e) => e.err === 'process.exit unexpectedly called')).toBe(true);
+    }
   });
 
   it('leaves a role that never had a tenant alone (fresh, unprovisioned install)', async () => {

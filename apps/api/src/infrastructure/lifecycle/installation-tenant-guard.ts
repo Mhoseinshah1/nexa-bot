@@ -152,7 +152,29 @@ export class InstallationTenantGuard {
     return this.inFlight;
   }
 
+  /**
+   * `verify` never rejects: it runs from a timer and from error handlers with nobody to catch
+   * it. A dependency that throws (a logger, `stopScope`, or an `exit` that a test runner
+   * replaces with a throwing stub) is logged and the current tenant kept, as before #411,
+   * when every step sat inside one try.
+   */
   private async run(): Promise<TenantId | null> {
+    try {
+      return await this.check();
+    } catch (error) {
+      try {
+        this.deps.logger.error(
+          { err: error instanceof Error ? error.message : String(error) },
+          'the installation tenant check failed unexpectedly; keeping the current tenant',
+        );
+        return this.deps.getCurrent();
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  private async check(): Promise<TenantId | null> {
     const cached = this.deps.getCurrent();
     if (cached === null) return null;
     let kind: TenantKind | null;
