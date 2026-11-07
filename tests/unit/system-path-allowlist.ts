@@ -60,6 +60,9 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleHeavyJobQueueRepository.heartbeat',
   'DrizzleHeavyJobQueueRepository.purgeFinished',
   'DrizzleHeavyJobQueueRepository.tryStart',
+  'DrizzleHostedDomainDirectory.certificateAllowed',
+  'DrizzleHostedDomainDirectory.findLinkByHash',
+  'DrizzleHostedDomainDirectory.resolveHost',
   'DrizzleIncidentRepository.tenantsWithDue',
   'DrizzleInstallationKeyRepository.all',
   'DrizzleInstallationKeyRepository.countsByWrappingKey',
@@ -166,13 +169,24 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'reason: customer notification text retention',
   'reason: customer prune: dependents in every tenant',
   // Phase 6A PR-3, the creator panel: the installation owner's reads and writes across the
-  // hosted tenants he created (ADR-0038), and the installation-wide backup time.
+  // hosted tenants he created (ADR-0038), and the installation-wide backup time. Activation
+  // (PR-4) adds: the Host->tenant directory reads made before any tenant is bound (activation
+  // link by token hash, certificate question, request host), the bot-identity check across
+  // every tenant, and the three writes a transaction bound to one tenant makes to ANOTHER
+  // tenant's row (bind a bot, spend a link, mark the owner activated), each on one row.
+  'reason: hosting: activation link by token hash',
+  'reason: hosting: bind the bot of a hosted tenant',
+  'reason: hosting: bot identity held by another tenant',
   'reason: hosting: close a hosted tenant for purge',
   'reason: hosting: last successful installation backup',
+  'reason: hosting: mark the hosted owner activated',
+  'reason: hosting: may a certificate be issued for a host',
   'reason: hosting: provision a hosted tenant',
   'reason: hosting: purge preview counts of a hosted tenant',
+  'reason: hosting: resolve a request host to its hosted tenant',
   'reason: hosting: set a hosted tenant status',
   'reason: hosting: slug taken in any tenant',
+  'reason: hosting: spend an activation link',
   'reason: hosting: the hosted bot list, every hosted tenant',
   'reason: idempotency retention: interactive keys',
   'reason: outbox retention: published messages',

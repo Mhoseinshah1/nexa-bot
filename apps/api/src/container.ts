@@ -1011,6 +1011,13 @@ import { HeavyJobGate } from './modules/platform/capacity/application/heavy-job-
 import { CapacityMonitor } from './modules/platform/capacity/application/capacity-monitor.js';
 // Phase 6A PR-3: the creator panel.
 import { buildHosting } from './modules/platform/hosting/infrastructure/build-hosting.js';
+import { buildHostedActivation } from './modules/platform/hosting/infrastructure/build-hosted-activation.js';
+import type { HostedActivationService } from './modules/platform/hosting/application/hosted-activation.service.js';
+import type { HostedOwnerActivationService } from './modules/platform/hosting/application/hosted-owner-activation.service.js';
+import type {
+  HostedDnsResolver,
+  HostedTlsProbe,
+} from './modules/platform/hosting/application/activation-ports.js';
 import type { HostingSectionService } from './modules/platform/hosting/application/hosting-section.service.js';
 import type { HostingService } from './modules/platform/hosting/application/hosting.service.js';
 import type { HostedBotExpiryService } from './modules/platform/hosting/application/hosted-bot-expiry.service.js';
@@ -1323,6 +1330,8 @@ export interface Container {
   readonly capacityMonitorLoop: CapacityMonitorLoop;
   /** Phase 6A PR-3: the creator panel (owner only, behind its own second factor). */
   readonly hostingSection: HostingSectionService;
+  readonly hostedActivation: HostedActivationService;
+  readonly hostedOwnerActivation: HostedOwnerActivationService;
   readonly hosting: HostingService;
   readonly hostedBotExpiry: HostedBotExpiryService;
   /**
@@ -1979,6 +1988,14 @@ export function usageSyncBudgetReserveFor(capacity: number, monitorReserve: numb
 
 export interface ContainerOptions {
   /**
+   * Phase 6A PR-4: the hosted-domain checks' network, replaceable by tests (a fake resolver and
+   * a fake HTTPS probe). Production passes nothing and gets `node:dns` and a verified-HTTPS probe.
+   */
+  readonly hostedNetwork?: {
+    readonly dns?: HostedDnsResolver;
+    readonly tls?: HostedTlsProbe;
+  };
+  /**
    * Where the process's log lines go: stdout (the default, what a service's log collector
    * reads) or stderr — for a CLI whose stdout IS its output (`--format json` is a document,
    * and one log line in it makes the document unreadable). Never "off": the lines are kept.
@@ -2475,31 +2492,54 @@ export function createContainer(
    * behind their own TOTP factor and 12-hour section session; the expiry sweep runs in the
    * installation-scoped sweep loop below. The disks are the capacity monitor's two.
    */
-  const { hostingSection, hosting, hostedBotExpiry } = buildHosting({
+  const { hostingSection, hosting, hostedBotExpiry, hostingRepository, hostingOwner } =
+    buildHosting({
+      db: database.db,
+      config,
+      uow,
+      guard,
+      audit,
+      opsLog,
+      outbox,
+      idempotency,
+      scopeActivity: tenants,
+      cipher,
+      hasher,
+      clock,
+      ids,
+      qr: new PngQrCodeEncoder(),
+      admins,
+      roles,
+      sessions,
+      verifyOwnPassword: (scope, actor, password, context, action) =>
+        adminManagement.verifyOwnPassword(scope, actor, password, context, action),
+      capacityLimits,
+      capacityResolver,
+      systemProbe,
+      diskPaths: ['/', config.BACKUP_WORK_DIR],
+      installationTenantId: () => installationTenantId,
+    });
+  // Phase 6A PR-4: the activation of a hosted bot (token, domain, SSL, webhook, one-time link)
+  // and the Host → hosted-tenant resolution, over the same Telegram gateway and bootstrap.
+  const { hostedActivation, hostedOwnerActivation } = buildHostedActivation({
     db: database.db,
     config,
     uow,
-    guard,
-    audit,
-    opsLog,
-    outbox,
+    hostingRepository,
+    section: hostingSection,
+    owner: hostingOwner,
     idempotency,
     scopeActivity: tenants,
-    cipher,
+    audit,
+    outbox,
     hasher,
     clock,
     ids,
-    qr: new PngQrCodeEncoder(),
-    admins,
-    roles,
-    sessions,
-    verifyOwnPassword: (scope, actor, password, context, action) =>
-      adminManagement.verifyOwnPassword(scope, actor, password, context, action),
-    capacityLimits,
-    capacityResolver,
-    systemProbe,
-    diskPaths: ['/', config.BACKUP_WORK_DIR],
-    installationTenantId: () => installationTenantId,
+    bots: botInstances,
+    bootstrap: bootstrapBot,
+    telegram: telegramBotGateway,
+    ...(options.hostedNetwork?.dns === undefined ? {} : { dns: options.hostedNetwork.dns }),
+    ...(options.hostedNetwork?.tls === undefined ? {} : { tls: options.hostedNetwork.tls }),
   });
 
   /*
@@ -9321,6 +9361,8 @@ export function createContainer(
     capacityResolver,
     hostingSection,
     hosting,
+    hostedActivation,
+    hostedOwnerActivation,
     hostedBotExpiry,
     botTurnGuard,
     heavyJobs,

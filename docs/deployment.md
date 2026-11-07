@@ -857,6 +857,53 @@ public through the edge, so a loop of anonymous requests could hold that pool. N
   mini app are not covered: their senders are a few provider addresses, and the mini app
   has its own budget.
 
+### Hosted bots' own domains: on-demand TLS (phase 6A PR-4)
+
+A hosted owner points a domain at this server (a CNAME at the owner's hostname, or an A/AAAA at
+its address); the creator panel then walks the activation steps (`docs/adr/0038-hosted-bots.md`).
+The edge issues the certificate by itself, and the **Caddyfile change** that makes it possible is
+exactly this, in `deploy/caddy/Caddyfile` (not in `routes.caddy`, and not in the CI file):
+
+```
+{
+	on_demand_tls {
+		ask http://api:3000/internal/hosting/domain-check
+	}
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	header Strict-Transport-Security "max-age=31536000"
+	import nexa_routes
+}
+```
+
+- **`ask` is the gate.** Caddy calls it (`?domain=<name>` appended) before requesting any
+  certificate; only a 2xx lets issuance proceed. The API answers `200` for a DNS-verified domain
+  of an `ACTIVE` hosted bot whose tenant is `ACTIVE`, and `404` for everything else (unknown,
+  unverified, suspended, the owner's own name, an address, garbage), so a stranger pointing a
+  name here gets no certificate and costs no ACME order.
+- **The endpoint is internal.** `routes.caddy` has no handler for `/internal/*` (a public request
+  for it falls to the SPA), the API answers it only to a socket peer in `TRUSTED_PROXY_IPS` or
+  loopback, refuses any request carrying `X-Forwarded-*`, `Forwarded`, `Via` or `X-Real-IP` (a
+  proxied request always has them, Caddy's own `ask` call has none), and has a global budget of
+  120 questions a minute. It reveals one bit about a name the caller already named.
+- **The owner's own site** keeps its managed certificate: its block is more specific than
+  `https://`. HSTS on a hosted domain omits `includeSubDomains` (its subdomains are not ours).
+- Caddy 2.10 renames `ask` to `permission http { endpoint ... }`; the old spelling still works.
+  The image is pinned in `compose.yml`.
+- **DNS target.** `HOSTED_BOTS_CNAME_TARGET` (default: the hostname of the first
+  `WEB_ADMIN_ORIGINS` entry) and, optionally, `HOSTED_BOTS_SERVER_IPS` (comma-separated). A domain
+  is verified when its CNAME names the target, or when every address it resolves to is the
+  target's own or listed. The creator panel shows the hosted owner's instructions.
+- **Host → tenant.** The API resolves a request's host (`request.hostname`: `X-Forwarded-Host` is
+  believed only from a peer in `TRUSTED_PROXY_IPS`, so the topology must be set right) to a
+  DNS-verified hosted domain for sign-in, sessions and the `/activate` page; any other host,
+  including every name in `WEB_ADMIN_ORIGINS`, is the installation. A hosted domain's own
+  `https://<domain>` is an allowed Origin on that domain only.
+
 ### Who reports a stalled role, and the one that cannot report itself
 
 Every background role now turns a loop that has stopped making progress into an

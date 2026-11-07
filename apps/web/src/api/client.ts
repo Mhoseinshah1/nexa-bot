@@ -22,6 +22,15 @@ import {
 import {
   // Phase 6A (D1): the installation owner's creator panel.
   HOSTING_ROUTES,
+  // Phase 6A PR-4: the activation of a hosted bot.
+  HOSTED_ACTIVATION_ROUTES,
+  HOSTING_ACTIVATION_ROUTES,
+  type HostedActivationLinkResponse,
+  type HostedActivationRedeemRequest,
+  type HostedActivationRedeemResponse,
+  type HostedActivationResponse,
+  type HostedActivationRunnableStep,
+  type HostedActivationView,
   type CapacitySetLimitRequest,
   type CapacitySetLimitResponse,
   type HostedBotCreateRequest,
@@ -5906,4 +5915,60 @@ export function setHostedBotLimit(
 
 export function fetchHostingServer(): Promise<HostingServerResponse> {
   return authedGet(HOSTING_ROUTES.server, hostingShape<HostingServerResponse>());
+}
+
+// --- Phase 6A PR-4: the activation of a hosted bot --------------------------------------------
+
+export function fetchHostedActivation(tenantId: string): Promise<HostedActivationView> {
+  return authedGet(
+    hostingPath(HOSTING_ACTIVATION_ROUTES.status, tenantId),
+    hostingShape<HostedActivationView>(),
+  );
+}
+
+/** The bot token and the domain, with a fresh second-factor proof. Never returned. */
+export function configureHostedActivation(
+  tenantId: string,
+  body: { idempotencyKey: string; proof: HostingProof; botToken: string; domain: string },
+): Promise<HostedActivationResponse> {
+  return post(
+    hostingPath(HOSTING_ACTIVATION_ROUTES.configure, tenantId),
+    body,
+    hostingShape<HostedActivationResponse>(),
+  );
+}
+
+/** Re-runs one check (token, domain, SSL, webhook). No code: it changes nothing a check did not prove. */
+export function runHostedActivationStep(
+  tenantId: string,
+  step: HostedActivationRunnableStep,
+  idempotencyKey: string,
+): Promise<HostedActivationResponse> {
+  return post(
+    hostingPath(HOSTING_ACTIVATION_ROUTES.runStep, tenantId).replace(':step', step),
+    { idempotencyKey },
+    hostingShape<HostedActivationResponse>(),
+  );
+}
+
+export function issueHostedActivationLink(
+  tenantId: string,
+  body: { idempotencyKey: string; proof: HostingProof },
+): Promise<HostedActivationLinkResponse> {
+  return post(
+    hostingPath(HOSTING_ACTIVATION_ROUTES.link, tenantId),
+    body,
+    hostingShape<HostedActivationLinkResponse>(),
+  );
+}
+
+/** The hosted owner's own page: anonymous, the link's token is the credential. */
+export function redeemHostedActivation(
+  body: HostedActivationRedeemRequest,
+): Promise<HostedActivationRedeemResponse> {
+  return post(
+    HOSTED_ACTIVATION_ROUTES.redeem,
+    body,
+    hostingShape<HostedActivationRedeemResponse>(),
+  );
 }

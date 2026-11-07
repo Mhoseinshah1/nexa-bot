@@ -280,6 +280,7 @@ export async function resetDatabase(db: Database): Promise<void> {
        business_outbound_messages, business_messages, business_conversations,
        telegram_business_connections,
        -- Phase 6A PR-3: the creator panel's register, factor, codes and sessions.
+       hosted_bot_activation_links, hosted_bot_activations,
        hosted_bots, hosting_totp_factors, hosting_recovery_codes, hosting_sessions,
        customers
      RESTART IDENTITY CASCADE` as never,
@@ -405,13 +406,16 @@ export function createTestContainer(
  * `createApiApp` for a test: the production application, as nexa_app, with the case's
  * `container.database` on the owner (`withOwnerDatabase`).
  */
-export async function createApiApp(config?: AppConfig): Promise<ApiApp> {
+export async function createApiApp(
+  config?: AppConfig,
+  options?: ContainerOptions,
+): Promise<ApiApp> {
   const resolved = config ?? testConfig();
   // Imported when a case asks for the HTTP app, never at module load: the bootstrap pulls
   // in the Nest module and its parameter decorators, and the rehearsal's panels helper —
   // run by tsx outside the API's compiler settings — imports this file for its fixtures.
   const { createApiApp: createProductionApiApp } = await import('../../apps/api/src/bootstrap');
-  const api = await createProductionApiApp(resolved);
+  const api = await createProductionApiApp(resolved, options);
   const owner = createDatabase(resolved.DATABASE_URL, 4);
   return {
     app: api.app,

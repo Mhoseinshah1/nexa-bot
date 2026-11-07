@@ -157,3 +157,24 @@
     min-height: var(--ctl-h);
   }
 }
+
+/* Phase 6A PR-4: the activation of a hosted bot, inside its card. */
+.hosting-act-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.hosting-act-step {
+  display: grid;
+  gap: 4px;
+  padding-block: 4px;
+}
+
+.hosting-act-link {
+  display: block;
+  overflow-wrap: anywhere;
+  user-select: all;
+}

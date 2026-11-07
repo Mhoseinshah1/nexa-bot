@@ -148,12 +148,63 @@ export function assertOriginAllowed(
 }
 
 /**
+ * Phase 6A PR-4: `assertOriginAllowed`, plus ONE more origin a write may come from — a hosted
+ * tenant's own verified domain.
+ *
+ * The static list is checked first and decides everything it can. Only when it refuses is the
+ * request's Origin looked at again: it must be exactly `https://<host>` (no port, no path) AND
+ * `<host>` must be the host this very request was addressed to (`request.hostname`, which
+ * honours `X-Forwarded-Host` only from a trusted proxy) AND that host must resolve to a
+ * DNS-verified hosted domain. A page on a hosted domain can therefore write to its own
+ * domain's API and to nothing else; another origin, a lookalike, or an unverified name is
+ * refused exactly as before. The sync `assertOriginAllowed` is untouched.
+ */
+export async function assertOriginOrHostedDomain(
+  container: {
+    readonly config: { readonly WEB_ADMIN_ORIGINS: readonly string[] };
+    readonly hostedOwnerActivation?: {
+      resolveHost(host: string | null | undefined): Promise<unknown>;
+    };
+  },
+  request: FastifyRequest,
+): Promise<void> {
+  try {
+    assertOriginAllowed(request, container.config.WEB_ADMIN_ORIGINS);
+    return;
+  } catch (refusal) {
+    const origin = request.headers.origin;
+    const hosted = container.hostedOwnerActivation;
+    if (hosted === undefined || typeof origin !== 'string') throw refusal;
+    let parsed: URL;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      throw refusal;
+    }
+    const sameHost = parsed.hostname === request.hostname.toLowerCase();
+    if (
+      !sameHost ||
+      parsed.protocol !== 'https:' ||
+      parsed.port !== '' ||
+      parsed.origin !== origin ||
+      (await hosted.resolveHost(request.hostname)) === null
+    ) {
+      throw refusal;
+    }
+  }
+}
+
+/**
  * What `authenticateAdmin` needs from the container, named so this file does not import it.
  */
 export interface AdminRequestAuthenticator {
   readonly config: {
     readonly NODE_ENV: string;
     readonly WEB_ADMIN_ORIGINS: readonly string[];
+  };
+  /** Phase 6A PR-4: lets a hosted tenant's own verified domain be an allowed Origin. */
+  readonly hostedOwnerActivation?: {
+    resolveHost(host: string | null | undefined): Promise<unknown>;
   };
   readonly auth: {
     authenticate(token: string): Promise<{ readonly admin: Admin; readonly session: AdminSession }>;
@@ -183,7 +234,7 @@ export async function authenticateAdmin(
   request: FastifyRequest,
 ): Promise<{ scope: TenantContext; actor: ActorContext }> {
   const token = requireSessionToken(request, container.config.NODE_ENV === 'production');
-  assertOriginAllowed(request, container.config.WEB_ADMIN_ORIGINS);
+  await assertOriginOrHostedDomain(container, request);
   const { admin, session } = await container.auth.authenticate(token);
   const correlationId = currentCorrelationId() ?? newCorrelationId(container.ids.uuid());
   // `botInstanceId: null`: every Web Admin record belongs to the TENANT — a tenant running

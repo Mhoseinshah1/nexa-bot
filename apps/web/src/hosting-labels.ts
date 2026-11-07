@@ -1,6 +1,8 @@
 import type {
   CapacityLimit,
   CapacityResource,
+  HostedActivationLinkState,
+  HostedActivationStep,
   HostedBotState,
   HostingCreateRefusal,
 } from '@nexa/contracts';
@@ -50,3 +52,26 @@ export const HOSTING_CREATE_REFUSAL_LABEL: Readonly<Record<HostingCreateRefusal,
 export function limitText(limit: CapacityLimit): string {
   return limit.mode === 'UNLIMITED' ? t('web.hosting_limit_unlimited') : formatNumber(limit.value);
 }
+
+/**
+ * The activation steps' words (phase 6A PR-4): what each step says once it holds («توکن تأیید شد»…)
+ * and what it is called until then. Records over the contract's own union.
+ */
+export const ACTIVATION_STEP_LABEL: Readonly<
+  Record<HostedActivationStep, { readonly done: WebKey; readonly todo: WebKey }>
+> = {
+  TOKEN: { done: 'web.hosting_act_step_token_done', todo: 'web.hosting_act_step_token_todo' },
+  DOMAIN: { done: 'web.hosting_act_step_domain_done', todo: 'web.hosting_act_step_domain_todo' },
+  SSL: { done: 'web.hosting_act_step_ssl_done', todo: 'web.hosting_act_step_ssl_todo' },
+  WEBHOOK: {
+    done: 'web.hosting_act_step_webhook_done',
+    todo: 'web.hosting_act_step_webhook_todo',
+  },
+  LINK: { done: 'web.hosting_act_step_link_done', todo: 'web.hosting_act_step_link_todo' },
+};
+
+export const ACTIVATION_LINK_STATE_LABEL: Readonly<Record<HostedActivationLinkState, WebKey>> = {
+  ACTIVE: 'web.hosting_act_link_state_active',
+  USED: 'web.hosting_act_link_state_used',
+  EXPIRED: 'web.hosting_act_link_state_expired',
+};
