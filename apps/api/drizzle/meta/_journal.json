@@ -2250,10 +2250,10 @@
       "breakpoints": true
     },
     {
-      "idx": 318,
+      "idx": 321,
       "version": "7",
-      "when": 1793851961905,
-      "tag": "0318_hosted_bot_activation",
+      "when": 1794029480276,
+      "tag": "0321_hosted_bot_activation",
       "breakpoints": true
     }
   ]
