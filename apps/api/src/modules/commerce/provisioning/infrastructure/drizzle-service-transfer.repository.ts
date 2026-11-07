@@ -172,7 +172,19 @@ export class DrizzleServiceTransferRepository implements ServiceTransferReposito
       .update(services)
       // The note is the sender's own words about their own service (brief F5): it does not
       // travel with the account.
-      .set({ customerId: input.toCustomerId, customerNote: null, updatedAt: input.now })
+      .set({
+        customerId: input.toCustomerId,
+        customerNote: null,
+        /*
+         * NEXA-OWNER-BATCH-1 PR-3: a finished service's automatic-deletion clock restarts for
+         * its new owner. The cycle is (service, `state_since`), so this starts a NEW cycle: a
+         * deletion scheduled (and warned) under the sender never matches again, and the
+         * recipient gets the full day count and a warning of their own.
+         */
+        stateSince: sql`CASE WHEN ${services.state} IN ('EXPIRED', 'SUSPENDED')
+                             THEN ${input.now}::timestamptz ELSE ${services.stateSince} END`,
+        updatedAt: input.now,
+      })
       .where(
         and(
           eq(services.tenantId, tenantId),

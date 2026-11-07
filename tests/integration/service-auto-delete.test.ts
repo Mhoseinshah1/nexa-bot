@@ -20,6 +20,7 @@ import {
 import { withDatabaseScope } from '../../apps/api/src/infrastructure/persistence/database-scope';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
+import { DrizzleServiceTransferRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository';
 import { DrizzleNotificationSubjectReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader';
 import { DrizzleOpsLogFacts } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/drizzle-ops-log-facts';
 import { OperationLog } from '../../apps/api/src/modules/commerce/ops-log/application/operation-log';
@@ -55,6 +56,10 @@ import {
  *   TERMINATE key made per attempt: "a failed TERMINATE is never planned again".
  * - the rate limit's room ignored: "at most max_per_minute per panel …".
  * - the flag read in `schedulePass` removed: "the flag off: nothing is warned or deleted".
+ * - the transfer's `state_since` restart removed: "a transfer after the warning …" (the clock
+ *   is not restarted, so the old cycle's run would hold the cycle's unique key for ever).
+ * - `s.customer_id = r.customer_id` removed from the reader, `deletable` and `stillDeletable`:
+ *   "a run scheduled under another owner …".
  */
 
 const BOT_A = SEED_IDS.botA1 as BotInstanceId;
@@ -631,6 +636,102 @@ describe('PR-3 — automatic deletion of finished services', () => {
       log.operationSucceeded(tenantA, String(operatorOp?.['id']), tx),
     );
     expect(queued).toHaveLength(0);
+  });
+
+  /** The transfer's own two writes, as `ServiceTransferService.transfer` makes them. */
+  async function transfer(serviceId: string, to: UserId, opts: { reassign: boolean }) {
+    const from = (await services.findById(tenantA, serviceId))?.customerId as UserId;
+    const repository = new DrizzleServiceTransferRepository(ctx.container.database.db);
+    const now = ctx.container.clock.now();
+    await ctx.container.uow.run(tenantA, async (tx) => {
+      await repository.create(
+        tenantA,
+        {
+          id: ctx.container.ids.uuid(),
+          serviceId,
+          fromCustomerId: from,
+          toCustomerId: to,
+          botInstanceId: BOT_A,
+          idempotencyKey: key('transfer'),
+          actorType: 'SYSTEM_JOB',
+          actorLabel: 'test',
+          correlationId: 'transfer-test',
+          now,
+        },
+        tx,
+      );
+      if (opts.reassign) {
+        await repository.reassign(
+          tenantA,
+          { serviceId, fromCustomerId: from, toCustomerId: to, now },
+          tx,
+        );
+      } else {
+        // Another path that changes the owner and leaves the clock alone.
+        await tx.tx.execute(sql`UPDATE services SET customer_id = ${to} WHERE id = ${serviceId}`);
+      }
+    });
+  }
+
+  /** A SUSPENDED service (transferable), its clock three days back, warned under its owner. */
+  async function warnedSuspended(
+    telegramUserId: string,
+  ): Promise<{ serviceId: string; runId: string }> {
+    await setSetting(a, 'after_suspend_days', 2);
+    const serviceId = await activeService(a, telegramUserId);
+    await run(sql`UPDATE services SET state = 'SUSPENDED' WHERE id = ${serviceId}`);
+    await age(serviceId, 3);
+    await ctx.container.serviceAutoDelete.runOnce(tenantA);
+    const [first] = await runsOf(serviceId);
+    expect(first).toMatchObject({ state: 'SCHEDULED' });
+    return { serviceId, runId: String(first?.['id']) };
+  }
+
+  it('a transfer after the warning: no deletion at the old deadline; the new owner is warned first', async () => {
+    const { serviceId, runId: oldRun } = await warnedSuspended('960121');
+    const to = await resolveCustomer(a, '960122');
+    const before = ctx.container.clock.now().getTime();
+    await transfer(serviceId, to, { reassign: true });
+    // The new owner's clock starts at the transfer: a new cycle, which only a run of its own
+    // (and so a warning to them) can delete. Without the restart the old run would hold the
+    // cycle's unique key and the new owner could never be warned.
+    const restarted = new Date(String((await serviceRow(serviceId))?.['state_since'])).getTime();
+    expect(restarted).toBeGreaterThanOrEqual(before - 1000);
+    const reader = new DrizzleNotificationSubjectReader(ctx.container.database.db);
+    const now = ctx.container.clock.now();
+    expect(await reader.stillHolds(tenantA, 'SERVICE_AUTO_DELETE_WARNING', oldRun, now)).toBe(
+      false,
+    );
+    // The old deadline passes: nothing is deleted.
+    await leadElapsed();
+    await ctx.container.serviceAutoDelete.runOnce(tenantA);
+    expect(await terminates(serviceId)).toHaveLength(0);
+    // The new owner's own cycle: due after the full days again, warned before any deletion.
+    await age(serviceId, 3);
+    await ctx.container.serviceAutoDelete.runOnce(tenantA);
+    expect(await terminates(serviceId)).toHaveLength(0);
+    const fresh = (await runsOf(serviceId)).filter((row) => row['id'] !== oldRun);
+    expect(fresh).toHaveLength(1);
+    expect(
+      await rows(sql`SELECT customer_id FROM customer_notifications
+                      WHERE kind = 'SERVICE_AUTO_DELETE_WARNING'
+                        AND subject_id = ${String(fresh[0]?.['id'])}`),
+    ).toEqual([{ customer_id: to }]);
+    await leadElapsed();
+    await ctx.container.serviceAutoDelete.runOnce(tenantA);
+    expect(await terminates(serviceId)).toHaveLength(1);
+  });
+
+  it('a run scheduled under another owner neither warns nor deletes', async () => {
+    const { serviceId, runId } = await warnedSuspended('960131');
+    const other = await resolveCustomer(a, '960132');
+    await transfer(serviceId, other, { reassign: false });
+    const reader = new DrizzleNotificationSubjectReader(ctx.container.database.db);
+    const now = ctx.container.clock.now();
+    expect(await reader.stillHolds(tenantA, 'SERVICE_AUTO_DELETE_WARNING', runId, now)).toBe(false);
+    await leadElapsed();
+    await ctx.container.serviceAutoDelete.runOnce(tenantA);
+    expect(await terminates(serviceId)).toHaveLength(0);
   });
 
   it('RLS: one tenant’s pass and its rows never reach another tenant', async () => {

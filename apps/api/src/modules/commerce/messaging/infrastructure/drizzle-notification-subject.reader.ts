@@ -357,7 +357,8 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
   /**
    * PR-3: "this service will be deleted" holds while the cycle is still SCHEDULED, the service
    * is still in the cycle's state since the cycle's moment (not renewed, resumed or
-   * terminated), and the feature is on.
+   * terminated), still owned by the customer it was scheduled under (not transferred), and the
+   * feature is on.
    */
   private async autoDeleteWarningHolds(tenantId: string, subjectId: string): Promise<boolean> {
     const result = await this.db.execute(sql`
@@ -366,6 +367,7 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
         JOIN services s
           ON s.tenant_id = r.tenant_id AND s.id = r.service_id
          AND s.state = r.cycle_state AND s.state_since = r.cycle_since
+         AND s.customer_id = r.customer_id
        WHERE r.tenant_id = ${tenantId}
          AND r.id = ${subjectId}
          AND r.state = 'SCHEDULED'

@@ -526,6 +526,9 @@ Lead decisions (PR-3):
 - **A cycle** is (service, `state_since`); a renewal or a resume starts a new one. The run row is
   unique per cycle, so the warning is sent once and the TERMINATE planned once (key derived from
   the run); a TERMINATE that fails is never planned again.
+- **A transfer restarts the clock** of a finished service (`reassign`, in the transfer's
+  transaction): a new cycle, so the new owner gets the full days and a warning of their own; a
+  run scheduled under another owner neither warns nor deletes (`customer_id` is part of the match).
 - **The deletion waits** at least `warn_hours` after the warning, and is judged against the
   settings at deletion time (a raised or zeroed day count holds it back). The warning is not held
   by quiet hours, which would eat that window.

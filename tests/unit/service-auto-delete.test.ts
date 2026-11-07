@@ -27,7 +27,7 @@ describe('PR-3 — automatic deletion: the rules that need no database', () => {
       'service.auto_delete.after_traffic_days',
       'service.auto_delete.after_time_days',
       'service.auto_delete.after_suspend_days',
-    ]) {
+    ] as const) {
       expect(settingDefinition(key).defaultValue).toBe(0);
       expect(settingDefinition(key).schema.safeParse(-1).success).toBe(false);
     }

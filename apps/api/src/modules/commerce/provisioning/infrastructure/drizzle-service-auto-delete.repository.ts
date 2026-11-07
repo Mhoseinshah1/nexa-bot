@@ -205,6 +205,7 @@ export class DrizzleServiceAutoDeleteRepository implements AutoDeleteRepository 
             JOIN services s
               ON s.tenant_id = r.tenant_id AND s.id = r.service_id
              AND s.state = r.cycle_state AND s.state_since = r.cycle_since
+             AND s.customer_id = r.customer_id
             CROSS JOIN LATERAL (SELECT ${daysOf(sql.raw('r.cause'), input.days)} AS days) d
            WHERE r.tenant_id = ${tenantId}
              AND r.state = 'SCHEDULED'
@@ -269,6 +270,7 @@ export class DrizzleServiceAutoDeleteRepository implements AutoDeleteRepository 
             JOIN services s
               ON s.tenant_id = r.tenant_id AND s.id = r.service_id
              AND s.state = r.cycle_state AND s.state_since = r.cycle_since
+             AND s.customer_id = r.customer_id
            WHERE r.tenant_id = ${tenantId} AND r.id = ${runId} AND r.state = 'SCHEDULED'
            LIMIT 1`,
     );
