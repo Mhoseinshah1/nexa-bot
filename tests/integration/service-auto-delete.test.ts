@@ -56,8 +56,10 @@ import {
  *   TERMINATE key made per attempt: "a failed TERMINATE is never planned again".
  * - the rate limit's room ignored: "at most max_per_minute per panel …".
  * - the flag read in `schedulePass` removed: "the flag off: nothing is warned or deleted".
- * - the transfer's `state_since` restart removed: "a transfer after the warning …" (the clock
- *   is not restarted, so the old cycle's run would hold the cycle's unique key for ever).
+ * - the transfer's cancellation of the SCHEDULED run removed: "a transfer after the warning …"
+ *   (the old run keeps the cycle's key, so the new owner is never warned).
+ * - `autoDeleteAfter` made to ignore the warning's lead: "a transfer after the warning …" (the
+ *   new owner would be deleted without a full window after their warning).
  * - `s.customer_id = r.customer_id` removed from the reader, `deletable` and `stillDeletable`:
  *   "a run scheduled under another owner …".
  */
@@ -689,34 +691,53 @@ describe('PR-3 — automatic deletion of finished services', () => {
 
   it('a transfer after the warning: no deletion at the old deadline; the new owner is warned first', async () => {
     const { serviceId, runId: oldRun } = await warnedSuspended('960121');
+    const clockBefore = String((await serviceRow(serviceId))?.['state_since']);
     const to = await resolveCustomer(a, '960122');
-    const before = ctx.container.clock.now().getTime();
     await transfer(serviceId, to, { reassign: true });
-    // The new owner's clock starts at the transfer: a new cycle, which only a run of its own
-    // (and so a warning to them) can delete. Without the restart the old run would hold the
-    // cycle's unique key and the new owner could never be warned.
-    const restarted = new Date(String((await serviceRow(serviceId))?.['state_since'])).getTime();
-    expect(restarted).toBeGreaterThanOrEqual(before - 1000);
+    // The transfer cancels the scheduled run and leaves the clock alone.
+    expect((await runsOf(serviceId))[0]).toMatchObject({ id: oldRun, state: 'CANCELLED' });
+    expect(String((await serviceRow(serviceId))?.['state_since'])).toBe(clockBefore);
     const reader = new DrizzleNotificationSubjectReader(ctx.container.database.db);
     const now = ctx.container.clock.now();
     expect(await reader.stillHolds(tenantA, 'SERVICE_AUTO_DELETE_WARNING', oldRun, now)).toBe(
       false,
     );
-    // The old deadline passes: nothing is deleted.
+
+    const warnedFor = async (runId: string) =>
+      rows(sql`SELECT customer_id FROM customer_notifications
+                WHERE kind = 'SERVICE_AUTO_DELETE_WARNING' AND subject_id = ${runId}`);
+    const live = async () =>
+      (await runsOf(serviceId)).filter((row) => row['state'] !== 'CANCELLED');
+
+    // The old deadline passes: nothing is deleted; the new owner is scheduled and warned, with a
+    // full warning window of their own (deadline = max(due, now + warn_hours)).
     await leadElapsed();
+    const atWarning = ctx.container.clock.now().getTime();
     await ctx.container.serviceAutoDelete.runOnce(tenantA);
     expect(await terminates(serviceId)).toHaveLength(0);
-    // The new owner's own cycle: due after the full days again, warned before any deletion.
-    await age(serviceId, 3);
+    const [second] = await live();
+    expect(second).toMatchObject({ state: 'SCHEDULED' });
+    expect(await warnedFor(String(second?.['id']))).toEqual([{ customer_id: to }]);
+    const secondDeadline = new Date(String(second?.['delete_after'])).getTime();
+    expect(secondDeadline).toBeGreaterThanOrEqual(atWarning + 24 * HOUR - 1000);
+    // A pass before that window ends deletes nothing.
     await ctx.container.serviceAutoDelete.runOnce(tenantA);
     expect(await terminates(serviceId)).toHaveLength(0);
-    const fresh = (await runsOf(serviceId)).filter((row) => row['id'] !== oldRun);
-    expect(fresh).toHaveLength(1);
-    expect(
-      await rows(sql`SELECT customer_id FROM customer_notifications
-                      WHERE kind = 'SERVICE_AUTO_DELETE_WARNING'
-                        AND subject_id = ${String(fresh[0]?.['id'])}`),
-    ).toEqual([{ customer_id: to }]);
+
+    // Transferred again: the deadline is the LAST warning's plus warn_hours, never further, and
+    // the clock still has not moved.
+    const third = await resolveCustomer(a, '960123');
+    await transfer(serviceId, third, { reassign: true });
+    const atLastWarning = ctx.container.clock.now().getTime();
+    await ctx.container.serviceAutoDelete.runOnce(tenantA);
+    const [last] = await live();
+    expect(await warnedFor(String(last?.['id']))).toEqual([{ customer_id: third }]);
+    const lastDeadline = new Date(String(last?.['delete_after'])).getTime();
+    expect(lastDeadline).toBeGreaterThanOrEqual(atLastWarning + 24 * HOUR - 1000);
+    expect(lastDeadline).toBeLessThanOrEqual(ctx.container.clock.now().getTime() + 24 * HOUR);
+    expect(String((await serviceRow(serviceId))?.['state_since'])).toBe(clockBefore);
+
+    // Once that window has passed, the service is deleted.
     await leadElapsed();
     await ctx.container.serviceAutoDelete.runOnce(tenantA);
     expect(await terminates(serviceId)).toHaveLength(1);

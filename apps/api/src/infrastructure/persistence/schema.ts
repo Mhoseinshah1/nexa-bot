@@ -18142,10 +18142,12 @@ export const serviceAutoRenewRuns = pgTable(
  *
  * A cycle is the service's stay in one finished state (`cycle_state`, EXPIRED or SUSPENDED)
  * since one moment (`cycle_since`, the service's `state_since` when the row was written).
- * UNIQUE on (tenant, service, `cycle_since`): two worker replicas, or a pass that overran, both
- * reach the same due service and only one INSERT schedules it — so a cycle is warned at most
- * once. A renewal or a resume moves `services.state_since`, so the old row stops matching and
- * the next stay is a new cycle with a new row.
+ * UNIQUE on (tenant, service, `cycle_since`) among the runs not CANCELLED: two worker replicas,
+ * or a pass that overran, both reach the same due service and only one INSERT schedules it — so
+ * a cycle is warned at most once per owner. A renewal or a resume moves `services.state_since`,
+ * so the old row stops matching and the next stay is a new cycle with a new row. A transfer
+ * CANCELS the scheduled run (the warning went to the old owner) without moving the clock; the
+ * new owner's run is scheduled with a full warning window of its own.
  *
  * `PLANNED` is written in the transaction that plans the provisioning `TERMINATE`
  * (`operation_id`), conditional on `SCHEDULED`: a cycle's deletion is planned exactly once,
@@ -18183,11 +18185,10 @@ export const serviceAutoDeleteRuns = pgTable(
     updatedAt: timestamptz('updated_at').notNull(),
   },
   (table) => [
-    unique('service_auto_delete_runs_cycle_key').on(
-      table.tenantId,
-      table.serviceId,
-      table.cycleSince,
-    ),
+    /** One live run per cycle; a CANCELLED one (a transfer) leaves room for the new owner's. */
+    uniqueIndex('service_auto_delete_runs_cycle_key')
+      .on(table.tenantId, table.serviceId, table.cycleSince)
+      .where(sql`state <> 'CANCELLED'`),
     index('service_auto_delete_runs_due_idx')
       .on(table.tenantId, table.deleteAfter)
       .where(sql`state = 'SCHEDULED'`),

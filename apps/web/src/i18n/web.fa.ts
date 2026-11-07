@@ -626,7 +626,7 @@ export const WEB_FA = {
     'از این پس سرویس‌های منقضی و معلق طبق تنظیمات، پس از هشدار به مشتری، از پنل حذف می‌شوند و این کار برگشت‌پذیر نیست.',
   'web.feature_service_auto_delete_on_confirm': 'بله، روشن شود',
   'web.auto_delete_preview_lead': 'با این تنظیمات،',
-  'web.auto_delete_preview_tail': 'سرویس در ۲۴ ساعت آینده حذف می‌شود',
+  'web.auto_delete_preview_tail': 'سرویس در 24 ساعت آینده حذف می‌شود',
   'web.auto_delete_preview_traffic': 'پایان حجم:',
   'web.auto_delete_preview_time': 'پایان زمان:',
   'web.auto_delete_preview_suspended': 'معلق:',
@@ -637,16 +637,16 @@ export const WEB_FA = {
   'web.auto_delete_preview_unavailable': 'شمار سرویس‌هایی که حذف می‌شوند خوانده نشد.',
   'web.setting_auto_delete_after_traffic_days': 'حذف پس از پایان حجم',
   'web.setting_auto_delete_after_traffic_days_desc':
-    'چند روز پس از آن‌که سرویس به‌خاطر پایان حجم منقضی شد، از پنل حذف شود. ۰ یعنی خاموش.',
+    'چند روز پس از آن‌که سرویس به‌خاطر پایان حجم منقضی شد، از پنل حذف شود. 0 یعنی خاموش.',
   'web.setting_auto_delete_after_time_days': 'حذف پس از پایان زمان',
   'web.setting_auto_delete_after_time_days_desc':
-    'چند روز پس از آن‌که زمان سرویس تمام شد، از پنل حذف شود. ۰ یعنی خاموش.',
+    'چند روز پس از آن‌که زمان سرویس تمام شد، از پنل حذف شود. 0 یعنی خاموش.',
   'web.setting_auto_delete_after_suspend_days': 'حذف پس از تعلیق',
   'web.setting_auto_delete_after_suspend_days_desc':
-    'چند روز پس از آن‌که سرویس معلق شد، از پنل حذف شود. ۰ یعنی خاموش.',
+    'چند روز پس از آن‌که سرویس معلق شد، از پنل حذف شود. 0 یعنی خاموش.',
   'web.setting_auto_delete_warn_hours': 'هشدار پیش از حذف',
   'web.setting_auto_delete_warn_hours_desc':
-    'چند ساعت پیش از حذف، یک پیام با دکمهٔ تمدید برای مشتری فرستاده شود. سرویس زودتر از این پس از هشدار حذف نمی‌شود. ۰ یعنی بدون هشدار.',
+    'چند ساعت پیش از حذف، یک پیام با دکمهٔ تمدید برای مشتری فرستاده شود. سرویس زودتر از این پس از هشدار حذف نمی‌شود. 0 یعنی بدون هشدار.',
   'web.setting_auto_delete_max_per_minute': 'حداکثر حذف در دقیقه برای هر پنل',
   'web.setting_auto_delete_max_per_minute_desc':
     'حذف‌ها با این سرعت در صف پنل گذاشته می‌شوند تا پنل یک‌باره زیر بار نرود.',

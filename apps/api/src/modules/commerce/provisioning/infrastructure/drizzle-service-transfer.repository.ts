@@ -175,14 +175,6 @@ export class DrizzleServiceTransferRepository implements ServiceTransferReposito
       .set({
         customerId: input.toCustomerId,
         customerNote: null,
-        /*
-         * NEXA-OWNER-BATCH-1 PR-3: a finished service's automatic-deletion clock restarts for
-         * its new owner. The cycle is (service, `state_since`), so this starts a NEW cycle: a
-         * deletion scheduled (and warned) under the sender never matches again, and the
-         * recipient gets the full day count and a warning of their own.
-         */
-        stateSince: sql`CASE WHEN ${services.state} IN ('EXPIRED', 'SUSPENDED')
-                             THEN ${input.now}::timestamptz ELSE ${services.stateSince} END`,
         updatedAt: input.now,
       })
       .where(
@@ -194,6 +186,17 @@ export class DrizzleServiceTransferRepository implements ServiceTransferReposito
       )
       .returning({ id: services.id });
     if (rows.length !== 1) return false;
+    /*
+     * NEXA-OWNER-BATCH-1 PR-3: an automatic deletion scheduled (and warned) under the sender is
+     * cancelled in this same transaction — its warning went to somebody who no longer holds the
+     * service. The clock (`state_since`) is NOT moved: the next pass schedules the cycle again
+     * for the recipient, who is warned in their turn and never deleted sooner than
+     * `warn_hours` after that warning.
+     */
+    await this.exec(tx).execute(sql`
+      UPDATE service_auto_delete_runs
+         SET state = 'CANCELLED', updated_at = ${input.now}
+       WHERE tenant_id = ${tenantId} AND service_id = ${input.serviceId} AND state = 'SCHEDULED'`);
     /*
      * Round 10, D1: the sender's consent to automatic renewal does not travel with the service
      * either — a new owner is never charged on the strength of somebody else's agreement, and a

@@ -1,5 +1,5 @@
 {
-  "id": "c69d40a1-0ffb-4b3f-b4f1-07cdf38921be",
+  "id": "8e53d7ad-1d74-4e83-a833-2b80e0cec6c3",
   "prevId": "3321c538-e946-434e-8eca-aefa6aadf4b0",
   "version": "7",
   "dialect": "postgresql",
@@ -33552,6 +33552,34 @@
         }
       },
       "indexes": {
+        "service_auto_delete_runs_cycle_key": {
+          "name": "service_auto_delete_runs_cycle_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "service_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "cycle_since",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "state <> 'CANCELLED'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "service_auto_delete_runs_due_idx": {
           "name": "service_auto_delete_runs_due_idx",
           "columns": [
@@ -33664,22 +33692,12 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "service_auto_delete_runs_cycle_key": {
-          "name": "service_auto_delete_runs_cycle_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "service_id",
-            "cycle_since"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
         "service_auto_delete_runs_state_check": {
           "name": "service_auto_delete_runs_state_check",
-          "value": "state IN ('SCHEDULED', 'PLANNED')"
+          "value": "state IN ('SCHEDULED', 'PLANNED', 'CANCELLED')"
         },
         "service_auto_delete_runs_cause_check": {
           "name": "service_auto_delete_runs_cause_check",

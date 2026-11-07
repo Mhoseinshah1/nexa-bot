@@ -147,7 +147,7 @@ export class DrizzleServiceAutoDeleteRepository implements AutoDeleteRepository 
              AND s.state_since + make_interval(days => d.days) <= ${input.horizon}
              AND NOT EXISTS (SELECT 1 FROM service_auto_delete_runs r
                               WHERE r.tenant_id = s.tenant_id AND r.service_id = s.id
-                                AND r.cycle_since = s.state_since)
+                                AND r.cycle_since = s.state_since AND r.state <> 'CANCELLED')
              AND ${NOT_BLOCKED}
            ORDER BY s.state_since, s.id
            LIMIT ${limit}`,
@@ -189,7 +189,7 @@ export class DrizzleServiceAutoDeleteRepository implements AutoDeleteRepository 
             FROM services s
            WHERE s.tenant_id = ${tenantId} AND s.id = ${c.serviceId}
              AND s.state = ${c.cycleState} AND s.state_since IS NOT NULL
-          ON CONFLICT ON CONSTRAINT service_auto_delete_runs_cycle_key DO NOTHING
+          ON CONFLICT (tenant_id, service_id, cycle_since) WHERE state <> 'CANCELLED' DO NOTHING
           RETURNING ${RUN_COLUMNS}`,
     );
     const row = rows[0];
@@ -365,7 +365,7 @@ export class DrizzleServiceAutoDeleteRepository implements AutoDeleteRepository 
             CROSS JOIN LATERAL (SELECT ${daysOf(sql.raw('c.cause'), input.days)} AS days) d
             LEFT JOIN service_auto_delete_runs r
               ON r.tenant_id = s.tenant_id AND r.service_id = s.id
-             AND r.cycle_since = s.state_since
+             AND r.cycle_since = s.state_since AND r.state <> 'CANCELLED'
            WHERE s.tenant_id = ${tenantId}
              AND s.state IN ('EXPIRED', 'SUSPENDED')
              AND s.state_since IS NOT NULL
