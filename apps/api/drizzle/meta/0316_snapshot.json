@@ -1,5 +1,5 @@
 {
-  "id": "d8049a75-abe9-42d7-85f5-170a0d48f963",
+  "id": "a3ce2b4b-46ed-4794-b27f-0533f2f68a1c",
   "prevId": "f2ef8bf9-a3ee-4153-85c1-a9edb402073d",
   "version": "7",
   "dialect": "postgresql",
@@ -415,92 +415,6 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.admin_known_ips": {
-      "name": "admin_known_ips",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "admin_id": {
-          "name": "admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "ip": {
-          "name": "ip",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "first_seen_at": {
-          "name": "first_seen_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "last_seen_at": {
-          "name": "last_seen_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "admin_known_ips_tenant_id_tenants_id_fk": {
-          "name": "admin_known_ips_tenant_id_tenants_id_fk",
-          "tableFrom": "admin_known_ips",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "admin_known_ips_tenant_admin_fk": {
-          "name": "admin_known_ips_tenant_admin_fk",
-          "tableFrom": "admin_known_ips",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "admin_known_ips_pkey": {
-          "name": "admin_known_ips_pkey",
-          "columns": [
-            "tenant_id",
-            "admin_id",
-            "ip"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "admin_known_ips_ip_check": {
-          "name": "admin_known_ips_ip_check",
-          "value": "length(ip) BETWEEN 2 AND 64"
-        }
-      },
       "isRLSEnabled": false
     },
     "public.admin_login_challenges": {
@@ -1047,99 +961,6 @@
         "admin_permission_overrides_effect_check": {
           "name": "admin_permission_overrides_effect_check",
           "value": "effect IN ('GRANT', 'DENY')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.admin_read_windows": {
-      "name": "admin_read_windows",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "admin_id": {
-          "name": "admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "window_start": {
-          "name": "window_start",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "rows_read": {
-          "name": "rows_read",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "alerted_at": {
-          "name": "alerted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "admin_read_windows_tenant_id_tenants_id_fk": {
-          "name": "admin_read_windows_tenant_id_tenants_id_fk",
-          "tableFrom": "admin_read_windows",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "admin_read_windows_tenant_admin_fk": {
-          "name": "admin_read_windows_tenant_admin_fk",
-          "tableFrom": "admin_read_windows",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "admin_read_windows_pkey": {
-          "name": "admin_read_windows_pkey",
-          "columns": [
-            "tenant_id",
-            "admin_id",
-            "window_start"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "admin_read_windows_rows_check": {
-          "name": "admin_read_windows_rows_check",
-          "value": "rows_read >= 0"
         }
       },
       "isRLSEnabled": false
@@ -13064,6 +12885,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "payment_link": {
+          "name": "payment_link",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'TELEGRAM_BOT'"
+        },
         "provider_unit": {
           "name": "provider_unit",
           "type": "text",
@@ -13719,6 +13547,10 @@
         "gateway_invoices_rialit_check": {
           "name": "gateway_invoices_rialit_check",
           "value": "provider <> 'RIALIT' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND octet_length(provider_order_id) <= 64 AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')"
+        },
+        "gateway_invoices_payment_link_check": {
+          "name": "gateway_invoices_payment_link_check",
+          "value": "payment_link IN ('TELEGRAM_BOT', 'WEB')"
         },
         "gateway_invoices_custom_check": {
           "name": "gateway_invoices_custom_check",
@@ -26620,6 +26452,13 @@
           "notNull": true,
           "default": false
         },
+        "tonpays_payment_link": {
+          "name": "tonpays_payment_link",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'TELEGRAM_BOT'"
+        },
         "provider_unit_rate_minor": {
           "name": "provider_unit_rate_minor",
           "type": "bigint",
@@ -26722,6 +26561,10 @@
         "payment_gateways_status_check": {
           "name": "payment_gateways_status_check",
           "value": "status IN ('ACTIVE', 'DISABLED')"
+        },
+        "payment_gateways_tonpays_payment_link_check": {
+          "name": "payment_gateways_tonpays_payment_link_check",
+          "value": "tonpays_payment_link IN ('TELEGRAM_BOT', 'WEB')"
         },
         "payment_gateways_bounds_currency_check": {
           "name": "payment_gateways_bounds_currency_check",

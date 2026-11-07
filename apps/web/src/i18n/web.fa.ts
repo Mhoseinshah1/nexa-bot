@@ -38,6 +38,7 @@ export const WEB_FA = {
   'web.password': 'گذرواژه',
   'web.signing_in': 'در حال ورود…',
   'web.sign_in_failed': 'نام کاربری یا گذرواژه نادرست است.',
+  'web.sign_in_server_error': 'خطای سرور؛ لاگ‌ها را بررسی کنید.',
   'web.rate_limited': 'تلاش‌های ناموفق زیاد بوده است. کمی بعد دوباره تلاش کنید.',
   'web.roles': 'نقش‌ها',
   'web.administrators': 'مدیران',
@@ -3351,6 +3352,12 @@ export const WEB_FA = {
   'web.payment_gateway_verified_phone_only': 'برای پرداخت با این درگاه، تأیید شماره لازم است',
   'web.payment_gateway_verified_phone_only_hint':
     'این درگاه به همهٔ مشتری‌ها نمایش داده می‌شود. وقتی مشتری‌ای که شماره‌اش تأیید نشده آن را انتخاب کند، پیش از ساخته شدن هر پرداختی شماره‌اش را می‌گیرد و پس از تأیید، مستقیم به پرداخت با همین درگاه برای همان سفارش یا افزایش موجودی می‌رود. حتی وقتی «تأیید شماره تلفن کاربران» خاموش است اعمال می‌شود؛ مشتری «معاف از تأیید شماره» هرگز پرسیده نمی‌شود.',
+  // The TONPAYS (website) route's «لینک پرداخت».
+  'web.payment_gateway_tonpays_link': 'لینک پرداخت',
+  'web.payment_gateway_tonpays_link_hint':
+    'مشتری به کدام لینک تون‌پیز فرستاده شود. اگر لینک انتخاب‌شده در فاکتور نبود، لینک دیگر نشان داده می‌شود. فقط روی فاکتورهای تازه اثر دارد.',
+  'web.payment_gateway_tonpays_link_bot': 'ربات تلگرام تون‌پیز',
+  'web.payment_gateway_tonpays_link_web': 'صفحهٔ وب تون‌پیز',
   'web.payment_gateway_verified_phone_list': '📱 نیاز به تأیید شماره',
   'web.payment_gateway_updated': 'آخرین تغییر',
   'web.payment_gateway_actions': 'عملیات',
@@ -5186,6 +5193,7 @@ export const WEB_FA = {
   'web.ib_button_payment_cancel_confirm': 'تأیید انصراف از پرداخت',
   'web.ib_button_payment_gateway_pay': 'پرداخت آنلاین (لینک درگاه)',
   'web.ib_button_payment_nowpayments_open': 'پرداخت با ارز دیجیتال (NOWPayments)',
+  'web.ib_button_payment_tonpays_bot_open': 'پرداخت در ربات تون‌پیز',
   'web.ib_button_payment_centralpay_open': 'پرداخت با CentralPay',
   'web.ib_button_payment_gateway_check': 'بررسی وضعیت پرداخت',
   'web.ib_button_payment_gateway_card_check': 'بررسی وضعیت (کارت‌به‌کارت درگاه)',

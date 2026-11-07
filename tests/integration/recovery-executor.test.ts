@@ -1038,26 +1038,32 @@ describe('the recovery executor', () => {
     const { recoveryId } = await confirmedRecovery();
 
     type Requests = { reassert: (row: unknown) => Promise<void> };
-    const requests = (container.recoveryExecutor as unknown as { deps: { requests: Requests } })
-      .deps.requests;
+    type Deps = { requests: Requests; sleep?: ((ms: number) => Promise<void>) | undefined };
+    const deps = (container.recoveryExecutor as unknown as { deps: Deps }).deps;
+    const requests = deps.requests;
     const real = requests.reassert.bind(requests);
+    // The write is retried with a backoff (a request-row write that keeps failing is
+    // bounded, not looped on); no test waits for it.
+    const realSleep = deps.sleep;
+    deps.sleep = async () => undefined;
     let calls = 0;
     requests.reassert = async (row) => {
       calls += 1;
-      // The FIRST call is `runStages`' own, immediately after the second rename.
-      // The second is the failure path's, and it must reach the real repository —
-      // a stub that failed both would prove nothing about what gets written.
-      if (calls === 1) throw new Error('the process lost its database between the renames');
+      // The first FIVE calls are `runStages`' own bounded series, immediately after the
+      // second rename. The sixth is the failure path's, and it must reach the real
+      // repository — a stub that failed both would prove nothing about what gets written.
+      if (calls <= 5) throw new Error('the process lost its database between the renames');
       return real(row);
     };
     try {
       await container.recoveryExecutor.tick();
     } finally {
       requests.reassert = real;
+      deps.sleep = realSleep;
     }
     // The failure path DID write, rather than the run having failed earlier for
     // some unrelated reason and never reaching the window under test.
-    expect(calls).toBe(2);
+    expect(calls).toBe(6);
 
     const row = await container.recoveryRequests.byIdUnscoped(recoveryId);
     expect(row?.state).toBe('FAILED');

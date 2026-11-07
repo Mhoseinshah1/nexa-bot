@@ -13,8 +13,13 @@ import type {
   PaymentId,
   SalesCurrencyCode,
   TenantContext,
+  TonPaysPaymentLink,
 } from '@nexa/contracts';
-import { PAYMENT_GATEWAY_DESCRIPTORS, PAYMENT_GATEWAY_PROVIDERS } from '@nexa/contracts';
+import {
+  DEFAULT_TONPAYS_PAYMENT_LINK,
+  PAYMENT_GATEWAY_DESCRIPTORS,
+  PAYMENT_GATEWAY_PROVIDERS,
+} from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -107,6 +112,8 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     callbackUrlSent: row.callbackUrlSent,
     invoiceUrl: row.invoiceUrl,
     webInvoiceUrl: row.webInvoiceUrl,
+    // Constrained by a CHECK built from the contract enum.
+    paymentLink: row.paymentLink as TonPaysPaymentLink,
     providerUnit: row.providerUnit as GatewayProviderUnit,
     sentAmount: row.sentAmount,
     conversionRateMinor: row.conversionRateMinor,
@@ -187,6 +194,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly botInstanceId: string | null;
       readonly providerUserId?: string | null;
       readonly endpointBaseUrl?: string | null;
+      readonly paymentLink?: TonPaysPaymentLink;
       readonly now: Date;
     },
     tx: unknown,
@@ -202,6 +210,8 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         providerUserId: input.providerUserId ?? null,
         // Round 10 C1: the bridge this attempt is created against, frozen (written once).
         endpointBaseUrl: input.endpointBaseUrl ?? null,
+        // The route's TonPays link choice, frozen with the attempt.
+        paymentLink: input.paymentLink ?? DEFAULT_TONPAYS_PAYMENT_LINK,
         creationState: 'CREATING',
         providerUnit: input.providerUnit,
         sentAmount: input.sentAmount,

@@ -1811,6 +1811,52 @@ assert_equals 'restart refused an installation with nothing wrong with it' 0 "$B
 assert_not_contains 'restart claimed a disagreement that does not exist' \
   "$BOTCTL_OUTPUT" 'disagree'
 
+test_case 'restart gives up on a stuck role at the deadline and names it, in Persian, with its log'
+# The incident: a recovery role left unhealthy after a restore, and `botctl restart` waited
+# on it with no end in sight and no word about WHICH role. The wait is wall-clock now, and
+# the failure says which service, its state, and the tail of its log.
+fake_set compose_services 'api worker monitor recovery provisioner postgres redis caddy'
+fake_set recovery_health unhealthy
+printf 'boot: tenant 7 not found\nboot: giving up\n' >"${FAKE_DIR}/logs_recovery"
+started="$(date +%s)"
+NEXA_READY_TIMEOUT=6 run_botctl restart
+elapsed=$(($(date +%s) - started))
+assert_fails 'restart called a stack with an unhealthy recovery role ready' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the unhealthy role was not named' "$BOTCTL_OUTPUT" 'recovery'
+assert_contains 'the report is not in Persian' "$BOTCTL_OUTPUT" 'آماده نشد'
+assert_contains 'the state was not reported' "$BOTCTL_OUTPUT" 'unhealthy'
+assert_contains 'the role log tail was not shown' "$BOTCTL_OUTPUT" 'boot: giving up'
+assert_fails 'the wait outlived its deadline' test "$elapsed" -gt 12
+
+test_case 'restart names a role that is still starting, not only an unhealthy one'
+fake_set recovery_health starting
+NEXA_READY_TIMEOUT=4 run_botctl restart
+assert_fails 'a starting role was called ready' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the starting state was not reported' "$BOTCTL_OUTPUT" 'starting'
+fake_set recovery_health healthy
+rm -f "${FAKE_DIR}/logs_recovery"
+
+test_case 'a compose ps that itself hangs cannot hang the wait'
+# Each poll is bounded by the time left, so a daemon that never answers still ends the
+# command at the deadline (the old loop counted only its own sleeps and never returned).
+fake_set ps_hang 1
+started="$(date +%s)"
+NEXA_READY_TIMEOUT=4 run_botctl restart
+elapsed=$(($(date +%s) - started))
+assert_fails 'restart succeeded against a daemon that never answers' test "$BOTCTL_STATUS" -eq 0
+assert_fails 'a hung compose ps outlived the deadline' test "$elapsed" -gt 15
+fake_set ps_hang 0
+
+test_case 'restart bounds up -d as well'
+fake_set up_hang 1
+started="$(date +%s)"
+NEXA_UP_TIMEOUT=2 run_botctl restart
+elapsed=$(($(date +%s) - started))
+assert_fails 'restart succeeded with a hung up -d' test "$BOTCTL_STATUS" -eq 0
+assert_fails 'a hung up -d outlived its bound' test "$elapsed" -gt 15
+fake_set up_hang 0
+fake_set compose_services 'api worker monitor postgres redis caddy'
+
 test_case 'restart background restarts exactly the three background roles'
 # Round 4 PR-H: the step the import completion screen tells the owner to run. It must
 # restart the worker, the monitor and the provisioner — the processes whose first passes
@@ -2874,10 +2920,196 @@ assert_contains "reset-2fa did not reach the CLI" \
   "$(docker_log)" "dist/admin-2fa-reset.cli.js --username owner --reason lost-phone"
 assert_not_contains "reset-2fa ran in read-only mode" "$(docker_log)" "--check"
 
+# A real terminal for the password prompts: botctl reads them from /dev/tty, which a pipe
+# cannot stand in for. The child is run under a pty; every time it prints a prompt (a line
+# ending in ": ") the next answer is typed, and the echo is off, as it is for an operator.
+tty_botctl_answers() {
+  local answers_file="${NEXA_ROOT}/tty-answers" out_file="${NEXA_ROOT}/tty-out"
+  : >"$answers_file"
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
+    printf '%s\n' "$1" >>"$answers_file"
+    shift
+  done
+  shift
+  python3 - "$answers_file" "$out_file" "$BOTCTL" "$@" <<'PTY'
+import os, pty, select, sys
+answers = open(sys.argv[1], encoding="utf-8").read().splitlines()
+out_path, argv = sys.argv[2], sys.argv[3:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(argv[0], argv)
+buf = b""
+typed = 0
+while True:
+    ready, _, _ = select.select([fd], [], [], 30)
+    if not ready:
+        os.kill(pid, 9)
+        break
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    buf += chunk
+    # One answer per prompt seen so far.
+    prompts = buf.count(b": ")
+    while typed < min(prompts, len(answers)):
+        os.write(fd, (answers[typed] + "\n").encode())
+        typed += 1
+_, status = os.waitpid(pid, 0)
+open(out_path, "wb").write(buf)
+sys.exit(os.waitstatus_to_exitcode(status))
+PTY
+  BOTCTL_STATUS=$?
+  BOTCTL_OUTPUT="$(cat "$out_file" 2>/dev/null)"
+  return 0
+}
+
+test_case "botctl admin reset-password passes the password on stdin and never in argv"
+PW='correct horse battery staple 99'
+reset_docker_log
+rm -f "${FAKE_DIR}/password_stdin"
+tty_botctl_answers "$PW" "$PW" -- admin reset-password owner
+assert_equals "reset-password failed" 0 "$BOTCTL_STATUS"
+assert_contains "reset-password did not reach the CLI" \
+  "$(docker_log)" "dist/admin-password-reset.cli.js --username owner"
+assert_not_contains "the password is in the compose argv" "$(docker_log)" "correct horse"
+assert_not_contains "the password was echoed to the terminal" "$BOTCTL_OUTPUT" "correct horse"
+assert_equals "the container did not receive the password on stdin" \
+  "$PW" "$(cat "${FAKE_DIR}/password_stdin" 2>/dev/null)"
+assert_not_contains "reset-password forwarded a --password argument" "$(docker_log)" "--password"
+
+test_case "botctl admin reset-password refuses mismatched passwords and runs nothing"
+reset_docker_log
+rm -f "${FAKE_DIR}/password_stdin"
+tty_botctl_answers "first-password-1234" "second-password-1234" -- admin reset-password owner
+assert_fails "mismatched passwords were accepted" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the mismatch was not said, in Persian" "$BOTCTL_OUTPUT" "یکسان نیستند"
+assert_not_contains "the CLI ran despite a mismatch" "$(docker_log)" "admin-password-reset.cli.js"
+assert_not_contains "a password leaked into the output" "$BOTCTL_OUTPUT" "first-password"
+
+test_case "botctl admin reset-password refuses an empty password"
+reset_docker_log
+tty_botctl_answers "" "" -- admin reset-password owner
+assert_fails "an empty password was accepted" test "$BOTCTL_STATUS" -eq 0
+assert_not_contains "the CLI ran with an empty password" "$(docker_log)" "admin-password-reset.cli.js"
+
+test_case "botctl admin reset-password reports the CLI's failure and exits non-zero"
+reset_docker_log
+fake_set password_cli_exit 1
+tty_botctl_answers "$PW" "$PW" -- admin reset-password nobody
+assert_fails "a failed reset exited zero" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the failure was not reported in Persian" "$BOTCTL_OUTPUT" "تغییر نکرد"
+fake_set password_cli_exit 0
+
+test_case "botctl admin reset-password needs a username and forwards --tenant"
+run_botctl admin reset-password
+assert_fails "reset-password ran without a username" test "$BOTCTL_STATUS" -eq 0
+reset_docker_log
+tty_botctl_answers "$PW" "$PW" -- admin reset-password owner --tenant acme
+assert_equals "reset-password with --tenant failed" 0 "$BOTCTL_STATUS"
+assert_contains "--tenant was not forwarded" \
+  "$(docker_log)" "dist/admin-password-reset.cli.js --username owner --tenant acme"
+
+# --- customers prune-empty ---------------------------------------------------------------
+# The listing is read-only: no lock, no backup, no confirmation. `--apply` backs up FIRST, asks
+# on the terminal, and only the right answer reaches the deleting call.
+
+test_case "botctl customers prune-empty only lists: no lock, no backup, no question"
+reset_docker_log
+exec 9>>"$NEXA_LOCK_FILE"
+flock -x 9
+run_botctl customers prune-empty </dev/null
+flock -u 9
+exec 9>&-
+assert_equals "the listing failed while the lock was held" 0 "$BOTCTL_STATUS"
+assert_contains "the listing did not reach the CLI" "$(docker_log)" "dist/customers-prune.cli.js list"
+assert_not_contains "the listing deleted" "$(docker_log)" "customers-prune.cli.js apply"
+assert_not_contains "the listing took a backup" "$(docker_log)" "pg_dump"
+assert_contains "the listing was not printed in Persian" "$BOTCTL_OUTPUT" "مشتریان بدون هیچ وابستگی"
+
+test_case "botctl customers prune-empty forwards --tenant and refuses an unknown option"
+reset_docker_log
+run_botctl customers prune-empty --tenant acme </dev/null
+assert_contains "--tenant was not forwarded" "$(docker_log)" "customers-prune.cli.js list --tenant acme"
+run_botctl customers prune-empty --everything </dev/null
+assert_fails "an unknown option was accepted" test "$BOTCTL_STATUS" -eq 0
+run_botctl customers nonsense </dev/null
+assert_fails "an unknown customers subcommand was accepted" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the usage does not name prune-empty" "$BOTCTL_OUTPUT" "prune-empty"
+
+test_case "botctl customers prune-empty --apply is a long command: refused on a bare terminal"
+reset_docker_log
+tty_botctl_answers "حذف" -- customers prune-empty --apply
+assert_fails "an apply ran on a terminal outside tmux" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the tmux line was not printed" "$BOTCTL_OUTPUT" "tmux new -s nexa-customers-prune"
+assert_not_contains "something ran before the refusal" "$(docker_log)" "customers-prune.cli.js"
+
+test_case "botctl customers prune-empty --apply backs up first, then deletes on the right answer"
+fake_set prune_count 3
+reset_docker_log
+TMUX=test-session tty_botctl_answers "حذف" -- customers prune-empty --apply
+assert_equals "the apply failed" 0 "$BOTCTL_STATUS"
+log="$(docker_log)"
+backup_at="$(printf '%s\n' "$log" | grep -n 'exec -T postgres pg_dump' | sed -n '1p' | cut -d: -f1)"
+apply_at="$(printf '%s\n' "$log" | grep -n 'customers-prune.cli.js apply' | sed -n '1p' | cut -d: -f1)"
+assert_ok "no backup was taken" test -n "$backup_at"
+assert_ok "the delete was not reached" test -n "$apply_at"
+assert_ok "the delete ran before the backup" test "${backup_at:-9999}" -lt "${apply_at:-0}"
+assert_contains "the confirmed count was not passed" "$log" "apply --expect-count 3 --typed حذف"
+dump="$(find "$NEXA_BACKUP_DIR" -name '*before-customers-prune*.sql.gz' -print -quit)"
+assert_ok "the backup is not labelled for the prune" test -n "$dump"
+
+test_case "botctl customers prune-empty --apply accepts the count as the answer"
+reset_docker_log
+TMUX=test-session tty_botctl_answers "3" -- customers prune-empty --apply
+assert_equals "the apply with the count failed" 0 "$BOTCTL_STATUS"
+assert_contains "the count was not passed" "$(docker_log)" "apply --expect-count 3 --typed 3"
+
+test_case "botctl customers prune-empty --apply with a wrong answer is refused by the CLI and fails"
+# The fake CLI cannot judge; what botctl owes is that the typed text reaches the CLI as is and
+# that a CLI refusal is a non-zero exit with the backup path named.
+reset_docker_log
+fake_set prune_apply_exit 1
+TMUX=test-session tty_botctl_answers "yes" -- customers prune-empty --apply
+assert_fails "a refused delete exited zero" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the refusal was not reported in Persian" "$BOTCTL_OUTPUT" "حذف انجام نشد"
+assert_contains "the typed text did not reach the CLI" "$(docker_log)" "--typed yes"
+fake_set prune_apply_exit 0
+
+test_case "botctl customers prune-empty --apply stops before the question when nothing is empty"
+fake_set prune_count 0
+reset_docker_log
+TMUX=test-session tty_botctl_answers "حذف" -- customers prune-empty --apply
+assert_equals "an empty list was an error" 0 "$BOTCTL_STATUS"
+assert_not_contains "a backup was taken for nothing" "$(docker_log)" "pg_dump"
+assert_not_contains "a delete ran for nothing" "$(docker_log)" "customers-prune.cli.js apply"
+fake_set prune_count 3
+
+test_case "botctl customers prune-empty --apply deletes nothing when the backup fails"
+reset_docker_log
+fake_set exec_exit 1
+TMUX=test-session tty_botctl_answers "حذف" -- customers prune-empty --apply
+assert_fails "a failed backup did not stop the delete" test "$BOTCTL_STATUS" -eq 0
+assert_not_contains "the delete ran after a failed backup" "$(docker_log)" "customers-prune.cli.js apply"
+fake_set exec_exit 0
+
+test_case "botctl customers prune-empty --apply takes the update lock"
+reset_docker_log
+exec 9>>"$NEXA_LOCK_FILE"
+flock -x 9
+TMUX=test-session tty_botctl_answers "حذف" -- customers prune-empty --apply
+flock -u 9
+exec 9>&-
+assert_fails "an apply ran while the lock was held" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the lock refusal was not explained" "$BOTCTL_OUTPUT" "already running"
+assert_not_contains "a delete ran under a held lock" "$(docker_log)" "customers-prune.cli.js apply"
+
 test_case "an unknown admin subcommand is refused with the usage"
 run_botctl admin nonsense
 assert_fails "an unknown admin subcommand was accepted" test "$BOTCTL_STATUS" -eq 0
-for action in check-2fa reset-2fa; do
+for action in check-2fa reset-2fa reset-password; do
   assert_contains "the usage does not name ${action}" "$BOTCTL_OUTPUT" "$action"
 done
 

@@ -25,6 +25,7 @@ import type { GatewayAttemptView } from '../../modules/commerce/payments/applica
 import { paysInChat } from '../../modules/commerce/checkout/application/checkout.service.js';
 import { amountToTransfer } from '../../modules/commerce/payments/domain/amount-to-transfer.js';
 import { cardNumberToCopy } from '../../modules/commerce/payments/domain/card-number.js';
+import { chooseTonPaysLink } from '../../modules/commerce/payments/domain/tonpays.js';
 import { transferFigures } from '../../modules/commerce/payments/domain/transfer-figures.js';
 import { personalDiscountPercentOf } from '../../modules/commerce/pricing/domain/pricing-engine.js';
 
@@ -161,7 +162,7 @@ export function attemptWire(
     payUrl:
       inChat || !ready
         ? null
-        : (attempt.invoice.webInvoiceUrl ?? attempt.invoice.invoiceUrl ?? null),
+        : (chooseTonPaysLink(attempt.invoice.paymentLink, attempt.invoice)?.url ?? null),
     paysInChat: inChat,
     inAppInvoice,
     expiresAt: attempt.payment.expiresAt?.toISOString() ?? null,

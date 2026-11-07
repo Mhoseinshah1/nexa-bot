@@ -6,6 +6,7 @@ import {
   type PaymentGatewayStatus,
   type SalesCurrencyCode,
   type TenantContext,
+  type TonPaysPaymentLink,
   type UserId,
   takesFixedRate,
 } from '@nexa/contracts';
@@ -47,6 +48,7 @@ const COLUMNS = {
   allowServicePurchase: paymentGateways.allowServicePurchase,
   allowWalletTopup: paymentGateways.allowWalletTopup,
   requiresVerifiedPhone: paymentGateways.requiresVerifiedPhone,
+  tonpaysPaymentLink: paymentGateways.tonpaysPaymentLink,
   hiddenUntil: paymentGateways.hiddenUntil,
   endpointBaseUrl: paymentGateways.endpointBaseUrl,
   webhookIpAllowlist: paymentGateways.webhookIpAllowlist,
@@ -73,6 +75,7 @@ interface Row {
   readonly allowServicePurchase: boolean;
   readonly allowWalletTopup: boolean;
   readonly requiresVerifiedPhone: boolean;
+  readonly tonpaysPaymentLink: string;
   readonly hiddenUntil: Date | null;
   readonly endpointBaseUrl: string | null;
   readonly webhookIpAllowlist: string[] | null;
@@ -106,6 +109,8 @@ function toRecord(row: Row): PaymentGatewayRecord {
     allowServicePurchase: row.allowServicePurchase,
     allowWalletTopup: row.allowWalletTopup,
     requiresVerifiedPhone: row.requiresVerifiedPhone,
+    // Constrained by a CHECK built from the contract enum.
+    tonpaysPaymentLink: row.tonpaysPaymentLink as TonPaysPaymentLink,
     hiddenUntil: row.hiddenUntil,
     endpointBaseUrl: row.endpointBaseUrl,
     webhookIpAllowlist: row.webhookIpAllowlist ?? [],
@@ -284,6 +289,7 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
         allowServicePurchase: config.allowServicePurchase,
         allowWalletTopup: config.allowWalletTopup,
         requiresVerifiedPhone: config.requiresVerifiedPhone,
+        tonpaysPaymentLink: config.tonpaysPaymentLink,
         updatedAt: now,
       })
       .where(and(eq(paymentGateways.tenantId, tenantId), eq(paymentGateways.provider, provider)))

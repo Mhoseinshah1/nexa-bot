@@ -129,8 +129,8 @@ describe('the NOWPayments screen', () => {
   it('keeps the generic pay button for every other link route', () => {
     const reply = gatewayAttemptScreen(
       {
-        payment: payment({ gatewayProvider: 'TONPAYS' }),
-        invoice: invoice({ provider: 'TONPAYS' }),
+        payment: payment({ gatewayProvider: 'TETRAPAY' }),
+        invoice: invoice({ provider: 'TETRAPAY' }),
       },
       null,
       AT,

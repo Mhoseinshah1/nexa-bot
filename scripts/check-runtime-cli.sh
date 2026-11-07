@@ -34,6 +34,10 @@ ENTRYPOINTS=(
   # Phase D2: the owner-recovery path for two-step sign-in. It runs when somebody
   # is locked out, which is not the moment to learn its import graph is broken.
   "apps/api/dist/admin-2fa-reset.cli.js"
+  # `botctl admin reset-password`: the same lockout, for a forgotten password.
+  "apps/api/dist/admin-password-reset.cli.js"
+  # `botctl customers prune-empty`: run before a Mirza import, when the target must be fresh.
+  "apps/api/dist/customers-prune.cli.js"
   # Migration P7: the legacy importer runs from the runtime image during a rehearsal and
   # the cutover; it carries a runtime dependency (mysql2) no other entrypoint loads.
   "apps/api/dist/legacy-import.cli.js"
@@ -63,6 +67,8 @@ node --input-type=module -e "
   const provision = await import('./apps/api/dist/provision-installation.cli.js');
   const backup = await import('./apps/api/dist/backup.cli.js');
   const reset2fa = await import('./apps/api/dist/admin-2fa-reset.cli.js');
+  const resetPassword = await import('./apps/api/dist/admin-password-reset.cli.js');
+  const prune = await import('./apps/api/dist/customers-prune.cli.js');
   const legacyImport = await import('./apps/api/dist/legacy-import.cli.js');
   const probe = await import('./apps/api/dist/rickpanel-probe.cli.js');
   const rehearse = await import('./apps/api/dist/cutover-rehearse.cli.js');
@@ -83,6 +89,9 @@ node --input-type=module -e "
   if (typeof backup.cmdVerify !== 'function') problems.push('backup.cmdVerify');
   if (typeof backup.parseArgs !== 'function') problems.push('backup.parseArgs');
   if (typeof reset2fa.parseResetArgs !== 'function') problems.push('reset2fa.parseResetArgs');
+  if (typeof resetPassword.parsePasswordResetArgs !== 'function')
+    problems.push('resetPassword.parsePasswordResetArgs');
+  if (typeof prune.parsePruneArgs !== 'function') problems.push('prune.parsePruneArgs');
   if (typeof legacyImport.parseArgs !== 'function') problems.push('legacyImport.parseArgs');
   if (typeof legacyImport.guardTarget !== 'function') problems.push('legacyImport.guardTarget');
   if (typeof probe.parseProbeArgs !== 'function') problems.push('probe.parseProbeArgs');

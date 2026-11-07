@@ -58,6 +58,8 @@ import {
   type GatewayConversionSpec,
   type ResolvedConversion,
   type SettingKey,
+  type TonPaysPaymentLink,
+  DEFAULT_TONPAYS_PAYMENT_LINK,
 } from '@nexa/contracts';
 import type { FxService } from '../../fx/application/fx.service.js';
 import type { ResellerService } from '../../resellers/application/reseller.service.js';
@@ -3764,6 +3766,7 @@ export class PaymentService {
           customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
           resolveConversion: route.resolveConversion,
           endpointBaseUrl: route.gateway.endpointBaseUrl ?? null,
+          paymentLink: route.gateway.tonpaysPaymentLink ?? DEFAULT_TONPAYS_PAYMENT_LINK,
           paymentId,
           reference,
           now,
@@ -3843,6 +3846,7 @@ export class PaymentService {
           customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
           resolveConversion: route.resolveConversion,
           endpointBaseUrl: route.gateway.endpointBaseUrl ?? null,
+          paymentLink: route.gateway.tonpaysPaymentLink ?? DEFAULT_TONPAYS_PAYMENT_LINK,
           paymentId,
           reference,
           now,
@@ -5239,6 +5243,8 @@ export class PaymentService {
        * transaction and FROZEN onto a new attempt. Null for every other route.
        */
       readonly endpointBaseUrl: string | null;
+      /** The route's TonPays link choice, frozen onto a new attempt. */
+      readonly paymentLink: TonPaysPaymentLink;
       readonly paymentId: PaymentId;
       readonly reference: string;
       readonly now: Date;
@@ -5437,6 +5443,7 @@ export class PaymentService {
           botInstanceId,
           // Round 10 C1: the bridge every inquiry of this attempt will ask, frozen here.
           endpointBaseUrl: descriptor.operatorEndpoint ? input.endpointBaseUrl : null,
+          paymentLink: input.paymentLink,
           now: input.now,
         },
         tx,
