@@ -862,6 +862,78 @@ describe('the late-payment policy of an online gateway', () => {
       await expectFallback(paymentId, 'ORDER_CLOSED');
     });
 
+    it('takes the original order’s transfer row BEFORE the customer (no 40P01 with a transfer being signalled)', async () => {
+      /*
+       * Codex P2 on #423. `signalTransferSent` locks the transfer's row and then needs a share
+       * lock on the customer (its receipt window's foreign key). The delivery withdraws that
+       * transfer while paying the original order, so it must not hold the customer FOR UPDATE
+       * before it reaches the transfer's row. Here a second connection plays the signal: it
+       * holds the transfer's row, waits until the delivery queues behind it, then asks for the
+       * customer's key-share lock — granted at once with the ordering. With the credit written
+       * before the withdrawal (the mutation run on this commit), PostgreSQL reports 40P01.
+       */
+      const { orderId, paymentId, invoiceId } = await createdAttempt();
+      await closed(orderId, paymentId, true);
+      const k = key();
+      const { payment: transfer } = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor(k),
+        maryam,
+        { idempotencyKey: `${k}-manual`, orderId },
+      );
+      tonpays.set(invoiceId, 'completed', true);
+      offsetMs += 6 * 60_000;
+      await laneWith(tonpays, false).runOnce(tenantA);
+
+      const signal = await ctx.container.database.withClient(async (client) => {
+        await client.query('BEGIN');
+        try {
+          await client.query('SELECT id FROM payments WHERE id = $1 FOR UPDATE', [transfer.id]);
+          const delivering = ctx.container.payments.deliverLateGatewayApproval(
+            tenantA,
+            systemActor('lock-order'),
+            paymentId,
+            { providerRequestAmount: 250_000n, evidenceNote: null },
+          );
+          // Until the delivery is waiting on the transfer's row this connection holds.
+          for (let i = 0; i < 200; i += 1) {
+            const waiting = await client.query<{ n: number }>(
+              `SELECT count(*)::int AS n FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+                WHERE NOT l.granted AND c.relname = 'payments'`,
+            );
+            const queued = await client.query<{ n: number }>(
+              `SELECT count(*)::int AS n FROM pg_stat_activity
+                WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid()`,
+            );
+            if ((waiting.rows[0]?.n ?? 0) > 0 || (queued.rows[0]?.n ?? 0) > 0) break;
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          await client.query(`SET LOCAL lock_timeout = '2s'`);
+          const customer = await client
+            .query('SELECT id FROM customers WHERE id = $1 FOR KEY SHARE', [maryam])
+            .then(
+              () => 'GRANTED',
+              (error: { code?: string }) => error.code ?? 'ERROR',
+            );
+          await client.query(customer === 'GRANTED' ? 'COMMIT' : 'ROLLBACK');
+          return { customer, delivered: await delivering };
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => undefined);
+          throw error;
+        }
+      });
+      expect(signal.customer).toBe('GRANTED');
+      expect(signal.delivered.outcome).toBe('DELIVERED');
+      // The withdrawn transfer, the paid original order, the money once.
+      expect((await paymentOf(transfer.id)).state).toBe('CANCELLED');
+      expect(await orderState(orderId)).toBe('PAID');
+      expect(await servicesOf(orderId)).toHaveLength(1);
+      expect(
+        (await walletEntries()).filter((e) => e.reason === 'GATEWAY_LATE_CREDIT'),
+      ).toHaveLength(1);
+      expect(await walletTotal()).toBe(0n);
+    });
+
     it('a double callback and concurrent deliveries settle the payment ONCE', async () => {
       const { orderId, paymentId, invoice, invoiceId } = await createdAttempt();
       await closed(orderId, paymentId);

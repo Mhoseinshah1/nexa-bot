@@ -200,6 +200,14 @@ export interface WalletSettlementAuthority {
    * TERMINATE being planned. A throw rolls everything back: nothing was debited yet.
    */
   readonly beforeSettlement?: (tx: TransactionScope) => Promise<void>;
+  /**
+   * NEXA-OWNER-BATCH-1 PR-5 (Codex P2 on #423): run in the settling transaction right AFTER
+   * the customer's lock — so after the order's unclaimed transfers were withdrawn — and
+   * before the balance is read. The late delivery writes its credit here: a credit written
+   * earlier would take the customer's row before the transfer rows, the reverse of the
+   * `row, then customer` order `signalTransferSent` takes, and the two would deadlock (40P01).
+   */
+  readonly afterCustomerLock?: (tx: TransactionScope) => Promise<void>;
 }
 
 export const CUSTOMER_WALLET_SETTLEMENT: WalletSettlementAuthority = {
@@ -1221,6 +1229,7 @@ export class PaymentService {
           throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
         }
         await this.assertCustomerMayPay(scope, customerId, tx);
+        if (authority.afterCustomerLock !== undefined) await authority.afterCustomerLock(tx);
 
         /*
          * Everything the callback could have carried is discarded in favour of this
@@ -4597,6 +4606,8 @@ export class PaymentService {
       }
       /* Set by the preamble: a purchase that never ran it was a REPLAY of an earlier delivery. */
       let ran = false;
+      /* The late credit, written by the purchase after its customer lock (`afterCustomerLock`). */
+      let credit: ((tx: TransactionScope) => Promise<void>) | null = null;
       try {
         const settled = await this.settleFromWallet(
           scope,
@@ -4608,7 +4619,12 @@ export class PaymentService {
             namespace: operator ? OPERATOR_NAMESPACE : 'SCHEDULER',
             beforeSettlement: async (tx) => {
               ran = true;
-              await this.lateDeliveryPreamble(scope, actor, paymentId, target, input, tx);
+              credit = await this.lateDeliveryPreamble(scope, actor, paymentId, target, input, tx);
+            },
+            afterCustomerLock: async (tx) => {
+              /* Unreachable without the preamble: the purchase calls both or neither. */
+              if (credit === null) throw new Error('late delivery: no credit to write');
+              await credit(tx);
             },
             ...(input.operator === undefined
               ? {}
@@ -4794,7 +4810,7 @@ export class PaymentService {
       readonly operator?: { readonly idempotencyKey: string };
     },
     tx: TransactionScope,
-  ): Promise<void> {
+  ): Promise<(tx: TransactionScope) => Promise<void>> {
     const operator = input.operator !== undefined;
     const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
     const now = this.deps.clock.now();
@@ -4840,13 +4856,23 @@ export class PaymentService {
         : await this.deps.lateDeliveryCatalog.sellable(scope, order, tx);
     if (!sellable) throw new LateDeliveryStop({ kind: 'FALLBACK', reason: 'PRODUCT_NOT_SELLABLE' });
 
-    await this.writeLateCredit(scope, actor, payment, verdict, now, tx, {
-      evidenceNote: input.evidenceNote,
-      notify: false,
-      disposition: 'DELIVERED',
-      deliveredOrderId: target.orderId,
-      decidedBy: operator ? 'OPERATOR' : 'POLICY',
-    });
+    /*
+     * The late credit is NOT written here (Codex P2 on #423). Writing it locks the customer's
+     * row, and the purchase has yet to withdraw the original order's unclaimed transfers —
+     * whose rows `signalTransferSent` locks BEFORE the customer. The purchase calls this back
+     * after its own customer lock, so this path takes `payment → transfers → customer` like
+     * every other. The payment's row lock, taken above and held to commit, still makes the
+     * verdict and the write one decision: nothing can credit this payment in between.
+     */
+    const writeCredit = async (inner: TransactionScope): Promise<void> => {
+      await this.writeLateCredit(scope, actor, payment, verdict, now, inner, {
+        evidenceNote: input.evidenceNote,
+        notify: false,
+        disposition: 'DELIVERED',
+        deliveredOrderId: target.orderId,
+        decidedBy: operator ? 'OPERATOR' : 'POLICY',
+      });
+    };
 
     if (target.kind === 'FULFILMENT') {
       /*
@@ -4901,6 +4927,7 @@ export class PaymentService {
         tx,
       );
     }
+    return writeCredit;
   }
 
   /**
