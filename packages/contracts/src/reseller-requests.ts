@@ -327,7 +327,7 @@ export const RESELLER_REQUEST_TEMPLATES = [
   tpl(
     'bot.reseller_request.summary',
     'PR-2: every question with its answer, before sending. «ارسال» files the request; «ویرایش» goes back to the first question.',
-    [ph('answers', 'STRING', 'The questions and answers, one block each.', { untrusted: true })],
+    [ph('answers', 'STRING', 'The questions and answers, one block each.')],
   ),
   tpl('bot.reseller_request.submitted', 'PR-2: «درخواست شما ثبت شد» — the request was filed.', [
     ph('number', 'NUMBER', 'The request number.', { required: false }),
