@@ -8615,7 +8615,7 @@ export function createContainer(
   const installationTenantGuard = new InstallationTenantGuard({
     getCurrent: () => installationTenantId,
     setCurrent: applyInstallationTenant,
-    tenantExists: async (tenantId) => (await tenants.findById(tenantId)) !== null,
+    tenantKind: async (tenantId) => (await tenants.findById(tenantId))?.kind ?? null,
     findPrimary: async () => (await tenants.findPrimary())?.id ?? null,
     exit: (code) => process.exit(code),
     logger,

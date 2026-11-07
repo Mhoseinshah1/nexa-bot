@@ -11,10 +11,17 @@ import {
 const OLD = 'tenant-old' as never;
 const NEW = 'tenant-new' as never;
 
-function world(opts: { cached: string | null; existing: string[]; primary: string | null }) {
+function world(opts: {
+  cached: string | null;
+  existing: string[];
+  primary: string | null;
+  /** Each existing tenant's kind; PRIMARY unless named here. */
+  kinds?: Record<string, 'PRIMARY' | 'RESELLER_BOT'>;
+}) {
   const state = {
     current: opts.cached as never as string | null,
     exists: new Set(opts.existing),
+    kinds: { ...opts.kinds },
     primary: opts.primary,
     existsCalls: 0,
     primaryCalls: 0,
@@ -28,10 +35,11 @@ function world(opts: { cached: string | null; existing: string[]; primary: strin
     setCurrent: (id) => {
       state.current = id as unknown as string;
     },
-    tenantExists: async (id) => {
+    tenantKind: async (id) => {
       state.existsCalls += 1;
       if (state.gate) await state.gate;
-      return state.exists.has(id as unknown as string);
+      const key = id as unknown as string;
+      return state.exists.has(key) ? (state.kinds[key] ?? 'PRIMARY') : null;
     },
     findPrimary: async () => {
       state.primaryCalls += 1;
@@ -73,6 +81,33 @@ describe('InstallationTenantGuard.verify', () => {
     expect(state.exits).toEqual([]);
   });
 
+  it('never swaps a cached tenant it saw as another kind for the installation tenant', async () => {
+    // One install hosts many tenants (ADR-0037); "the primary" is the owner's. A reseller or
+    // hosted tenant that disappears must not have its work moved into the owner's tenant.
+    const CHILD = 'tenant-child';
+    const { guard, state } = world({
+      cached: CHILD,
+      existing: [CHILD, NEW],
+      primary: NEW,
+      kinds: { [CHILD]: 'RESELLER_BOT' },
+    });
+    await expect(guard.verify()).resolves.toBe(CHILD);
+    state.exists.delete(CHILD);
+    await expect(guard.verify()).resolves.toBe(CHILD);
+    expect(state.current).toBe(CHILD);
+    expect(state.primaryCalls).toBe(0);
+    expect(state.exits).toEqual([]);
+    expect(state.errors[0]).toMatchObject({ cachedTenantId: CHILD, kind: 'RESELLER_BOT' });
+  });
+
+  it('still adopts the primary when the cached tenant it saw WAS the installation tenant', async () => {
+    const { guard, state } = world({ cached: OLD, existing: [OLD, NEW], primary: NEW });
+    await expect(guard.verify()).resolves.toBe(OLD);
+    state.exists.delete(OLD);
+    await expect(guard.verify()).resolves.toBe(NEW);
+    expect(state.current).toBe(NEW);
+  });
+
   it('exits 1 when the cached tenant is gone and the database has no primary', async () => {
     const { guard, state } = world({ cached: OLD, existing: [], primary: null });
     await guard.verify();
@@ -93,7 +128,7 @@ describe('InstallationTenantGuard.verify', () => {
     const broken = new InstallationTenantGuard({
       getCurrent: () => state.current as never,
       setCurrent: () => undefined,
-      tenantExists: async () => {
+      tenantKind: async () => {
         throw new Error('connection terminated');
       },
       findPrimary: async () => NEW,

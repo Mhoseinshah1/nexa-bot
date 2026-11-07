@@ -1,4 +1,4 @@
-import type { TenantId } from '@nexa/contracts';
+import type { TenantId, TenantKind } from '@nexa/contracts';
 
 /** How often a role asks whether the tenant it cached at startup still exists. */
 export const INSTALLATION_TENANT_CHECK_MS = 30_000;
@@ -35,9 +35,13 @@ export interface InstallationTenantGuardDeps {
   /** The tenant the process resolved at startup (or last re-resolved). */
   readonly getCurrent: () => TenantId | null;
   readonly setCurrent: (tenantId: TenantId) => void;
-  /** A primary-key lookup: does this tenant row exist in the live database? */
-  readonly tenantExists: (tenantId: TenantId) => Promise<boolean>;
-  /** The same resolution a role does at boot. */
+  /**
+   * A primary-key lookup: the tenant's kind, or null when the row does not exist in the
+   * live database. A directory read (`tenants` carries no row-level security), made on
+   * the audited system path when nothing is bound (ADR-0037).
+   */
+  readonly tenantKind: (tenantId: TenantId) => Promise<TenantKind | null>;
+  /** The same resolution a role does at boot: the installation's one PRIMARY tenant. */
   readonly findPrimary: () => Promise<TenantId | null>;
   /** Process exit; Docker restarts the role and it resolves from scratch. */
   readonly exit: (code: number) => void;
@@ -62,6 +66,12 @@ export interface InstallationTenantGuardDeps {
  * - it is gone and there is no primary: the install is not recoverable in this process, so
  *   exit and let Docker start the role again.
  *
+ * The guard replaces only the INSTALLATION tenant. One install hosts many tenants
+ * (ADR-0037), and "the primary" is the owner's installation tenant: a cached tenant the
+ * guard has seen as any other kind (a reseller sales bot, a hosted bot) is never swapped
+ * for the owner's when it disappears — that would move a stranger's work into the
+ * owner's tenant. It is logged and kept; its writes keep failing, which is the truth.
+ *
  * A role that never had a tenant (a fresh, unprovisioned install) is left alone. A check
  * that could not be answered (database down mid-restore) changes nothing. Concurrent calls
  * share one check. The guard never retries the write that failed.
@@ -69,6 +79,8 @@ export interface InstallationTenantGuardDeps {
 export class InstallationTenantGuard {
   private timer: NodeJS.Timeout | null = null;
   private inFlight: Promise<TenantId | null> | null = null;
+  /** The kind this guard last saw the cached tenant have, by id. */
+  private lastSeen: { readonly tenantId: TenantId; readonly kind: TenantKind } | null = null;
 
   constructor(private readonly deps: InstallationTenantGuardDeps) {}
 
@@ -103,7 +115,19 @@ export class InstallationTenantGuard {
     const cached = this.deps.getCurrent();
     if (cached === null) return null;
     try {
-      if (await this.deps.tenantExists(cached)) return cached;
+      const kind = await this.deps.tenantKind(cached);
+      if (kind !== null) {
+        this.lastSeen = { tenantId: cached, kind };
+        return cached;
+      }
+      const seen = this.lastSeen?.tenantId === cached ? this.lastSeen.kind : null;
+      if (seen !== null && seen !== 'PRIMARY') {
+        this.deps.logger.error(
+          { cachedTenantId: cached, kind: seen },
+          'the tenant this process cached no longer exists and was not the installation tenant; not replacing it with the installation tenant',
+        );
+        return cached;
+      }
       const primary = await this.deps.findPrimary();
       if (primary === null) {
         this.deps.logger.error(
