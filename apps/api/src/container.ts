@@ -5951,6 +5951,7 @@ export function createContainer(
   const resellerRequestService = new ResellerRequestService({
     requests: new DrizzleResellerRequestRepository(database.db),
     resellers: resellerRepository,
+    registrar: resellerAdminService,
     customers: customerRepository,
     features: featureFlagResolver,
     settings: settingsResolver,

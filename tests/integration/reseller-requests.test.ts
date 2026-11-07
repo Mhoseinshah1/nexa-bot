@@ -21,6 +21,7 @@ import {
   lastKeyboard,
   lastReply,
   lastText,
+  ledgerCount,
   photoUpdate,
   receiptFixture,
   replayOf,
@@ -42,6 +43,10 @@ import {
  *  - `entryBlock`: the cooldown comparison inverted          -> 'the wait after a rejection';
  *  - `customerReply`/`postMessage`: the `status !== PENDING` refusal removed -> 'closed thread';
  *  - the `reseller_requests_one_pending_key` index dropped   -> 'the index is the backstop'.
+ *  - `approve`: the request read WITHOUT its `FOR UPDATE` lock -> 'a concurrent pair'
+ *    (the loser reaches the registration and fails `RESELLER_ALREADY_REGISTERED`);
+ *  - `approve`: the PENDING check removed (an APPROVED row re-decided) -> 'a double approve'
+ *    and 'a concurrent pair' (`ALREADY_RESELLER` instead of the decision that stands).
  */
 
 const LABEL = CATALOGUE_FA['bot.menu.reseller_request'];
@@ -131,6 +136,42 @@ describe('reseller requests (PR-2)', () => {
     await step('x', draft, tg);
     const rowsNow = await requestsOf();
     return rowsNow[rowsNow.length - 1]?.id as string;
+  }
+
+  /** A tap on a log message's button, as a Telegram group sends it. */
+  function groupTap(data: string, telegramUserId: string) {
+    const id = 880_000 + (n += 1);
+    return c().botRuntime.handle(tenantA, systemActor('group'), {
+      idempotencyKey: `group-tap-${String(id)}`,
+      botInstanceId: BOT_A,
+      update: {
+        // The lowest id there is: a window reads only messages sent AFTER the tap that
+        // opened it, and the fixture numbers its own updates upward from small values.
+        update_id: 1,
+        callback_query: {
+          id: `cbq-${String(id)}`,
+          from: { id: Number(telegramUserId), is_bot: false, first_name: 'ادمین' },
+          data,
+          message: { message_id: 5, date: 0, chat: { id: -100123, type: 'supergroup' } },
+        },
+      },
+      telegramUserId,
+      from: { id: Number(telegramUserId), first_name: 'ادمین' },
+    });
+  }
+
+  /** A filed request for another applicant, by their Telegram id. */
+  async function fileRequestFor(tg: string): Promise<string> {
+    const draft = await begin(tg);
+    await say(f, 'فروشگاه', tg);
+    await step('s', draft, tg);
+    await step('x', draft, tg);
+    const mine = await rows<{ id: string }>(
+      f,
+      sql`SELECT r.id FROM reseller_requests r JOIN customers c ON c.id = r.customer_id
+           WHERE c.telegram_user_id = ${tg}`,
+    );
+    return mine[0]?.id as string;
   }
 
   describe('the owner’s questions', () => {
@@ -482,15 +523,330 @@ describe('reseller requests (PR-2)', () => {
       expect(denials[0]?.n).toBeGreaterThanOrEqual(2);
     });
 
-    it('keeps approve a boundary: authorised, then refused as not implemented, changing nothing', async () => {
-      const request = await fileRequest();
-      const tier = await c().resellersAdmin.createTier(tenantA, f.owner, {
+    // -- Approve (§7): the Web Admin's registration, joined to the decision's transaction --
+
+    const goldTier = (name = 'Gold') =>
+      c().resellersAdmin.createTier(tenantA, f.owner, {
         idempotencyKey: key(),
         write: {
-          name: 'Gold',
+          name,
           pricingMode: 'LIST_PRICE',
           discountPercentage: null,
           creditLimit: money(0n, 'IRT'),
+        },
+      });
+
+    const count = async (query: ReturnType<typeof sql>): Promise<number> =>
+      Number((await rows<{ n: number }>(f, query))[0]?.n ?? 0);
+
+    /** What one approval leaves behind: counted, so a second one shows as a 2. */
+    const approvalTrace = async (customerId: string = f.customer) => ({
+      resellers: await count(
+        sql`SELECT count(*)::int AS n FROM resellers WHERE customer_id = ${customerId}`,
+      ),
+      registerAudits: await count(
+        sql`SELECT count(*)::int AS n FROM audit_logs
+             WHERE action = 'reseller.register' AND result = 'SUCCESS' AND entity_id = ${customerId}`,
+      ),
+      approveAudits: await count(
+        sql`SELECT count(*)::int AS n FROM audit_logs
+             WHERE action = 'reseller_request.approve' AND result = 'SUCCESS'`,
+      ),
+      standingEvents: await count(
+        sql`SELECT count(*)::int AS n FROM outbox_messages
+             WHERE event_type = 'ResellerStandingChanged' AND aggregate_id = ${customerId}`,
+      ),
+      decidedEvents: await count(
+        sql`SELECT count(*)::int AS n FROM outbox_messages
+             WHERE event_type = 'ResellerRequestDecided'`,
+      ),
+      decisionMessages: await count(
+        sql`SELECT count(*)::int AS n FROM customer_notifications
+             WHERE kind = 'RESELLER_REQUEST_DECISION' AND customer_id = ${customerId}`,
+      ),
+    });
+    const ONCE = {
+      resellers: 1,
+      registerAudits: 1,
+      approveAudits: 1,
+      standingEvents: 1,
+      decidedEvents: 1,
+      decisionMessages: 1,
+    };
+    const NOTHING = {
+      resellers: 0,
+      registerAudits: 0,
+      approveAudits: 0,
+      standingEvents: 0,
+      decidedEvents: 0,
+      decisionMessages: 0,
+    };
+
+    const resellerOf = async (customerId: string = f.customer) =>
+      (
+        await rows<{
+          tier_id: string;
+          status: string;
+          pricing_mode: string;
+          credit_limit_amount: string | null;
+        }>(
+          f,
+          sql`SELECT tier_id, status, pricing_mode, credit_limit_amount::text AS credit_limit_amount
+               FROM resellers WHERE customer_id = ${customerId}`,
+        )
+      )[0];
+
+    /** The group's «✅ تأیید» → the tier list in the private chat → the tier → «تأیید نهایی». */
+    async function confirmDataFromGroup(request: string, tierName: string): Promise<string> {
+      await customerNamed(f, TG.owner, 'owner_admin');
+      f.sent = [];
+      await groupTap(`rqa:${request}`, TG.owner);
+      const list = f.sent.find(
+        (one) => one.method === 'sendMessage' && String(one.body['chat_id']) === TG.owner,
+      );
+      const tierButton = keyboardOf(list?.body ?? {}).find((one) => one.text === tierName);
+      expect(tierButton?.callback_data).toBeDefined();
+      expect((await tap(f, tierButton?.callback_data as string, TG.owner)).replyKey).toBe(
+        'bot.admin.reseller_request.confirm',
+      );
+      const confirm = lastKeyboard(f)[0]?.callback_data;
+      expect(confirm).toBeDefined();
+      return confirm as string;
+    }
+
+    it('approve from the operations group: the tier list, the confirmation, then a reseller on that tier', async () => {
+      const request = await fileRequest();
+      const tier = await goldTier();
+      const confirm = await confirmDataFromGroup(request, 'Gold');
+      const done = await tap(f, confirm, TG.owner);
+      expect(done.replyKey).toBe('bot.admin.reseller_request.done_approved');
+      expect(await resellerOf()).toMatchObject({ tier_id: tier.id, status: 'ACTIVE' });
+      expect((await requestsOf())[0]?.status).toBe('APPROVED');
+      const decided = await rows<{ decided_by_admin_id: string; tier_id: string }>(
+        f,
+        sql`SELECT decided_by_admin_id, tier_id FROM reseller_requests WHERE id = ${request}`,
+      );
+      expect(decided[0]).toEqual({ decided_by_admin_id: f.ownerId, tier_id: tier.id });
+      expect(await approvalTrace()).toEqual(ONCE);
+      // A redelivery of the confirm tap, and a second tap on it, approve nothing more.
+      await tap(f, confirm, TG.owner);
+      expect(await approvalTrace()).toEqual(ONCE);
+    });
+
+    it('approve from the Web Admin: the same service, the same audit, the same ops log line', async () => {
+      const request = await fileRequest();
+      const tier = await goldTier();
+      const result = await c().resellerRequests.approve(tenantA, f.owner, {
+        requestId: request,
+        tierId: tier.id,
+        idempotencyKey: key(),
+      });
+      expect(result).toMatchObject({
+        changed: true,
+        request: { status: 'APPROVED', tierId: tier.id },
+      });
+      // Exactly the Web Admin's «ثبت نماینده»: an ACTIVE row on the tier's terms, the
+      // `reseller.register` audit row and the `ResellerStandingChanged` the ops log reports.
+      expect(await resellerOf()).toMatchObject({
+        tier_id: tier.id,
+        status: 'ACTIVE',
+        pricing_mode: 'TIER',
+        credit_limit_amount: null,
+      });
+      expect(await approvalTrace()).toEqual(ONCE);
+      const standing = await rows<{ payload: Record<string, unknown> }>(
+        f,
+        sql`SELECT payload FROM outbox_messages WHERE event_type = 'ResellerStandingChanged'`,
+      );
+      expect(standing[0]?.payload).toMatchObject({
+        customerId: f.customer,
+        change: 'PROMOTED',
+        toStatus: 'ACTIVE',
+        toTierName: 'Gold',
+      });
+      // The customer page reads the same standing the registration writes.
+      await expect(c().resellersAdmin.get(tenantA, f.owner, f.customer)).resolves.toMatchObject({
+        status: 'ACTIVE',
+      });
+    });
+
+    it('approve moves NO wallet entry and grants NO credit (ledger and credit limits unchanged)', async () => {
+      await c().wallet.adjust(tenantA, f.owner, f.customer, {
+        idempotencyKey: key(),
+        direction: 'CREDIT',
+        amountMinor: 125_000n,
+        currency: 'IRT',
+        note: 'شارژ آزمون',
+      });
+      const request = await fileRequest();
+      const tier = await goldTier();
+      const ledgerBefore = await ledgerCount(f);
+      const allLedgerBefore = await count(sql`SELECT count(*)::int AS n FROM wallet_entries`);
+      const balanceBefore = await c().wallet.balance(tenantA, f.owner, f.customer);
+      expect(ledgerBefore).toBe(1);
+
+      await c().resellerRequests.approve(tenantA, f.owner, {
+        requestId: request,
+        tierId: tier.id,
+        idempotencyKey: key(),
+      });
+
+      expect(await ledgerCount(f)).toBe(ledgerBefore);
+      expect(await count(sql`SELECT count(*)::int AS n FROM wallet_entries`)).toBe(allLedgerBefore);
+      expect(await c().wallet.balance(tenantA, f.owner, f.customer)).toEqual(balanceBefore);
+      expect((await resellerOf())?.credit_limit_amount).toBeNull();
+    });
+
+    it('a double approve (same key, or a second tap) is idempotent: one reseller row, one notification', async () => {
+      const request = await fileRequest();
+      const tier = await goldTier();
+      const k = key();
+      const first = await c().resellerRequests.approve(tenantA, f.owner, {
+        requestId: request,
+        tierId: tier.id,
+        idempotencyKey: k,
+      });
+      expect(first.changed).toBe(true);
+      // The same key replays; another key finds the request decided and changes nothing.
+      const replay = await c().resellerRequests.approve(tenantA, f.owner, {
+        requestId: request,
+        tierId: tier.id,
+        idempotencyKey: k,
+      });
+      const again = await c().resellerRequests.approve(tenantA, f.owner, {
+        requestId: request,
+        tierId: tier.id,
+        idempotencyKey: key(),
+      });
+      expect([replay.changed, again.changed]).toEqual([false, false]);
+      expect(again.request).toMatchObject({ status: 'APPROVED', tierId: tier.id });
+      expect(await approvalTrace()).toEqual(ONCE);
+      // A rejection after the approval is CLOSED, not a second decision.
+      await expect(
+        c().resellerRequests.reject(tenantA, f.owner, {
+          requestId: request,
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: RESELLER_REQUEST_ERROR_CODES.CLOSED });
+    });
+
+    it('a concurrent pair (two keys at once, then the group and the Web Admin at once) approves exactly once', async () => {
+      const request = await fileRequest();
+      const tier = await goldTier();
+      const outcomes = await Promise.all([
+        c().resellerRequests.approve(tenantA, f.owner, {
+          requestId: request,
+          tierId: tier.id,
+          idempotencyKey: key(),
+        }),
+        c().resellerRequests.approve(tenantA, f.owner, {
+          requestId: request,
+          tierId: tier.id,
+          idempotencyKey: key(),
+        }),
+      ]);
+      // Both answer with the decision that stands; exactly one of them made it.
+      expect(outcomes.map((one) => one.request.status)).toEqual(['APPROVED', 'APPROVED']);
+      expect(outcomes.map((one) => one.changed).sort()).toEqual([false, true]);
+      expect(await approvalTrace()).toEqual(ONCE);
+
+      // The group's confirm and the Web Admin's button racing on another applicant.
+      const second = await customerNamed(f, '750912', 'second_rr');
+      const other = await fileRequestFor('750912');
+      const confirm = await confirmDataFromGroup(other, 'Gold');
+      const [group, web] = await Promise.all([
+        tap(f, confirm, TG.owner),
+        c().resellerRequests.approve(tenantA, f.owner, {
+          requestId: other,
+          tierId: tier.id,
+          idempotencyKey: key(),
+        }),
+      ]);
+      expect(group.replyKey).toBe('bot.admin.reseller_request.done_approved');
+      expect(web.request.status).toBe('APPROVED');
+      const trace = await approvalTrace(second);
+      expect(trace).toMatchObject({
+        resellers: 1,
+        registerAudits: 1,
+        standingEvents: 1,
+        decisionMessages: 1,
+      });
+      expect(trace.approveAudits).toBe(2); // one per request: the first pair's and this one's
+    });
+
+    it('an administrator without resellers.edit is refused on approve, from the group and from the Web Admin', async () => {
+      const request = await fileRequest();
+      const tier = await goldTier();
+      const viewerId = await bindNewAdmin(f, 'viewer-ap', TG.observer, ['resellers.view']);
+      const viewer = adminActorFor({ id: viewerId, username: 'viewer-ap', password: 'x' });
+      await expect(
+        c().resellerRequests.approve(tenantA, viewer, {
+          requestId: request,
+          tierId: tier.id,
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
+      expect(
+        await count(
+          sql`SELECT count(*)::int AS n FROM audit_logs
+               WHERE action = 'reseller_request.approve' AND result = 'DENIED'`,
+        ),
+      ).toBe(1);
+
+      // From the group: the «✅ تأیید» tap, and a forged confirm in the private chat.
+      await customerNamed(f, TG.observer, 'viewer_ap');
+      f.sent = [];
+      await groupTap(`rqa:${request}`, TG.observer);
+      expect(f.sent.filter((one) => one.method === 'sendMessage')).toEqual([]);
+      const ownerConfirm = await confirmDataFromGroup(request, 'Gold');
+      await tap(f, ownerConfirm, TG.observer);
+
+      expect((await requestsOf())[0]?.status).toBe('PENDING');
+      expect(await approvalTrace()).toEqual(NOTHING);
+    });
+
+    it('refuses an invalid tier, a stopped installation and an applicant who already is a reseller, changing nothing', async () => {
+      const request = await fileRequest();
+      const tier = await goldTier();
+      for (const tierId of [c().ids.uuid(), 'not-a-uuid']) {
+        await expect(
+          c().resellerRequests.approve(tenantA, f.owner, {
+            requestId: request,
+            tierId,
+            idempotencyKey: key(),
+          }),
+        ).rejects.toMatchObject({ code: RESELLER_REQUEST_ERROR_CODES.TIER_INVALID });
+      }
+
+      await f.ctx.container.database.db.execute(
+        sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+      );
+      try {
+        await expect(
+          c().resellerRequests.approve(tenantA, f.owner, {
+            requestId: request,
+            tierId: tier.id,
+            idempotencyKey: key(),
+          }),
+        ).rejects.toMatchObject({ kind: 'CONFLICT' });
+      } finally {
+        await f.ctx.container.database.db.execute(
+          sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${tenantA.tenantId}`,
+        );
+      }
+      expect((await requestsOf())[0]?.status).toBe('PENDING');
+      expect(await approvalTrace()).toEqual(NOTHING);
+
+      // Registered on the resellers page while the request was open: refused, stays PENDING,
+      // and the one reseller row is the page's.
+      await c().resellersAdmin.register(tenantA, f.owner, {
+        idempotencyKey: key(),
+        customerId: f.customer,
+        write: {
+          tierId: tier.id,
+          pricingMode: 'TIER',
+          discountPercentage: null,
+          creditLimit: null,
         },
       });
       await expect(
@@ -499,29 +855,92 @@ describe('reseller requests (PR-2)', () => {
           tierId: tier.id,
           idempotencyKey: key(),
         }),
-      ).rejects.toMatchObject({ code: RESELLER_REQUEST_ERROR_CODES.APPROVE_NOT_IMPLEMENTED });
+      ).rejects.toMatchObject({ code: RESELLER_REQUEST_ERROR_CODES.ALREADY_RESELLER });
+      expect((await requestsOf())[0]?.status).toBe('PENDING');
+      expect(await approvalTrace()).toMatchObject({
+        resellers: 1,
+        registerAudits: 1,
+        approveAudits: 0,
+        decisionMessages: 0,
+      });
+      // From the group the operator is told so, and nothing changes.
+      const confirm = await confirmDataFromGroup(request, 'Gold');
+      expect((await tap(f, confirm, TG.owner)).replyKey).toBe(
+        'bot.admin.reseller_request.already_reseller',
+      );
       expect((await requestsOf())[0]?.status).toBe('PENDING');
     });
 
-    // The next change (the approve path, money-tier reviewer) fills these in. Each one names
-    // what it MUST prove; none may be deleted or weakened to make that change pass.
-    it.todo(
-      'approve from the operations group: the tier list, the confirmation, then a reseller on that tier',
-    );
-    it.todo('approve from the Web Admin: the same service, the same audit, the same ops log line');
-    it.todo(
-      'approve moves NO wallet entry and grants NO credit (ledger and credit limits unchanged)',
-    );
-    it.todo(
-      'a double approve (same key, or a second tap) is idempotent: one reseller row, one notification',
-    );
-    it.todo(
-      'an administrator without resellers.edit is refused on approve, from the group and from the Web Admin',
-    );
-    it.todo(
-      'approve and the request’s state change commit in ONE transaction (a failing registration leaves it PENDING)',
-    );
-    it.todo('the approval message names the tier; a decided request takes no further reply');
+    it('approve and the request’s state change commit in ONE transaction (a failing step leaves it PENDING)', async () => {
+      const request = await fileRequest();
+      const tier = await goldTier();
+      // The customer's decision message is written AFTER the registration and the decision,
+      // in the same transaction: failing it must undo both.
+      const notifier = (
+        c().resellerRequests as unknown as {
+          deps: { notifier: { notifyThrough: (...args: unknown[]) => Promise<unknown> } };
+        }
+      ).deps.notifier;
+      const original = notifier.notifyThrough;
+      notifier.notifyThrough = async () => {
+        throw new Error('the notification lane is down');
+      };
+      try {
+        await expect(
+          c().resellerRequests.approve(tenantA, f.owner, {
+            requestId: request,
+            tierId: tier.id,
+            idempotencyKey: key(),
+          }),
+        ).rejects.toThrow('the notification lane is down');
+      } finally {
+        notifier.notifyThrough = original;
+      }
+      expect((await requestsOf())[0]?.status).toBe('PENDING');
+      expect(await approvalTrace()).toEqual(NOTHING);
+      // And it can still be approved afterwards.
+      await c().resellerRequests.approve(tenantA, f.owner, {
+        requestId: request,
+        tierId: tier.id,
+        idempotencyKey: key(),
+      });
+      expect(await approvalTrace()).toEqual(ONCE);
+    });
+
+    it('the approval message names the tier; a decided request takes no further reply', async () => {
+      const request = await fileRequest();
+      await c().resellerRequests.postMessage(tenantA, f.owner, {
+        requestId: request,
+        text: 'سؤال پیش از تأیید',
+        idempotencyKey: key(),
+      });
+      const tier = await goldTier('Platinum');
+      await c().resellerRequests.approve(tenantA, f.owner, {
+        requestId: request,
+        tierId: tier.id,
+        idempotencyKey: key(),
+      });
+      f.sent = [];
+      await c().customerNotificationLoop.tick();
+      const decision = f.sent.filter(
+        (one) => one.method === 'sendMessage' && String(one.body['text']).includes('Platinum'),
+      );
+      expect(decision).toHaveLength(1);
+      expect((await tap(f, `rqr:${request}`, TG.customer)).replyKey).toBe(
+        'bot.reseller_request.thread_closed',
+      );
+      await expect(
+        c().resellerRequests.postMessage(tenantA, f.owner, {
+          requestId: request,
+          text: 'دیر شد',
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: RESELLER_REQUEST_ERROR_CODES.CLOSED });
+      // The applicant is a reseller now: the menu button says so instead of a new request.
+      expect((await say(f, LABEL, TG.customer)).replyKey).toBe(
+        'bot.reseller_request.already_reseller',
+      );
+    });
   });
 
   describe('the operations group', () => {
@@ -642,28 +1061,6 @@ describe('reseller requests (PR-2)', () => {
       expect(queued[0]?.buttons.map((one) => one.kind)).toEqual(['RESELLER_REQUEST', 'USER']);
     });
 
-    /** A tap on a log message's button, as a Telegram group sends it. */
-    function groupTap(data: string, telegramUserId: string) {
-      const id = 880_000 + (n += 1);
-      return c().botRuntime.handle(tenantA, systemActor('group'), {
-        idempotencyKey: `group-tap-${String(id)}`,
-        botInstanceId: BOT_A,
-        update: {
-          // The lowest id there is: a window reads only messages sent AFTER the tap that
-          // opened it, and the fixture numbers its own updates upward from small values.
-          update_id: 1,
-          callback_query: {
-            id: `cbq-${String(id)}`,
-            from: { id: Number(telegramUserId), is_bot: false, first_name: 'ادمین' },
-            data,
-            message: { message_id: 5, date: 0, chat: { id: -100123, type: 'supergroup' } },
-          },
-        },
-        telegramUserId,
-        from: { id: Number(telegramUserId), first_name: 'ادمین' },
-      });
-    }
-
     it('answers a permitted administrator’s tap in their PRIVATE chat only, and a stranger’s not at all', async () => {
       const request = await fileRequest();
       await makeTier();
@@ -719,18 +1116,5 @@ describe('reseller requests (PR-2)', () => {
           creditLimit: money(0n, 'IRT'),
         },
       });
-
-    async function fileRequestFor(tg: string): Promise<string> {
-      const draft = await begin(tg);
-      await say(f, 'فروشگاه', tg);
-      await step('s', draft, tg);
-      await step('x', draft, tg);
-      const mine = await rows<{ id: string }>(
-        f,
-        sql`SELECT r.id FROM reseller_requests r JOIN customers c ON c.id = r.customer_id
-             WHERE c.telegram_user_id = ${tg}`,
-      );
-      return mine[0]?.id as string;
-    }
   });
 });

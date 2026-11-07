@@ -44,6 +44,7 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { ResellerRepository } from '../../resellers/application/ports.js';
+import type { ResellerAdminService } from '../../resellers/application/reseller-admin.service.js';
 import type {
   AskedQuestion,
   CustomerFacts,
@@ -67,6 +68,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export interface ResellerRequestServiceDeps {
   readonly requests: ResellerRequestRepository;
   readonly resellers: Pick<ResellerRepository, 'findByCustomer' | 'findTier' | 'listTiers'>;
+  /**
+   * The ONE way a customer becomes a reseller — the Web Admin's «ثبت نماینده»
+   * (`ResellerAdminService.register`), joined to the approval's transaction.
+   */
+  readonly registrar: Pick<ResellerAdminService, 'registerWithin'>;
   readonly customers: Pick<CustomerRepository, 'findById'>;
   readonly features: {
     isEnabled(scope: TenantContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean>;
@@ -901,22 +907,26 @@ export class ResellerRequestService {
   /**
    * Approves the request: the customer becomes a reseller on the chosen tier.
    *
-   * TODO(PR-2 approve, money-tier reviewer): this is the BOUNDARY, not the transaction. The
-   * next change fills it in with, in ONE transaction:
-   *   1. the scope-activity check, then the request locked (`lockedRequestOf`) and still PENDING;
-   *   2. the tier must exist (`resellers.findTier`) -> `TIER_INVALID`;
-   *   3. the SAME registration the Web Admin customer page uses, `ResellerAdminService.register`
-   *      (same permission `resellers.edit`, same audit, same `ResellerStandingChanged` event so
-   *      the operations log reports it) — reused, not copied; it refuses a customer that already
-   *      is a reseller;
-   *   4. `requests.decide(... status: 'APPROVED', tierId ...)` and the `ResellerRequestDecided`
-   *      event; `notifier.notifyThrough(... 'RESELLER_REQUEST_DECISION' ...)` (the lane reads
-   *      the tier's name from the row);
-   *   5. NO wallet entry and NO credit: the registration moves no money.
-   * Idempotent on the key; an already APPROVED request with the same tier replays. A second
-   * decision on a decided request is CLOSED. Callers are already wired to this method:
-   * the operations group's «✅ تأیید» tier list + confirm (`admin-reseller-request-flow.ts`)
-   * and the Web Admin's approve button (`ResellerRequestsController.approve`).
+   * ONE transaction holds all of it: the scope's activity, the request locked `FOR UPDATE`
+   * and still PENDING, the tier (this tenant's), the registration — the SAME one the Web
+   * Admin's «ثبت نماینده» runs (`ResellerAdminService.registerWithin`: `resellers.edit`, the
+   * `reseller.register` audit row, the `ResellerStandingChanged` event the operations log
+   * reports) — the decision, its `ResellerRequestDecided` event, the customer's decision
+   * message (the lane reads the tier's name from the row) and the idempotency record. A
+   * failure anywhere leaves the request PENDING and the customer as they were.
+   *
+   * NO wallet entry and NO credit: the registration is on the tier's terms (`TIER` pricing,
+   * no discount, no credit limit of its own), exactly what the register form submits by
+   * default; `registerWithin` refuses any non-zero limit as `register` does.
+   *
+   * Idempotent and race-safe. The same key replays. A second approve with another key (a
+   * second tap, the group and the Web Admin at once) waits on the row lock, finds the
+   * request APPROVED and returns it unchanged (`changed: false`): no second registration,
+   * audit row or message. A request already REJECTED is CLOSED. A customer who became a
+   * reseller some other way while the request was open is refused (`ALREADY_RESELLER`) and
+   * the request stays PENDING for the operator to reject: approving would claim a tier the
+   * customer is not on, and a standing change is `ResellerAdminService.update`'s, with its
+   * written reason.
    */
   async approve(
     scope: TenantContext,
@@ -928,15 +938,124 @@ export class ResellerRequestService {
     },
   ): Promise<RequestDecisionResult> {
     const requestId = this.idOf(input.requestId);
-    // Deny by default: a non-permitted actor is refused (and audited) before anything else.
-    await this.authorize(scope, actor, {
+    const denial = {
       action: 'reseller_request.approve',
       entityType: 'ResellerRequest',
       entityId: requestId,
-    });
-    throw errors.preconditionFailed(
-      RESELLER_REQUEST_ERROR_CODES.APPROVE_NOT_IMPLEMENTED,
-      'Approving a reseller request is not implemented yet.',
+    };
+    // Deny by default: a non-permitted actor is refused (and audited) before anything else.
+    await this.authorize(scope, actor, denial);
+    const adminId = this.adminIdOf(actor);
+    const tier = uuidV7Schema.safeParse(input.tierId);
+    if (!tier.success) throw this.tierInvalid();
+    const tierId = tier.data;
+    const requestHash = hashRequest({ op: 'approve', requestId, tierId });
+    const replayed = await this.deps.idempotency.find<{ requestId: string }>(
+      scope,
+      actor.surface,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replayed !== null) {
+      const found = await this.deps.requests.findById(scope, replayed.result.requestId);
+      if (found !== null) return { request: found, changed: false };
+    }
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      RESELLER_REQUEST_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        // The lock is what makes a concurrent pair approve once: the second waits here for
+        // the first to commit, then reads APPROVED below.
+        const request = await this.lockedRequestOf(scope, requestId, tx);
+        if (request === null) throw this.notFound();
+        if (request.status === 'REJECTED') throw this.closed();
+        let changed = false;
+        let current = request;
+        if (request.status === 'PENDING') {
+          if ((await this.deps.resellers.findTier(scope, tierId, tx)) === null) {
+            throw this.tierInvalid();
+          }
+          if ((await this.deps.resellers.findByCustomer(scope, request.customerId, tx)) !== null) {
+            throw errors.conflict(
+              RESELLER_REQUEST_ERROR_CODES.ALREADY_RESELLER,
+              'This customer already is a reseller; the request stays open.',
+            );
+          }
+          await this.deps.registrar.registerWithin(
+            scope,
+            actor,
+            {
+              customerId: request.customerId,
+              write: {
+                tierId,
+                pricingMode: 'TIER',
+                discountPercentage: null,
+                creditLimit: null,
+              },
+            },
+            tx,
+          );
+          const now = this.deps.clock.now();
+          const moved = await this.deps.requests.decide(
+            scope,
+            request.id,
+            { status: 'APPROVED', adminId, tierId, reason: null },
+            now,
+            tx,
+          );
+          /* istanbul ignore next -- the row lock is held and PENDING was just read. */
+          if (!moved) throw this.closed();
+          changed = true;
+          current = (await this.deps.requests.findById(scope, request.id, tx)) ?? request;
+          await this.deps.notifier.notifyThrough(
+            scope,
+            request.customerId as UserId,
+            request.botInstanceId as BotInstanceId,
+            'RESELLER_REQUEST_DECISION',
+            request.id,
+            now,
+            tx,
+          );
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'ResellerRequestDecided',
+            aggregateType: 'ResellerRequest',
+            aggregateId: request.id,
+            payload: {
+              requestId: request.id,
+              customerId: request.customerId,
+              status: 'APPROVED',
+              tierId,
+            },
+          });
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: 'reseller_request.approve',
+              entityType: 'ResellerRequest',
+              entityId: request.id,
+              before: { status: 'PENDING' },
+              after: { status: 'APPROVED', tierId },
+              result: 'SUCCESS',
+            },
+            tx,
+          );
+        }
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          actor.surface,
+          input.idempotencyKey,
+          requestHash,
+          { requestId: request.id },
+          tx,
+        );
+        return { request: current, changed };
+      },
     );
   }
 
@@ -1104,6 +1223,13 @@ export class ResellerRequestService {
     return errors.conflict(
       RESELLER_REQUEST_ERROR_CODES.CLOSED,
       'This request has been decided; its conversation is closed.',
+    );
+  }
+
+  private tierInvalid() {
+    return errors.validation(
+      RESELLER_REQUEST_ERROR_CODES.TIER_INVALID,
+      'The chosen tier is not a reseller tier of this installation.',
     );
   }
 

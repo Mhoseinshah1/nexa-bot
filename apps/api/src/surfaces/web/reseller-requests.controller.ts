@@ -105,7 +105,6 @@ export class ResellerRequestsController {
   ): Promise<ResellerRequestDetailResponse> {
     const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = resellerRequestApproveRequestSchema.parse(body);
-    // The boundary is wired; the approval transaction is the next change's.
     await this.container.resellerRequests.approve(scope, actor, { requestId, ...input });
     return {
       request: this.view(await this.container.resellerRequests.get(scope, actor, requestId)),

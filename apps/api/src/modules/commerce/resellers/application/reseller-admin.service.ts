@@ -635,7 +635,6 @@ export class ResellerAdminService {
     // After the replay: a command that committed before the decision replays its result.
     refuseCredit(input.write.creditLimit);
 
-    const now = this.deps.clock.now();
     await runAuthorizedMutation(
       this.mutationDeps(),
       scope,
@@ -643,55 +642,83 @@ export class ResellerAdminService {
       RESELLERS_EDIT_PERMISSION,
       denial,
       async (tx) => {
-        await this.assertScopeActive(scope, tx);
-        if ((await this.deps.customers.findById(scope, customerId as UserId, tx)) === null) {
-          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
-        }
-        const registerTier = await this.deps.resellers.findTier(scope, write.tierId, tx);
-        if (registerTier === null) {
-          throw tierNotFound();
-        }
-        const registered = await this.deps.resellers.register(
-          scope,
-          { ...write, id: this.deps.ids.uuid(), customerId, now },
-          tx,
-        );
-        if (!registered) {
-          throw errors.conflict(
-            COMMERCE_ERROR_CODES.RESELLER_ALREADY_REGISTERED,
-            'This customer is already a reseller.',
-          );
-        }
-        await this.deps.audit.record(
-          scope,
-          actor,
-          {
-            action: 'reseller.register',
-            entityType: 'Customer',
-            entityId: customerId,
-            before: null,
-            after: serialisableReseller(write),
-            result: 'SUCCESS',
-          },
-          tx,
-        );
-        await this.deps.outbox.write(tx, actor, {
-          eventType: 'ResellerStandingChanged',
-          aggregateType: 'Customer',
-          aggregateId: customerId,
-          payload: {
-            customerId,
-            change: 'PROMOTED',
-            fromStatus: null,
-            toStatus: 'ACTIVE',
-            fromTierName: null,
-            toTierName: registerTier.name,
-          },
-        });
+        await this.registerWithin(scope, actor, { customerId, write: input.write }, tx);
         await this.remember(scope, input.idempotencyKey, requestHash, { customerId }, tx);
       },
     );
     return this.resellerListing(scope, customerId);
+  }
+
+  /**
+   * The registration itself, INSIDE a caller's transaction: `register`'s body, and what
+   * approving a reseller request (PR-2, `ResellerRequestService.approve`) runs so that the
+   * customer becomes a reseller in the SAME commit as the request's decision — one write
+   * path, so the permission, the `reseller.register` audit row and the
+   * `ResellerStandingChanged` event the operations log reports are the same wherever a
+   * reseller is made.
+   *
+   * Charges `resellers.edit` and the scope's activity again on the caller's transaction,
+   * whatever the caller checked. The caller owns idempotency (its command's key covers this
+   * write) and must make the early check on the same permission, with its DENIED audit row,
+   * before its transaction, so a refusal leaves the trail `register` leaves.
+   * Moves no money: a registration writes no wallet entry and grants no credit.
+   */
+  async registerWithin(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly customerId: string; readonly write: Omit<ResellerWrite, 'status'> },
+    tx: TransactionScope,
+  ): Promise<void> {
+    const customerId = this.id(input.customerId, 'customer');
+    const write: ResellerWrite = { ...input.write, status: 'ACTIVE' };
+    refuseCredit(write.creditLimit);
+    await this.deps.guard.check(scope, actor, RESELLERS_EDIT_PERMISSION, tx);
+    await this.assertScopeActive(scope, tx);
+    if ((await this.deps.customers.findById(scope, customerId as UserId, tx)) === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+    }
+    const registerTier = await this.deps.resellers.findTier(scope, write.tierId, tx);
+    if (registerTier === null) {
+      throw tierNotFound();
+    }
+    const now = this.deps.clock.now();
+    const registered = await this.deps.resellers.register(
+      scope,
+      { ...write, id: this.deps.ids.uuid(), customerId, now },
+      tx,
+    );
+    if (!registered) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.RESELLER_ALREADY_REGISTERED,
+        'This customer is already a reseller.',
+      );
+    }
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'reseller.register',
+        entityType: 'Customer',
+        entityId: customerId,
+        before: null,
+        after: serialisableReseller(write),
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    await this.deps.outbox.write(tx, actor, {
+      eventType: 'ResellerStandingChanged',
+      aggregateType: 'Customer',
+      aggregateId: customerId,
+      payload: {
+        customerId,
+        change: 'PROMOTED',
+        fromStatus: null,
+        toStatus: 'ACTIVE',
+        fromTierName: null,
+        toTierName: registerTier.name,
+      },
+    });
   }
 
   /**

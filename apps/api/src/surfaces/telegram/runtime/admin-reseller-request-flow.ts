@@ -141,15 +141,18 @@ export async function adminResellerRequestTurn(
       case 'ADMIN_RESELLER_REQUEST_CONFIRM': {
         if (command.secondaryId == null) return null;
         const detail = await service.get(scope, adminActor, id);
-        await service.approve(scope, adminActor, {
+        const approved = await service.approve(scope, adminActor, {
           requestId: id,
           tierId: command.secondaryId,
           // The tap's own update key: a redelivery replays, a second tap is a second key
           // that finds the request decided (the service's idempotency, not a check here).
           idempotencyKey: `${input.idempotencyKey}:approve`,
         });
+        // The tier the request WAS approved on: a second tap that lost the race to another
+        // operator's approval is told the decision that stands, not the tier it tapped.
+        const decidedTier = approved.request.tierId ?? command.secondaryId;
         const tierName = (await service.tiersFor(scope, adminActor)).find(
-          (one) => one.id === command.secondaryId,
+          (one) => one.id === decidedTier,
         )?.name;
         return deliver(rt, scope, input, {
           key: 'bot.admin.reseller_request.done_approved',
@@ -231,8 +234,8 @@ export async function adminResellerRequestTurn(
     }
   } catch (error) {
     if (isNexaError(error)) {
-      if (error.code === RESELLER_REQUEST_ERROR_CODES.APPROVE_NOT_IMPLEMENTED) {
-        return deliver(rt, scope, input, notice('bot.admin.reseller_request.not_implemented'));
+      if (error.code === RESELLER_REQUEST_ERROR_CODES.ALREADY_RESELLER) {
+        return deliver(rt, scope, input, notice('bot.admin.reseller_request.already_reseller'));
       }
       if (
         error.code === RESELLER_REQUEST_ERROR_CODES.CLOSED ||
