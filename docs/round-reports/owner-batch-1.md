@@ -8,3 +8,7 @@
 PR-1 needed three CI-fix commits after a clean Codex review: two cited test titles restored
 (ae137154, f238167c), two reply-keyboard tests updated to the new default (c6d81a2b), and a race in
 `custom-menu-buttons` web test made robust (f238167c). No force-push.
+| PR-2 reseller requests | https://github.com/Mhoseinshah1/nexa-bot/pull/421 | `795cfa85c` |
+
+PR-2: one Codex fix commit (c4e4afc1, added migration 0323 for the draft step key) and two CI-fix
+commits (cfd3d9a0, e4382d8a: stale menu counts in two integration tests). Migrations 0322, 0323.
