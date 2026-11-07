@@ -13,14 +13,14 @@ every merge and say so in the PR text.
 - PR-3 https://github.com/Mhoseinshah1/nexa-bot/pull/415 — creator panel «میزبانی‌ها» — `6cce12807`. Migrations 0319/0320.
 - PR-4 https://github.com/Mhoseinshah1/nexa-bot/pull/416 — activation (token, DNS, SSL, webhook, one-time link) — `ac695dffa`. Migration 0321.
 
+- PR-5 https://github.com/Mhoseinshah1/nexa-bot/pull/417 — isolation proof (tests only) — `be9c1ab73`. Create gate still CLOSED.
+- main @ `be9c1ab73`; newest migration 0321_hosted_bot_activation.
+
 ## Open
-- PR-5 https://github.com/Mhoseinshah1/nexa-bot/pull/417 `test/p6a-d3-isolation-proof` — the isolation suite (tests only).
-  Codex requested once (comment 6703688849). See "Next step" for its status at stop.
+- Nothing open. PR-6 not started.
 
 ## Next step (exact)
-1. If #417 is not merged: `bash scripts/claude/ci-status.sh 417` and `--codex 417`. Fix the first
-   complete Codex review of its head in ONE commit (never re-request), get CI green, run the diff-check,
-   then merge as a merge commit.
+1. (done: #417 merged)
 2. PR-6 `fix/p6a-hardening-followups` (money tier), from the latest main:
    a. **The worker must serve every active tenant**, not only `installationTenantId`: notifications,
       reminders, payment expiry, gateway inquiry, broadcasts, provisioning and the other per-tenant
@@ -59,8 +59,11 @@ every merge and say so in the PR text.
 - The container restarted twice; the worktrees and uncommitted PR-5 files survived both times.
 - `gh pr`/GraphQL are blocked. `gh api` REST and the GitHub MCP tools work, for PRs, merges and `@codex review`.
 
-## Local state (lost on reclaim)
-Worktree /home/user/wt-p6a-iso (PR-5). Private DBs nexa_test_p6a_{rls,panel,act,iso}: drop them at round end.
+## Local state
+No worktrees left, and the private test databases are dropped.
+Known flaky unit test, not phase work: `tests/unit/rickpanel-load-protection.test.ts` "two reads of the same panel at once
+never overlap". It compares real 15 ms timer pacing with only 1 ms of slack, and failed once on CI for #417.
+Candidate for a small fix: use a fake clock.
 Remote branches to delete after the phase: test/p6a-load-harness, feat/p6a-capacity-guards,
 feat/p6a-d0-hardening-ops, feat/p6a-d0-tenant-hardening, feat/p6a-d1-creator-panel(-ui),
 feat/p6a-d2-activation, and test/p6a-d3-isolation-proof once merged.
