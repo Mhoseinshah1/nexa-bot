@@ -69,6 +69,7 @@ export const OPS_LOG_TYPE_LABEL: Readonly<Record<OpsLogTypeId, WebKey>> = {
   ERROR_OPERATION: 'web.opslog_type_error_operation',
   PANEL_STATE: 'web.opslog_type_panel_state',
   TICKET_NEW: 'web.opslog_type_ticket_new',
+  RESELLER_REQUEST: 'web.opslog_type_reseller_request',
   REPORT_SUMMARY: 'web.opslog_type_report_summary',
   REPORT_FINANCIAL: 'web.opslog_type_report_financial',
   REPORT_PANELS: 'web.opslog_type_report_panels',

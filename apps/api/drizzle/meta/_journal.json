@@ -2255,6 +2255,20 @@
       "when": 1794029480276,
       "tag": "0321_hosted_bot_activation",
       "breakpoints": true
+    },
+    {
+      "idx": 322,
+      "version": "7",
+      "when": 1794056223943,
+      "tag": "0322_reseller_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 323,
+      "version": "7",
+      "when": 1794066749051,
+      "tag": "0323_reseller_request_draft_step_key",
+      "breakpoints": true
     }
   ]
 }

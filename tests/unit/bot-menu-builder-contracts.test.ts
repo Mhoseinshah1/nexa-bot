@@ -114,7 +114,7 @@ function legacyRowsAllOpen(stored: readonly MainMenuLayoutEntry[]): MainMenuButt
   return packMainMenuRows(shown).map((row) => row.map((button) => button.id));
 }
 
-const allOpen: MainMenuGateOpenById = { trial: true, referral: true };
+const allOpen: MainMenuGateOpenById = { trial: true, referral: true, reseller_request: true };
 const idsOf = (rows: readonly (readonly { button: MainMenuButtonId }[])[]) =>
   rows.map((row) => row.map((one) => one.button));
 
@@ -174,7 +174,8 @@ describe('C-1 legacy → explicit: identical keyboard with every gate open', () 
       { button: 'catalog', enabled: false },
     ]);
     for (const config of explicit.buttons) {
-      expect(config.style).toBe('default');
+      // PR-2: only «درخواست نمایندگی» has a default style of its own (danger).
+      expect(config.style).toBe(mainMenuButton(config.button).defaultStyle ?? 'default');
       expect(config.iconSlot).toBeNull();
     }
     expect(explicit.buttons.find((one) => one.button === 'wallet')?.appearanceSlot).toBe('payment');
@@ -191,6 +192,7 @@ describe('C-1 legacy → explicit: identical keyboard with every gate open', () 
       ['apps', 'referral'],
       ['help'],
       ['tickets'],
+      ['reseller_request'],
     ]);
     expect(explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT).rows).toEqual([
       ['catalog', 'services'],
@@ -198,6 +200,7 @@ describe('C-1 legacy → explicit: identical keyboard with every gate open', () 
       ['trial', 'referral'],
       ['apps'],
       ['tickets'],
+      ['reseller_request'],
     ]);
   });
 });
@@ -304,6 +307,12 @@ describe('C-2 the compatibility projection parses under the PREVIOUS release’s
       { button: 'referral', enabled: false, target: 'referral', appearanceSlot: null },
       { button: 'apps', enabled: false, target: 'apps', appearanceSlot: null },
       { button: 'tickets', enabled: false, target: 'tickets', appearanceSlot: null },
+      {
+        button: 'reseller_request',
+        enabled: false,
+        target: 'reseller_request',
+        appearanceSlot: null,
+      },
     ]);
   });
 });
@@ -548,6 +557,7 @@ describe('customerRowsOf — the one rendering rule (runtime and preview)', () =
     expect(MAIN_MENU_BUTTONS.filter(mainMenuButtonIsGated).map((one) => one.id)).toEqual([
       'trial',
       'referral',
+      'reseller_request',
     ]);
   });
 });

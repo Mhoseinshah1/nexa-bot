@@ -2,6 +2,8 @@
 // the administrators' roster. Moved verbatim out of bot-runtime.ts (R9 split): each
 // method is a free function taking the runtime first; BotRuntime keeps a forwarder for
 // the ones the router calls.
+import * as adminResellerRequestFlow from './admin-reseller-request-flow.js';
+import { RESELLER_REQUEST_ADMIN_PERMISSION } from './admin-reseller-request-flow.js';
 import type { ActorContext, BotInstanceId, PermissionKey, TenantContext } from '@nexa/contracts';
 import { DEFAULT_USERNAME_PREFIX } from '@nexa/contracts';
 import { mayBePushedRefundRequests } from '../../../modules/commerce/payments/application/service-refund-push.consumer.js';
@@ -161,6 +163,23 @@ export async function adminTurn(
    */
   const mayDecideRefundRequest =
     ADMIN_REFUND_REQUEST_INTENTS.has(command.intent) && mayBePushedRefundRequests(permissions);
+  /*
+   * PR-2: a reseller request's buttons in the operations log group are admitted on the one
+   * permission that acts on them, panel or no panel; the service charges it again.
+   */
+  const mayActOnResellerRequest =
+    command.intent.startsWith('ADMIN_RESELLER_REQUEST_') &&
+    permissions.has(RESELLER_REQUEST_ADMIN_PERMISSION);
+  if (mayActOnResellerRequest) {
+    return adminResellerRequestFlow.adminResellerRequestTurn(
+      rt,
+      scope,
+      actor,
+      adminActor,
+      command,
+      input,
+    );
+  }
   if (!hasAnyPanelSection(permissions) && !mayDecideRefundRequest) return null;
 
   try {

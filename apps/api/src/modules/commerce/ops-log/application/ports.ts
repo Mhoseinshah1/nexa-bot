@@ -460,6 +460,8 @@ export interface OpsLogWords {
   refundChannel(channel: string): string;
   refundFailure(cause: string): string;
   refundRequestOutcome(outcome: string): string;
+  /** PR-2: the decision of a reseller request, in Persian. */
+  resellerRequestOutcome(outcome: 'APPROVED' | 'REJECTED'): string;
   cryptoKindTitle(topup: boolean): string;
   walletAdjustHeading(direction: 'CREDIT' | 'DEBIT'): string;
   /** `" · 🥇 اولین خرید · 🧑‍💼 نماینده"`, or null when neither applies. */

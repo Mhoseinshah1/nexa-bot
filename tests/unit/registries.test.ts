@@ -364,6 +364,9 @@ describe('the feature flag registry', () => {
       // (inert until a minimum is set); both are raised by the reseller-minimum sweep.
       'reseller_minimum_achieved_notices',
       'reseller_minimum_reminders',
+      // PR-2. Off by default; the main-menu button and the request flow it switches on are
+      // reachable, and a request already sent stays decidable when it is turned off.
+      'reseller_requests',
       // R4 PR-F. Both off by default; the rich-message seam in the customer messenger is
       // reachable, and with rich_messages off every request is byte for byte the old one.
       'rich_messages',

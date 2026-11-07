@@ -413,6 +413,18 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * no placeholders: the sentence carries no figure, so there is no reader and no payload.
    */
   'RESELLER_EXPIRED',
+  /*
+   * PR-2, «درخواست نمایندگی»: an operator wrote to the applicant. `reseller_request_messages.id`
+   * is the subject — the `TICKET_REPLY` shape: a kind and an id, the words read from the row
+   * at send time (ADR 0030 §1). Its one button is «پاسخ».
+   */
+  'RESELLER_REQUEST_MESSAGE',
+  /*
+   * PR-2: the request was decided. `reseller_requests.id` is the subject; the outcome, the
+   * tier's name and the reason are read from the request row at send time. Rendered as
+   * `bot.reseller_request.rejected`, or `bot.reseller_request.approved` when the row says so.
+   */
+  'RESELLER_REQUEST_DECISION',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -495,6 +507,9 @@ export const CUSTOMER_NOTIFICATION_AUTOMATED: Readonly<Record<CustomerNotificati
     SERVICE_AUTO_RENEW_PRICE_CHANGED: true,
     // Round 11, C2: raised by the expiry sweep, not by anything the reseller did then.
     RESELLER_EXPIRED: true,
+    // PR-2: an operator wrote, or decided, on purpose.
+    RESELLER_REQUEST_MESSAGE: false,
+    RESELLER_REQUEST_DECISION: false,
   };
 
 /**
@@ -712,6 +727,9 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * false message after a quick extension.)
    */
   RESELLER_EXPIRED: true,
+  // PR-2: an operator's own message, and the answer to the customer's own request.
+  RESELLER_REQUEST_MESSAGE: false,
+  RESELLER_REQUEST_DECISION: false,
 };
 
 /**
@@ -804,6 +822,9 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   SERVICE_AUTO_RENEW_PRICE_CHANGED: true,
   // Round 11, C2: an account-standing fact, told when it happens (as ACCOUNT_UNBLOCKED is).
   RESELLER_EXPIRED: false,
+  // PR-2: an operator wrote, or decided, now; the applicant is told now.
+  RESELLER_REQUEST_MESSAGE: false,
+  RESELLER_REQUEST_DECISION: false,
 };
 
 /**
@@ -903,6 +924,9 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   SERVICE_AUTO_RENEW_PRICE_CHANGED: 'bot.service.auto_renew_price_changed',
   // Round 11, C2: no values; the sentence names nothing but the standing.
   RESELLER_EXPIRED: 'bot.reseller.expired',
+  // PR-2: values read at send time from the message row / the request row.
+  RESELLER_REQUEST_MESSAGE: 'bot.reseller_request.message_from_owner',
+  RESELLER_REQUEST_DECISION: 'bot.reseller_request.rejected',
 };
 
 /**

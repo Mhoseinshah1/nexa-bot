@@ -1,4 +1,6 @@
 import {
+  OPS_LOG_ACTION_BUTTON_KINDS,
+  opsLogButtonCallbackData,
   opsLogButtonPath,
   type OpsLogButton,
   type OpsLogButtonKind,
@@ -36,14 +38,26 @@ export class WebAdminButtonResolver implements OpsButtonResolver {
   async resolve(
     scope: ScopeContext,
     buttons: readonly OpsLogButton[],
-  ): Promise<readonly { readonly text: string; readonly url: string; readonly row: number }[]> {
+  ): Promise<readonly ResolvedOpsButton[]> {
+    const out: ResolvedOpsButton[] = [];
+    /*
+     * PR-2: ACTION buttons carry callback data, not an address, so they are drawn whether or
+     * not a Web Admin address is known. They sit on the first rows, link buttons after them.
+     */
+    for (const button of buttons) {
+      if (!(OPS_LOG_ACTION_BUTTON_KINDS as readonly string[]).includes(button.kind)) continue;
+      const data = opsLogButtonCallbackData(button);
+      if (data === null) continue;
+      out.push({ text: this.deps.labelOf(button.kind), data, row: out.length });
+    }
+    const actions = out.length;
     const configured = await this.deps.settings.valueOf<string>(
       scope,
       'ops.log.admin_base_url' as SettingKey,
     );
     const origin = publicHttpsOrigin(configured !== '' ? configured : this.deps.defaultOrigin);
-    if (origin === null) return [];
-    const out: { text: string; url: string; row: number }[] = [];
+    if (origin === null) return out;
+    let links = 0;
     for (const button of buttons) {
       const path = opsLogButtonPath(button);
       if (path === null) continue;
@@ -51,12 +65,22 @@ export class WebAdminButtonResolver implements OpsButtonResolver {
       out.push({
         text: this.deps.labelOf(button.kind),
         url: `${origin}${path}`,
-        row: Math.floor(out.length / 2),
+        row: actions + Math.floor(links / 2),
       });
+      links += 1;
     }
     return out;
   }
 }
+
+/** A resolved button: a link, or (PR-2) an action carrying callback data. */
+export type ResolvedOpsButton = {
+  readonly text: string;
+  readonly row: number;
+} & (
+  | { readonly url: string; readonly data?: undefined }
+  | { readonly data: string; readonly url?: undefined }
+);
 
 const PRIVATE_V4 = /^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/;
 

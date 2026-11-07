@@ -68,6 +68,8 @@ export const OPS_LOG_TYPE_IDS = [
   'BACKUP_FILE', // L31
   // PAYMENTS — added after the Appendix L review
   'GIFT_CARD', // R10 D4
+  // USERS — owner batch 1, PR-2
+  'RESELLER_REQUEST',
 ] as const;
 export type OpsLogTypeId = (typeof OPS_LOG_TYPE_IDS)[number];
 
@@ -204,6 +206,21 @@ export const OPS_LOG_TYPES = {
     topic: 'PAYMENTS',
     templates: ['ops.log.gift_card_redeemed', 'ops.log.gift_card_batch_created'],
   },
+  /*
+   * Owner batch 1, PR-2: «درخواست نمایندگی». A request filed, the applicant's reply in its
+   * conversation, and its decision. One switch, the USERS topic, beside the reseller changes.
+   * The request's own message carries callback buttons (approve, reject, message the
+   * applicant) as well as the Web Admin links.
+   */
+  RESELLER_REQUEST: {
+    l: 'PR2',
+    topic: 'USERS',
+    templates: [
+      'ops.reseller_request.new',
+      'ops.reseller_request.reply',
+      'ops.reseller_request.decided',
+    ],
+  },
 } as const satisfies Record<OpsLogTypeId, OpsLogTypeDefinition>;
 
 export function opsLogTypeTopic(id: OpsLogTypeId): OpsLogTopicCategory {
@@ -257,6 +274,16 @@ export const OPS_LOG_BUTTON_KINDS = [
   'BULK_OPERATION',
   'DASHBOARD',
   'NOTIFICATIONS',
+  // PR-2: a reseller request's page in the Web Admin.
+  'RESELLER_REQUEST',
+  /*
+   * PR-2: ACTION buttons. They open no page: a tap is a callback the bot answers in the
+   * tapping administrator's private chat (`RESELLER_REQUEST_CALLBACKS`), after the bot has
+   * re-checked the permission. They are drawn whether or not a Web Admin address is known.
+   */
+  'RESELLER_REQUEST_APPROVE',
+  'RESELLER_REQUEST_REJECT',
+  'RESELLER_REQUEST_MESSAGE',
 ] as const;
 export type OpsLogButtonKind = (typeof OPS_LOG_BUTTON_KINDS)[number];
 
@@ -318,10 +345,41 @@ export function opsLogButtonPath(button: OpsLogButton): string | null {
       const id = needsRef();
       return id === null ? null : `/tickets/${id}`;
     }
+    case 'RESELLER_REQUEST': {
+      const id = needsRef();
+      return id === null ? null : `/reseller-requests/${id}`;
+    }
+    case 'RESELLER_REQUEST_APPROVE':
+    case 'RESELLER_REQUEST_REJECT':
+    case 'RESELLER_REQUEST_MESSAGE':
+      return null;
     case 'DASHBOARD':
       return '/';
     case 'NOTIFICATIONS':
       return '/notification-center';
+  }
+}
+
+/** The action buttons, which carry callback data instead of an address. */
+export const OPS_LOG_ACTION_BUTTON_KINDS = [
+  'RESELLER_REQUEST_APPROVE',
+  'RESELLER_REQUEST_REJECT',
+  'RESELLER_REQUEST_MESSAGE',
+] as const satisfies readonly OpsLogButtonKind[];
+
+/** The `callback_data` of an action button, or null for a link button or an unsafe ref. */
+export function opsLogButtonCallbackData(button: OpsLogButton): string | null {
+  const ref = button.ref;
+  if (ref === undefined || !SAFE_REF.test(ref)) return null;
+  switch (button.kind) {
+    case 'RESELLER_REQUEST_APPROVE':
+      return `rqa:${ref}`;
+    case 'RESELLER_REQUEST_REJECT':
+      return `rqj:${ref}`;
+    case 'RESELLER_REQUEST_MESSAGE':
+      return `rqm:${ref}`;
+    default:
+      return null;
   }
 }
 
@@ -358,6 +416,11 @@ const TOKENS = {
   orderCode: ['STRING', 'The order’s 8-character public code.'],
   serviceCode: ['STRING', 'The service’s 8-character public code.'],
   ticketNumber: ['STRING', 'The ticket’s number.'],
+  requestNumber: ['STRING', 'PR-2: the reseller request’s number.'],
+  servicesCount: ['NUMBER', 'PR-2: how many services the customer has.'],
+  totalPaid: ['MONEY', 'PR-2: what the customer has paid in all.'],
+  qa: ['STRING', 'PR-2: the request’s questions with their answers.'],
+  tierName: ['STRING', 'PR-2: the reseller tier a request was approved on.'],
   at: ['DATETIME', 'When the fact was recorded.'],
   expiredAt: [
     'DATETIME',
@@ -798,6 +861,21 @@ export const OPS_LOG_TEMPLATES = [
     'ops.support.customer_replied',
     'Log L26: a customer wrote in an existing support ticket — its number, its topic and the first two lines of the message, and (R9 C2) the source: bot or mini app.',
     [...req('ticketNumber', 'category', 'at'), ...WHO(), ...opt('snippet', 'source')],
+  ),
+  logTemplate(
+    'ops.reseller_request.new',
+    'Log (PR-2, درخواست نمایندگی): a customer filed a reseller request — who, how many services and how much paid, and every question with its answer.',
+    [...req('requestNumber', 'at'), ...WHO(), ...opt('servicesCount', 'totalPaid', 'qa')],
+  ),
+  logTemplate(
+    'ops.reseller_request.reply',
+    'Log (PR-2, درخواست نمایندگی): the applicant answered in the request’s conversation — the first two lines of the reply.',
+    [...req('requestNumber', 'at'), ...WHO(), ...opt('snippet')],
+  ),
+  logTemplate(
+    'ops.reseller_request.decided',
+    'Log (PR-2, درخواست نمایندگی): the request was approved or rejected — by whom, on which tier, and the reason.',
+    [...req('requestNumber', 'outcome', 'at'), ...WHO(), ...opt('tierName', 'adminName', 'reason')],
   ),
   // --- New log types -----------------------------------------------------------------------
   logTemplate(

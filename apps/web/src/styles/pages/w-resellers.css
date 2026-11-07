@@ -158,3 +158,120 @@
   gap: 8px;
   min-height: var(--ctl-h);
 }
+
+/* --- the drag-and-drop list (PR-2): the owner's reseller-request questions ------------- */
+
+.sortable {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sortable-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-2);
+}
+
+.sortable-item.is-dragging {
+  opacity: 0.5;
+}
+
+/* The drop line is drawn over the layout, never inserted into it. */
+.sortable-item.is-drop-before::before,
+.sortable-item.is-drop-after::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  height: 2px;
+  background: var(--accent);
+}
+
+.sortable-item.is-drop-before::before {
+  inset-block-start: -5px;
+}
+
+.sortable-item.is-drop-after::after {
+  inset-block-end: -5px;
+}
+
+.sortable-grip {
+  flex: none;
+  display: grid;
+  place-items: center;
+  inline-size: 34px;
+  min-block-size: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--fg-dim, var(--fg));
+  cursor: grab;
+  /* A finger on the grip drags; anywhere else it still scrolls the page. */
+  touch-action: none;
+}
+
+.sortable-grip:active {
+  cursor: grabbing;
+}
+
+.sortable-body {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+}
+
+/* --- the reseller-request thread ------------------------------------------------------ */
+
+.rr-thread {
+  display: grid;
+  gap: 10px;
+}
+
+.rr-message {
+  display: grid;
+  gap: 4px;
+  max-inline-size: 85%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-2);
+}
+
+.rr-message.is-admin {
+  justify-self: end;
+  background: var(--accent-soft);
+}
+
+.rr-message-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rr-photo {
+  max-inline-size: 100%;
+  max-block-size: 320px;
+  border-radius: var(--radius-ctl);
+}
+
+.rr-answer {
+  display: grid;
+  gap: 2px;
+  padding-block: 8px;
+  border-block-end: 1px solid var(--line);
+}
+
+.rr-answer:last-child {
+  border-block-end: 0;
+}
+
+.rr-answer-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

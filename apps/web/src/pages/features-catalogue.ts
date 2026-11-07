@@ -270,6 +270,18 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: 'web.feature_customer_reminder_opt_out_off_effect',
     confirmEnable: null,
   },
+  // PR-2. Off withdraws the offer only: the button goes, a request already sent stays
+  // decidable and its conversation continues.
+  reseller_requests: {
+    title: 'web.feature_reseller_requests_title',
+    summary: 'web.feature_reseller_requests_summary',
+    category: 'sales',
+    where: ['bot', 'web_admin'],
+    offEffect: 'web.feature_reseller_requests_off_effect',
+    related: { path: '/reseller-requests', label: 'web.nav_reseller_requests' },
+    disableEffect: null,
+    confirmEnable: null,
+  },
   // Off: an attribution is made only at registration and never afterwards, so a
   // customer who joins through a referral link while this is off is never attributed.
   referrals: {

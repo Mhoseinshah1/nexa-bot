@@ -212,6 +212,13 @@ export const EVENT_TYPES = [
   'TicketMessagePosted',
   'TicketStatusChanged',
   'TicketAssigned',
+  // Owner batch 1, PR-2: a reseller request filed, a message posted in its conversation (by
+  // the applicant or by an operator) and its decision. Ids and closed vocabularies only —
+  // never the answers or a message's text, which are on their rows. The operations log is a
+  // consumer of all three.
+  'ResellerRequestSubmitted',
+  'ResellerRequestMessagePosted',
+  'ResellerRequestDecided',
   // Round N: a broadcast and a mass operation changing state. The content, the audience and
   // the recipients are never in the payload: a state change is the fact.
   'BroadcastStateChanged',
@@ -304,6 +311,8 @@ export const AGGREGATE_TYPES = [
   'LegacyImportMapRow',
   // R10 D4: one batch of gift cards.
   'GiftCardBatch',
+  // PR-2: one customer's reseller request, and its conversation.
+  'ResellerRequest',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -729,6 +738,18 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     customerId: z.string(),
     categoryId: z.string(),
     messageId: z.string(),
+  }),
+  ResellerRequestSubmitted: z.object({ requestId: z.string(), customerId: z.string() }),
+  ResellerRequestMessagePosted: z.object({
+    requestId: z.string(),
+    messageId: z.string(),
+    senderType: z.enum(['CUSTOMER', 'ADMIN']),
+  }),
+  ResellerRequestDecided: z.object({
+    requestId: z.string(),
+    customerId: z.string(),
+    status: z.enum(['APPROVED', 'REJECTED']),
+    tierId: z.string().nullable(),
   }),
   TicketMessagePosted: z.object({
     ticketId: z.string(),

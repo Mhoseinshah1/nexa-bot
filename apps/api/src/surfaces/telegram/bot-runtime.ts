@@ -88,6 +88,8 @@ import * as serviceRequestsFlow from './runtime/service-requests-flow.js';
 import * as autoRenewFlow from './runtime/auto-renew-flow.js';
 import * as serviceActionsFlow from './runtime/service-actions-flow.js';
 import * as supportFlow from './runtime/support-flow.js';
+import * as resellerRequestFlow from './runtime/reseller-request-flow.js';
+import * as adminResellerRequestFlow from './runtime/admin-reseller-request-flow.js';
 import * as trialFlow from './runtime/trial-flow.js';
 import * as referralFlow from './runtime/referral-flow.js';
 import * as tutorialFlow from './runtime/tutorial-flow.js';
@@ -1739,6 +1741,16 @@ export class BotRuntime {
       if (command.intent !== 'MAIN_MENU') return supportFlow.supportScreen(this, scope, customer);
       return this.mainMenuReply(scope, actor, customer, input);
     }
+    // PR-2: «👨‍💻 درخواست نمایندگی» — the application's screens and the applicant's «پاسخ».
+    if (command.intent === 'RESELLER_REQUEST') {
+      return resellerRequestFlow.menuEntry(this, scope, actor, customer, input);
+    }
+    if (command.intent === 'RESELLER_REQUEST_STEP') {
+      return resellerRequestFlow.stepTurn(this, scope, actor, command, customer, input);
+    }
+    if (command.intent === 'RESELLER_REQUEST_REPLY' && command.targetId !== null) {
+      return resellerRequestFlow.replyOpen(this, scope, actor, customer, command.targetId, input);
+    }
     // WP-A7: the customer's support tickets.
     const ticketed = await supportFlow.ticketTurn(this, scope, actor, command, customer, input);
     if (ticketed !== null) return inPlace(ticketed);
@@ -2061,6 +2073,16 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'RECEIPT_UPLOAD' && command.file != null) {
+      // PR-2: a photo answers an applicant's reply window when that is the prompt seen last.
+      const requestReply = await resellerRequestFlow.replyFile(
+        this,
+        scope,
+        actor,
+        customer,
+        command.file,
+        input,
+      );
+      if (requestReply !== null) return requestReply;
       /*
        * WP-A7: a file answers a ticket window when that is the prompt the customer saw last;
        * otherwise it is a receipt, exactly as before.
@@ -2670,6 +2692,29 @@ export class BotRuntime {
         text,
         input,
       );
+    }
+    // PR-2: a typed answer to one of the owner's questions, and the applicant's typed reply.
+    if (capture.purpose === 'RESELLER_REQUEST_ANSWER') {
+      return resellerRequestFlow.answerText(this, scope, actor, customer, capture, text, input);
+    }
+    if (capture.purpose === 'RESELLER_REQUEST_REPLY') {
+      return resellerRequestFlow.replySubmit(
+        this,
+        scope,
+        actor,
+        customer,
+        capture,
+        text,
+        null,
+        input,
+      );
+    }
+    // PR-2: what an operator typed after tapping «❌ رد» or «💬 پیام به متقاضی» in the group.
+    if (
+      capture.purpose === 'RESELLER_REQUEST_ADMIN_REASON' ||
+      capture.purpose === 'RESELLER_REQUEST_ADMIN_MESSAGE'
+    ) {
+      return adminResellerRequestFlow.adminText(this, scope, actor, customer, capture, text, input);
     }
     // WP-A7: a new ticket's first message, or a reply to one.
     if (capture.purpose === 'TICKET_NEW_MESSAGE' || capture.purpose === 'TICKET_REPLY') {
