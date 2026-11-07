@@ -7,16 +7,16 @@ don't stop to ask; order PR-1/PR-4 → PR-2 → PR-3 → PR-5). Worktrees under 
 ## Merged (main)
 
 - PR-4 https://github.com/Mhoseinshah1/nexa-bot/pull/419 — SecretInput, one Save, value formatter — `6de9bd557`.
+- PR-1 https://github.com/Mhoseinshah1/nexa-bot/pull/420 — Mirza menu defaults, search switches — `1f1d5545d`.
 
 ## Open
 
-- PR-1 https://github.com/Mhoseinshah1/nexa-bot/pull/420 — Codex clean on 8450e3a7; CI-fix commits after it
-  (citation ae137154; main merged 61041a41); integration shard 9 red twice → triage running.
-- PR-2 `feat/reseller-request` — bot/UI agent implementing; approve path (§7) left as a stub for a money-tier agent.
+- PR-2 `feat/reseller-request` — bot/UI done (migration 0322); money-tier agent implementing approve (§7).
+- PR-3 `feat/service-auto-delete` — money-tier agent implementing.
 
 ## Next step (exact)
 
-Merge PR-1 on green; merge main into PR-2, renumber its migration if needed, then the approve agent;
+Merge main into PR-2, renumber its migration if needed, then the approve agent;
 then PR-3 (money tier), then PR-5 (money tier).
 
 ## Decisions taken
