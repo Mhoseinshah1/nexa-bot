@@ -1042,6 +1042,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.auto_renew_funds_short':
     '{icon:warning} تمدید خودکار سرویس «{service}» انجام نشد، چون موجودی کیف پول برای مبلغ تمدید ({price}) کافی نیست.\n' +
     'مبلغی از حساب شما کسر نشده است. اگر پیش از پایان اعتبار ({expiresAt}) کیف پول را شارژ کنید، سرویس به‌طور خودکار تمدید می‌شود.',
+  /* NEXA-OWNER-BATCH-1 PR-3: the one warning before an automatic deletion. */
+  'bot.service.auto_delete_warning':
+    '{icon:warning} سرویس «{service}» فردا حذف می‌شود؛ برای حفظ آن تمدید کنید.\n' +
+    'زمان حذف: {deleteAt}',
   'bot.service.auto_renew_price_changed':
     '{icon:warning} تمدید خودکار سرویس «{service}» انجام نشد، چون مبلغ تمدید ({price}) از مبلغی که هنگام فعال‌سازی پذیرفته بودید ({consented}) بیشتر شده است.\n' +
     'مبلغی از حساب شما کسر نشده است. می‌توانید از بخش «سرویس‌های من» سرویس را تمدید کنید و تمدید خودکار را دوباره فعال کنید.',

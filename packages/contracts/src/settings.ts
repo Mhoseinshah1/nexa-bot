@@ -81,6 +81,17 @@ import {
   AUTO_RENEW_LEAD_HOURS_MIN,
 } from './auto-renew.js';
 import {
+  AUTO_DELETE_DAYS_MAX,
+  AUTO_DELETE_DAYS_MIN,
+  AUTO_DELETE_MAX_PER_MINUTE_DEFAULT,
+  AUTO_DELETE_MAX_PER_MINUTE_MAX,
+  AUTO_DELETE_MAX_PER_MINUTE_MIN,
+  AUTO_DELETE_WARN_HOURS_DEFAULT,
+  AUTO_DELETE_WARN_HOURS_MAX,
+  AUTO_DELETE_WARN_HOURS_MIN,
+  SERVICE_AUTO_DELETE_SETTING_KEYS,
+} from './auto-delete.js';
+import {
   LATE_CREDIT_SETTING_KEYS,
   CARD_SWITCH_COOLDOWN_SECONDS_DEFAULT,
   CARD_SWITCH_COOLDOWN_SECONDS_MAX,
@@ -2172,6 +2183,88 @@ export const SETTINGS = [
     // A day: room for a customer told their wallet is short to top it up before the deadline.
     defaultValue: AUTO_RENEW_LEAD_HOURS_DEFAULT,
     configures: 'service_auto_renew',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * NEXA-OWNER-BATCH-1 PR-3: automatic deletion of finished services (`service_auto_delete`).
+   * Each day count is measured from `services.state_since` (see `auto-delete.ts`); `0` switches
+   * that cause off, and all three are `0` by default, so the flag alone deletes nothing.
+   */
+  {
+    key: SERVICE_AUTO_DELETE_SETTING_KEYS.afterTrafficDays,
+    description:
+      'NEXA-OWNER-BATCH-1 PR-3: delete a service automatically this many days after it expired ' +
+      'because its traffic ran out (traffic used reached its limit). 0 is off, the default. ' +
+      'Counted from the moment this installation saw the service expire, never earlier. Inert ' +
+      'while the service_auto_delete flag is off.',
+    schema: z.number().int().min(AUTO_DELETE_DAYS_MIN).max(AUTO_DELETE_DAYS_MAX),
+    defaultValue: 0,
+    configures: 'service_auto_delete',
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: SERVICE_AUTO_DELETE_SETTING_KEYS.afterTimeDays,
+    description:
+      'NEXA-OWNER-BATCH-1 PR-3: delete a service automatically this many days after it expired ' +
+      'because its time ran out. 0 is off, the default. Counted from the moment this ' +
+      'installation saw the service expire, never earlier. Inert while the service_auto_delete ' +
+      'flag is off.',
+    schema: z.number().int().min(AUTO_DELETE_DAYS_MIN).max(AUTO_DELETE_DAYS_MAX),
+    defaultValue: 0,
+    configures: 'service_auto_delete',
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: SERVICE_AUTO_DELETE_SETTING_KEYS.afterSuspendDays,
+    description:
+      'NEXA-OWNER-BATCH-1 PR-3: delete a service automatically this many days after it became ' +
+      'SUSPENDED. 0 is off, the default. Counted from the moment this installation saw it ' +
+      'suspended, never earlier. Inert while the service_auto_delete flag is off.',
+    schema: z.number().int().min(AUTO_DELETE_DAYS_MIN).max(AUTO_DELETE_DAYS_MAX),
+    defaultValue: 0,
+    configures: 'service_auto_delete',
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: SERVICE_AUTO_DELETE_SETTING_KEYS.warnHours,
+    description:
+      'NEXA-OWNER-BATCH-1 PR-3: how long before an automatic deletion the customer is warned ' +
+      'once, with a renew button, in hours. A service is never deleted sooner than this after ' +
+      'its warning was raised. 0 sends no warning. Inert while the service_auto_delete flag is ' +
+      'off.',
+    schema: z.number().int().min(AUTO_DELETE_WARN_HOURS_MIN).max(AUTO_DELETE_WARN_HOURS_MAX),
+    defaultValue: AUTO_DELETE_WARN_HOURS_DEFAULT,
+    configures: 'service_auto_delete',
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: SERVICE_AUTO_DELETE_SETTING_KEYS.maxPerMinute,
+    description:
+      'NEXA-OWNER-BATCH-1 PR-3: at most this many automatic deletions are planned per minute ' +
+      'for one panel, through the provisioning queue, so a backlog drains slowly instead of in ' +
+      'a burst. Inert while the service_auto_delete flag is off.',
+    schema: z
+      .number()
+      .int()
+      .min(AUTO_DELETE_MAX_PER_MINUTE_MIN)
+      .max(AUTO_DELETE_MAX_PER_MINUTE_MAX),
+    defaultValue: AUTO_DELETE_MAX_PER_MINUTE_DEFAULT,
+    configures: 'service_auto_delete',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

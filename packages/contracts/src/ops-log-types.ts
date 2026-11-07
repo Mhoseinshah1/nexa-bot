@@ -68,6 +68,8 @@ export const OPS_LOG_TYPE_IDS = [
   'BACKUP_FILE', // L31
   // PAYMENTS — added after the Appendix L review
   'GIFT_CARD', // R10 D4
+  // SERVICES — added after the Appendix L review
+  'SERVICE_AUTO_DELETED', // NEXA-OWNER-BATCH-1 PR-3
 ] as const;
 export type OpsLogTypeId = (typeof OPS_LOG_TYPE_IDS)[number];
 
@@ -203,6 +205,16 @@ export const OPS_LOG_TYPES = {
     l: 'R10-D4',
     topic: 'PAYMENTS',
     templates: ['ops.log.gift_card_redeemed', 'ops.log.gift_card_batch_created'],
+  },
+  /*
+   * NEXA-OWNER-BATCH-1 PR-3: a service the automatic deletion removed from its panel — the
+   * account name, the cause and the days it waited. One message per deletion, posted when the
+   * TERMINATE succeeded; the day's count is a line of the nightly report.
+   */
+  SERVICE_AUTO_DELETED: {
+    l: 'PR3-AUTO-DELETE',
+    topic: 'SERVICES',
+    templates: ['ops.log.service_auto_deleted'],
   },
 } as const satisfies Record<OpsLogTypeId, OpsLogTypeDefinition>;
 
@@ -531,6 +543,12 @@ const TOKENS = {
   failedPayments: ['NUMBER', 'Failed payments in the day.'],
   openTickets: ['NUMBER', 'Open tickets now.'],
   cleanup: ['STRING', 'The one cleanup line (L30), or absent when nothing was cleaned.'],
+  // Automatic deletion (NEXA-OWNER-BATCH-1 PR-3).
+  deleteCause: [
+    'STRING',
+    'PR-3: why the service was deleted automatically (traffic ran out, time ran out, suspended), in Persian.',
+  ],
+  deleteDays: ['NUMBER', 'PR-3: how many days the service had been in that state, as configured.'],
   // Gift cards (R10 D4).
   batchLabel: ['STRING', 'R10 D4: the gift card batch’s label, as the operator typed it.'],
   codeLast4: [
@@ -1006,6 +1024,15 @@ export const OPS_LOG_TEMPLATES = [
       ...req('byWhom', 'at'),
       ...WHO(),
       ...opt('panelName', 'serviceUsername', 'serviceCode', 'rotations'),
+    ],
+  ),
+  logTemplate(
+    'ops.log.service_auto_deleted',
+    'PR-3: the automatic deletion removed a finished service from its panel — the account name, the cause and the days it waited.',
+    [
+      ...req('serviceUsername', 'deleteCause', 'deleteDays', 'at'),
+      ...WHO(),
+      ...opt('panelName', 'serviceCode'),
     ],
   ),
   logTemplate('ops.log.trial_created', 'Log L16: a trial account was created.', [

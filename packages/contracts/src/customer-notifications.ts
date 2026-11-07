@@ -413,6 +413,14 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * no placeholders: the sentence carries no figure, so there is no reader and no payload.
    */
   'RESELLER_EXPIRED',
+  /*
+   * NEXA-OWNER-BATCH-1 PR-3: this service will be deleted automatically
+   * (`service.auto_delete.warn_hours` before it may be). The subject is the
+   * `service_auto_delete_runs` row — one per (service, due cycle) — so a cycle is warned at most
+   * once; a renewal starts a new cycle. The account name and the deletion moment are read at
+   * send time from that row: a reader, not a payload (ADR 0030 §1).
+   */
+  'SERVICE_AUTO_DELETE_WARNING',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -495,6 +503,8 @@ export const CUSTOMER_NOTIFICATION_AUTOMATED: Readonly<Record<CustomerNotificati
     SERVICE_AUTO_RENEW_PRICE_CHANGED: true,
     // Round 11, C2: raised by the expiry sweep, not by anything the reseller did then.
     RESELLER_EXPIRED: true,
+    // PR-3: raised by the auto-delete sweep, not by anything the customer did then.
+    SERVICE_AUTO_DELETE_WARNING: true,
   };
 
 /**
@@ -712,6 +722,13 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * false message after a quick extension.)
    */
   RESELLER_EXPIRED: true,
+  /*
+   * PR-3: `true`. "This service will be deleted" stops being true once it is renewed or
+   * resumed (a new cycle), terminated, or the feature is switched off: the reader holds only
+   * while the run is still SCHEDULED, the service is still in the run's state since the run's
+   * moment, and the flag is on.
+   */
+  SERVICE_AUTO_DELETE_WARNING: true,
 };
 
 /**
@@ -804,6 +821,11 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   SERVICE_AUTO_RENEW_PRICE_CHANGED: true,
   // Round 11, C2: an account-standing fact, told when it happens (as ACCOUNT_UNBLOCKED is).
   RESELLER_EXPIRED: false,
+  /*
+   * PR-3: NOT held. The deletion is never planned sooner than `warn_hours` after the warning was
+   * raised, so a warning held until morning would eat the customer's window to renew.
+   */
+  SERVICE_AUTO_DELETE_WARNING: false,
 };
 
 /**
@@ -903,6 +925,8 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   SERVICE_AUTO_RENEW_PRICE_CHANGED: 'bot.service.auto_renew_price_changed',
   // Round 11, C2: no values; the sentence names nothing but the standing.
   RESELLER_EXPIRED: 'bot.reseller.expired',
+  // PR-3: values read at send time from the auto-delete run row.
+  SERVICE_AUTO_DELETE_WARNING: 'bot.service.auto_delete_warning',
 };
 
 /**

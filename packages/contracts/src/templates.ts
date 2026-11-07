@@ -7154,6 +7154,36 @@ export const TEMPLATES = [
       },
     ],
   },
+  /*
+   * NEXA-OWNER-BATCH-1 PR-3: the one warning before an automatic deletion. Its values are read
+   * at send time from the `service_auto_delete_runs` row the notification names (ADR 0030 §1).
+   */
+  {
+    key: 'bot.service.auto_delete_warning',
+    description:
+      'NEXA-OWNER-BATCH-1 PR-3: sent at most once per service per due cycle, ' +
+      'service.auto_delete.warn_hours before an EXPIRED or SUSPENDED service may be deleted ' +
+      'automatically. Carries the renew button of the existing renewal flow. Superseded unsent ' +
+      'if the service was renewed or resumed meanwhile, was terminated, or the feature was ' +
+      'switched off.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'deleteAt',
+        type: 'DATETIME',
+        description: 'The earliest moment the service may be deleted.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
   {
     key: 'bot.service.auto_renew_price_changed',
     description:
