@@ -15,7 +15,7 @@ import {
   type CorrelationId,
   type TenantContext,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   adminPermissionOverrides,
@@ -34,6 +34,7 @@ import {
 } from '../../apps/api/src/modules/platform/identity/application/totp';
 import {
   createAdmin,
+  createApiApp,
   migrateOnce,
   resetDatabase,
   tenantA,
@@ -52,6 +53,10 @@ const HOSTED_PASSWORD = 'the-hosted-owners-password';
  * owner-only guard, the section's own second factor and 12-hour session, the fresh code on
  * every sensitive action, every action, the expiry sweep, and that a stopped hosted bot is
  * really stopped (write paths, webhook, Web Admin sign-in and sessions).
+ *
+ * The app connects as `nexa_app` (ADR-0037, the harness's `createApiApp`), so every statement
+ * the panel makes is bound by row-level security; the fixtures and the cross-tenant reads
+ * back are the owner's handle (`container.database`).
  *
  * The clock is the container's own, moved forward by the cases: every code is a fresh
  * 30-second step (the replay rule refuses a step twice), and the 12-hour expiry and the
@@ -512,6 +517,11 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
       const list = await api.container.hosting.list(tenantA, ownerActor, panel.token);
       expect(list.bots.map((bot) => bot.tenantId)).toEqual([id]);
       expect(list.create).toEqual({ enabled: true, refusal: null });
+
+      // The fail-closed tenant guard (#411): a new HOSTED tenant is never the installation's
+      // PRIMARY, and its creation never re-resolves the role's own tenant.
+      expect((await api.container.tenants.findPrimary())?.id).toBe(tenantA.tenantId);
+      await expect(api.container.installationTenantGuard.verify()).resolves.toBe(tenantA.tenantId);
     });
 
     it('suspension really stops the bot: write paths, webhook, Web Admin sign-in and sessions', async () => {
@@ -647,6 +657,8 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
       });
       expect(purged).toMatchObject({ erasure: 'PENDING', bot: { state: 'PURGED' } });
       expect(await codeOf(act('activate'))).toBe(HOSTING_ERROR_CODES.STATE_CONFLICT);
+      // A purged hosted tenant leaves the installation's own tenant where it was (#411).
+      await expect(api.container.installationTenantGuard.verify()).resolves.toBe(tenantA.tenantId);
     });
 
     it('sets and clears an expiry date; the limits editor changes a limit to «نامحدود»', async () => {
@@ -789,6 +801,48 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
       }
       return null;
     }
+
+    it('the sidebar key is shown to the installation owner only, not to a delegated operator', async () => {
+      // The session's permission list is chrome; `hosting.manage` is drawn for the owner alone.
+      const shown = async (username: string, password: string) => {
+        const login = await inject({
+          method: 'POST',
+          url: `${API_PREFIX}/auth/login`,
+          headers: { origin: ORIGIN },
+          payload: { username, password },
+        });
+        expect(login.statusCode).toBe(201);
+        const cookie = cookieFrom(login, 'nexa_admin_session') as string;
+        const session = await inject({
+          method: 'GET',
+          url: `${API_PREFIX}/auth/session`,
+          headers: { cookie, origin: ORIGIN },
+        });
+        expect(session.statusCode).toBe(200);
+        return {
+          login: (login.json() as { permissions: string[] }).permissions,
+          session: (session.json() as { permissions: string[] }).permissions,
+        };
+      };
+      const ownerSees = await shown(owner.username, OWNER_PASSWORD);
+      expect(ownerSees.login).toContain('hosting.manage');
+      expect(ownerSees.session).toContain('hosting.manage');
+      const delegated = await createAdmin(api.container, tenantA, {
+        username: 'panel-delegated',
+        password: 'the-delegated-password',
+        roleKeys: ['operator'],
+      });
+      await api.container.database.db.insert(adminPermissionOverrides).values({
+        tenantId: tenantA.tenantId,
+        adminId: delegated.id,
+        permissionKey: 'hosting.manage',
+        effect: 'GRANT',
+        reason: 'test: a delegated key is not drawn',
+      });
+      const delegatedSees = await shown('panel-delegated', 'the-delegated-password');
+      expect(delegatedSees.login).not.toContain('hosting.manage');
+      expect(delegatedSees.session).not.toContain('hosting.manage');
+    });
 
     it('the section cookie is issued on activation and required beside the session cookie', async () => {
       const login = await inject({

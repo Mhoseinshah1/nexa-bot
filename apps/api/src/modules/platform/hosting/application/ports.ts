@@ -204,7 +204,7 @@ export interface HostingRepository {
     since: Date,
   ): Promise<ReadonlyMap<string, ReadonlyMap<CapacityResource, number>>>;
   /** The newest SUCCEEDED installation backup's finish time, or null. */
-  lastSucceededBackupAt(): Promise<Date | null>;
+  lastSucceededBackupAt(scope: ScopeContext): Promise<Date | null>;
 }
 
 export interface HostedTenantFacts {

@@ -732,7 +732,7 @@ export class HostingService {
     const [facts, hits, lastBackup, limits] = await Promise.all([
       this.factsFor(installation, rows),
       this.deps.repository.limitHitsSince(installation, new Date(now.getTime() - DAY_MS)),
-      this.deps.repository.lastSucceededBackupAt(),
+      this.deps.repository.lastSucceededBackupAt(installation),
       // PR-2's own read, as the owner (installation scope + `settings.destructive`).
       this.deps.capacityLimits.list(installation, actor),
     ]);

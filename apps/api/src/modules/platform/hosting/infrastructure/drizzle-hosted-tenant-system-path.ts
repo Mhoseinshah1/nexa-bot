@@ -12,6 +12,11 @@ import {
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
+  ScopeBound,
+  withSystemScope,
+  withSystemScopeIn,
+} from '../../../../infrastructure/persistence/database-scope.js';
+import {
   adminSessions,
   admins,
   botInstances,
@@ -26,6 +31,17 @@ import type { HostedTenantFacts, HostedTenantSystemPath } from '../application/p
 
 function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
+}
+
+/**
+ * The system path for one hosting operation (ADR-0037), under a LITERAL reason pinned in
+ * `tests/unit/system-path-allowlist.ts`: on the owner's own transaction when given one
+ * (`withSystemScopeIn`, where row-level security would otherwise confine every statement
+ * to the installation tenant and refuse the hosted tenant's rows), else on the pool.
+ */
+function acrossTenants<T>(tx: unknown, reason: string, fn: () => Promise<T>): Promise<T> {
+  const open = (tx as TransactionScope | undefined)?.tx;
+  return open === undefined ? withSystemScope(reason, fn) : withSystemScopeIn(open, reason, fn);
 }
 
 /** What `provision` needs from identity: the same repositories every admin path uses. */
@@ -61,14 +77,15 @@ export interface HostedOwnerProvisioning {
  * Phase 6A PR-3 — THE creator panel's cross-tenant path (`HostedTenantSystemPath`).
  *
  * Every method takes an explicit `SystemContext` (`hosting.<operation>`): these are the
- * installation owner's reads and writes ACROSS hosted tenants, and the one seam the RLS
- * merge (ADR-0037) routes through the system path. Until then they run on the caller's
- * connection like any other query; the context is asserted, never ignored, so a call site
+ * installation owner's reads and writes ACROSS hosted tenants, and each runs on the RLS
+ * system path (ADR-0037) under its own literal reason (`acrossTenants`), on the caller's
+ * transaction when it has one. The context is asserted, never ignored, so a call site
  * cannot reach here without naming why.
  *
  * Reads are aggregate (counts, usernames, statuses); nothing here returns a hosted tenant's
  * customers, credentials or messages.
  */
+@ScopeBound()
 export class DrizzleHostedTenantSystemPath implements HostedTenantSystemPath {
   constructor(
     private readonly db: Database,
@@ -83,43 +100,48 @@ export class DrizzleHostedTenantSystemPath implements HostedTenantSystemPath {
     const out = new Map<string, HostedTenantFacts>();
     if (hosted.length === 0) return out;
     const ids = hosted.map((row) => row.tenantId);
-    const [directory, counts, owners, bots] = await Promise.all([
-      this.db
-        .select({
-          id: tenants.id,
-          slug: tenants.slug,
-          displayName: tenants.displayName,
-          status: tenants.status,
-        })
-        .from(tenants)
-        .where(inArray(tenants.id, ids)),
-      this.db
-        .select({ tenantId: customers.tenantId, count: sql<number>`count(*)::int` })
-        .from(customers)
-        .where(inArray(customers.tenantId, ids))
-        .groupBy(customers.tenantId),
-      this.db
-        .select({ tenantId: admins.tenantId, id: admins.id, username: admins.username })
-        .from(admins)
-        .where(
-          and(
-            inArray(admins.tenantId, ids),
-            inArray(
-              admins.id,
-              hosted.map((row) => row.ownerAdminId),
+    const [directory, counts, owners, bots] = await acrossTenants(
+      undefined,
+      'hosting: the hosted bot list, every hosted tenant',
+      async () =>
+        await Promise.all([
+          this.db
+            .select({
+              id: tenants.id,
+              slug: tenants.slug,
+              displayName: tenants.displayName,
+              status: tenants.status,
+            })
+            .from(tenants)
+            .where(inArray(tenants.id, ids)),
+          this.db
+            .select({ tenantId: customers.tenantId, count: sql<number>`count(*)::int` })
+            .from(customers)
+            .where(inArray(customers.tenantId, ids))
+            .groupBy(customers.tenantId),
+          this.db
+            .select({ tenantId: admins.tenantId, id: admins.id, username: admins.username })
+            .from(admins)
+            .where(
+              and(
+                inArray(admins.tenantId, ids),
+                inArray(
+                  admins.id,
+                  hosted.map((row) => row.ownerAdminId),
+                ),
+              ),
             ),
-          ),
-        ),
-      this.db
-        .select({
-          tenantId: botInstances.tenantId,
-          username: botInstances.username,
-          status: botInstances.status,
-        })
-        .from(botInstances)
-        .where(inArray(botInstances.tenantId, ids))
-        .orderBy(asc(botInstances.createdAt), asc(botInstances.id)),
-    ]);
+          this.db
+            .select({
+              tenantId: botInstances.tenantId,
+              username: botInstances.username,
+              status: botInstances.status,
+            })
+            .from(botInstances)
+            .where(inArray(botInstances.tenantId, ids))
+            .orderBy(asc(botInstances.createdAt), asc(botInstances.id)),
+        ]),
+    );
     const countOf = new Map(counts.map((row) => [row.tenantId, row.count]));
     const ownerOf = new Map(owners.map((row) => [`${row.tenantId}:${row.id}`, row.username]));
     const botOf = new Map<string, { username: string; status: BotInstanceStatus }>();
@@ -149,11 +171,13 @@ export class DrizzleHostedTenantSystemPath implements HostedTenantSystemPath {
 
   async slugTaken(context: SystemContext, slug: string, tx?: unknown): Promise<boolean> {
     assertSystem(context);
-    const [row] = await executorOf(this.db, tx)
-      .select({ id: tenants.id })
-      .from(tenants)
-      .where(eq(tenants.slug, slug))
-      .limit(1);
+    const [row] = await acrossTenants(tx, 'hosting: slug taken in any tenant', () =>
+      executorOf(this.db, tx)
+        .select({ id: tenants.id })
+        .from(tenants)
+        .where(eq(tenants.slug, slug))
+        .limit(1),
+    );
     return row !== undefined;
   }
 
@@ -163,6 +187,17 @@ export class DrizzleHostedTenantSystemPath implements HostedTenantSystemPath {
     tx: unknown,
   ): Promise<void> {
     assertSystem(context);
+    // The hosted tenant's rows (the tenant, its roles, its first owner) are written from
+    // the installation owner's transaction: on the system path, or RLS refuses them.
+    await acrossTenants(tx, 'hosting: provision a hosted tenant', () =>
+      this.provisionIn(input, tx),
+    );
+  }
+
+  private async provisionIn(
+    input: Parameters<HostedTenantSystemPath['provision']>[1],
+    tx: unknown,
+  ): Promise<void> {
     const executor = executorOf(this.db, tx);
     const [parent] = await executor
       .select({
@@ -235,13 +270,15 @@ export class DrizzleHostedTenantSystemPath implements HostedTenantSystemPath {
     assertSystem(context);
     // Conditional on `from` and on the kind: this path never touches the installation's own
     // tenant or a reseller bot, whatever id it is handed.
-    const rows = await executorOf(this.db, tx)
-      .update(tenants)
-      .set({ status: to, updatedAt: now })
-      .where(
-        and(eq(tenants.id, hostedTenantId), eq(tenants.kind, 'HOSTED'), eq(tenants.status, from)),
-      )
-      .returning({ id: tenants.id });
+    const rows = await acrossTenants(tx, 'hosting: set a hosted tenant status', () =>
+      executorOf(this.db, tx)
+        .update(tenants)
+        .set({ status: to, updatedAt: now })
+        .where(
+          and(eq(tenants.id, hostedTenantId), eq(tenants.kind, 'HOSTED'), eq(tenants.status, from)),
+        )
+        .returning({ id: tenants.id }),
+    );
     return rows.length === 1;
   }
 
@@ -252,6 +289,16 @@ export class DrizzleHostedTenantSystemPath implements HostedTenantSystemPath {
     tx: unknown,
   ): Promise<{ sessionsRevoked: number; botsDisabled: number }> {
     assertSystem(context);
+    return acrossTenants(tx, 'hosting: close a hosted tenant for purge', () =>
+      this.closeForPurgeIn(hostedTenantId, now, tx),
+    );
+  }
+
+  private async closeForPurgeIn(
+    hostedTenantId: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<{ sessionsRevoked: number; botsDisabled: number }> {
     const executor = executorOf(this.db, tx);
     const sessions = await executor
       .update(adminSessions)
@@ -282,13 +329,18 @@ export class DrizzleHostedTenantSystemPath implements HostedTenantSystemPath {
         .where(eq(table.tenantId, hostedTenantId));
       return row?.count ?? 0;
     };
-    const [customerCount, orderCount, serviceCount, paymentCount, adminCount] = await Promise.all([
-      countIn(customers),
-      countIn(orders),
-      countIn(services),
-      countIn(payments),
-      countIn(admins),
-    ]);
+    const [customerCount, orderCount, serviceCount, paymentCount, adminCount] = await acrossTenants(
+      undefined,
+      'hosting: purge preview counts of a hosted tenant',
+      async () =>
+        await Promise.all([
+          countIn(customers),
+          countIn(orders),
+          countIn(services),
+          countIn(payments),
+          countIn(admins),
+        ]),
+    );
     return {
       customers: customerCount,
       orders: orderCount,
