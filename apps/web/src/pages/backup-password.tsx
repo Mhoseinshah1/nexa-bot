@@ -8,7 +8,7 @@ import {
 import { ApiError, setBackupArchivePassword } from '../api/client';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
-import { Banner, KV } from '../ui/kit';
+import { Banner, KV, SecretInput } from '../ui/kit';
 import { formatTimestamp } from '../format';
 import { Icon } from '../ui/icons';
 import { errorText } from '../error-text';
@@ -116,10 +116,7 @@ export function BackupPasswordCard({
         <form onSubmit={onSubmit} className="stack" autoComplete="off">
           <label className="field">
             <span className="field-label">{t('web.backup_password_new')}</span>
-            <input
-              type="password"
-              className="input"
-              autoComplete="new-password"
+            <SecretInput
               maxLength={BACKUP_ARCHIVE_PASSWORD_MAX_LENGTH}
               value={password}
               onChange={(event) => setPassword(event.currentTarget.value)}
@@ -127,10 +124,7 @@ export function BackupPasswordCard({
           </label>
           <label className="field">
             <span className="field-label">{t('web.backup_password_again')}</span>
-            <input
-              type="password"
-              className="input"
-              autoComplete="new-password"
+            <SecretInput
               maxLength={BACKUP_ARCHIVE_PASSWORD_MAX_LENGTH}
               value={again}
               onChange={(event) => setAgain(event.currentTarget.value)}
@@ -138,10 +132,7 @@ export function BackupPasswordCard({
           </label>
           <label className="field">
             <span className="field-label">{t('web.kit_account_password')}</span>
-            <input
-              type="password"
-              className="input"
-              autoComplete="current-password"
+            <SecretInput
               value={accountPassword}
               onChange={(event) => setAccountPassword(event.currentTarget.value)}
             />

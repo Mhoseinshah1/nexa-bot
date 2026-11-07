@@ -12,6 +12,7 @@ import {
 } from '@nexa/contracts';
 import { auditLogExportUrl, fetchAuditLog, type AuditLogFilters } from '../api/client';
 import { formatTimestamp } from '../format';
+import { formatValueText } from '../ui/value-format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
@@ -836,10 +837,10 @@ function EntityCell({
   );
 }
 
-/** Text for one recorded value: a string as itself, anything else as its JSON. */
+/** Text for one recorded value: a string as itself, anything else as the kit formats it. */
 function valueText(value: unknown): string {
   if (value === undefined) return '';
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  const text = typeof value === 'string' ? value : formatValueText(value);
   return text.length > 200 ? `${text.slice(0, 200)}…` : text;
 }
 

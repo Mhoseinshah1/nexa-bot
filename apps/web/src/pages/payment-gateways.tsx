@@ -61,8 +61,10 @@ import {
   useUnsavedChanges,
   type Column,
   Num,
+  SecretInput,
 } from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
+import { saveChangedSecrets } from '../ui/secret-form';
 
 /** TonPays' two routes share one signature scheme and one set of texts (R7). */
 function isTonPaysRoute(provider: string | null | undefined): boolean {
@@ -70,6 +72,12 @@ function isTonPaysRoute(provider: string | null | undefined): boolean {
 }
 
 /** The text key of the webhook-secret field: TetraPay and TonPays each have their own words. */
+/** What one secret step sends: the route and the value as typed when Save was pressed. */
+interface SecretArgs {
+  readonly provider: string;
+  readonly value: string;
+}
+
 function secretKeyOf(
   keying: string | null,
   part: 'input' | 'hint' | 'save',
@@ -552,19 +560,19 @@ export function PaymentGatewaysPage({
   });
 
   const credential = useMutation({
-    mutationFn: () => {
-      if (keying === null) throw new Error('no route is being keyed');
+    // The route and the typed value are captured when Save is pressed (the fields stay
+    // editable while an earlier step runs), never read from state mid-batch.
+    mutationFn: ({ provider, value: apiKey }: SecretArgs) => {
       return setPaymentGatewayCredential({
-        provider: keying,
+        provider,
         apiKey,
         // A new key for a new value, so correcting a mistyped key is a new command.
-        idempotencyKey: keyed.current({ provider: keying, apiKey }),
+        idempotencyKey: keyed.current({ provider, apiKey }),
       });
     },
     onSuccess: () => {
       keyed.settle();
       setApiKey('');
-      setKeying(null);
       notify({ tone: 'ok', message: t('web.payment_gateway_credential_saved') });
       refresh();
     },
@@ -572,12 +580,11 @@ export function PaymentGatewaysPage({
   });
 
   const secret = useMutation({
-    mutationFn: () => {
-      if (keying === null) throw new Error('no route is being keyed');
+    mutationFn: ({ provider, value: webhookSecret }: SecretArgs) => {
       return setPaymentGatewayWebhookSecret({
-        provider: keying,
+        provider,
         secret: webhookSecret,
-        idempotencyKey: secretKeyed.current({ provider: keying, webhookSecret }),
+        idempotencyKey: secretKeyed.current({ provider, webhookSecret }),
       });
     },
     onSuccess: () => {
@@ -597,12 +604,11 @@ export function PaymentGatewaysPage({
   });
 
   const verify = useMutation({
-    mutationFn: () => {
-      if (keying === null) throw new Error('no route is being keyed');
+    mutationFn: ({ provider, value: verifyKey }: SecretArgs) => {
       return setPaymentGatewayVerifyKey({
-        provider: keying,
+        provider,
         verifyKey,
-        idempotencyKey: verifyKeyed.current({ provider: keying, verifyKey }),
+        idempotencyKey: verifyKeyed.current({ provider, verifyKey }),
       });
     },
     onSuccess: () => {
@@ -651,7 +657,47 @@ export function PaymentGatewaysPage({
     onError: (error) => checkKeyed.settleOn(error),
   });
 
+  /*
+   * One «ذخیره» for every secret of the drawer: an empty field keeps its stored value, only the
+   * typed ones are sent (each through its own command), a failure is shown at its field with
+   * the other fields' text kept, and the drawer closes only when everything sent succeeded.
+   */
+  const [savingSecrets, setSavingSecrets] = useState(false);
+  const saveSecrets = async () => {
+    if (keying === null) return;
+    const provider = keying;
+    const descriptor =
+      PAYMENT_GATEWAY_DESCRIPTORS[keying as keyof typeof PAYMENT_GATEWAY_DESCRIPTORS];
+    credential.reset();
+    secret.reset();
+    verify.reset();
+    setSavingSecrets(true);
+    try {
+      const result = await saveChangedSecrets([
+        {
+          field: 'apiKey',
+          value: apiKey,
+          run: () => credential.mutateAsync({ provider, value: apiKey }),
+        },
+        {
+          field: 'webhookSecret',
+          value: descriptor?.webhookSecret === true ? webhookSecret : '',
+          run: () => secret.mutateAsync({ provider, value: webhookSecret }),
+        },
+        {
+          field: 'verifyKey',
+          value: descriptor?.verifyKey === true ? verifyKey : '',
+          run: () => verify.mutateAsync({ provider, value: verifyKey }),
+        },
+      ]);
+      if (result.ok) setKeying(null);
+    } finally {
+      setSavingSecrets(false);
+    }
+  };
+
   const busy =
+    savingSecrets ||
     save.isPending ||
     toggle.isPending ||
     credential.isPending ||
@@ -1114,7 +1160,10 @@ export function PaymentGatewaysPage({
         */}
         <Drawer
           open={mayEdit && keying !== null}
-          onClose={closeKeying}
+          onClose={() => {
+            // The batch reads nothing from state, but closing mid-save would hide its errors.
+            if (!savingSecrets) closeKeying();
+          }}
           title={titled(
             t('web.payment_gateway_credential_title'),
             rows.find((row) => row.provider === keying),
@@ -1156,36 +1205,90 @@ export function PaymentGatewaysPage({
               )}
               htmlFor="pg-api-key"
             >
-              <input
+              <SecretInput
                 id="pg-api-key"
-                className="input ltr mono"
-                type="password"
-                autoComplete="new-password"
-                spellCheck={false}
                 value={apiKey}
                 maxLength={512}
                 onChange={(event) => setApiKey(event.target.value)}
               />
             </Field>
+            {credential.error != null && (
+              <Banner tone="danger">
+                {t('web.payment_gateway_credential_input')}:{' '}
+                {gatewayRequestRefusalText(credential.error) ?? messageFor(credential.error)}
+                <ErrorRef error={credential.error} />
+              </Banner>
+            )}
+            {/*
+            A signed route's IPN secret (NOWPayments): its own write-only field and its own
+            command, starting EMPTY every time — the stored secret is never sent here.
+          */}
+            {PAYMENT_GATEWAY_DESCRIPTORS[keying as keyof typeof PAYMENT_GATEWAY_DESCRIPTORS]
+              ?.webhookSecret === true && (
+              <>
+                <Field
+                  label={t(secretKeyOf(keying, 'input'))}
+                  htmlFor="pg-webhook-secret"
+                  hint={t(secretKeyOf(keying, 'hint'))}
+                >
+                  <SecretInput
+                    id="pg-webhook-secret"
+                    value={webhookSecret}
+                    maxLength={256}
+                    onChange={(event) => setWebhookSecret(event.target.value)}
+                  />
+                </Field>
+                {secret.error != null && (
+                  <Banner tone="danger">
+                    {t(secretKeyOf(keying, 'input'))}: {messageFor(secret.error)}
+                    <ErrorRef error={secret.error} />
+                  </Banner>
+                )}
+              </>
+            )}
+            {/*
+            A route's separate verify key (CentralPay): its own write-only field and its own
+            command, starting EMPTY every time — the stored key is never sent here.
+          */}
+            {PAYMENT_GATEWAY_DESCRIPTORS[keying as keyof typeof PAYMENT_GATEWAY_DESCRIPTORS]
+              ?.verifyKey === true && (
+              <>
+                <Field
+                  label={t('web.payment_gateway_verify_key_input')}
+                  htmlFor="pg-verify-key"
+                  hint={t('web.payment_gateway_verify_key_hint')}
+                >
+                  <SecretInput
+                    id="pg-verify-key"
+                    value={verifyKey}
+                    maxLength={256}
+                    onChange={(event) => setVerifyKey(event.target.value)}
+                  />
+                </Field>
+                {verify.error != null && (
+                  <Banner tone="danger">
+                    {t('web.payment_gateway_verify_key_input')}: {messageFor(verify.error)}
+                    <ErrorRef error={verify.error} />
+                  </Banner>
+                )}
+              </>
+            )}
             <div className="form-actions">
               <button
                 type="button"
                 className="btn primary"
-                disabled={busy || apiKey.trim() === ''}
-                onClick={() => credential.mutate()}
+                disabled={
+                  busy ||
+                  (apiKey.trim() === '' && webhookSecret.trim() === '' && verifyKey.trim() === '')
+                }
+                onClick={() => void saveSecrets()}
               >
-                {t('web.payment_gateway_credential_save')}
+                {t('web.save')}
               </button>
               <button type="button" className="btn" disabled={busy} onClick={closeKeying}>
                 {t('web.payment_gateway_cancel_edit')}
               </button>
             </div>
-            {credential.error != null && (
-              <Banner tone="danger">
-                {gatewayRequestRefusalText(credential.error) ?? messageFor(credential.error)}
-                <ErrorRef error={credential.error} />
-              </Banner>
-            )}
             {/*
             Round 10 C1: the custom gateway's bridge — base URL and callback allow-list. Its own
             command and audit row; the server refuses it while the route is switched on, and the
@@ -1257,88 +1360,6 @@ export function PaymentGatewaysPage({
                   </Banner>
                 )}
               </div>
-            )}
-            {/*
-            A signed route's IPN secret (NOWPayments): its own write-only field and its own
-            command, starting EMPTY every time — the stored secret is never sent here.
-          */}
-            {PAYMENT_GATEWAY_DESCRIPTORS[keying as keyof typeof PAYMENT_GATEWAY_DESCRIPTORS]
-              ?.webhookSecret === true && (
-              <>
-                <Field
-                  label={t(secretKeyOf(keying, 'input'))}
-                  htmlFor="pg-webhook-secret"
-                  hint={t(secretKeyOf(keying, 'hint'))}
-                >
-                  <input
-                    id="pg-webhook-secret"
-                    className="input ltr mono"
-                    type="password"
-                    autoComplete="new-password"
-                    spellCheck={false}
-                    value={webhookSecret}
-                    maxLength={256}
-                    onChange={(event) => setWebhookSecret(event.target.value)}
-                  />
-                </Field>
-                <div className="form-actions">
-                  <button
-                    type="button"
-                    className="btn primary"
-                    disabled={busy || webhookSecret.trim() === ''}
-                    onClick={() => secret.mutate()}
-                  >
-                    {t(secretKeyOf(keying, 'save'))}
-                  </button>
-                </div>
-                {secret.error != null && (
-                  <Banner tone="danger">
-                    {messageFor(secret.error)}
-                    <ErrorRef error={secret.error} />
-                  </Banner>
-                )}
-              </>
-            )}
-            {/*
-            A route's separate verify key (CentralPay): its own write-only field and its own
-            command, starting EMPTY every time — the stored key is never sent here.
-          */}
-            {PAYMENT_GATEWAY_DESCRIPTORS[keying as keyof typeof PAYMENT_GATEWAY_DESCRIPTORS]
-              ?.verifyKey === true && (
-              <>
-                <Field
-                  label={t('web.payment_gateway_verify_key_input')}
-                  htmlFor="pg-verify-key"
-                  hint={t('web.payment_gateway_verify_key_hint')}
-                >
-                  <input
-                    id="pg-verify-key"
-                    className="input ltr mono"
-                    type="password"
-                    autoComplete="new-password"
-                    spellCheck={false}
-                    value={verifyKey}
-                    maxLength={256}
-                    onChange={(event) => setVerifyKey(event.target.value)}
-                  />
-                </Field>
-                <div className="form-actions">
-                  <button
-                    type="button"
-                    className="btn primary"
-                    disabled={busy || verifyKey.trim() === ''}
-                    onClick={() => verify.mutate()}
-                  >
-                    {t('web.payment_gateway_verify_key_save')}
-                  </button>
-                </div>
-                {verify.error != null && (
-                  <Banner tone="danger">
-                    {messageFor(verify.error)}
-                    <ErrorRef error={verify.error} />
-                  </Banner>
-                )}
-              </>
             )}
           </div>
         </Drawer>

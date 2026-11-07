@@ -512,10 +512,11 @@ describe('the TonPays API key', () => {
     fireEvent.click(screen.getByRole('button', { name: 'تنظیم کلید API' }));
     const input = (await screen.findByLabelText('کلید API جدید')) as HTMLInputElement;
     expect(input.value).toBe('');
-    expect(input.type).toBe('password');
+    expect(input.type).toBe('text');
+    expect(input.autocomplete).toBe('off');
 
     fireEvent.change(input, { target: { value: 'tp_new_key_123' } });
-    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ کلید' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
     });
@@ -602,9 +603,10 @@ describe('the NOWPayments key, IPN secret and credential check', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'تنظیم کلید API' }));
     const input = (await screen.findByLabelText('کلید IPN جدید (IPN Secret)')) as HTMLInputElement;
     expect(input.value).toBe('');
-    expect(input.type).toBe('password');
+    expect(input.type).toBe('text');
+    expect(input.autocomplete).toBe('off');
     fireEvent.change(input, { target: { value: 'ipn_secret_123' } });
-    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ کلید IPN' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
     });
@@ -730,9 +732,10 @@ describe('the CentralPay API key and verify key', () => {
     expect(screen.queryByLabelText('کلید IPN جدید (IPN Secret)')).toBeNull();
     const input = (await screen.findByLabelText('کلید تأیید جدید (verify)')) as HTMLInputElement;
     expect(input.value).toBe('');
-    expect(input.type).toBe('password');
+    expect(input.type).toBe('text');
+    expect(input.autocomplete).toBe('off');
     fireEvent.change(input, { target: { value: 'md5_verify_123' } });
-    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ کلید تأیید' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
     });
@@ -815,9 +818,10 @@ describe('the TetraPay page', () => {
       'رمز وب‌هوک جدید (whsec_ — اختیاری)',
     )) as HTMLInputElement;
     expect(input.value).toBe('');
-    expect(input.type).toBe('password');
+    expect(input.type).toBe('text');
+    expect(input.autocomplete).toBe('off');
     fireEvent.change(input, { target: { value: 'whsec_abc123' } });
-    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ رمز وب‌هوک' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
     });

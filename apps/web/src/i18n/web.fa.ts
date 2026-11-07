@@ -470,6 +470,10 @@ export const WEB_FA = {
     'مشتری‌ای که یک بار قوانین را پذیرفته با انتشار نسخهٔ تازه دوباره پرسیده نمی‌شود.',
   'web.feature_addon_time_in_renew_menu_off':
     'بسته‌های زمان اضافه از منوی تمدید برداشته می‌شوند و فقط از دکمهٔ «خرید زمان اضافه» قابل خرید هستند.',
+  'web.feature_services_search_label_button_off':
+    'دکمهٔ «جستجوی نام کاربری» در فهرست سرویس‌های مشتری کشیده نمی‌شود (حالت پیش‌فرض). اگر دکمهٔ «🔎 جستجو» هم خاموش باشد، کل ردیف جستجو حذف می‌شود. چیزی پاک نمی‌شود.',
+  'web.feature_services_search_button_off':
+    'دکمهٔ «🔎 جستجو» در فهرست سرویس‌های مشتری کشیده نمی‌شود (حالت پیش‌فرض). اگر دکمهٔ «جستجوی نام کاربری» هم خاموش باشد، کل ردیف جستجو حذف می‌شود و ضربه روی دکمهٔ قدیمی با پیام «این دکمه دیگر فعال نیست» پاسخ داده می‌شود. چیزی پاک نمی‌شود.',
   'web.feature_personal_discount_off':
     'تخفیف شخصی اعمال نمی‌شود و قیمت‌ها همان قیمت معمول است؛ درصدهای ثبت‌شده می‌مانند. تأیید پیش‌نویسی که با تخفیف شخصی قیمت‌گذاری شده رد می‌شود و مشتری باید از اول شروع کند.',
   'web.feature_service_usage_chart_off':
@@ -487,6 +491,14 @@ export const WEB_FA = {
   'web.feature_last_changed': 'آخرین تغییر',
   'web.feature_related_settings': 'تنظیمات مرتبط',
   'web.feature_setting_unset': 'تعیین نشده',
+  'web.value_lines_separator': '؛ ',
+  'web.value_field_handle': 'شناسه',
+  'web.value_field_chat_id': 'شناسه گفتگو',
+  'web.value_field_mandatory': 'اجباری',
+  'web.value_field_amount': 'مبلغ',
+  'web.value_field_currency': 'واحد پول',
+  'web.secret_show': 'نمایش مقدار',
+  'web.secret_hide': 'پنهان کردن مقدار',
   'web.feature_confirm_disable': 'آیا از خاموش کردن این قابلیت مطمئن هستید؟',
   'web.feature_confirm_disable_yes': 'بله، خاموش شود',
   'web.feature_confirm_cancel': 'انصراف',
@@ -701,6 +713,12 @@ export const WEB_FA = {
   'web.feature_addon_time_in_renew_menu_title': 'نمایش زمان اضافه داخل تمدید هم',
   'web.feature_addon_time_in_renew_menu_summary':
     'روشن (پیش‌فرض): بسته‌های زمان اضافه علاوه بر دکمهٔ «خرید زمان اضافه» در منوی «تمدید سرویس» هم نشان داده می‌شوند. خاموش: فقط از دکمهٔ «خرید زمان اضافه» قابل خرید هستند و از منوی تمدید حذف می‌شوند.',
+  'web.feature_services_search_label_button_title': 'دکمهٔ «جستجوی نام کاربری» در سرویس‌های من',
+  'web.feature_services_search_label_button_summary':
+    'روشن: در فهرست «سرویس‌های من» ربات، دکمهٔ «جستجوی نام کاربری» بالای دکمه‌های صفحه‌بندی نشان داده می‌شود و با ضربه روی آن مشتری نام کاربری سرویسش را برای جستجو می‌فرستد. خاموش (پیش‌فرض): این دکمه کشیده نمی‌شود؛ اگر دکمهٔ «🔎 جستجو» هم خاموش باشد، کل ردیف جستجو حذف می‌شود و اگر آن روشن باشد فقط همان دکمه می‌ماند. متن دکمه از بخش متن‌ها (bot.service.search_label_button) تغییر می‌کند.',
+  'web.feature_services_search_button_title': 'دکمهٔ «🔎 جستجو» در سرویس‌های من',
+  'web.feature_services_search_button_summary':
+    'روشن: در فهرست «سرویس‌های من» ربات، دکمهٔ «🔎 جستجو» نشان داده می‌شود و با ضربه روی آن مشتری نام کاربری سرویسش را برای جستجو می‌فرستد. خاموش (پیش‌فرض): این دکمه کشیده نمی‌شود؛ اگر دکمهٔ «جستجوی نام کاربری» هم خاموش باشد، کل ردیف جستجو حذف می‌شود و ضربه روی دکمهٔ قدیمی که پیش از خاموش شدن کشیده شده بود با «این دکمه دیگر فعال نیست» پاسخ داده می‌شود و فهرست همان‌جا دوباره کشیده می‌شود. متن دکمه از بخش متن‌ها (bot.service.search_button) تغییر می‌کند.',
   'web.feature_rich_messages_title': 'دکمه‌های داخل پیام',
   'web.feature_rich_messages_summary':
     'صفحه‌های دکمه‌دار ربات به‌صورت «پیام غنی» تلگرام فرستاده می‌شوند و دکمه‌ها داخل خود پیام قرار می‌گیرند. صفحه‌ای که تلگرام نپذیرد به روش معمول فرستاده می‌شود.',
@@ -3220,7 +3238,6 @@ export const WEB_FA = {
   'web.payment_gateway_credential_telegram_hint':
     'این درگاه کلید «Custom Telegram» جداگانه‌ای از تون پی می‌خواهد. کلید درگاه وبسایت اینجا کار نمی‌کند و نباید وارد شود.',
   'web.payment_gateway_credential_input': 'کلید API جدید',
-  'web.payment_gateway_credential_save': 'ذخیرهٔ کلید',
   'web.payment_gateway_credential_saved': 'کلید API ذخیره شد.',
   'web.payment_gateway_nowpayments_hint':
     'مبلغ فاکتور به دلار و فقط از نرخ مرکزی ارز (USDT) محاسبه می‌شود؛ مشتری نوع ارز دیجیتال را در صفحهٔ NOWPayments انتخاب می‌کند. پرداخت فقط پس از وضعیت «finished» با استعلام مستقیم از NOWPayments تأیید می‌شود.',
@@ -3302,7 +3319,6 @@ export const WEB_FA = {
   'web.payment_gateway_verify_key_input': 'کلید تأیید جدید (verify)',
   'web.payment_gateway_verify_key_hint':
     'کلید جداگانه‌ای که CentralPay برای استعلام پرداخت داده است (غیر از کلید ساخت لینک). کلید ذخیره‌شده هرگز نمایش داده نمی‌شود؛ ابتدا کلید API را تنظیم کنید. بدون کلید تأیید، این درگاه قابل فعال‌سازی نیست.',
-  'web.payment_gateway_verify_key_save': 'ذخیرهٔ کلید تأیید',
   'web.payment_gateway_verify_key_saved': 'کلید تأیید ذخیره شد.',
   'web.payment_gateway_provider_user_id': 'شناسهٔ کاربر در درگاه',
   'web.payment_gateway_check': 'بررسی اتصال',

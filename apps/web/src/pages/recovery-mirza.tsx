@@ -68,6 +68,7 @@ import {
   Textarea,
   type Column,
   type Tone,
+  SecretInput,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { InventoryDiagnostics } from './recovery-mirza-inventory-diagnostics';
@@ -687,11 +688,8 @@ function KeyForm({ row }: { row: LegacyMigrationImportView }) {
         </>
       ) : (
         <Field label={t('web.lmg_passphrase')} htmlFor="lmg-passphrase">
-          <Input
+          <SecretInput
             id="lmg-passphrase"
-            type="password"
-            dir="ltr"
-            autoComplete="off"
             value={value}
             onChange={(event) => setValue(event.currentTarget.value)}
           />

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
-  DEFAULT_EXPLICIT_MAIN_MENU,
+  DEFAULT_MAIN_MENU_LAYOUT,
+  explicitFromLegacy,
   MAIN_MENU_BUTTON_STYLES,
   type BotMenuBuilderResponse,
   type ExplicitMainMenu,
@@ -27,6 +28,13 @@ import {
   refusal,
   revision,
 } from './bot-buttons-builder-fixture';
+
+/**
+ * The plain starting layout these tests were written against: the registry packed two to a row,
+ * every style `default`. The shipped default (`DEFAULT_EXPLICIT_MAIN_MENU`) is Mirza's arrangement
+ * since NEXA-OWNER-BATCH-1 PR-1; the drag, style and inspector mechanics are layout-independent.
+ */
+const DEFAULT_EXPLICIT_MAIN_MENU = explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT);
 
 /**
  * Round T (T3) — the button builder on «دکمه‌های ربات».

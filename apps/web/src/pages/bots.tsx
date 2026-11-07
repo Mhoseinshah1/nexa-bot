@@ -35,6 +35,7 @@ import {
   useToast,
   type Tone,
   Num,
+  SecretInput,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { ErrorRef, ProviderText } from '../ui/technical-details';
@@ -567,12 +568,8 @@ function BotSection({
               htmlFor={`bot-token-${bot.id}`}
               hint={t('web.bot_token_hint')}
             >
-              <input
+              <SecretInput
                 id={`bot-token-${bot.id}`}
-                className="input ltr mono"
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
                 value={token}
                 maxLength={256}
                 onChange={(event) => setToken(event.target.value)}

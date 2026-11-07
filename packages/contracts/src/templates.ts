@@ -558,7 +558,8 @@ export const TEMPLATES = [
     description:
       'The main-menu button that takes a free trial service: straight to the one panel ' +
       'that offers one, or to a choice when several do. Drawn only while at least one ' +
-      'panel offers a trial. Routes exactly as /trial.',
+      'panel offers a trial. Routes exactly as /trial. The default label carries the ' +
+      'literal braces «{تست}»: they are decoration, not a placeholder.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

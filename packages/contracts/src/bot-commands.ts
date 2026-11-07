@@ -326,6 +326,26 @@ export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
   },
 ];
 
+/**
+ * The labels the main-menu buttons had BEFORE the Mirza-style defaults (NEXA-OWNER-BATCH-1,
+ * PR-1), by button. A reply keyboard already sitting in a customer's chat still shows them, and
+ * a tap is only text, so the shared route table keeps routing them: the older-defaults rule
+ * (`docs/adr/0036-custom-main-menu-buttons.md`). Append when a default changes again; never
+ * remove one, a keyboard in a chat has no expiry.
+ */
+export const REPLACED_MAIN_MENU_LABELS: readonly {
+  readonly button: MainMenuButtonId;
+  readonly label: string;
+}[] = [
+  { button: 'catalog', label: '🛒 خرید اشتراک' },
+  { button: 'services', label: '📱 سرویس\u200cهای من' },
+  { button: 'wallet', label: '💰 کیف پول' },
+  { button: 'trial', label: '🧪 دریافت سرویس تست' },
+  { button: 'referral', label: '👥 زیرمجموعه\u200cگیری' },
+  { button: 'apps', label: '📱 دانلود برنامه و آموزش اتصال' },
+  { button: 'help', label: '💬 پشتیبانی' },
+];
+
 /** The declared button for an id. Total over `MAIN_MENU_BUTTON_IDS`. */
 export function mainMenuButton(id: MainMenuButtonId): BotMenuButton {
   const found = MAIN_MENU_BUTTONS.find((button) => button.id === id);

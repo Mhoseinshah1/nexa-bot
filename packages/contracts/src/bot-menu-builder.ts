@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { APPEARANCE_SLOTS, type AppearanceSlot } from './appearance.js';
 import {
-  DEFAULT_MAIN_MENU_LAYOUT,
   MAIN_MENU_BUTTON_IDS,
   MAIN_MENU_TARGETS,
   mainMenuButton,
@@ -515,9 +514,44 @@ export function explicitFromLegacy(stored: readonly MainMenuLayoutEntry[]): Expl
   });
 }
 
-/** Every declared button, in its declared place: the registry's default as an explicit layout. */
-export const DEFAULT_EXPLICIT_MAIN_MENU: ExplicitMainMenu =
-  explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT);
+/** The default style of each button: Mirza's green, the trial blue, the ticket desk plain. */
+const DEFAULT_MAIN_MENU_STYLES: Readonly<Record<MainMenuButtonId, MainMenuButtonStyle>> = {
+  catalog: 'success',
+  services: 'success',
+  wallet: 'success',
+  help: 'success',
+  trial: 'primary',
+  referral: 'success',
+  apps: 'success',
+  tickets: 'default',
+};
+
+/**
+ * The default keyboard where nothing is saved (NEXA-OWNER-BATCH-1, PR-1): Mirza's order, two
+ * to a row, with the styles the owner chose. One purchase button on top, wallet beside
+ * services, the trial alone, the guide beside the referral program, support alone; the ticket
+ * desk keeps its place after it. Right-to-left, the first of a row is the right-hand button.
+ *
+ * It is a DEFAULT and nothing else: the runtime draws it only while the tenant has neither a
+ * published layout nor a saved `bot.main_menu`, so an arrangement, style or label an owner
+ * saved is never rewritten. `explicitFromLegacy` (a saved legacy value) still packs by the
+ * registry's `wide` flags with every style `default`.
+ */
+export const DEFAULT_EXPLICIT_MAIN_MENU: ExplicitMainMenu = normalizeExplicitMainMenu({
+  v: EXPLICIT_MAIN_MENU_VERSION,
+  rows: [
+    ['catalog'],
+    ['wallet', 'services'],
+    ['trial'],
+    ['apps', 'referral'],
+    ['help'],
+    ['tickets'],
+  ],
+  buttons: MAIN_MENU_BUTTON_IDS.map((id) => ({
+    ...defaultMainMenuButtonConfig(id),
+    style: DEFAULT_MAIN_MENU_STYLES[id],
+  })),
+});
 
 /**
  * The compatibility projection a publish writes to `bot.main_menu`: the placed buttons

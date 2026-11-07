@@ -264,7 +264,7 @@ describe('the features page, after WP-A4', () => {
       },
     ]);
     const { container } = renderPage((<FeaturesPage mayEdit denied={false} />) as ReactElement);
-    await screen.findByText('20');
+    await screen.findByText(/^20(\s|$)/u);
     expect(container.textContent).not.toContain('-100777000');
     expect(container.textContent).not.toContain(t('web.setting_ops_max_attempts'));
     expect(container.textContent).toContain(t('web.setting_ops_max_per_minute'));

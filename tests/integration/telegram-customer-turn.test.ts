@@ -255,10 +255,11 @@ describe('the customer Telegram turn', () => {
       | undefined;
     expect(markup, 'the welcome carried no keyboard at all').toBeDefined();
     expect(markup?.keyboard?.map((row) => row.map((button) => button.text))).toEqual([
-      [CATALOGUE_FA['bot.menu.catalog'], CATALOGUE_FA['bot.menu.services']],
-      [CATALOGUE_FA['bot.menu.wallet'], CATALOGUE_FA['bot.menu.help']],
-      // WP-A10: app downloads and connection guides, on a row of its own.
+      [CATALOGUE_FA['bot.menu.catalog']],
+      [CATALOGUE_FA['bot.menu.wallet'], CATALOGUE_FA['bot.menu.services']],
+      // WP-A10: app downloads and connection guides (the referral button is off, so it is alone).
       [CATALOGUE_FA['bot.menu.apps']],
+      [CATALOGUE_FA['bot.menu.help']],
       // WP-A7: «🎫 پشتیبانی / تیکت‌ها», on a row of its own.
       [CATALOGUE_FA['bot.menu.tickets']],
     ]);

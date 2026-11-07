@@ -56,6 +56,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  SecretInput,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { TicketAiSwitchCard } from './support-ai-tickets-card';
@@ -1221,13 +1222,8 @@ function CredentialRow({
             htmlFor={`sai-key-${provider}`}
             hint={t('web.sai_key_input_hint')}
           >
-            <input
+            <SecretInput
               id={`sai-key-${provider}`}
-              className="input"
-              type="password"
-              dir="ltr"
-              autoComplete="new-password"
-              spellCheck={false}
               maxLength={512}
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}

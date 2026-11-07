@@ -121,6 +121,44 @@ describe('the Features page', () => {
     );
   });
 
+  it('describes the two services-search switches in full, each off by default, in the customer category', async () => {
+    for (const key of ['services_search_label_button', 'services_search_button'] as const) {
+      const p = FEATURE_PRESENTATION[key];
+      expect(p.category, key).toBe('customer');
+      expect(p.where, key).toEqual(['bot']);
+      // What it does, where it is seen, and the effect when off: three full sentences, not stubs.
+      expect(t(p.summary).length, key).toBeGreaterThan(120);
+      expect(t(p.summary), key).toContain('سرویس‌های من');
+      expect(t(p.offEffect).length, key).toBeGreaterThan(60);
+    }
+    stubApi([
+      {
+        url: '/features',
+        body: {
+          flags: [
+            flag('services_search_label_button', false),
+            flag('services_search_button', false),
+          ],
+        },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+    fireEvent.click(
+      await screen.findByRole('tab', { name: new RegExp(t(FEATURE_CATEGORY_TITLE.customer)) }),
+    );
+    const labelRow = (
+      await screen.findByText(t(FEATURE_PRESENTATION.services_search_label_button.title))
+    ).closest('.feature-row') as HTMLElement;
+    expect(within(labelRow).getByRole('switch')).not.toBeChecked();
+    expect(
+      within(labelRow).getByText(t(FEATURE_PRESENTATION.services_search_label_button.offEffect)),
+    ).toBeInTheDocument();
+    const searchRow = screen
+      .getByText(t(FEATURE_PRESENTATION.services_search_button.title))
+      .closest('.feature-row') as HTMLElement;
+    expect(within(searchRow).getByRole('switch')).not.toBeChecked();
+  });
+
   it('searches names and descriptions across all categories, grouped by category', async () => {
     stubApi([{ url: '/features', body: { flags: all() } }]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
@@ -206,5 +244,58 @@ describe('the Features page', () => {
       await screen.findByRole('tab', { name: new RegExp(t('web.feature_cat_other')) }),
     ).toBeInTheDocument();
     expect(screen.getByText(t('web.feature_unknown_summary'))).toBeInTheDocument();
+  });
+});
+
+describe('a feature’s related settings read as words, never as JSON', () => {
+  it('shows the referral gift total as money, a percent with its unit, and absent as «تعیین نشده»', async () => {
+    const configured = (key: string, value: unknown) => ({
+      key,
+      value,
+      source: 'TENANT',
+      version: 1,
+      updatedAt: '2026-09-01T00:00:00.000Z',
+      updatedByAdminId: 'a1',
+      description: key,
+      zeroMeaning: 'DISABLES',
+      mutability: 'RUNTIME',
+      classification: 'PUBLIC',
+      configures: null,
+      consumer: 'ACTIVE',
+      inert: false,
+      storedValueInvalid: false,
+    });
+    stubApi([
+      {
+        url: '/features',
+        body: {
+          flags: FEATURE_FLAGS.map((d) =>
+            d.key === 'referral_signup_gift'
+              ? featureFlagSchema.parse({
+                  ...flag(d.key, true),
+                  configuration: [
+                    configured('referral.signup_gift.total', {
+                      amountMinor: '20000',
+                      currency: 'IRT',
+                    }),
+                    configured('referral.signup_gift.referrer_percent', 60),
+                    configured('referral.signup_gift.referred_percent', null),
+                  ],
+                })
+              : flag(d.key),
+          ),
+        },
+      },
+    ]);
+    const view = renderPage(<FeaturesPage mayEdit denied={false} />);
+    await screen.findByRole('tablist');
+    fireEvent.click(tabFor('referral'));
+    await waitFor(() => expect(view.container.textContent).toContain('20,000'));
+    const text = view.container.textContent ?? '';
+    expect(text).toContain('20,000 تومان');
+    expect(text).toContain(`60 ${t('web.unit_percent')}`);
+    expect(text).toContain(t('web.feature_setting_unset'));
+    expect(text).not.toContain('amountMinor');
+    expect(text).not.toContain('{"');
   });
 });

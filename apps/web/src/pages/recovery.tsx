@@ -44,6 +44,7 @@ import {
   StateSwitch,
   StatusDot,
   type Column,
+  SecretInput,
 } from '../ui/kit';
 import { FilePicker } from '../ui/file-picker';
 import { Icon } from '../ui/icons';
@@ -896,10 +897,7 @@ function RecoveryOperations({
               {uploadedSevenZip && (
                 <label className="field">
                   <span className="field-label">{t('web.recovery_archive_password')}</span>
-                  <input
-                    type="password"
-                    className="input"
-                    autoComplete="off"
+                  <SecretInput
                     value={archivePassword}
                     onChange={(event) => setArchivePassword(event.currentTarget.value)}
                   />

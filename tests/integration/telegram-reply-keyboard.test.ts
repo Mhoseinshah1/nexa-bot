@@ -238,6 +238,16 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
   });
 
   it('keeps a never-published tenant’s keyboard byte for byte on an ELIGIBLE bot: no style, no icon', async () => {
+    // PR-1: a tenant that SAVED bot.main_menu but never published keeps the old packing, plain.
+    await api.container.settingsService.set(tenantA, owner, {
+      idempotencyKey: key('saved-menu'),
+      key: 'bot.main_menu',
+      value: ['catalog', 'services', 'wallet', 'help', 'apps', 'tickets'].map((button) => ({
+        button,
+        enabled: true,
+      })),
+      expectedVersion: null,
+    });
     expect((await say(BOT_A1)).statusCode).toBe(201);
     expect(sends()).toHaveLength(1);
     const markup = sends()[0]?.body['reply_markup'];
@@ -247,6 +257,30 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
           [{ text: label('bot.menu.catalog') }, { text: label('bot.menu.services') }],
           [{ text: label('bot.menu.wallet') }, { text: label('bot.menu.help') }],
           [{ text: label('bot.menu.apps') }],
+          [{ text: label('bot.menu.tickets') }],
+        ],
+        resize_keyboard: true,
+        is_persistent: true,
+        one_time_keyboard: false,
+        selective: false,
+      }),
+    );
+  });
+
+  it('keeps a never-published tenant’s keyboard byte for byte on an ELIGIBLE bot: the Mirza default layout and styles for a tenant that never saved a menu, no icon', async () => {
+    expect((await say(BOT_A1)).statusCode).toBe(201);
+    expect(sends()).toHaveLength(1);
+    const markup = sends()[0]?.body['reply_markup'];
+    expect(JSON.stringify(markup)).toBe(
+      JSON.stringify({
+        keyboard: [
+          [{ text: label('bot.menu.catalog'), style: 'success' }],
+          [
+            { text: label('bot.menu.wallet'), style: 'success' },
+            { text: label('bot.menu.services'), style: 'success' },
+          ],
+          [{ text: label('bot.menu.apps'), style: 'success' }],
+          [{ text: label('bot.menu.help'), style: 'success' }],
           [{ text: label('bot.menu.tickets') }],
         ],
         resize_keyboard: true,
@@ -268,15 +302,12 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
     expect(await testOutcome(BOT_A1)).toBe('SENT');
   });
 
-  it('isolates tenants: an eligible bot of a tenant that never published draws its own legacy rows', async () => {
+  it('isolates tenants: an eligible bot of a tenant that never published draws its own default rows, none of tenant A’s published ones', async () => {
     await publishLayout();
     await say(BOT_B1);
     const keyboard = keyboardOf(sends()[0]?.body) as Record<string, unknown>[][];
-    expect(keyboard.flat().every((button) => Object.keys(button).join() === 'text')).toBe(true);
-    expect(keyboard[0]).toEqual([
-      { text: label('bot.menu.catalog') },
-      { text: label('bot.menu.services') },
-    ]);
+    expect(keyboard.flat().every((button) => !('icon_custom_emoji_id' in button))).toBe(true);
+    expect(keyboard[0]).toEqual([{ text: label('bot.menu.catalog'), style: 'success' }]);
   });
 
   it('R-3 routes a tap on an iconed, styled button by its label, exactly as the slash command', async () => {

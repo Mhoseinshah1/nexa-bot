@@ -1,4 +1,5 @@
 import {
+  DEFAULT_EXPLICIT_MAIN_MENU,
   MAIN_MENU_BUTTONS,
   customMenuRouteValue,
   customerRowsOf,
@@ -56,6 +57,13 @@ export interface MainMenuSnapshot {
   readonly source: MainMenuSourceAnswer;
   /** `bot.main_menu` as resolved in that snapshot; drawn when `source` is LEGACY. */
   readonly legacy: readonly MainMenuLayoutEntry[];
+  /**
+   * `bot.main_menu` has no stored row: the value above is the registry default, not something
+   * an owner saved. Only then is the default Mirza keyboard (`DEFAULT_EXPLICIT_MAIN_MENU`)
+   * drawn in its place; a saved value, whatever it is, keeps the legacy packing. Absent is
+   * false: a stand-in that cannot tell does not guess.
+   */
+  readonly legacyIsDefault?: boolean;
 }
 
 export interface MainMenuSource {
@@ -202,7 +210,16 @@ export class MainMenuLayout {
   }> {
     const ask = (enabled: boolean) => enabled || options.gatesForHidden === true;
     const snapshot = options.pinned ?? (await this.snapshotFor(scope));
-    const source = snapshot.source;
+    /*
+     * NEXA-OWNER-BATCH-1 PR-1: nothing published and nothing saved in `bot.main_menu` - the
+     * default keyboard, Mirza's rows and styles, drawn through the same explicit path (so the
+     * same gates apply). Any saved value keeps its own packing, and the reported `source` of the
+     * builder's read stays the snapshot's (this is the keyboard's decision only).
+     */
+    const source: MainMenuSourceAnswer =
+      snapshot.source.kind === 'LEGACY' && snapshot.legacyIsDefault === true
+        ? { kind: 'EXPLICIT', layout: DEFAULT_EXPLICIT_MAIN_MENU, revision: 0 }
+        : snapshot.source;
     const stored = source.kind === 'EXPLICIT' ? legacyProjectionOf(source.layout) : snapshot.legacy;
     const flags = new Map<FeatureFlagKey, boolean>();
     let trialOffered: boolean | undefined;

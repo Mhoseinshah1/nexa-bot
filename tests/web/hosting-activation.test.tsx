@@ -266,7 +266,8 @@ describe('the creator panel: activation steps', () => {
     await openActivation();
     fireEvent.click(screen.getByRole('button', { name: t('web.hosting_act_configure') }));
     const token = screen.getByLabelText(t('web.hosting_act_token_label')) as HTMLInputElement;
-    expect(token.type).toBe('password');
+    expect(token.type).toBe('text');
+    expect(token.autocomplete).toBe('off');
     fireEvent.change(token, { target: { value: '7100000001:AAH-secret-token-value-0123456789' } });
     fireEvent.change(screen.getByLabelText(t('web.hosting_act_domain_label')), {
       target: { value: ' bots.acme.com ' },

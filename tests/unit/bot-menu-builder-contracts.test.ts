@@ -184,8 +184,16 @@ describe('C-1 legacy → explicit: identical keyboard with every gate open', () 
     expect(explicit.buttons.map((one) => one.button)).toEqual([...MAIN_MENU_BUTTON_IDS]);
   });
 
-  it('the registry default converts to the default keyboard', () => {
+  it('the default explicit layout is Mirza’s keyboard (PR-1); a legacy conversion keeps the registry packing', () => {
     expect(DEFAULT_EXPLICIT_MAIN_MENU.rows).toEqual([
+      ['catalog'],
+      ['wallet', 'services'],
+      ['trial'],
+      ['apps', 'referral'],
+      ['help'],
+      ['tickets'],
+    ]);
+    expect(explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT).rows).toEqual([
       ['catalog', 'services'],
       ['wallet', 'help'],
       ['trial', 'referral'],

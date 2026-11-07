@@ -386,6 +386,10 @@ describe('the feature flag registry', () => {
       // hourly snapshot written beside an existing usage read are reachable behind it.
       'service_usage_chart',
       'service_usage_reminders',
+      // NEXA-OWNER-BATCH-1 PR-1. Both off by default; the services list's search row (label button,
+      // search button) is drawn only behind them, one switch each, and a stale tap opens nothing.
+      'services_search_button',
+      'services_search_label_button',
       // R10 D5 (a). Off by default; the captcha gate in front of a new customer's turns
       // and the mini app's matching gate are reachable, and with it off nobody is asked.
       'start_captcha',

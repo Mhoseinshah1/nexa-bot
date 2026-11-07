@@ -42,6 +42,8 @@ import {
   CHANNEL_MEMBERSHIP_TIMEOUT_MS,
   COUNTER_CAP,
   MAIN_MENU_BUTTONS,
+  REPLACED_MAIN_MENU_LABELS,
+  mainMenuButton,
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
   TICKET_REPLY_FILE_RETENTION_DAYS,
@@ -6277,7 +6279,11 @@ export function createContainer(
       const rendered = await Promise.all(
         keys.map((key) => templateResolver.render(scope, key, {})),
       );
-      return [...rendered, ...keys.map((key) => CATALOGUE_FA[key])].map((label) => label.trim());
+      return [
+        ...rendered,
+        ...keys.map((key) => CATALOGUE_FA[key]),
+        ...REPLACED_MAIN_MENU_LABELS.map((replaced) => replaced.label),
+      ].map((label) => label.trim());
     },
   });
   const botCommandSyncLoop = new BotCommandSyncLoop(botCommandSync, {
@@ -9524,6 +9530,11 @@ export function createContainer(
       // R5C-1 item 4: «نمایش زمان اضافه داخل تمدید هم» (flag `addon_time_in_renew_menu`).
       renewMenuShowsTime: (scope) =>
         featureFlagResolver.isEnabled(scope, 'addon_time_in_renew_menu'),
+      // NEXA-OWNER-BATCH-1 PR-1: the services list's search row (two flags, default off).
+      servicesSearchRow: async (scope) => ({
+        label: await featureFlagResolver.isEnabled(scope, 'services_search_label_button'),
+        search: await featureFlagResolver.isEnabled(scope, 'services_search_button'),
+      }),
       // R8-C3: the service screen's button arrangement, the tenant's `bot.service_card_layout`.
       serviceCardLayout: (scope) =>
         settingsResolver.valueOf<unknown>(scope, 'bot.service_card_layout'),
@@ -9551,6 +9562,15 @@ export function createContainer(
        * keyboard from the same constant. One source, two consumers, no drift.
        */
       mainMenu: new Map([
+        /*
+         * NEXA-OWNER-BATCH-1 PR-1: the labels the defaults had before the Mirza-style ones. A
+         * keyboard already in a chat still shows them, and a tap is only text, so they route to
+         * the same commands (the older-defaults rule). First in the list: a Map keeps the LAST
+         * value of a key, so a label the current table claims keeps its own route.
+         */
+        ...REPLACED_MAIN_MENU_LABELS.map(
+          (replaced) => [replaced.label, `/${mainMenuButton(replaced.button).command}`] as const,
+        ),
         ...MAIN_MENU_BUTTONS.map(
           (button) => [CATALOGUE_FA[button.label], `/${button.command}`] as const,
         ),

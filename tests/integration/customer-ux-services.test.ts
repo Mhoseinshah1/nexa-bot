@@ -288,6 +288,27 @@ describe('a customer looks after the services they bought', () => {
   };
   const buttonsOf = (markup: string): string[] =>
     [...markup.matchAll(/"callback_data":"([^"]+)"/g)].map((m) => m[1] as string);
+  /** NEXA-OWNER-BATCH-1 PR-1: the two switches of the services list's search row (default off). */
+  let flagSeq = 0;
+  async function setSearchFlags(label: boolean, search: boolean): Promise<void> {
+    for (const [key, enabled] of [
+      ['services_search_label_button', label],
+      ['services_search_button', search],
+    ] as const) {
+      const current = (await ctx.container.featureFlags.list(tenantA, owner)).find(
+        (flag) => flag.key === key,
+      );
+      flagSeq += 1;
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key,
+        enabled,
+        expectedVersion: current?.version ?? null,
+        idempotencyKey: `search-flag-${key}-${String(flagSeq)}`,
+        confirmKey: key,
+        reason: 'PR-1 integration.',
+      });
+    }
+  }
 
   // =========================================================================
   // §G — the list
@@ -295,6 +316,7 @@ describe('a customer looks after the services they bought', () => {
   describe('the services list', () => {
     it('renders the approved text, one button per REAL username, and the bottom controls', async () => {
       const service = await activeService('list-one');
+      await setSearchFlags(true, true);
       const result = await handle(text('/services'));
       expect(result.replyKey).toBe('bot.service.list');
       expect(lastText()).toBe(
@@ -462,6 +484,10 @@ describe('a customer looks after the services they bought', () => {
   // §G — search
   // =========================================================================
   describe('searching by username', () => {
+    beforeEach(async () => {
+      await setSearchFlags(true, true);
+    });
+
     it('finds by prefix within the customer’s own services only', async () => {
       const mine = await activeService('search-mine', maryam);
       const theirs = await activeService('search-theirs', reza);
@@ -764,12 +790,111 @@ describe('a customer looks after the services they bought', () => {
     });
 
     it('a note prompt is one question: opening a search closes it', async () => {
+      await setSearchFlags(true, true);
       const service = await activeService('note-supersede');
       await handle(tap(`nt:${service.id}`));
       await handle(tap('ss:'));
       const result = await handle(text('zzzz'));
       expect(result.replyKey).toBe('bot.service.search_none');
       expect((await services.findById(tenantA, service.id))?.customerNote).toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // NEXA-OWNER-BATCH-1 PR-1 — the search row's two switches, and the menu labels
+  // =========================================================================
+  describe('the search row switches (both off by default)', () => {
+    const listMarkup = async (): Promise<string> => {
+      await activeService('row-one');
+      await handle(text('/services'));
+      return lastMarkup();
+    };
+
+    it('draws no search row at all with both switches off (the default)', async () => {
+      const markup = await listMarkup();
+      expect(buttonsOf(markup)).not.toContain('ss:');
+      expect(markup).not.toContain('جستجوی نام کاربری');
+      expect(markup).not.toContain('🔎 جستجو');
+      // The pager and the way back stay.
+      expect(buttonsOf(markup)).toEqual([expect.stringMatching(/^sv:/), 'sl:1', 'mm:']);
+    });
+
+    it('draws only the label button when only that switch is on', async () => {
+      await setSearchFlags(true, false);
+      const markup = await listMarkup();
+      expect(buttonsOf(markup).filter((data) => data === 'ss:')).toHaveLength(1);
+      expect(markup).toContain('جستجوی نام کاربری');
+      expect(markup).not.toContain('🔎 جستجو');
+    });
+
+    it('draws only the search button when only that switch is on', async () => {
+      await setSearchFlags(false, true);
+      const markup = await listMarkup();
+      expect(buttonsOf(markup).filter((data) => data === 'ss:')).toHaveLength(1);
+      expect(markup).toContain('🔎 جستجو');
+      expect(markup).not.toContain('جستجوی نام کاربری');
+    });
+
+    it('opens the search from the one button that is on', async () => {
+      await setSearchFlags(false, true);
+      const opened = await handle(tap('ss:'));
+      expect(opened.replyKey).toBe('bot.service.search_prompt');
+    });
+
+    it('answers a stale tap with both off as no longer active, opens no capture, and redraws the list in place', async () => {
+      const service = await activeService('row-stale');
+      sent = [];
+      const update = tap('ss:');
+      const result = await handle(update);
+      expect(result.replyKey).toBe('bot.service.list');
+      const tapped = (
+        update.update as unknown as { callback_query: { message: { message_id: number } } }
+      ).callback_query.message.message_id;
+      // The tapped message is edited into the list; nothing new is sent.
+      expect(messages()).toHaveLength(0);
+      const edit = sent.find((one) => one.url.includes('/editMessageText'));
+      expect(edit?.body['message_id']).toBe(tapped);
+      expect(JSON.stringify(edit?.body['reply_markup'])).toContain(`sv:${service.id}`);
+      expect(JSON.stringify(edit?.body['reply_markup'])).not.toContain('"ss:"');
+      // The usual «no longer active» answer on the callback.
+      const answer = sent.find((one) => one.url.includes('/answerCallbackQuery'));
+      expect(String(answer?.body['text'])).toContain('این دکمه دیگر فعال نیست');
+      // No window was opened: the next plain message is not a search.
+      const stray = await handle(text('row'));
+      expect(stray.replyKey).toBe('bot.unknown_command');
+    });
+  });
+
+  describe('the Mirza default menu labels', () => {
+    const replyKeyOf = async (label: string): Promise<string | null> =>
+      (await handle(text(label))).replyKey;
+
+    it('route the new default labels, the literal «{تست}» trial label included', async () => {
+      expect(await replyKeyOf('🔐 خرید اشتراک')).toBe(await replyKeyOf('/catalog'));
+      expect(await replyKeyOf('🏦 کیف پول + شارژ')).toBe(await replyKeyOf('/wallet'));
+      expect(await replyKeyOf('🛍 سرویس های من')).toBe(await replyKeyOf('/services'));
+      expect(await replyKeyOf('☎️ پشتیبانی')).toBe(await replyKeyOf('/help'));
+      expect(await replyKeyOf('📚 آموزش')).toBe(await replyKeyOf('/apps'));
+      expect(await replyKeyOf('👥 زیر مجموعه گیری')).toBe(await replyKeyOf('/referral'));
+      expect(await replyKeyOf('اشتراک رایگان {تست}')).toBe(await replyKeyOf('/trial'));
+      expect(await replyKeyOf('اشتراک رایگان {تست}')).not.toBe('bot.unknown_command');
+    });
+
+    it('still route every label a default had before', async () => {
+      const before: readonly (readonly [string, string])[] = [
+        ['🛒 خرید اشتراک', '/catalog'],
+        ['📱 سرویس\u200cهای من', '/services'],
+        ['💰 کیف پول', '/wallet'],
+        ['🧪 دریافت سرویس تست', '/trial'],
+        ['👥 زیرمجموعه\u200cگیری', '/referral'],
+        ['📱 دانلود برنامه و آموزش اتصال', '/apps'],
+        ['💬 پشتیبانی', '/help'],
+      ];
+      for (const [label, command] of before) {
+        const viaLabel = await replyKeyOf(label);
+        expect(viaLabel, label).not.toBe('bot.unknown_command');
+        expect(viaLabel, label).toBe(await replyKeyOf(command));
+      }
     });
   });
 
