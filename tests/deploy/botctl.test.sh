@@ -2932,7 +2932,7 @@ tty_botctl_answers() {
   done
   shift
   python3 - "$answers_file" "$out_file" "$BOTCTL" "$@" <<'PTY'
-import os, pty, select, sys
+import os, pty, select, sys, termios, time
 answers = open(sys.argv[1], encoding="utf-8").read().splitlines()
 out_path, argv = sys.argv[2], sys.argv[3:]
 pid, fd = pty.fork()
@@ -2955,6 +2955,14 @@ while True:
     # One answer per prompt seen so far.
     prompts = buf.count(b": ")
     while typed < min(prompts, len(answers)):
+        if "reset-password" in argv:
+            # A silent prompt: the prompt text is printed BEFORE the script's
+            # `read -s` turns echo off. Typing in that gap gets the password
+            # echoed by the tty (a race that lost on a fast runner), so wait
+            # until the terminal really is silent, as a person's typing would.
+            deadline = time.time() + 10
+            while time.time() < deadline and termios.tcgetattr(fd)[3] & termios.ECHO:
+                time.sleep(0.01)
         os.write(fd, (answers[typed] + "\n").encode())
         typed += 1
 _, status = os.waitpid(pid, 0)

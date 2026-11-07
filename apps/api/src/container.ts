@@ -96,6 +96,7 @@ import type {
   PaymentGatewayProvider,
   ProductId,
   TenantContext,
+  TenantKind,
   Translator,
   // Round N: the audience's balance range is written in the selling currency.
   SalesCurrencyCode,
@@ -1315,7 +1316,12 @@ export interface Container {
   readonly heavyJobs: HeavyJobGate;
   /** Phase 6A PR-2: the owner's disk, memory and worker-lag alerts (worker loop). */
   readonly capacityMonitorLoop: CapacityMonitorLoop;
-  setInstallationTenant(tenantId: TenantId | null): void;
+  /**
+   * Sets the role's installation tenant and records its kind with the tenant guard, at the
+   * moment the scope is set (PR #411). `kind` is the resolved tenant's own kind; omitted, it
+   * is recorded as UNKNOWN, and a tenant of unknown kind that vanishes fails closed.
+   */
+  setInstallationTenant(tenantId: TenantId | null, kind?: TenantKind | null): void;
   readonly recordPing: RecordPingService;
   /**
    * Phase 4 — the customer-facing commerce lane.
@@ -8615,11 +8621,33 @@ export function createContainer(
   const installationTenantGuard = new InstallationTenantGuard({
     getCurrent: () => installationTenantId,
     setCurrent: applyInstallationTenant,
+    // Fail closed (PR #411): a vanished tenant not known to be the PRIMARY is never swapped
+    // for the owner's. The scope stops: every `scope()` above answers null, so the loops skip
+    // and the Web Admin's login scope is refused, rather than writing under anyone's tenant.
+    stopScope: () => applyInstallationTenant(null),
     tenantKind: async (tenantId) => (await tenants.findById(tenantId))?.kind ?? null,
     findPrimary: async () => (await tenants.findPrimary())?.id ?? null,
+    // The owner's operations log, the PR-2 mechanism, addressed to the PRIMARY tenant: the
+    // cached (vanished) tenant can no longer carry the event, and a hosted tenant's group
+    // must never receive it. Reading the primary here only ADDRESSES the alert.
+    alertOwner: async (event) => {
+      const owner = (await tenants.findPrimary())?.id ?? null;
+      if (owner === null) return false;
+      await new InstallationOwnerOpsLog({
+        recorder: opsLog,
+        installationTenantId: () => owner,
+        conditionIsOpen: (tenantId, code) =>
+          capacityConditions.tenantConditionIsOpen(tenantId, code),
+      }).record(event);
+      return true;
+    },
     exit: (code) => process.exit(code),
     logger,
   });
+  const setInstallationTenant = (tenantId: TenantId | null, kind?: TenantKind | null): void => {
+    applyInstallationTenant(tenantId);
+    installationTenantGuard.record(tenantId, kind);
+  };
 
   const recoveryExecutor = new RecoveryExecutor({
     requests: recoveryRequests,
@@ -9246,7 +9274,7 @@ export function createContainer(
     botTurnGuard,
     heavyJobs,
     capacityMonitorLoop,
-    setInstallationTenant: applyInstallationTenant,
+    setInstallationTenant,
     installationTenantGuard,
     recordPing,
     customers: customerService,

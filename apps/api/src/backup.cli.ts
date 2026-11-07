@@ -319,7 +319,7 @@ async function pointAtInstallation(
 ): Promise<void> {
   try {
     const primary = await container.tenants.findPrimary();
-    container.setInstallationTenant(primary?.id ?? null);
+    container.setInstallationTenant(primary?.id ?? null, primary?.kind ?? null);
   } catch (error) {
     container.logger.warn(
       { err: error instanceof Error ? error.message : String(error) },

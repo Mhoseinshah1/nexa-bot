@@ -7,16 +7,34 @@ import {
 /**
  * A Disaster Recovery restore replaces the database under every long-running role, whose
  * cached installation tenant then names nothing. The guard is what makes that survivable.
+ *
+ * PR #411, fail closed: the kind is recorded where the scope is set (`record`), and only a
+ * vanished tenant recorded as PRIMARY is re-resolved. MUTATIONS, each run and each red here:
+ * drop the `failClosed` branch (hosted before/after, unknown, dedupe cases); fall back on an
+ * UNKNOWN kind; drop the `stopScope` call; drop the `alerted` dedupe; drop the UNKNOWN exit;
+ * drop re-recording the adopted primary; never fall back (the #413 restore cases); record
+ * every kind as UNKNOWN in `record`.
  */
 const OLD = 'tenant-old' as never;
 const NEW = 'tenant-new' as never;
+/** A hosted (reseller) tenant: one install hosts many (ADR-0037). */
+const HOSTED = 'tenant-hosted';
+
+type Kind = 'PRIMARY' | 'RESELLER_BOT';
 
 function world(opts: {
   cached: string | null;
   existing: string[];
   primary: string | null;
   /** Each existing tenant's kind; PRIMARY unless named here. */
-  kinds?: Record<string, 'PRIMARY' | 'RESELLER_BOT'>;
+  kinds?: Record<string, Kind>;
+  /**
+   * The kind the role recorded when it set `cached` (what `resolveInstallationTenant` does at
+   * boot). Default PRIMARY, the boot case; `'none'` records nothing (never recorded).
+   */
+  recorded?: Kind | null | 'none';
+  alertFails?: boolean;
+  stopFails?: boolean;
 }) {
   const state = {
     current: opts.cached as never as string | null,
@@ -25,6 +43,8 @@ function world(opts: {
     primary: opts.primary,
     existsCalls: 0,
     primaryCalls: 0,
+    stops: [] as string[],
+    alerts: [] as { code: string; severity: string; dedupeKey?: string; context?: unknown }[],
     exits: [] as number[],
     warns: [] as Record<string, unknown>[],
     errors: [] as Record<string, unknown>[],
@@ -34,6 +54,11 @@ function world(opts: {
     getCurrent: () => state.current as never,
     setCurrent: (id) => {
       state.current = id as unknown as string;
+    },
+    stopScope: (id) => {
+      if (opts.stopFails === true) throw new Error('cannot stop');
+      state.stops.push(id as unknown as string);
+      state.current = null;
     },
     tenantKind: async (id) => {
       state.existsCalls += 1;
@@ -45,6 +70,11 @@ function world(opts: {
       state.primaryCalls += 1;
       return state.primary as never;
     },
+    alertOwner: async (event) => {
+      if (opts.alertFails === true) throw new Error('ops log down');
+      state.alerts.push(event as never);
+      return true;
+    },
     exit: (code) => {
       state.exits.push(code);
     },
@@ -53,6 +83,8 @@ function world(opts: {
       error: (c) => state.errors.push(c),
     },
   });
+  const recorded = opts.recorded === undefined ? 'PRIMARY' : opts.recorded;
+  if (recorded !== 'none') guard.record(opts.cached as never, recorded);
   return { guard, state };
 }
 
@@ -63,6 +95,26 @@ const fk = (extra: Record<string, unknown> = {}) =>
     ...extra,
   });
 
+/** The fail-closed outcome: never the owner's tenant, scope stopped, one owner alert. */
+function expectFailedClosed(
+  state: ReturnType<typeof world>['state'],
+  tenant: string,
+  kind: string,
+): void {
+  expect(state.current).toBeNull();
+  expect(state.current).not.toBe(NEW);
+  expect(state.primaryCalls).toBe(0);
+  expect(state.stops).toEqual([tenant]);
+  expect(state.alerts).toHaveLength(1);
+  expect(state.alerts[0]).toMatchObject({
+    code: 'tenancy.cached_tenant_vanished',
+    severity: 'CRITICAL',
+    dedupeKey: `tenancy.cached_tenant_vanished:${tenant}`,
+    context: { tenantId: tenant, kind },
+  });
+  expect(state.errors[0]).toMatchObject({ cachedTenantId: tenant, recordedKind: kind });
+}
+
 describe('InstallationTenantGuard.verify', () => {
   it('does nothing while the cached tenant still exists', async () => {
     const { guard, state } = world({ cached: OLD, existing: [OLD], primary: NEW });
@@ -72,43 +124,136 @@ describe('InstallationTenantGuard.verify', () => {
     expect(state.exits).toEqual([]);
   });
 
-  it('adopts the new primary, once, and says so, when the cached tenant is gone', async () => {
+  it('adopts the new primary, once, and says so, when the recorded PRIMARY is gone (#413)', async () => {
     const { guard, state } = world({ cached: OLD, existing: [NEW], primary: NEW });
     await expect(guard.verify()).resolves.toBe(NEW);
     expect(state.current).toBe(NEW);
     expect(state.primaryCalls).toBe(1);
     expect(state.warns[0]).toMatchObject({ previousTenantId: OLD, tenantId: NEW });
     expect(state.exits).toEqual([]);
+    expect(state.alerts).toEqual([]);
+    expect(state.stops).toEqual([]);
   });
 
-  it('never swaps a cached tenant it saw as another kind for the installation tenant', async () => {
-    // One install hosts many tenants (ADR-0037); "the primary" is the owner's. A reseller or
-    // hosted tenant that disappears must not have its work moved into the owner's tenant.
-    const CHILD = 'tenant-child';
+  it('records the re-resolved tenant as PRIMARY, so a second restore re-resolves too', async () => {
+    const NEWER = 'tenant-newer';
+    const { guard, state } = world({ cached: OLD, existing: [NEW], primary: NEW });
+    await expect(guard.verify()).resolves.toBe(NEW);
+    state.exists = new Set([NEWER]);
+    state.primary = NEWER;
+    await expect(guard.verify()).resolves.toBe(NEWER);
+    expect(state.alerts).toEqual([]);
+  });
+
+  it('a HOSTED tenant deleted BEFORE the first check never resolves to the owner and is stopped', async () => {
+    // Recorded at boot as RESELLER_BOT; gone before the guard ever looked at it.
     const { guard, state } = world({
-      cached: CHILD,
-      existing: [CHILD, NEW],
+      cached: HOSTED,
+      existing: [NEW],
       primary: NEW,
-      kinds: { [CHILD]: 'RESELLER_BOT' },
+      recorded: 'RESELLER_BOT',
     });
-    await expect(guard.verify()).resolves.toBe(CHILD);
-    state.exists.delete(CHILD);
-    await expect(guard.verify()).resolves.toBe(CHILD);
-    expect(state.current).toBe(CHILD);
-    expect(state.primaryCalls).toBe(0);
+    await expect(guard.verify()).resolves.toBeNull();
+    expectFailedClosed(state, HOSTED, 'RESELLER_BOT');
     expect(state.exits).toEqual([]);
-    expect(state.errors[0]).toMatchObject({ cachedTenantId: CHILD, kind: 'RESELLER_BOT' });
   });
 
-  it('still adopts the primary when the cached tenant it saw WAS the installation tenant', async () => {
-    const { guard, state } = world({ cached: OLD, existing: [OLD, NEW], primary: NEW });
+  it('a HOSTED tenant deleted AFTER the first check gives the same result', async () => {
+    const { guard, state } = world({
+      cached: HOSTED,
+      existing: [HOSTED, NEW],
+      primary: NEW,
+      kinds: { [HOSTED]: 'RESELLER_BOT' },
+      recorded: 'RESELLER_BOT',
+    });
+    await expect(guard.verify()).resolves.toBe(HOSTED);
+    state.exists.delete(HOSTED);
+    await expect(guard.verify()).resolves.toBeNull();
+    expectFailedClosed(state, HOSTED, 'RESELLER_BOT');
+    expect(state.exits).toEqual([]);
+  });
+
+  it('a periodic check that saw the row as PRIMARY does not overrule an UNKNOWN record', async () => {
+    // The kind is what the role recorded when it set the scope, never learnt from a tick.
+    const { guard, state } = world({
+      cached: OLD,
+      existing: [OLD, NEW],
+      primary: NEW,
+      recorded: null,
+    });
     await expect(guard.verify()).resolves.toBe(OLD);
     state.exists.delete(OLD);
-    await expect(guard.verify()).resolves.toBe(NEW);
-    expect(state.current).toBe(NEW);
+    await guard.verify();
+    expectFailedClosed(state, OLD, 'UNKNOWN');
+    expect(state.exits).toEqual([1]);
   });
 
-  it('exits 1 when the cached tenant is gone and the database has no primary', async () => {
+  it('a tenant of UNKNOWN kind fails closed and exits non-zero rather than guess', async () => {
+    const { guard, state } = world({ cached: OLD, existing: [NEW], primary: NEW, recorded: null });
+    await guard.verify();
+    expectFailedClosed(state, OLD, 'UNKNOWN');
+    expect(state.exits).toEqual([1]);
+  });
+
+  it('a kind never recorded (or recorded for another tenant) fails closed the same way', async () => {
+    const never = world({ cached: OLD, existing: [NEW], primary: NEW, recorded: 'none' });
+    await never.guard.verify();
+    expectFailedClosed(never.state, OLD, 'UNKNOWN');
+    expect(never.state.exits).toEqual([1]);
+
+    // The PRIMARY record was for another id: the cached one was set without recording.
+    const other = world({ cached: NEW, existing: [NEW], primary: NEW });
+    other.state.current = OLD;
+    await other.guard.verify();
+    expectFailedClosed(other.state, OLD, 'UNKNOWN');
+  });
+
+  it('one disappearance is one alert, however often the guard is asked', async () => {
+    const { guard, state } = world({
+      cached: HOSTED,
+      existing: [NEW],
+      primary: NEW,
+      recorded: 'RESELLER_BOT',
+    });
+    await guard.verify();
+    guard.onWriteError(fk());
+    await guard.verify();
+    // Even if something put the same vanished id back, the owner is not told twice.
+    state.current = HOSTED;
+    await guard.verify();
+    expect(state.alerts).toHaveLength(1);
+    expect(state.primaryCalls).toBe(0);
+  });
+
+  it('an alert that cannot be sent still stops the scope, and is logged', async () => {
+    const { guard, state } = world({
+      cached: HOSTED,
+      existing: [NEW],
+      primary: NEW,
+      recorded: 'RESELLER_BOT',
+      alertFails: true,
+    });
+    await expect(guard.verify()).resolves.toBeNull();
+    expect(state.stops).toEqual([HOSTED]);
+    expect(state.primaryCalls).toBe(0);
+    expect(state.errors.some((e) => e.err === 'ops log down')).toBe(true);
+  });
+
+  it('a scope that cannot be stopped exits non-zero', async () => {
+    const { guard, state } = world({
+      cached: HOSTED,
+      existing: [NEW],
+      primary: NEW,
+      recorded: 'RESELLER_BOT',
+      stopFails: true,
+    });
+    await guard.verify();
+    expect(state.current).toBe(HOSTED);
+    expect(state.primaryCalls).toBe(0);
+    expect(state.exits).toEqual([1]);
+  });
+
+  it('exits 1 when the recorded PRIMARY is gone and the database has no primary', async () => {
     const { guard, state } = world({ cached: OLD, existing: [], primary: null });
     await guard.verify();
     expect(state.exits).toEqual([1]);
@@ -124,21 +269,23 @@ describe('InstallationTenantGuard.verify', () => {
   });
 
   it('changes nothing when the database cannot answer', async () => {
-    const { guard, state } = world({ cached: OLD, existing: [], primary: NEW });
+    const { state } = world({ cached: OLD, existing: [], primary: NEW });
     const broken = new InstallationTenantGuard({
       getCurrent: () => state.current as never,
       setCurrent: () => undefined,
+      stopScope: () => state.stops.push('x'),
       tenantKind: async () => {
         throw new Error('connection terminated');
       },
       findPrimary: async () => NEW,
+      alertOwner: async () => true,
       exit: (c) => state.exits.push(c),
       logger: { warn: (c) => state.warns.push(c), error: (c) => state.errors.push(c) },
     });
     await broken.verify();
     expect(state.exits).toEqual([]);
+    expect(state.stops).toEqual([]);
     expect(state.current).toBe(OLD);
-    void guard;
   });
 
   it('coalesces concurrent verifications into one check', async () => {

@@ -79,7 +79,8 @@ describe('a restore that brings a different tenant', () => {
       'recovery',
     );
     await container.database.db.insert(tenants).values(tenantRow(OLD));
-    container.setInstallationTenant(OLD as never);
+    // What `resolveInstallationTenant` does at boot: the PRIMARY, with its kind recorded.
+    container.setInstallationTenant(OLD as never, 'PRIMARY');
   });
 
   afterAll(async () => {
@@ -123,8 +124,8 @@ describe('a restore that brings a different tenant', () => {
   });
 
   it('the recovery role records a completed cutover once, under the live tenant, without a loop', async () => {
-    // Back to the stale state: the process still holds a tenant that is gone.
-    container.setInstallationTenant(OLD as never);
+    // Back to the stale state: the process still holds the PRIMARY it resolved at boot, gone.
+    container.setInstallationTenant(OLD as never, 'PRIMARY');
     const reassert = vi.spyOn(container.recoveryRequests, 'reassert');
     const recoveryId = '0192f000-0000-7000-8000-00000000f001';
     await new FileCutoverJournal(recoveryRoot).write({
