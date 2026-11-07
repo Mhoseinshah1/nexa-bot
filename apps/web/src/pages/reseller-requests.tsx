@@ -29,6 +29,7 @@ import { t } from '../i18n/web.fa';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import { ConfirmDialog } from '../ui/confirm-dialog';
+import { keepPageWhileTurning } from '../ui/paging';
 import { SortableList } from '../ui/sortable-list';
 import { ErrorRef } from '../ui/technical-details';
 import { useUnsavedChanges } from '../ui/unsaved';
@@ -158,16 +159,18 @@ function RequestsList({ route, denied }: { route: Route; denied: boolean }) {
   }>({ filter: filter ?? '', cursors: [] });
   const cursors = trail.filter === (filter ?? '') ? trail.cursors : [];
   const cursor = cursors[cursors.length - 1];
-  const list = useQuery({
-    queryKey: ['reseller-requests', filter, cursor ?? null],
-    queryFn: () =>
-      fetchResellerRequests({
-        ...(filter === null ? {} : { filter }),
-        limit: LIST_PAGE_SIZE,
-        ...(cursor === undefined ? {} : { cursor }),
-      }),
-    enabled: !denied,
-  });
+  const list = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['reseller-requests', filter, cursor ?? null],
+      queryFn: () =>
+        fetchResellerRequests({
+          ...(filter === null ? {} : { filter }),
+          limit: LIST_PAGE_SIZE,
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const rows = list.data?.requests ?? [];
   const counts = list.data?.counts;
   const nextCursor = list.data?.nextCursor ?? null;

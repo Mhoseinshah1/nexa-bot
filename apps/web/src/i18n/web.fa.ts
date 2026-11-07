@@ -7283,7 +7283,7 @@ export const WEB_FA = {
   'web.rrq_text_problem': 'متن سؤال خالی یا خیلی بلند است.',
   'web.rrq_required': 'اجباری',
   'web.rrq_max': 'حداکثر طول پاسخ',
-  'web.rrq_max_problem': 'عددی بین ۱ و ۲۰۰۰ بنویسید.',
+  'web.rrq_max_problem': 'عددی بین 1 و 2000 بنویسید.',
   'web.rrq_delete': 'حذف',
   'web.rrq_add': 'افزودن سؤال',
   'web.rrq_saved': 'سؤال‌ها ذخیره شد.',
