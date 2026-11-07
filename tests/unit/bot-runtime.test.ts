@@ -1682,6 +1682,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.reminder_usage_second_button',
       'bot.admin.reminders_button',
       'bot.admin.reminders_section',
+      'bot.admin.reseller_request.already_reseller',
       'bot.admin.reseller_request.button_cancel',
       'bot.admin.reseller_request.button_confirm',
       'bot.admin.reseller_request.button_reject_plain',

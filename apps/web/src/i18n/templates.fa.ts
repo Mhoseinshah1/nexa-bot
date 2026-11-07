@@ -1145,6 +1145,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'انصراف ادمین از پیام یا رد',
     'پاسخ به ادمین وقتی پیش از فرستادن، انصراف می‌دهد.',
   ],
+  'bot.admin.reseller_request.already_reseller': [
+    'متقاضی از قبل نماینده است',
+    'پاسخ به ادمین وقتی متقاضی پیش از تأیید از راه دیگری نماینده شده است؛ درخواست باز می‌ماند.',
+  ],
   'bot.admin.reseller_request.not_implemented': [
     'تأیید درخواست هنوز در دسترس نیست',
     'پیش از آماده شدن تأیید نمایندگی.',

@@ -441,6 +441,10 @@ export const RESELLER_REQUEST_TEMPLATES = [
     'PR-2: the operator cancelled a prompt; nothing was sent.',
   ),
   tpl('bot.admin.reseller_request.not_implemented', 'PR-2: approval is not available yet.'),
+  tpl(
+    'bot.admin.reseller_request.already_reseller',
+    'PR-2: the applicant became a reseller some other way while the request was open; nothing was changed and the request stays open.',
+  ),
   tpl('bot.admin.reseller_request.button_confirm', 'PR-2: the operator’s «تأیید نهایی».'),
   tpl('bot.admin.reseller_request.button_cancel', 'PR-2: cancels an operator prompt.'),
   tpl('bot.admin.reseller_request.button_reject_plain', 'PR-2: rejects with no reason.'),
