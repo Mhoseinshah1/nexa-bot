@@ -3545,3 +3545,35 @@ textarea.input,
     column-gap: 18px;
   }
 }
+
+/*
+ * SecretInput: a text input masked by the browser's own text-security, so it is never a
+ * `type="password"` the browser would take for a login. Where that property is missing the
+ * glyphs are blurred out instead, so a secret is never drawn in clear while hidden.
+ */
+.secret-input {
+  width: 100%;
+}
+.secret-input > .input {
+  min-width: 0;
+}
+.secret-input > .btn.icon {
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+.input.secret-masked {
+  -webkit-text-security: disc;
+}
+@supports not (-webkit-text-security: disc) {
+  .input.secret-masked {
+    color: transparent;
+    text-shadow: 0 0 7px var(--fg);
+  }
+}
+
+/* A stored value drawn as labelled lines (`Value`). */
+.value-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

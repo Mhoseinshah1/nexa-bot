@@ -321,13 +321,13 @@ describe('the support AI settings page', () => {
     expect(openai.getByText(new RegExp(t('web.sai_test_model')))).toBeTruthy();
   });
 
-  it('sets a key through a password field, clears it, and never renders it', async () => {
+  it('sets a key through a masked secret field, clears it, and never renders it', async () => {
     const { api, view } = settings();
     const openai = await providerBlock('OPENAI');
     fireEvent.click(openai.getByRole('button', { name: t('web.sai_key_replace') }));
     const field = openai.getByLabelText(new RegExp(t('web.sai_key_input'))) as HTMLInputElement;
-    expect(field.type).toBe('password');
-    expect(field.autocomplete).toBe('new-password');
+    expect(field.type).toBe('text');
+    expect(field.autocomplete).toBe('off');
     // Only Z.AI has a region.
     expect(openai.queryByLabelText(t('web.sai_region'))).toBeNull();
     fireEvent.change(field, { target: { value: `  ${SECRET} ` } });

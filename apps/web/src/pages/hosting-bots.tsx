@@ -43,6 +43,7 @@ import {
   StateSwitch,
   Switch,
   useToast,
+  SecretInput,
 } from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
 import { fromLocalInput, toLocalInput } from './incidents';
@@ -533,12 +534,8 @@ function CreateDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
         {...optionalError(invalid(form.adminPassword, passwordOk))}
         required
       >
-        <input
+        <SecretInput
           id={`${id}-password`}
-          type="password"
-          className="input"
-          dir="ltr"
-          autoComplete="new-password"
           value={form.adminPassword}
           onChange={(event) => set('adminPassword', event.currentTarget.value)}
         />

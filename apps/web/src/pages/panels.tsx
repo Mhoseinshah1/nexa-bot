@@ -111,6 +111,7 @@ import {
   RefLink,
   StatCard,
   LIST_PAGE_SIZE,
+  SecretInput,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { createPortal } from 'react-dom';
@@ -2643,11 +2644,8 @@ function CredentialsTab({
               )}
               {accepts('password') && (
                 <Field label={t('web.password')} htmlFor={`cp-${panel.id}`}>
-                  <input
+                  <SecretInput
                     id={`cp-${panel.id}`}
-                    className="input ltr mono"
-                    type="password"
-                    autoComplete="new-password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                   />
@@ -2659,11 +2657,8 @@ function CredentialsTab({
                   hint={apiTokenCopy(panel.providerType).hint}
                   htmlFor={`ct-${panel.id}`}
                 >
-                  <input
+                  <SecretInput
                     id={`ct-${panel.id}`}
-                    className="input ltr mono"
-                    type="password"
-                    autoComplete="off"
                     value={apiToken}
                     onChange={(event) => setApiToken(event.target.value)}
                   />
@@ -3091,11 +3086,8 @@ export function NewPanelPage({
                       )}
                       {accepts('password') && (
                         <Field label={t('web.password')} htmlFor="new-password">
-                          <input
+                          <SecretInput
                             id="new-password"
-                            className="input ltr mono"
-                            type="password"
-                            autoComplete="new-password"
                             value={password}
                             onChange={(event) => setPassword(event.target.value)}
                           />
@@ -3107,11 +3099,8 @@ export function NewPanelPage({
                           hint={apiTokenCopy(chosen?.key ?? null).hint}
                           htmlFor="new-token"
                         >
-                          <input
+                          <SecretInput
                             id="new-token"
-                            className="input ltr mono"
-                            type="password"
-                            autoComplete="off"
                             value={apiToken}
                             onChange={(event) => setApiToken(event.target.value)}
                           />
