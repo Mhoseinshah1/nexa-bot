@@ -31,6 +31,7 @@ import {
   Ltr,
   Modal,
   StateSwitch,
+  SecretInput,
 } from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
 import { CodePromptDialog, HOSTING_BOTS_KEY, noteSectionError } from './hosting-parts';
@@ -306,14 +307,8 @@ function ConfigureDialog({
       onDone={(response) => onDone(response.activation)}
     >
       <Field label={t('web.hosting_act_token_label')} htmlFor={`${id}-token`}>
-        <input
+        <SecretInput
           id={`${id}-token`}
-          className="input"
-          dir="ltr"
-          type="password"
-          autoComplete="off"
-          autoCapitalize="none"
-          spellCheck={false}
           value={token}
           onChange={(event) => setToken(event.currentTarget.value)}
         />

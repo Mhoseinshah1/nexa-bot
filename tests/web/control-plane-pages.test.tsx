@@ -451,7 +451,7 @@ describe('the feature flags page', () => {
     await screen.findByText(t('web.feature_service_expiry_reminders_title'));
     expect(screen.getByText(t('web.feature_related_settings'))).toBeInTheDocument();
     expect(screen.getByText(t('web.setting_reminders_expiry_first_days'))).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText(/^3(\s|$)/u)).toBeInTheDocument();
     // Off, so the value does nothing, and the page says so.
     expect(screen.getByText(t('web.inert'))).toBeInTheDocument();
     expect(container.textContent).not.toContain('reminders.expiry_first_days');

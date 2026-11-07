@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { OPS_GROUP_MANAGED_SETTING_KEYS, type FeatureFlagResponse } from '@nexa/contracts';
 import { fetchFeatureFlags, saveFeatureFlag } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
+import { settingPresentation } from '../settings-presentation';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
 import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
@@ -18,6 +19,7 @@ import {
   StateSwitch,
   Switch,
   Tabs,
+  Value,
 } from '../ui/kit';
 import { useLinkHandler } from '../router';
 import {
@@ -415,7 +417,7 @@ function RelatedSettings({ flag }: { flag: FeatureFlagResponse }) {
             <div key={setting.key}>
               <dt>{label ?? <Ltr>{setting.key}</Ltr>}</dt>
               <dd>
-                <SettingValue value={setting.value} />
+                <SettingValue settingKey={setting.key} value={setting.value} />
                 {setting.storedValueInvalid && (
                   <span className="danger small"> {t('web.stored_value_invalid')}</span>
                 )}
@@ -429,16 +431,19 @@ function RelatedSettings({ flag }: { flag: FeatureFlagResponse }) {
 }
 
 /**
- * A setting's current value, as an operator reads it.
- *
- * `String(null)` is the four characters "null", which reads as a stored value rather
- * than an absent one, so an absent value says so in words. A boolean reads as on/off.
- * Anything else is data, and is shown as left-to-right text.
+ * A setting's current value, as an operator reads it: through the kit's one value formatter,
+ * with the unit and the option labels the Settings page gives the same key. A money object is
+ * an amount with its currency, a boolean is on/off, absent says so in words — never the JSON.
  */
-function SettingValue({ value }: { value: unknown }) {
-  if (value === null || value === undefined || value === '') {
-    return <span className="muted">{t('web.feature_setting_unset')}</span>;
+function SettingValue({ settingKey, value }: { settingKey: string; value: unknown }) {
+  const control = settingPresentation(settingKey)?.control;
+  if (control?.kind === 'select') {
+    const option = control.options.find((candidate) => candidate.value === value);
+    if (option !== undefined) return <>{t(option.label)}</>;
   }
-  if (typeof value === 'boolean') return <>{value ? t('web.enabled') : t('web.disabled')}</>;
-  return <Ltr>{typeof value === 'string' ? value : JSON.stringify(value)}</Ltr>;
+  if (control?.kind === 'boolean' && typeof value === 'boolean') {
+    return <>{t(value ? control.on : control.off)}</>;
+  }
+  const unit = control?.kind === 'integer' ? control.unit : undefined;
+  return <Value value={value} {...(unit === undefined ? {} : { hint: { unit } })} />;
 }

@@ -491,6 +491,14 @@ export const WEB_FA = {
   'web.feature_last_changed': 'آخرین تغییر',
   'web.feature_related_settings': 'تنظیمات مرتبط',
   'web.feature_setting_unset': 'تعیین نشده',
+  'web.value_lines_separator': '؛ ',
+  'web.value_field_handle': 'شناسه',
+  'web.value_field_chat_id': 'شناسه گفتگو',
+  'web.value_field_mandatory': 'اجباری',
+  'web.value_field_amount': 'مبلغ',
+  'web.value_field_currency': 'واحد پول',
+  'web.secret_show': 'نمایش مقدار',
+  'web.secret_hide': 'پنهان کردن مقدار',
   'web.feature_confirm_disable': 'آیا از خاموش کردن این قابلیت مطمئن هستید؟',
   'web.feature_confirm_disable_yes': 'بله، خاموش شود',
   'web.feature_confirm_cancel': 'انصراف',
@@ -3230,7 +3238,6 @@ export const WEB_FA = {
   'web.payment_gateway_credential_telegram_hint':
     'این درگاه کلید «Custom Telegram» جداگانه‌ای از تون پی می‌خواهد. کلید درگاه وبسایت اینجا کار نمی‌کند و نباید وارد شود.',
   'web.payment_gateway_credential_input': 'کلید API جدید',
-  'web.payment_gateway_credential_save': 'ذخیرهٔ کلید',
   'web.payment_gateway_credential_saved': 'کلید API ذخیره شد.',
   'web.payment_gateway_nowpayments_hint':
     'مبلغ فاکتور به دلار و فقط از نرخ مرکزی ارز (USDT) محاسبه می‌شود؛ مشتری نوع ارز دیجیتال را در صفحهٔ NOWPayments انتخاب می‌کند. پرداخت فقط پس از وضعیت «finished» با استعلام مستقیم از NOWPayments تأیید می‌شود.',
@@ -3312,7 +3319,6 @@ export const WEB_FA = {
   'web.payment_gateway_verify_key_input': 'کلید تأیید جدید (verify)',
   'web.payment_gateway_verify_key_hint':
     'کلید جداگانه‌ای که CentralPay برای استعلام پرداخت داده است (غیر از کلید ساخت لینک). کلید ذخیره‌شده هرگز نمایش داده نمی‌شود؛ ابتدا کلید API را تنظیم کنید. بدون کلید تأیید، این درگاه قابل فعال‌سازی نیست.',
-  'web.payment_gateway_verify_key_save': 'ذخیرهٔ کلید تأیید',
   'web.payment_gateway_verify_key_saved': 'کلید تأیید ذخیره شد.',
   'web.payment_gateway_provider_user_id': 'شناسهٔ کاربر در درگاه',
   'web.payment_gateway_check': 'بررسی اتصال',

@@ -42,6 +42,7 @@ import {
   useToast,
   useFocusAfterWrite,
   useUnsavedChanges,
+  Value,
 } from '../ui/kit';
 import {
   DirtyScope,
@@ -693,7 +694,7 @@ function SaveError({ error, settingKey }: { error: unknown; settingKey: string }
 function CurrentValue({ control, value }: { control: SettingControl | null; value: unknown }) {
   const unset = <span className="muted">{t('web.settings_value_unset')}</span>;
   if (control === null) {
-    return value === null || value === '' ? unset : <Ltr>{toEditable(value)}</Ltr>;
+    return <Value value={value} />;
   }
   switch (control.kind) {
     case 'integer':

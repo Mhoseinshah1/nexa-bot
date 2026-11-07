@@ -647,7 +647,8 @@ describe('the /bots route wires the token replacement to settings.destructive', 
     open(['settings.view', 'settings.destructive']);
     await screen.findByText('@acme_store_bot');
 
-    expect(openToken().input).toHaveAttribute('type', 'password');
+    expect(openToken().input).toHaveAttribute('type', 'text');
+    expect(openToken().input).toHaveAttribute('autocomplete', 'off');
     // And the permission it holds grants nothing it does not name.
     expect(screen.queryByRole('button', { name: 'توقف ربات' })).toBeNull();
   });
