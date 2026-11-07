@@ -191,6 +191,20 @@ another payment already settled, goes to the wallet once through the same credit
 `RETURNED` basis — the same notice and `ops.financial.late_credit_returned` as every other
 route's returned money; a second charge for one attempt stays the operator's identity mismatch.
 
+**A late approval follows its route's late-payment policy (NEXA-OWNER-BATCH-1 PR-5).** Each
+online gateway with a late-credit setting (TonPays, TonPays Telegram, TetraPay, Rialit, custom)
+names one of `WALLET` (the old switch on: the payment's own amount to the wallet once), `REVIEW`
+(the old switch off: a late completion an operator decides with «تحویل سرویس» or «به کیف پول»
+under `payments.reconcile`) or `DELIVER` (the order's service as if paid on time, at its frozen
+total, when the product sells, the payment covers it, the panel has room and the customer is not
+blocked; otherwise the `WALLET` path with the reason in the operations group). Migration 0322
+mapped stored `true`/`false` to `WALLET`/`REVIEW`. A delivery is the late credit plus the
+customer's own wallet purchase in ONE transaction; an EXPIRED order is delivered through a
+fulfilment order tied to the payment (`lateDeliveryOrderId`), never by reopening a frozen payment
+or order. One late credit per payment (`<paymentId>:late-credit`) is the exactly-once guard for
+all three. Stars and card-to-card name no policy and keep their rules; an UNKNOWN payment is never
+delivered (reconciliation decides it).
+
 ## Providers and panels (Phase 3)
 
 **Marzban is the supported mutable provider.** 3X-UI keeps the five

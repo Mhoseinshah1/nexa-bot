@@ -82,6 +82,9 @@ export const i18nOpsLogWords: OpsLogWords = {
   paidOperation: (purpose) => pick(W.paidOperations, purpose, W.paidOperations.OTHER),
   operationState: (state) => W.operationStates[state],
   byWhom: (kind) => W.byWhom[kind],
+  lateDecidedBy: (by) => W.lateDecidedBy[by],
+  lateDeliveryFallback: (reason) =>
+    pick(W.lateDeliveryFallback, reason, W.lateDeliveryFallback.PURCHASE_REFUSED),
   providerFailure: (kind) =>
     kind === null
       ? W.providerFailures.UNKNOWN

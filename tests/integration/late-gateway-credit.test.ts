@@ -717,7 +717,7 @@ describe('a late gateway approval, credited to the wallet', () => {
   });
 
   it('with the setting OFF nothing is credited: the approval is a late completion, exactly as before', async () => {
-    await setSetting(SWITCH, false);
+    await setSetting(SWITCH, 'REVIEW');
     const { orderId, paymentId, invoice, invoiceId } = await createdAttempt();
     await pastDeadline(paymentId);
     tonpays.set(invoiceId, 'completed', true);
@@ -739,7 +739,7 @@ describe('a late gateway approval, credited to the wallet', () => {
   });
 
   it('with the setting OFF no slow late polling is scheduled either', async () => {
-    await setSetting(SWITCH, false);
+    await setSetting(SWITCH, 'REVIEW');
     const { paymentId } = await createdAttempt();
     await ctx.container.database.db.execute(
       sql`UPDATE payments SET expires_at = now() + interval '4 seconds' WHERE id = ${paymentId}`,

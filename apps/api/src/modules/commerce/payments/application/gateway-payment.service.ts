@@ -22,6 +22,7 @@ import {
   orderPurposeCreatesNewService,
   type OrderPurpose,
   type PaymentGatewayProvider,
+  type LatePaymentPolicy,
   type PaymentId,
   type TenantContext,
   type UnitOfWork,
@@ -537,6 +538,17 @@ export interface GatewayPaymentServiceDeps {
   readonly lateCredit?: {
     policyFor(scope: TenantContext, provider: PaymentGatewayProvider): Promise<LateCreditPolicy>;
     credit: PaymentService['creditLateGatewayApproval'];
+    /**
+     * NEXA-OWNER-BATCH-1 PR-5: the route's late-payment policy (`resolveLatePaymentPolicy`) and
+     * the delivery a `DELIVER` policy asks for (`PaymentService.deliverLateGatewayApproval`,
+     * which decides again under the payment's lock and falls back to the credit). Absent:
+     * every late approval takes the credit, as before.
+     */
+    latePolicy?(
+      scope: TenantContext,
+      provider: PaymentGatewayProvider,
+    ): Promise<LatePaymentPolicy | null>;
+    deliver?: PaymentService['deliverLateGatewayApproval'];
   };
   /**
    * FIX-03 (batch 2026-10-10): the per-gateway count of failed inquiries behind
@@ -2604,6 +2616,36 @@ export class GatewayPaymentService {
             // Already credited: the credit path answers CREDITED again and records the outcome.
             confirmation.reason === 'LATE_CREDIT_ALREADY_APPLIED')
         ) {
+          /*
+           * NEXA-OWNER-BATCH-1 PR-5: a route whose policy is DELIVER delivers a LATE approval
+           * as the order's service (the money RETURNED for an order paid another way, and a
+           * replay of an applied credit, still take the credit below). The delivery decides
+           * again under the payment's lock and runs the credit itself when a condition fails.
+           */
+          if (
+            (confirmation.reason === 'DEADLINE_PASSED' ||
+              (confirmation.reason === 'PAYMENT_NOT_PENDING' &&
+                (confirmation.payment.state === 'EXPIRED' ||
+                  confirmation.payment.state === 'UNKNOWN'))) &&
+            (await this.latePaymentPolicy(scope, invoice.provider)) === 'DELIVER'
+          ) {
+            const delivered = await this.deliverLateApproval(
+              scope,
+              actor,
+              invoice,
+              evidenceNote,
+              lateCreditInput.providerRequestAmount,
+            );
+            if (delivered.kind === 'SETTLED') return 'CREDITED';
+            if (delivered.kind === 'ERROR') return 'ERROR';
+            await this.lateCompletion(
+              scope,
+              actor,
+              invoice,
+              delivered.reason ?? confirmation.reason,
+            );
+            return 'LATE';
+          }
           const credited = await this.creditLateApproval(
             scope,
             actor,
@@ -2645,6 +2687,97 @@ export class GatewayPaymentService {
         'a late-credit policy could not be read; late approvals are recorded, not credited',
       );
       return off;
+    }
+  }
+
+  /**
+   * NEXA-OWNER-BATCH-1 PR-5: the route's late-payment policy, or null when the lane has no
+   * reader, the route names none, or it cannot be read — a read that fails never chooses a
+   * delivery (the credit, which reads it again under the lock, decides). Never throws.
+   */
+  private async latePaymentPolicy(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+  ): Promise<LatePaymentPolicy | null> {
+    const reader = this.deps.lateCredit?.latePolicy;
+    if (reader === undefined || this.deps.lateCredit?.deliver === undefined) return null;
+    try {
+      return await reader(scope, provider);
+    } catch (error: unknown) {
+      this.deps.logger.error(
+        { provider, ...errorFacts(error) },
+        'a late-payment policy could not be read; a late approval takes the wallet credit',
+      );
+      return null;
+    }
+  }
+
+  /**
+   * NEXA-OWNER-BATCH-1 PR-5: a re-verified LATE approval offered to the DELIVERY. Its answer:
+   *
+   * - `SETTLED` — delivered, or credited to the wallet instead (a condition failed, or it was
+   *   a top-up), or it was settled once before: nothing more to record here.
+   * - `NOT_SETTLED` — the credit's own refusal: recorded as a late completion, as before.
+   * - `ERROR` — it threw, or the payment is still PENDING just past its deadline: nothing
+   *   moved, the row stays scheduled and is asked again (the expiry sweep closes it first).
+   */
+  private async deliverLateApproval(
+    scope: TenantContext,
+    actor: ActorContext,
+    invoice: GatewayInvoiceRecord,
+    evidenceNote: string,
+    providerRequestAmount: bigint | null,
+  ): Promise<
+    | { readonly kind: 'SETTLED' }
+    | { readonly kind: 'ERROR' }
+    | { readonly kind: 'NOT_SETTLED'; readonly reason: string | null }
+  > {
+    const deliver = this.deps.lateCredit?.deliver;
+    if (deliver === undefined) return { kind: 'NOT_SETTLED', reason: null };
+    let delivered: Awaited<ReturnType<typeof deliver>>;
+    try {
+      delivered = await deliver(scope, actor, invoice.paymentId, {
+        providerRequestAmount,
+        evidenceNote,
+      });
+    } catch (error: unknown) {
+      const errorName = error instanceof Error ? error.name : 'unknown';
+      this.deps.logger.error(
+        { paymentId: invoice.paymentId, error: errorName },
+        'a late gateway approval could not be delivered',
+      );
+      await recordQuietly(
+        this.deps.opsLog,
+        scope,
+        {
+          code: GATEWAY_SETTLEMENT_FAILED_CODE,
+          severity: 'ERROR',
+          message:
+            'A payment the gateway approved late could not be delivered or credited. Nothing ' +
+            'moved; it is asked again.',
+          dedupeKey: `${GATEWAY_SETTLEMENT_FAILED_CODE}:${invoice.paymentId}`,
+          context: { paymentId: invoice.paymentId, provider: invoice.provider, error: errorName },
+        },
+        this.deps.logger,
+      );
+      return { kind: 'ERROR' };
+    }
+    switch (delivered.outcome) {
+      case 'DELIVERED':
+      case 'CREDITED':
+      case 'ALREADY_SETTLED':
+        return { kind: 'SETTLED' };
+      case 'DEFERRED':
+        return { kind: 'ERROR' };
+      case 'NOT_ELIGIBLE':
+        switch (delivered.reason) {
+          case 'AMOUNT_MISMATCH':
+            return { kind: 'NOT_SETTLED', reason: 'LATE_CREDIT_AMOUNT_MISMATCH' };
+          case 'APPROVAL_NOT_VERIFIED':
+            return { kind: 'NOT_SETTLED', reason: 'LATE_CREDIT_APPROVAL_NOT_VERIFIED' };
+          default:
+            return { kind: 'NOT_SETTLED', reason: null };
+        }
     }
   }
 

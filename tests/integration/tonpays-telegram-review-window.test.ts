@@ -973,7 +973,7 @@ describe('the TonPays Telegram provider review window', () => {
         );
         await ctx.container.settingsService.set(tenantA, owner, {
           key: 'payments.late_credit.tonpays_telegram_enabled',
-          value: false,
+          value: 'REVIEW',
           expectedVersion: current?.version ?? null,
           idempotencyKey: `late-credit-${key()}`,
         });

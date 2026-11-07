@@ -21,6 +21,7 @@ import {
   paymentReceiptCreditRequestSchema,
   paymentReceiptRejectRequestSchema,
   paymentReconcileRequestSchema,
+  paymentLateDecisionRequestSchema,
   paymentReinquireRequestSchema,
   routePattern,
   type CompensationListResponse,
@@ -284,6 +285,27 @@ export class PaymentsController {
     await this.container.payments.reconcileGatewayPayment(scope, actor, id, {
       to: input.to,
       note: input.note === undefined || input.note === '' ? null : input.note,
+      idempotencyKey: input.idempotencyKey,
+    });
+    return this.detail(request, id);
+  }
+
+  /**
+   * NEXA-OWNER-BATCH-1 PR-5: an operator's decision on a LATE completion — «تحویل سرویس»
+   * (`DELIVER`) or «به کیف پول» (`WALLET`), under `payments.reconcile`. The service decides
+   * again under the payment's lock from the provider's RECORDED approval; either happens at
+   * most once per payment, and a delivery whose conditions fail goes to the wallet instead.
+   */
+  @Post(routePattern(PAYMENT_ROUTES.lateDecision, 'id'))
+  async lateDecision(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<PaymentResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const input = paymentLateDecisionRequestSchema.parse(body);
+    await this.container.payments.decideLateCompletion(scope, actor, id, {
+      choice: input.choice,
       idempotencyKey: input.idempotencyKey,
     });
     return this.detail(request, id);

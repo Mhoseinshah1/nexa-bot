@@ -680,7 +680,7 @@ describe('Rialit, through the one settlement path', () => {
 
     it('a late paid after expired is credited once to the wallet when the switch is ON', async () => {
       await enableRialit();
-      await setSetting(LATE_SWITCH, true);
+      await setSetting(LATE_SWITCH, 'WALLET');
       const { paymentId, orderId } = await createdAttempt();
       fake.set(orderId, 'expired');
       await inquireNow();

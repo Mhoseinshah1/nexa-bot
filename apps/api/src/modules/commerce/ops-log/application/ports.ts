@@ -476,6 +476,10 @@ export interface OpsLogWords {
   paidOperation(purpose: string): string;
   operationState(state: 'FAILED' | 'UNKNOWN'): string;
   byWhom(kind: 'CUSTOMER' | 'ADMIN' | 'SYSTEM'): string;
+  /** NEXA-OWNER-BATCH-1 PR-5: who chose what a late approval became, in Persian. */
+  lateDecidedBy(by: 'POLICY' | 'OPERATOR'): string;
+  /** NEXA-OWNER-BATCH-1 PR-5: why a late delivery went to the wallet, in Persian. */
+  lateDeliveryFallback(reason: string): string;
   providerFailure(kind: string | null): string;
   /** Why an undeliverable order was refunded: the recorded reason, else the failure kind. */
   refundReason(reason: string | null, failureKind: string | null): string;

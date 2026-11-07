@@ -349,7 +349,11 @@ import { NotificationCenterService } from './modules/platform/opslog/application
 import { DrizzleNotificationInboxRepository } from './modules/platform/opslog/infrastructure/drizzle-notification-inbox.repository.js';
 import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
-import { settingsLateCreditPolicy } from './modules/commerce/payments/application/late-credit-policy.js';
+import { unorderableReason } from './modules/commerce/catalog/application/catalog-visibility.js';
+import {
+  resolveLatePaymentPolicy,
+  settingsLateCreditPolicy,
+} from './modules/commerce/payments/application/late-credit-policy.js';
 import { SettingsService } from './modules/control/settings/application/settings.service.js';
 import { ReminderThresholdsGuard } from './modules/control/settings/application/reminder-thresholds.guard.js';
 import { QuietHoursGuard } from './modules/control/settings/application/quiet-hours.guard.js';
@@ -4263,6 +4267,26 @@ export function createContainer(
 
   const paymentService = new PaymentService({
     resellers: resellerService,
+    /*
+     * NEXA-OWNER-BATCH-1 PR-5: whether a late approval's order is still sellable to its
+     * customer — the catalogue's own rule (`unorderableReason`), the audience as the reseller
+     * standing decides it, read inside the delivery's transaction.
+     */
+    lateDeliveryCatalog: {
+      sellable: async (scope, order, tx) => {
+        if (order.line.productId === null) return false;
+        const product = await productRepository.findById(scope, order.line.productId, tx);
+        if (product === null) return false;
+        const category =
+          product.categoryId === null
+            ? null
+            : await productCategoryRepository.findForShare(scope, product.categoryId, tx);
+        const standing = await resellerService.standing(scope, order.customerId, tx);
+        return (
+          unorderableReason(product, category, standing === null ? 'CUSTOMER' : 'RESELLER') === null
+        );
+      },
+    },
     undeliverable: undeliverableOrders,
     // The one credit path, for a reconciliation whose order another payment settled.
     refunds: refundService,
@@ -4513,6 +4537,10 @@ export function createContainer(
       policyFor: settingsLateCreditPolicy(settingsResolver),
       credit: (scope, actor, id, input) =>
         paymentService.creditLateGatewayApproval(scope, actor, id, input),
+      // NEXA-OWNER-BATCH-1 PR-5: the one policy resolver, and the delivery DELIVER asks for.
+      latePolicy: (scope, provider) => resolveLatePaymentPolicy(settingsResolver, scope, provider),
+      deliver: (scope, actor, id, input) =>
+        paymentService.deliverLateGatewayApproval(scope, actor, id, input),
     },
   });
   /*

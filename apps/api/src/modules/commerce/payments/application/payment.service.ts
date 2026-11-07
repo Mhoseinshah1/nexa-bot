@@ -51,6 +51,7 @@ import {
   type OrderPurpose,
   type PaymentGatewayProvider,
   type PaymentPurpose,
+  type LateDeliveryFallbackReason,
   conversionPolicyFor,
   effectiveMinorPerUnit,
   isSettingKey,
@@ -99,9 +100,22 @@ import type { OrderRecord, OrderRepository } from '../../orders/application/port
 import type { UndeliverableOrderRefunder } from '../../orders/application/undeliverable-order-refunder.js';
 import type { RefundService } from './refund.service.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
-import type { WalletRepository } from '../../wallet/application/ports.js';
+import type { WalletEntryRecord, WalletRepository } from '../../wallet/application/ports.js';
 import { canCover, shortfallMinor } from '../../wallet/domain/balance.js';
 import { gatewaySettlementDeadline, settlementRefusal } from '../domain/settlement.js';
+import { resolveLatePaymentPolicy } from './late-credit-policy.js';
+import {
+  LATE_DELIVERY_ACTION,
+  LATE_DELIVERY_ORDER_ACTION,
+  LATE_DELIVERY_ORDER_HOLD_MS,
+  LateDeliveryStop,
+  lateDecisionOpen,
+  lateDeliveryDecision,
+  lateDeliveryFallbackOf,
+  lateDeliveryKey,
+  lateDeliveryTarget,
+  type LateDeliveryTarget,
+} from './late-delivery.js';
 import {
   reconciliationEvidenceAllows,
   requiresProviderReference,
@@ -111,6 +125,7 @@ import {
   lateCreditReference,
   lateCreditStateDecision,
   recordedChargeApproves,
+  type LateCreditBasis,
 } from '../domain/late-credit.js';
 import {
   GATEWAY_REVIEW_RECONCILED_CODE,
@@ -315,6 +330,14 @@ export interface PaymentServiceDeps {
    * nobody may lengthen it past what the owner set.
    */
   readonly settings: SettingsResolver;
+  /**
+   * NEXA-OWNER-BATCH-1 PR-5: whether a late approval's order is still SELLABLE — its product
+   * orderable by this customer now, by the catalogue's own rule (`unorderableReason`), read in
+   * the delivery's transaction. Absent: never sellable, so a delivery goes to the wallet.
+   */
+  readonly lateDeliveryCatalog?: {
+    sellable(scope: TenantContext, order: OrderRecord, tx: TransactionScope): Promise<boolean>;
+  };
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
   /**
@@ -481,21 +504,60 @@ export type LateGatewayCredit =
     }
   | {
       readonly outcome: 'NOT_ELIGIBLE';
-      readonly reason:
-        | 'NOT_A_GATEWAY_PAYMENT'
-        | 'ROUTE_HAS_NO_LATE_CREDIT'
-        | 'SETTING_OFF'
-        | 'APPROVAL_NOT_VERIFIED'
-        | 'ALREADY_CONFIRMED'
-        | 'PAYMENT_CLOSED'
-        | 'STILL_PAYABLE'
-        | 'AMOUNT_MISMATCH'
-        | 'CURRENCY_UNSUPPORTED';
+      readonly reason: LateCreditRefusal;
       readonly payment: PaymentRecord;
+    };
+
+/** Why a late approval was not credited (and so not delivered either). */
+export type LateCreditRefusal =
+  | 'NOT_A_GATEWAY_PAYMENT'
+  | 'ROUTE_HAS_NO_LATE_CREDIT'
+  /* The route's policy is REVIEW (the old switch OFF): an operator decides. */
+  | 'SETTING_OFF'
+  | 'APPROVAL_NOT_VERIFIED'
+  | 'ALREADY_CONFIRMED'
+  | 'PAYMENT_CLOSED'
+  | 'STILL_PAYABLE'
+  | 'AMOUNT_MISMATCH'
+  | 'CURRENCY_UNSUPPORTED';
+
+/**
+ * NEXA-OWNER-BATCH-1 PR-5: the answer of `deliverLateGatewayApproval`.
+ *
+ * - `DELIVERED` — this call paid the order's service from the late credit (one transaction).
+ * - `CREDITED` — the WALLET path ran instead: `fallbackReason` says why (null for a top-up,
+ *   whose wallet IS its delivery). The money is in the wallet once.
+ * - `ALREADY_SETTLED` — the payment's late credit already existed: a delivery or a credit
+ *   happened before, once, and nothing moved now.
+ * - `DEFERRED` — the payment is still PENDING just past its deadline; nothing moved, and the
+ *   lane asks again once the expiry sweep has closed it.
+ * - `NOT_ELIGIBLE` — the credit's own refusal; nothing moved (a late completion, as before).
+ */
+export type LateGatewayDelivery =
+  | { readonly outcome: 'DELIVERED'; readonly paymentId: PaymentId; readonly orderId: OrderId }
+  | {
+      readonly outcome: 'CREDITED';
+      readonly paymentId: PaymentId;
+      readonly fallbackReason: LateDeliveryFallbackReason | null;
+      readonly credit: LateGatewayCredit;
+    }
+  | {
+      readonly outcome: 'ALREADY_SETTLED';
+      readonly paymentId: PaymentId;
+      /** An operator's retried request (the same idempotency key): answered, not refused. */
+      readonly replayed?: boolean;
+    }
+  | { readonly outcome: 'DEFERRED'; readonly paymentId: PaymentId }
+  | {
+      readonly outcome: 'NOT_ELIGIBLE';
+      readonly paymentId: PaymentId;
+      readonly reason: LateCreditRefusal | string;
     };
 
 /** The audit action of every late credit this path writes. */
 export const GATEWAY_LATE_CREDIT_ACTION = 'payment.gateway_late_credit';
+/** NEXA-OWNER-BATCH-1 PR-5: the audit action of an operator's late-completion decision. */
+export const LATE_DECISION_ACTION = 'payment.late_decision';
 
 /**
  * R12 F1: the routes whose open attempts an order's settlement closes — approved by the
@@ -943,7 +1005,11 @@ export class PaymentService {
       if (record === undefined) continue;
       // CX4: whether ISSUE_REFUND is offered is the refund service's decision, not a copy.
       const refundRefusal = await this.refundRefusalForGuide(scope, record);
-      const guide = paymentSituationOf({ ...recorded, refundRefusal });
+      const guide = paymentSituationOf({
+        ...recorded,
+        refundRefusal,
+        lateDecisionOpen: lateDecisionOpen(record),
+      });
       found.set(id, {
         /*
          * `needsAction` is the SQL facet's answer, from the same statement as every other
@@ -4082,6 +4148,17 @@ export class PaymentService {
        */
       readonly providerRequestAmount: bigint | null;
       readonly evidenceNote: string | null;
+      /**
+       * NEXA-OWNER-BATCH-1 PR-5: an OPERATOR's «به کیف پول» (or the wallet fallback of their
+       * «تحویل سرویس») on a late completion. It is charged `payments.reconcile` instead of the
+       * lane's permission, and it credits under a `REVIEW` policy too — the operator is the
+       * decision `REVIEW` waits for. Absent: the lane, behind the route's policy.
+       */
+      readonly operatorDecision?: boolean;
+      /** Set when a delivery was asked for and this credit is its fallback (logged with it). */
+      readonly fallbackReason?: LateDeliveryFallbackReason;
+      /** The operator's idempotency key, remembered in the crediting transaction. */
+      readonly remember?: { readonly idempotencyKey: string; readonly requestHash: string };
     },
   ): Promise<LateGatewayCredit> {
     const paymentId = this.paymentId(id);
@@ -4090,13 +4167,15 @@ export class PaymentService {
       entityType: 'Payment',
       entityId: paymentId,
     };
-    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+    const permission =
+      input.operatorDecision === true ? PAYMENT_RECONCILE_PERMISSION : PAYMENT_PLACE_PERMISSION;
+    await this.authorize(scope, actor, permission, denial);
 
     return runAuthorizedMutation(
       this.mutationDeps(),
       scope,
       actor,
-      PAYMENT_PLACE_PERMISSION,
+      permission,
       denial,
       async (tx): Promise<LateGatewayCredit> => {
         await this.assertScopeActive(scope, tx);
@@ -4106,211 +4185,44 @@ export class PaymentService {
         if (payment === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
         }
-        if (payment.method !== 'GATEWAY' || payment.gatewayProvider === null) {
-          return { outcome: 'NOT_ELIGIBLE', reason: 'NOT_A_GATEWAY_PAYMENT', payment };
+        const verdict = await this.lateApprovalVerdict(scope, payment, input, now, tx);
+        if (verdict.kind === 'NOT_ELIGIBLE') {
+          return { outcome: 'NOT_ELIGIBLE', reason: verdict.reason, payment };
         }
-        const reference = lateCreditReference(payment.id);
-        const existing = await this.deps.wallet.findByReference(scope, reference, tx);
-        if (existing !== null) {
+        if (verdict.kind === 'EXISTING') {
           // Done already. Make sure the record says so, and write nothing else.
           await this.deps.gatewayInvoices.markLateCredited(scope, payment.id, now, tx);
           return {
             outcome: 'CREDITED',
             payment,
-            entryId: existing.id,
-            amount: existing.amount,
+            entryId: verdict.entry.id,
+            amount: verdict.entry.amount,
             credited: false,
           };
         }
-        /*
-         * R12 F1: whether the ORDER can still take this money, asked only of a PENDING payment
-         * inside its deadline — the one case where the answer decides. Read under the payment's
-         * lock, after it; an order leaves `AWAITING_PAYMENT` one way only, so an order read as
-         * paid (or closed) here cannot be awaiting payment again by the time this commits.
-         */
-        const deadline = gatewaySettlementDeadline(payment);
-        let orderAwaitingPayment: boolean | null = null;
-        if (
-          payment.state === 'PENDING' &&
-          payment.orderId !== null &&
-          deadline !== null &&
-          now.getTime() < deadline.getTime()
-        ) {
-          const order = await this.deps.orders.findById(scope, payment.orderId, tx);
-          orderAwaitingPayment =
-            order !== null &&
-            order.customerId === payment.customerId &&
-            order.state === 'AWAITING_PAYMENT';
-        }
-        const state = lateCreditStateDecision({
-          state: payment.state,
-          deadline,
+        const { entry, inserted } = await this.writeLateCredit(
+          scope,
+          actor,
+          payment,
+          verdict,
           now,
-          orderAwaitingPayment,
-        });
-        if (!state.creditable) {
-          return { outcome: 'NOT_ELIGIBLE', reason: state.reason, payment };
-        }
-        /*
-         * Only a LATE approval waits for the route's switch (R5A item 4). Money RETURNED for an
-         * attempt that can no longer pay its order (R12 F1: a cancelled attempt, an order paid
-         * another way) is credited whatever the switch says and on every inquiry route — off,
-         * nothing would ever give it back.
-         */
-        /*
-         * NEXA v095 PR-4 G: a RECORDED-payment route (Stars) credits a LATE charge always (the
-         * owner's decision; `recordedChargeApproves`). NEXA v096 (owner, closes OQ-V095-P4-02):
-         * a recorded charge for an attempt that can no longer pay its order (a CANCELLED
-         * attempt, an order another payment settled) is RETURNED here too, like every route's.
-         */
-        const recorded =
-          PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].approval === 'RECORDED_PAYMENT';
-        if (state.basis === 'LATE_APPROVAL' && !recorded) {
-          const settingName =
-            PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].lateCreditSetting;
-          if (settingName === null) {
-            return { outcome: 'NOT_ELIGIBLE', reason: 'ROUTE_HAS_NO_LATE_CREDIT', payment };
-          }
-          const enabled = await this.deps.settings.valueOf<boolean>(
-            scope,
-            settingKeyOf(settingName),
-            tx,
-          );
-          if (enabled !== true) {
-            return { outcome: 'NOT_ELIGIBLE', reason: 'SETTING_OFF', payment };
-          }
-        }
-        /*
-         * The re-verify rule, held here as well as in the lane: the invoice's recorded inquiry
-         * must be an approval by the route's own table (`completed` AND `paid === true`), and
-         * the provider's echoed request amount must be the amount Nexa sent.
-         */
-        const invoice = await this.deps.gatewayInvoices.findByPayment(scope, payment.id, tx);
-        if (
-          invoice === null ||
-          invoice.providerPaid !== true ||
-          (recorded
-            ? // G: the recorded charge is the approval (and a reported refund cleared it).
-              !recordedChargeApproves(invoice)
-            : !reconciliationEvidenceAllows(payment.gatewayProvider, 'CONFIRMED', {
-                status: invoice.providerStatus,
-                paid: invoice.providerPaid,
-              }))
-        ) {
-          return { outcome: 'NOT_ELIGIBLE', reason: 'APPROVAL_NOT_VERIFIED', payment };
-        }
-        // A reference-bound route (CentralPay) credits only with its reference bound, as it settles.
-        if (requiresProviderReference(invoice.provider) && invoice.providerChargeId === null) {
-          return { outcome: 'NOT_ELIGIBLE', reason: 'APPROVAL_NOT_VERIFIED', payment };
-        }
-        if (
-          !lateCreditAmountMatches({
-            providerRequestAmount: input.providerRequestAmount,
-            sentAmount: invoice.sentAmount,
-          })
-        ) {
-          return { outcome: 'NOT_ELIGIBLE', reason: 'AMOUNT_MISMATCH', payment };
-        }
-        if (payment.amount.currency !== (await this.sellingCurrency(scope, tx))) {
-          return { outcome: 'NOT_ELIGIBLE', reason: 'CURRENCY_UNSUPPORTED', payment };
-        }
-
-        if (!(await this.deps.wallet.lockCustomer(scope, payment.customerId, tx))) {
-          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
-        }
-        const before = await this.deps.wallet.balanceOf(
-          scope,
-          payment.customerId,
-          payment.amount.currency,
           tx,
-        );
-        const { entry, inserted } = await this.deps.wallet.append(
-          scope,
           {
-            id: this.deps.ids.uuid(),
-            customerId: payment.customerId,
-            direction: 'CREDIT',
-            reason: 'GATEWAY_LATE_CREDIT',
-            // The payment's OWN frozen amount: never a figure the provider reported.
-            amount: payment.amount,
-            reference,
-            // The wallet, never the order: the order is not reopened and nothing is built.
-            orderId: null,
-            paymentId: payment.id,
-            note: null,
-            now,
+            evidenceNote: input.evidenceNote,
+            notify: true,
+            disposition: input.fallbackReason === undefined ? 'WALLET' : 'DELIVERY_FALLBACK',
+            ...(input.fallbackReason === undefined ? {} : { fallbackReason: input.fallbackReason }),
+            decidedBy: input.operatorDecision === true ? 'OPERATOR' : 'POLICY',
           },
-          tx,
         );
-        // Written (or found) in this transaction either way; a replay changes nothing else.
-        await this.deps.gatewayInvoices.markLateCredited(scope, payment.id, now, tx);
-        if (inserted) {
-          await this.deps.outbox.write(tx, actor, {
-            eventType: 'WalletEntryRecorded',
-            aggregateType: 'Wallet',
-            aggregateId: entry.customerId,
-            payload: {
-              customerId: entry.customerId,
-              entryId: entry.id,
-              direction: entry.direction,
-              reason: entry.reason,
-              amountMinor: entry.amount.amountMinor.toString(),
-              currency: entry.amount.currency,
-            },
-          });
-          await this.deps.outbox.write(tx, actor, {
-            eventType: 'PaymentLateCredited',
-            aggregateType: 'Payment',
-            aggregateId: payment.id,
-            payload: {
-              customerId: payment.customerId,
-              orderId: payment.orderId,
-              provider: payment.gatewayProvider,
-              entryId: entry.id,
-              amountMinor: entry.amount.amountMinor.toString(),
-              currency: entry.amount.currency,
-              basis: state.basis,
-            },
-          });
-          await this.deps.audit.record(
+        if (input.remember !== undefined) {
+          await rememberOnce(
+            this.deps.idempotency,
             scope,
-            actor,
-            {
-              action: GATEWAY_LATE_CREDIT_ACTION,
-              entityType: 'Payment',
-              entityId: payment.id,
-              before: { state: payment.state },
-              after: {
-                state: payment.state,
-                gatewayProvider: payment.gatewayProvider,
-                orderId: payment.orderId,
-                walletEntryId: entry.id,
-                amountMinor: entry.amount.amountMinor.toString(),
-                currency: entry.amount.currency,
-                balanceBeforeMinor: before.amountMinor.toString(),
-                providerStatus: invoice.providerStatus,
-                evidenceNote: input.evidenceNote,
-                // R12 F1: a late approval (behind the switch), or money returned for an attempt
-                // that could no longer pay its order (whatever the switch says).
-                basis: state.basis,
-                credited: true,
-              },
-              result: 'SUCCESS',
-            },
-            tx,
-          );
-          /*
-           * Told in THIS transaction, like every credit: once, by
-           * `customer_notifications_subject_key` on (tenant, kind, payment). The answer is not
-           * checked — a customer with no durable bot link has nobody to tell, and a messaging
-           * concern may not veto a credit.
-           */
-          await this.deps.notifier.notify(
-            scope,
-            payment.customerId,
-            'GATEWAY_LATE_PAYMENT_CREDITED',
-            payment.id,
-            now,
+            OPERATOR_NAMESPACE,
+            input.remember.idempotencyKey,
+            input.remember.requestHash,
+            { paymentId: payment.id },
             tx,
           );
         }
@@ -4323,6 +4235,672 @@ export class PaymentService {
         };
       },
     );
+  }
+
+  /**
+   * Whether a LATE approval may be credited — every rule `creditLateGatewayApproval` states,
+   * decided on the payment row the caller holds FOR UPDATE. Shared by the credit and by the
+   * delivery (NEXA-OWNER-BATCH-1 PR-5), so both judge one approval by one table.
+   *
+   * `EXISTING`: the payment's late credit is already in the ledger (`<paymentId>:late-credit`):
+   * whatever happened to it — a credit, or a delivery that the credit paid for — it happened
+   * once and nothing is owed. `OK`: credit it, on `basis`, against `invoice`.
+   */
+  private async lateApprovalVerdict(
+    scope: TenantContext,
+    payment: PaymentRecord,
+    input: {
+      readonly providerRequestAmount: bigint | null;
+      readonly operatorDecision?: boolean;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<
+    | { readonly kind: 'EXISTING'; readonly entry: { readonly id: string; readonly amount: Money } }
+    | { readonly kind: 'NOT_ELIGIBLE'; readonly reason: LateCreditRefusal }
+    | {
+        readonly kind: 'OK';
+        readonly basis: LateCreditBasis;
+        readonly invoice: GatewayInvoiceRecord;
+        readonly provider: PaymentGatewayProvider;
+      }
+  > {
+    if (payment.method !== 'GATEWAY' || payment.gatewayProvider === null) {
+      return { kind: 'NOT_ELIGIBLE', reason: 'NOT_A_GATEWAY_PAYMENT' };
+    }
+    const existing = await this.deps.wallet.findByReference(
+      scope,
+      lateCreditReference(payment.id),
+      tx,
+    );
+    if (existing !== null) return { kind: 'EXISTING', entry: existing };
+    /*
+     * R12 F1: whether the ORDER can still take this money, asked only of a PENDING payment
+     * inside its deadline — the one case where the answer decides. Read under the payment's
+     * lock, after it; an order leaves `AWAITING_PAYMENT` one way only, so an order read as
+     * paid (or closed) here cannot be awaiting payment again by the time this commits.
+     */
+    const deadline = gatewaySettlementDeadline(payment);
+    let orderAwaitingPayment: boolean | null = null;
+    if (
+      payment.state === 'PENDING' &&
+      payment.orderId !== null &&
+      deadline !== null &&
+      now.getTime() < deadline.getTime()
+    ) {
+      const order = await this.deps.orders.findById(scope, payment.orderId, tx);
+      orderAwaitingPayment =
+        order !== null &&
+        order.customerId === payment.customerId &&
+        order.state === 'AWAITING_PAYMENT';
+    }
+    const state = lateCreditStateDecision({
+      state: payment.state,
+      deadline,
+      now,
+      orderAwaitingPayment,
+    });
+    if (!state.creditable) return { kind: 'NOT_ELIGIBLE', reason: state.reason };
+    /*
+     * Only a LATE approval waits for the route's policy (R5A item 4; NEXA-OWNER-BATCH-1 PR-5:
+     * `WALLET` and `DELIVER` credit, `REVIEW` waits for an operator — whose own decision is
+     * what `operatorDecision` carries). Money RETURNED for an attempt that can no longer pay its
+     * order (R12 F1: a cancelled attempt, an order paid another way) is credited whatever the
+     * policy says and on every inquiry route — off, nothing would ever give it back.
+     *
+     * NEXA v095 PR-4 G: a RECORDED-payment route (Stars) credits a LATE charge always (the
+     * owner's decision; `recordedChargeApproves`). NEXA v096 (owner, closes OQ-V095-P4-02):
+     * a recorded charge for an attempt that can no longer pay its order (a CANCELLED
+     * attempt, an order another payment settled) is RETURNED here too, like every route's.
+     */
+    const recorded =
+      PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].approval === 'RECORDED_PAYMENT';
+    if (state.basis === 'LATE_APPROVAL' && !recorded) {
+      const policy = await resolveLatePaymentPolicy(
+        this.deps.settings,
+        scope,
+        payment.gatewayProvider,
+        tx,
+      );
+      if (policy === null) return { kind: 'NOT_ELIGIBLE', reason: 'ROUTE_HAS_NO_LATE_CREDIT' };
+      if (policy === 'REVIEW' && input.operatorDecision !== true) {
+        return { kind: 'NOT_ELIGIBLE', reason: 'SETTING_OFF' };
+      }
+    }
+    /*
+     * The re-verify rule, held here as well as in the lane: the invoice's recorded inquiry
+     * must be an approval by the route's own table (`completed` AND `paid === true`), and
+     * the provider's echoed request amount must be the amount Nexa sent.
+     */
+    const invoice = await this.deps.gatewayInvoices.findByPayment(scope, payment.id, tx);
+    if (
+      invoice === null ||
+      invoice.providerPaid !== true ||
+      (recorded
+        ? // G: the recorded charge is the approval (and a reported refund cleared it).
+          !recordedChargeApproves(invoice)
+        : !reconciliationEvidenceAllows(payment.gatewayProvider, 'CONFIRMED', {
+            status: invoice.providerStatus,
+            paid: invoice.providerPaid,
+          }))
+    ) {
+      return { kind: 'NOT_ELIGIBLE', reason: 'APPROVAL_NOT_VERIFIED' };
+    }
+    // A reference-bound route (CentralPay) credits only with its reference bound, as it settles.
+    if (requiresProviderReference(invoice.provider) && invoice.providerChargeId === null) {
+      return { kind: 'NOT_ELIGIBLE', reason: 'APPROVAL_NOT_VERIFIED' };
+    }
+    if (
+      !lateCreditAmountMatches({
+        /*
+         * An operator's decision carries no inquiry of its own: the echo the provider's last
+         * recorded inquiry gave is compared instead, so a mismatch the lane refused stays refused.
+         */
+        providerRequestAmount:
+          input.providerRequestAmount ??
+          (input.operatorDecision === true ? invoice.requestAmount : null),
+        sentAmount: invoice.sentAmount,
+      })
+    ) {
+      return { kind: 'NOT_ELIGIBLE', reason: 'AMOUNT_MISMATCH' };
+    }
+    if (payment.amount.currency !== (await this.sellingCurrency(scope, tx))) {
+      return { kind: 'NOT_ELIGIBLE', reason: 'CURRENCY_UNSUPPORTED' };
+    }
+    return { kind: 'OK', basis: state.basis, invoice, provider: payment.gatewayProvider };
+  }
+
+  /**
+   * The ONE late-credit write: one `GATEWAY_LATE_CREDIT` entry under `<paymentId>:late-credit`
+   * (the partial unique index `wallet_entries_gateway_late_credit_payment_key` allows one per
+   * payment), the invoice's `LATE_CREDITED` outcome, and — for the entry this call inserted —
+   * the two outbox events, the audit row and, unless a delivery will tell the customer by its
+   * service instead, the customer's `GATEWAY_LATE_PAYMENT_CREDITED` notice. All in `tx`.
+   */
+  private async writeLateCredit(
+    scope: TenantContext,
+    actor: ActorContext,
+    payment: PaymentRecord,
+    verdict: {
+      readonly basis: LateCreditBasis;
+      readonly invoice: GatewayInvoiceRecord;
+      readonly provider: PaymentGatewayProvider;
+    },
+    now: Date,
+    tx: TransactionScope,
+    options: {
+      readonly evidenceNote: string | null;
+      readonly notify: boolean;
+      readonly disposition: 'WALLET' | 'DELIVERED' | 'DELIVERY_FALLBACK';
+      readonly deliveredOrderId?: OrderId;
+      readonly fallbackReason?: LateDeliveryFallbackReason;
+      readonly decidedBy: 'POLICY' | 'OPERATOR';
+    },
+  ): Promise<{ readonly entry: WalletEntryRecord; readonly inserted: boolean }> {
+    const reference = lateCreditReference(payment.id);
+    if (!(await this.deps.wallet.lockCustomer(scope, payment.customerId, tx))) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+    }
+    const before = await this.deps.wallet.balanceOf(
+      scope,
+      payment.customerId,
+      payment.amount.currency,
+      tx,
+    );
+    const { entry, inserted } = await this.deps.wallet.append(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        customerId: payment.customerId,
+        direction: 'CREDIT',
+        reason: 'GATEWAY_LATE_CREDIT',
+        // The payment's OWN frozen amount: never a figure the provider reported.
+        amount: payment.amount,
+        reference,
+        // The wallet, never the order: the order is not reopened. A delivery pays from here.
+        orderId: null,
+        paymentId: payment.id,
+        note: null,
+        now,
+      },
+      tx,
+    );
+    // Written (or found) in this transaction either way; a replay changes nothing else.
+    await this.deps.gatewayInvoices.markLateCredited(scope, payment.id, now, tx);
+    if (!inserted) return { entry, inserted };
+    // The plain WALLET path keeps its event exactly as before: no new field on it.
+    const disposition =
+      options.disposition === 'WALLET' && options.decidedBy === 'POLICY'
+        ? {}
+        : {
+            disposition: options.disposition,
+            decidedBy: options.decidedBy,
+            ...(options.deliveredOrderId === undefined
+              ? {}
+              : { deliveredOrderId: options.deliveredOrderId }),
+            ...(options.fallbackReason === undefined
+              ? {}
+              : { fallbackReason: options.fallbackReason }),
+          };
+    await this.deps.outbox.write(tx, actor, {
+      eventType: 'WalletEntryRecorded',
+      aggregateType: 'Wallet',
+      aggregateId: entry.customerId,
+      payload: {
+        customerId: entry.customerId,
+        entryId: entry.id,
+        direction: entry.direction,
+        reason: entry.reason,
+        amountMinor: entry.amount.amountMinor.toString(),
+        currency: entry.amount.currency,
+      },
+    });
+    await this.deps.outbox.write(tx, actor, {
+      eventType: 'PaymentLateCredited',
+      aggregateType: 'Payment',
+      aggregateId: payment.id,
+      payload: {
+        customerId: payment.customerId,
+        orderId: payment.orderId,
+        provider: verdict.provider,
+        entryId: entry.id,
+        amountMinor: entry.amount.amountMinor.toString(),
+        currency: entry.amount.currency,
+        basis: verdict.basis,
+        ...disposition,
+      },
+    });
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: GATEWAY_LATE_CREDIT_ACTION,
+        entityType: 'Payment',
+        entityId: payment.id,
+        before: { state: payment.state },
+        after: {
+          state: payment.state,
+          gatewayProvider: verdict.provider,
+          orderId: payment.orderId,
+          walletEntryId: entry.id,
+          amountMinor: entry.amount.amountMinor.toString(),
+          currency: entry.amount.currency,
+          balanceBeforeMinor: before.amountMinor.toString(),
+          providerStatus: verdict.invoice.providerStatus,
+          evidenceNote: options.evidenceNote,
+          // R12 F1: a late approval (behind the policy), or money returned for an attempt
+          // that could no longer pay its order (whatever the policy says).
+          basis: verdict.basis,
+          credited: true,
+          ...disposition,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    /*
+     * Told in THIS transaction, like every credit: once, by
+     * `customer_notifications_subject_key` on (tenant, kind, payment). The answer is not
+     * checked — a customer with no durable bot link has nobody to tell, and a messaging
+     * concern may not veto a credit. A delivery says nothing here: the customer's message is
+     * the service the provisioner delivers, and "your money is in the wallet" would be false
+     * a moment later.
+     */
+    if (options.notify) {
+      await this.deps.notifier.notify(
+        scope,
+        payment.customerId,
+        'GATEWAY_LATE_PAYMENT_CREDITED',
+        payment.id,
+        now,
+        tx,
+      );
+    }
+    return { entry, inserted };
+  }
+
+  /**
+   * NEXA-OWNER-BATCH-1 PR-5 — a LATE approval delivered as the order's service (`DELIVER`),
+   * by the route's policy (the lane) or by an operator's «تحویل سرویس» on the late-completion
+   * queue (`operator`, under `payments.reconcile`).
+   *
+   * ## How, and why this way
+   *
+   * The money travels the two paths that already exist, in ONE transaction: the late credit
+   * (`writeLateCredit`, the same single `<paymentId>:late-credit` entry the WALLET path writes)
+   * and the customer's own wallet purchase (`settleFromWallet`: the `PURCHASE` debit of the
+   * order's FROZEN total, the `WALLET_DEBIT` confirmation, `SETTLE`, the panel's capacity
+   * under its lock, `planForSettledOrder` and the provisioner). Nothing is re-priced and no
+   * settlement logic is copied. Either everything commits, or nothing does.
+   *
+   * The order paid is the ORIGINAL one while it still awaits payment. When it has EXPIRED
+   * (the usual case: the order ends with its last attempt), a FULFILMENT ORDER tied to this
+   * payment is created in the same transaction — the original's frozen line and totals, an id
+   * derived from the payment (`lateDeliveryOrderId`) — and paid instead. Chosen over a
+   * late-payment transition because the schema freezes an EXPIRED payment and a terminal
+   * order (`nexa_payments_confirmation_guard`, 0052; the order machine has no edge out of
+   * EXPIRED): a transition would have to reopen both, against triggers that exist for the
+   * rollback case; a new order reopens nothing.
+   *
+   * ## When it falls back to the wallet
+   *
+   * The product is not sellable, the payment does not cover the order's total, the customer
+   * is blocked, the panel has no room (the wallet purchase's own `prepareFulfilment` refuses),
+   * the order was cancelled or paid another way, it is not a new-service order, the payment
+   * is UNKNOWN, or the wallet purchase refuses for a reason of its own: the transaction rolls
+   * back — no credit, no order, no debit — and the WALLET path runs on its own
+   * (`creditLateGatewayApproval`, with the reason), so the customer is told the credit and
+   * the operations group is told why.
+   *
+   * ## Exactly once
+   *
+   * Under the payment's row lock, the late credit entry is the one settlement a payment can
+   * have, by the ledger's unique reference: a delivery writes it with the purchase, a credit
+   * writes it alone, and whichever commits second finds it (`EXISTING`) and moves nothing.
+   * A double callback, a callback racing an operator, and two operators all serialise on that
+   * lock. The purchase's own references derive from `late-deliver:<paymentId>`, so even a
+   * replay of the purchase lands on the rows already written.
+   */
+  async deliverLateGatewayApproval(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: {
+      readonly providerRequestAmount: bigint | null;
+      readonly evidenceNote: string | null;
+      /** The operator's command; absent for the lane (the route's DELIVER policy). */
+      readonly operator?: { readonly idempotencyKey: string; readonly requestHash: string };
+    },
+  ): Promise<LateGatewayDelivery> {
+    const paymentId = this.paymentId(id);
+    const operator = input.operator !== undefined;
+    const permission = operator ? PAYMENT_RECONCILE_PERMISSION : PAYMENT_PLACE_PERMISSION;
+    const denial = { action: LATE_DELIVERY_ACTION, entityType: 'Payment', entityId: paymentId };
+    await this.authorize(scope, actor, permission, denial);
+
+    let fallback: LateDeliveryFallbackReason | null = null;
+    for (let attempt = 0; attempt < 2 && fallback === null; attempt += 1) {
+      // Advisory: which order to pay. Decided again under the payment's lock.
+      const advisory = await this.deps.repository.findById(scope, paymentId);
+      if (advisory === null) {
+        throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+      }
+      if (advisory.orderId === null) {
+        // A top-up: the wallet IS what it bought. The WALLET path, with no fallback to report.
+        return this.lateCreditAsDelivery(scope, actor, paymentId, input, null);
+      }
+      const original = await this.deps.orders.findById(scope, advisory.orderId);
+      const target = lateDeliveryTarget(advisory.id, original);
+      if (target === null) {
+        fallback = 'ORDER_CLOSED';
+        break;
+      }
+      /* Set by the preamble: a purchase that never ran it was a REPLAY of an earlier delivery. */
+      let ran = false;
+      try {
+        const settled = await this.settleFromWallet(
+          scope,
+          actor,
+          advisory.customerId,
+          { orderId: target.orderId, idempotencyKey: lateDeliveryKey(advisory.id) },
+          {
+            permission,
+            namespace: operator ? OPERATOR_NAMESPACE : 'SCHEDULER',
+            beforeSettlement: async (tx) => {
+              ran = true;
+              await this.lateDeliveryPreamble(scope, actor, paymentId, target, input, tx);
+            },
+            ...(input.operator === undefined
+              ? {}
+              : {
+                  inTransaction: async (tx: TransactionScope) => {
+                    const remembered = input.operator;
+                    if (remembered === undefined) return;
+                    await rememberOnce(
+                      this.deps.idempotency,
+                      scope,
+                      OPERATOR_NAMESPACE,
+                      remembered.idempotencyKey,
+                      remembered.requestHash,
+                      { paymentId },
+                      tx,
+                    );
+                  },
+                }),
+          },
+        );
+        // A replay moved nothing: the delivery it repeats happened once, before.
+        if (!ran) return { outcome: 'ALREADY_SETTLED', paymentId };
+        return { outcome: 'DELIVERED', paymentId, orderId: settled.order.id };
+      } catch (error: unknown) {
+        if (error instanceof LateDeliveryStop) {
+          if (error.stop.kind === 'RETRY') continue;
+          if (error.stop.kind === 'CREDIT') {
+            return this.lateCreditAsDelivery(scope, actor, paymentId, input, null);
+          }
+          if (error.stop.kind === 'FALLBACK') {
+            fallback = error.stop.reason;
+            break;
+          }
+          return error.stop.kind === 'EXISTING'
+            ? { outcome: 'ALREADY_SETTLED', paymentId }
+            : error.stop.kind === 'DEFER'
+              ? { outcome: 'DEFERRED', paymentId }
+              : { outcome: 'NOT_ELIGIBLE', paymentId, reason: error.stop.reason };
+        }
+        const mapped = lateDeliveryFallbackOf(error);
+        if (mapped === null) throw error;
+        fallback = mapped;
+      }
+    }
+    // Two advisory reads disagreed with the lock: the order is moving; the wallet is safe.
+    return this.lateCreditAsDelivery(
+      scope,
+      actor,
+      paymentId,
+      input,
+      fallback ?? 'PURCHASE_REFUSED',
+    );
+  }
+
+  /**
+   * NEXA-OWNER-BATCH-1 PR-5 — an operator's decision on a LATE completion, from the Web Admin
+   * (the ops-group message's two buttons open it there): «تحویل سرویس» (`DELIVER`, the same
+   * delivery, checks and wallet fallback as the route's DELIVER policy) or «به کیف پول»
+   * (`WALLET`, the credit). Both under `payments.reconcile`, both on the provider's RECORDED
+   * approval only, and both at most once per payment: the payment-level guard (one late credit
+   * per payment, under its lock) decides between two operators, an operator and a callback,
+   * and a double click; the idempotency key only makes a retried request answer the same.
+   *
+   * An UNKNOWN payment has its own operator exit (reconciliation) and is refused here.
+   */
+  async decideLateCompletion(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: { readonly choice: 'DELIVER' | 'WALLET'; readonly idempotencyKey: string },
+  ): Promise<LateGatewayDelivery> {
+    const paymentId = this.paymentId(id);
+    const denial = { action: LATE_DECISION_ACTION, entityType: 'Payment', entityId: paymentId };
+    await this.authorize(scope, actor, PAYMENT_RECONCILE_PERMISSION, denial);
+    const requestHash = hashRequest({ paymentId, decision: `LATE_${input.choice}` });
+    const replayed = await this.deps.idempotency.find<{ paymentId: string }>(
+      scope,
+      OPERATOR_NAMESPACE,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replayed !== null) return { outcome: 'ALREADY_SETTLED', paymentId, replayed: true };
+    const payment = await this.deps.repository.findById(scope, paymentId);
+    if (payment === null || payment.method !== 'GATEWAY') {
+      throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+    }
+    if (payment.state === 'UNKNOWN') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+        'A payment whose outcome is unknown is resolved by reconciliation.',
+        { reason: 'RECONCILE_INSTEAD' },
+      );
+    }
+    const operator = { idempotencyKey: input.idempotencyKey, requestHash };
+    const evidenceNote = `operator:late_${input.choice.toLowerCase()}`;
+    const answer =
+      input.choice === 'DELIVER'
+        ? await this.deliverLateGatewayApproval(scope, actor, paymentId, {
+            providerRequestAmount: null,
+            evidenceNote,
+            operator,
+          })
+        : await this.lateCreditAsDelivery(
+            scope,
+            actor,
+            paymentId,
+            { providerRequestAmount: null, evidenceNote, operator },
+            null,
+          );
+    switch (answer.outcome) {
+      case 'DELIVERED':
+      case 'CREDITED':
+        return answer;
+      case 'ALREADY_SETTLED':
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+          'This late payment was already delivered or credited.',
+          { reason: 'LATE_PAYMENT_ALREADY_SETTLED' },
+        );
+      case 'DEFERRED':
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+          'This payment is still closing; try again in a minute.',
+          { reason: 'LATE_PAYMENT_STILL_CLOSING' },
+        );
+      case 'NOT_ELIGIBLE':
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+          'The gateway’s recorded answer does not support that decision.',
+          { reason: answer.reason },
+        );
+    }
+  }
+
+  /** The WALLET path a delivery falls back to (or a top-up's), answered as a delivery. */
+  private async lateCreditAsDelivery(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: PaymentId,
+    input: {
+      readonly providerRequestAmount: bigint | null;
+      readonly evidenceNote: string | null;
+      readonly operator?: { readonly idempotencyKey: string; readonly requestHash: string };
+    },
+    fallback: LateDeliveryFallbackReason | null,
+  ): Promise<LateGatewayDelivery> {
+    const credit = await this.creditLateGatewayApproval(scope, actor, paymentId, {
+      providerRequestAmount: input.providerRequestAmount,
+      evidenceNote: input.evidenceNote,
+      ...(input.operator === undefined
+        ? {}
+        : {
+            operatorDecision: true,
+            remember: {
+              idempotencyKey: input.operator.idempotencyKey,
+              requestHash: input.operator.requestHash,
+            },
+          }),
+      ...(fallback === null ? {} : { fallbackReason: fallback }),
+    });
+    if (credit.outcome === 'NOT_ELIGIBLE') {
+      return { outcome: 'NOT_ELIGIBLE', paymentId, reason: credit.reason };
+    }
+    if (!credit.credited) return { outcome: 'ALREADY_SETTLED', paymentId };
+    return { outcome: 'CREDITED', paymentId, fallbackReason: fallback, credit };
+  }
+
+  /**
+   * The delivery's first step INSIDE the purchase's transaction, before any other lock: the
+   * payment's row lock, the approval judged exactly as the credit judges it, the four
+   * conditions, the late credit (silent: the service is the customer's message), and — when
+   * the original order expired — the fulfilment order. A stop throws `LateDeliveryStop`,
+   * which rolls the whole transaction back.
+   */
+  private async lateDeliveryPreamble(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: PaymentId,
+    target: LateDeliveryTarget,
+    input: {
+      readonly providerRequestAmount: bigint | null;
+      readonly evidenceNote: string | null;
+      readonly operator?: { readonly idempotencyKey: string };
+    },
+    tx: TransactionScope,
+  ): Promise<void> {
+    const operator = input.operator !== undefined;
+    const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
+    const now = this.deps.clock.now();
+    if (payment === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+    }
+    const verdict = await this.lateApprovalVerdict(
+      scope,
+      payment,
+      { providerRequestAmount: input.providerRequestAmount, operatorDecision: operator },
+      now,
+      tx,
+    );
+    if (verdict.kind === 'EXISTING') throw new LateDeliveryStop({ kind: 'EXISTING' });
+    if (verdict.kind === 'NOT_ELIGIBLE') {
+      throw new LateDeliveryStop({ kind: 'NOT_ELIGIBLE', reason: verdict.reason });
+    }
+    // The lane delivers only under the route's DELIVER policy, read here under the lock.
+    if (!operator && verdict.basis === 'LATE_APPROVAL') {
+      const policy = await resolveLatePaymentPolicy(
+        this.deps.settings,
+        scope,
+        verdict.provider,
+        tx,
+      );
+      // Changed since the lane read it: the credit decides under its own lock (WALLET credits,
+      // REVIEW leaves it to an operator).
+      if (policy !== 'DELIVER') throw new LateDeliveryStop({ kind: 'CREDIT' });
+    }
+    const order =
+      payment.orderId === null ? null : await this.deps.orders.findById(scope, payment.orderId, tx);
+    const decision = lateDeliveryDecision({ payment, basis: verdict.basis, order, target, now });
+    if (decision !== null) throw new LateDeliveryStop(decision);
+    /* `lateDeliveryDecision` returned null only for an order it read; restated for the type. */
+    if (order === null) throw new LateDeliveryStop({ kind: 'FALLBACK', reason: 'ORDER_CLOSED' });
+    const customer = await this.deps.customers.findById(scope, payment.customerId, tx);
+    if (customer === null || customer.status === 'BLOCKED') {
+      throw new LateDeliveryStop({ kind: 'FALLBACK', reason: 'CUSTOMER_BLOCKED' });
+    }
+    const sellable =
+      this.deps.lateDeliveryCatalog === undefined
+        ? false
+        : await this.deps.lateDeliveryCatalog.sellable(scope, order, tx);
+    if (!sellable) throw new LateDeliveryStop({ kind: 'FALLBACK', reason: 'PRODUCT_NOT_SELLABLE' });
+
+    await this.writeLateCredit(scope, actor, payment, verdict, now, tx, {
+      evidenceNote: input.evidenceNote,
+      notify: false,
+      disposition: 'DELIVERED',
+      deliveredOrderId: target.orderId,
+      decidedBy: operator ? 'OPERATOR' : 'POLICY',
+    });
+
+    if (target.kind === 'FULFILMENT') {
+      /*
+       * The fulfilment order: the original's FROZEN line and totals, copied — never priced
+       * again — and confirmed in this transaction, so the purchase below settles it like any
+       * order a customer confirmed. Its panel slot is taken by the purchase's own
+       * `prepareFulfilment`, under the panel's lock; the original's name hold was released
+       * when it expired, so the service gets the default name (`planForSettledOrder`).
+       */
+      const created = await this.deps.orders.create(
+        scope,
+        {
+          id: target.orderId,
+          customerId: order.customerId,
+          purpose: order.purpose,
+          line: order.line,
+          totals: order.totals,
+          expiresAt: new Date(now.getTime() + LATE_DELIVERY_ORDER_HOLD_MS),
+          now,
+        },
+        tx,
+      );
+      const confirmed = await this.deps.orders.transition(
+        scope,
+        created.id,
+        'DRAFT',
+        'AWAITING_PAYMENT',
+        { confirmedAt: now },
+        now,
+        tx,
+      );
+      if (!confirmed) {
+        throw new Error(`fulfilment order ${created.id} could not be confirmed`);
+      }
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: LATE_DELIVERY_ORDER_ACTION,
+          entityType: 'Order',
+          entityId: created.id,
+          before: null,
+          after: {
+            state: 'AWAITING_PAYMENT',
+            lateOfPaymentId: payment.id,
+            originalOrderId: order.id,
+            totalMinor: order.totals.total.amountMinor.toString(),
+            currency: order.totals.currency,
+          },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+    }
   }
 
   /**
