@@ -1,6 +1,15 @@
-import { systemJobActor, type CorrelationId, type TenantContext } from '@nexa/contracts';
+import {
+  systemJobActor,
+  type CorrelationId,
+  type TenantContext,
+  type TenantId,
+} from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 import type {
   KnowledgeAutoRefreshResult,
   SupportKnowledgeBuildService,
@@ -55,8 +64,14 @@ export function refreshDecision(input: {
 export class SupportKnowledgeRefreshLoop {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
-  private seen: { signature: string; since: number } | null = null;
-  private lastNightly: string | null = null;
+  /**
+   * The debounce and the nightly mark, PER TENANT (Phase 6A PR-6): one loop serves every
+   * active bot, so one bot's content settling or nightly run must never be another's.
+   */
+  private readonly state = new Map<
+    TenantId,
+    { seen: { signature: string; since: number } | null; lastNightly: string | null }
+  >();
   private readonly progress: LoopProgress;
 
   constructor(
@@ -65,7 +80,8 @@ export class SupportKnowledgeRefreshLoop {
       'pendingRefreshSignature' | 'autoRefresh'
     >,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => Date;
       readonly correlationId: () => string;
@@ -106,9 +122,14 @@ export class SupportKnowledgeRefreshLoop {
     if (this.running) return { action: 'IDLE' };
     this.running = true;
     try {
-      const outcome = await this.pass();
+      // Once per tenant (Phase 6A PR-6). The answer is the first tenant's: the owner's own
+      // bot under the fan-out, the one tenant otherwise; no tenant yet is IDLE.
+      const outcomes: KnowledgeRefreshTick[] = [];
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        outcomes.push(await this.pass(scope));
+      });
       this.progress.record(this.options.now().getTime());
-      return outcome;
+      return outcomes[0] ?? { action: 'IDLE' };
     } catch (error: unknown) {
       this.options.logger.error({ err: error }, 'support knowledge refresh pass failed');
       return { action: 'IDLE' };
@@ -117,34 +138,42 @@ export class SupportKnowledgeRefreshLoop {
     }
   }
 
-  private async pass(): Promise<KnowledgeRefreshTick> {
-    const scope = this.options.scope();
-    if (scope === null) return { action: 'IDLE' };
+  private async pass(scope: TenantContext): Promise<KnowledgeRefreshTick> {
+    let state = this.state.get(scope.tenantId);
+    if (state === undefined) {
+      state = { seen: null, lastNightly: null };
+      this.state.set(scope.tenantId, state);
+    }
     const now = this.options.now();
     const day = now.toISOString().slice(0, 10);
     const nightly =
-      now.getUTCHours() === SUPPORT_KNOWLEDGE_NIGHTLY_HOUR_UTC && this.lastNightly !== day;
+      now.getUTCHours() === SUPPORT_KNOWLEDGE_NIGHTLY_HOUR_UTC && state.lastNightly !== day;
     const signature = await this.build.pendingRefreshSignature(scope);
-    const decision = refreshDecision({ signature, seen: this.seen, now: now.getTime(), nightly });
-    if (nightly) this.lastNightly = day;
+    const decision = refreshDecision({ signature, seen: state.seen, now: now.getTime(), nightly });
+    if (nightly) state.lastNightly = day;
     if (decision === 'IDLE') {
-      this.seen = null;
+      state.seen = null;
       return { action: 'IDLE' };
     }
     if (decision === 'WAIT') {
-      if (this.seen === null || this.seen.signature !== signature) {
-        this.seen = { signature: signature ?? '', since: now.getTime() };
+      if (state.seen === null || state.seen.signature !== signature) {
+        state.seen = { signature: signature ?? '', since: now.getTime() };
       }
-      return { action: 'WAITING', since: this.seen.since };
+      return { action: 'WAITING', since: state.seen.since };
     }
     const result = await this.build.autoRefresh(
       scope,
       systemJobActor(SUPPORT_KNOWLEDGE_REFRESH_JOB, this.options.correlationId() as CorrelationId),
     );
-    this.seen = null;
+    state.seen = null;
     if (result.outcome === 'REFRESHED') {
       this.options.logger.info(
-        { applied: result.applied, conflicted: result.conflicted, capped: result.capped },
+        {
+          tenantId: scope.tenantId,
+          applied: result.applied,
+          conflicted: result.conflicted,
+          capped: result.capped,
+        },
         'support knowledge refreshed from the owner content',
       );
     }

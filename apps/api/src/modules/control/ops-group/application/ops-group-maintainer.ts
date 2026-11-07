@@ -1,7 +1,11 @@
-import type { ActorContext, TenantContext } from '@nexa/contracts';
+import type { ActorContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { OpsGroupService } from './ops-group.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * How often the worker looks at the operations log group. A group that was just bound is
@@ -27,7 +31,8 @@ export class OpsGroupMaintainer {
   constructor(
     private readonly service: OpsGroupService,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly actor: () => ActorContext;
       readonly intervalMs: number;
       readonly now: () => number;
@@ -67,14 +72,19 @@ export class OpsGroupMaintainer {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope !== null) {
+      // Once per tenant (Phase 6A PR-6): each bot's own operations log group.
+      await forEachLoopTenant(this.options.scope, async (scope) => {
         const result = await this.service.maintain(scope, this.options.actor());
-        if (result === 'CHECKED') this.options.logger.info({}, 'operations log group checked');
-        if (result === 'REQUEUED') {
-          this.options.logger.info({}, 'operations log group: preserved reports requeued');
+        if (result === 'CHECKED') {
+          this.options.logger.info({ tenantId: scope.tenantId }, 'operations log group checked');
         }
-      }
+        if (result === 'REQUEUED') {
+          this.options.logger.info(
+            { tenantId: scope.tenantId },
+            'operations log group: preserved reports requeued',
+          );
+        }
+      });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       this.options.logger.error({ err: error }, 'operations log group pass failed');

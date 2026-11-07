@@ -1,7 +1,10 @@
-import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { NightlyReportService } from './nightly-report.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * How often the nightly report pass runs. A minute: a pass that finds nothing due costs the
@@ -29,7 +32,8 @@ export class NightlyReportLoop {
   constructor(
     private readonly reports: NightlyReportService,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => number;
       readonly logger: {
@@ -71,14 +75,17 @@ export class NightlyReportLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      // No tenant yet is a healthy pass that did nothing: there is nothing to report on.
-      if (scope === null) {
-        this.progress.record(this.options.now());
-        return;
-      }
-      const queued = await this.reports.runOnce(scope);
-      if (queued > 0) this.options.logger.info({ queued }, 'queued the nightly reports');
+      // Once per tenant (Phase 6A PR-6). No tenant yet is a healthy pass that did nothing:
+      // there is nothing to report on.
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        const queued = await this.reports.runOnce(scope);
+        if (queued > 0) {
+          this.options.logger.info(
+            { tenantId: scope.tenantId, queued },
+            'queued the nightly reports',
+          );
+        }
+      });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       this.options.logger.error({ error }, 'nightly report pass failed');

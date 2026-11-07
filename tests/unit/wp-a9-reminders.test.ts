@@ -15,6 +15,7 @@ import {
   featureFlagDefinition,
   usageRemainingPercent,
   usageRemindersReached,
+  type TenantId,
 } from '@nexa/contracts';
 import {
   CUSTOMER_REMINDER_INTERVAL_MS,
@@ -22,6 +23,7 @@ import {
 } from '../../apps/api/src/modules/commerce/messaging/application/customer-reminder-loop';
 import { CUSTOMER_NOTIFICATION_INTERVAL_MS } from '../../apps/api/src/modules/commerce/messaging/application/customer-notification-loop';
 import { SERVICE_REMINDER_INTERVAL_MS } from '../../apps/api/src/modules/commerce/provisioning/application/service-reminder-loop';
+import { TenantFanOut } from '../../apps/api/src/infrastructure/lifecycle/tenant-pass';
 
 /**
  * WP-A9, the pure halves: the owner's defaults, the ladder's decision including the day of
@@ -228,6 +230,54 @@ describe('CustomerReminderLoop', () => {
     clock = 1_000 + 10 * 60_000;
     expect(loop.isFresh(clock), 'a failing sweep turns readiness stale').toBe(false);
     await loop.stop();
+  });
+
+  it("phase 6A PR-6: under the fan-out each tenant keeps its own due time; one bot's run never consumes another's", async () => {
+    const owner = 'tenant-owner' as TenantId;
+    const hosted = 'tenant-hosted' as TenantId;
+    let clock = 0;
+    const runs: string[] = [];
+    // The hosted bot becomes active a minute after the owner's first run.
+    let active: TenantId[] = [owner];
+    const fanOut = new TenantFanOut({
+      activeTenants: async () => active,
+      installationTenantId: () => owner,
+      now: () => clock,
+      logger,
+    });
+    const loop = new CustomerReminderLoop(
+      [
+        {
+          name: 'slow',
+          everyMs: 900_000,
+          runOnce: async (s) => (runs.push(`${s.tenantId}@${clock}`), 0),
+        },
+      ],
+      {
+        scope: fanOut.pass('customer-reminders', { budgetMs: CUSTOMER_REMINDER_INTERVAL_MS }),
+        intervalMs: CUSTOMER_REMINDER_INTERVAL_MS,
+        now: () => clock,
+        logger,
+      },
+    );
+    await loop.tick(); // owner at 0
+    clock = 60_000;
+    active = [owner, hosted];
+    // Owner not due; the hosted bot has never run, so it is due at once — with one shared
+    // last-run per sweep it would have been skipped as "ran a minute ago".
+    await loop.tick();
+    clock = 120_000;
+    await loop.tick(); // neither due
+    clock = 900_000;
+    await loop.tick(); // owner due again
+    clock = 960_000;
+    await loop.tick(); // the hosted bot due again, fifteen minutes after its own run
+    expect(runs).toEqual([
+      'tenant-owner@0',
+      'tenant-hosted@60000',
+      'tenant-owner@900000',
+      'tenant-hosted@960000',
+    ]);
   });
 });
 

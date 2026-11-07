@@ -4,7 +4,7 @@ import {
   SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
   SUPPORT_AI_VISION_MAX_IMAGES,
   type SupportAiJobKind,
-  type TenantContext,
+  type TenantId,
 } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { SupportAssistService } from './support-assist.service.js';
@@ -16,6 +16,10 @@ import {
   type SupportAssistantLiveness,
 } from './assistant-watch.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 import type { SupportHandoffRateAlert } from './handoff-rate-alert.js';
 
 export const ASSISTANT_INTERVAL_MS = 2_000;
@@ -89,9 +93,15 @@ export const HANDOFF_RATE_INTERVAL_MS = 10 * 60_000;
 export class AssistantLoop {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
-  private lastRetentionAt = 0;
-  private lastAliveAt = 0;
-  private lastHandoffRateAt = 0;
+  /**
+   * When the retention, the liveness proof and the handoff-rate check last ran, PER TENANT
+   * (Phase 6A PR-6): one loop serves every active bot, and one bot's pass must never
+   * consume another bot's due time.
+   */
+  private readonly due = new Map<
+    TenantId,
+    { lastRetentionAt: number; lastAliveAt: number; lastHandoffRateAt: number }
+  >();
   private reportedNoScope = false;
   private readonly progress: LoopProgress;
 
@@ -119,7 +129,8 @@ export class AssistantLoop {
       readonly learning?: Pick<SupportLearningService, 'runDue' | 'purge'>;
       /** D5: closes the worker's "assistant stalled" condition once a pass completes. */
       readonly liveness?: Pick<SupportAssistantLiveness, 'alive'>;
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => Date;
       readonly logger: {
@@ -136,6 +147,19 @@ export class AssistantLoop {
 
   isFresh(nowMs: number): boolean {
     return this.progress.isFresh(nowMs);
+  }
+
+  private stateOf(tenantId: TenantId): {
+    lastRetentionAt: number;
+    lastAliveAt: number;
+    lastHandoffRateAt: number;
+  } {
+    let state = this.due.get(tenantId);
+    if (state === undefined) {
+      state = { lastRetentionAt: 0, lastAliveAt: 0, lastHandoffRateAt: 0 };
+      this.due.set(tenantId, state);
+    }
+    return state;
   }
 
   start(): void {
@@ -162,159 +186,161 @@ export class AssistantLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope === null) {
-        if (!this.reportedNoScope) {
-          this.options.logger.info({}, 'assistant: no installation tenant yet; idle');
-          this.reportedNoScope = true;
-        }
-        this.progress.record(this.options.now().getTime());
-        return;
-      }
-      const auto = this.options.auto;
-      // TB7: an AUTO_DECISION job is claimed only when its producer is wired.
-      const kinds: readonly SupportAiJobKind[] =
-        auto === undefined ? ['ASSIST_DRAFT'] : ['ASSIST_DRAFT', 'AUTO_DECISION'];
-      const counts: Record<string, number> = {};
-      let claimed = 0;
-      while (claimed < ASSISTANT_BATCH) {
-        const at = this.options.now();
-        const job = await this.assist.claimNext(
-          scope,
-          at,
-          new Date(at.getTime() + ASSISTANT_LEASE_MS),
-          kinds,
-        );
-        if (job === null) break;
-        claimed += 1;
-        // Phase 4 PR-1 item 8: one job that throws never ends the pass. The error is logged, an
-        // automatic job is released for one retry (then handed off), and the next job runs.
-        let result: string;
-        try {
-          if (job.kind === 'AUTO_DECISION' && auto !== undefined) {
-            // A job that keeps dying mid-call is repeated failure: it hands off, never loops.
-            result =
-              job.attempts > ASSISTANT_MAX_ATTEMPTS
-                ? await auto.giveUp(scope, job)
-                : await auto.produce(scope, job);
-          } else {
-            // `attempts` already counts this claim: a job that keeps dying mid-call fails instead.
-            result =
-              job.attempts > ASSISTANT_MAX_ATTEMPTS
-                ? await this.assist.abandon(scope, job)
-                : await this.assist.produce(scope, job);
-          }
-        } catch (error: unknown) {
-          this.options.logger.error({ err: error, jobId: job.id }, 'assistant: a job failed');
-          result = 'exception';
-          if (job.kind === 'AUTO_DECISION' && auto?.recoverFromException !== undefined) {
-            try {
-              await auto.recoverFromException(scope, job);
-            } catch (recovery: unknown) {
-              this.options.logger.error(
-                { err: recovery, jobId: job.id },
-                'assistant: a failed job could not be released',
-              );
-            }
-          }
-        }
-        counts[result] = (counts[result] ?? 0) + 1;
-        this.progress.record(this.options.now().getTime());
-        // A stopped tenant: the job was left untouched, and so is the rest of the pass.
-        if (result === 'INACTIVE') break;
-      }
-      // Phase 4 PR-4: ticket jobs, claimed and produced ONE at a time like the conversations'.
-      const tickets = this.options.tickets;
-      if (tickets !== undefined) {
-        let ticketClaimed = 0;
-        while (ticketClaimed < ASSISTANT_BATCH) {
+      // Once per tenant (Phase 6A PR-6), each its own bounded batch in its own scope.
+      const report = await forEachLoopTenant(this.options.scope, async (scope) => {
+        const state = this.stateOf(scope.tenantId);
+        const auto = this.options.auto;
+        // TB7: an AUTO_DECISION job is claimed only when its producer is wired.
+        const kinds: readonly SupportAiJobKind[] =
+          auto === undefined ? ['ASSIST_DRAFT'] : ['ASSIST_DRAFT', 'AUTO_DECISION'];
+        const counts: Record<string, number> = {};
+        let claimed = 0;
+        while (claimed < ASSISTANT_BATCH) {
           const at = this.options.now();
-          const job = await tickets.claimNext(
+          const job = await this.assist.claimNext(
             scope,
             at,
             new Date(at.getTime() + ASSISTANT_LEASE_MS),
+            kinds,
           );
           if (job === null) break;
-          ticketClaimed += 1;
           claimed += 1;
+          // Phase 4 PR-1 item 8: one job that throws never ends the pass. The error is logged, an
+          // automatic job is released for one retry (then handed off), and the next job runs.
           let result: string;
           try {
-            result =
-              job.attempts > ASSISTANT_MAX_ATTEMPTS
-                ? await tickets.giveUp(scope, job)
-                : await tickets.produce(scope, job);
+            if (job.kind === 'AUTO_DECISION' && auto !== undefined) {
+              // A job that keeps dying mid-call is repeated failure: it hands off, never loops.
+              result =
+                job.attempts > ASSISTANT_MAX_ATTEMPTS
+                  ? await auto.giveUp(scope, job)
+                  : await auto.produce(scope, job);
+            } else {
+              // `attempts` already counts this claim: a job that keeps dying mid-call fails instead.
+              result =
+                job.attempts > ASSISTANT_MAX_ATTEMPTS
+                  ? await this.assist.abandon(scope, job)
+                  : await this.assist.produce(scope, job);
+            }
           } catch (error: unknown) {
-            this.options.logger.error(
-              { err: error, jobId: job.id },
-              'assistant: a ticket job failed',
-            );
+            this.options.logger.error({ err: error, jobId: job.id }, 'assistant: a job failed');
             result = 'exception';
-            try {
-              await tickets.recoverFromException(scope, job);
-            } catch (recovery: unknown) {
-              this.options.logger.error(
-                { err: recovery, jobId: job.id },
-                'assistant: a failed ticket job could not be released',
-              );
+            if (job.kind === 'AUTO_DECISION' && auto?.recoverFromException !== undefined) {
+              try {
+                await auto.recoverFromException(scope, job);
+              } catch (recovery: unknown) {
+                this.options.logger.error(
+                  { err: recovery, jobId: job.id },
+                  'assistant: a failed job could not be released',
+                );
+              }
             }
           }
-          counts[`ticket_${result}`] = (counts[`ticket_${result}`] ?? 0) + 1;
+          counts[result] = (counts[result] ?? 0) + 1;
           this.progress.record(this.options.now().getTime());
+          // A stopped tenant: the job was left untouched, and so is the rest of the pass.
           if (result === 'INACTIVE') break;
         }
-      }
-      // TB8: learning jobs, after the conversations' own jobs — a customer waits on those. ONE
-      // per claim, each leased from the moment it is claimed (TB5 review, finding 4): a batch
-      // leased up front would wait out its lease behind its sibling's provider call.
-      const learning = this.options.learning;
-      let learned = 0;
-      if (learning !== undefined) {
-        for (let pass = 0; pass < ASSISTANT_LEARNING_BATCH; pass += 1) {
-          const at = this.options.now();
-          const learningCounts = await learning.runDue(scope, {
-            now: at,
-            leaseUntil: new Date(at.getTime() + ASSISTANT_LEASE_MS),
-            limit: 1,
-          });
-          let ran = 0;
-          for (const [label, n] of Object.entries(learningCounts)) {
-            counts[label] = (counts[label] ?? 0) + n;
-            ran += n;
+        // Phase 4 PR-4: ticket jobs, claimed and produced ONE at a time like the conversations'.
+        const tickets = this.options.tickets;
+        if (tickets !== undefined) {
+          let ticketClaimed = 0;
+          while (ticketClaimed < ASSISTANT_BATCH) {
+            const at = this.options.now();
+            const job = await tickets.claimNext(
+              scope,
+              at,
+              new Date(at.getTime() + ASSISTANT_LEASE_MS),
+            );
+            if (job === null) break;
+            ticketClaimed += 1;
+            claimed += 1;
+            let result: string;
+            try {
+              result =
+                job.attempts > ASSISTANT_MAX_ATTEMPTS
+                  ? await tickets.giveUp(scope, job)
+                  : await tickets.produce(scope, job);
+            } catch (error: unknown) {
+              this.options.logger.error(
+                { err: error, jobId: job.id },
+                'assistant: a ticket job failed',
+              );
+              result = 'exception';
+              try {
+                await tickets.recoverFromException(scope, job);
+              } catch (recovery: unknown) {
+                this.options.logger.error(
+                  { err: recovery, jobId: job.id },
+                  'assistant: a failed ticket job could not be released',
+                );
+              }
+            }
+            counts[`ticket_${result}`] = (counts[`ticket_${result}`] ?? 0) + 1;
+            this.progress.record(this.options.now().getTime());
+            if (result === 'INACTIVE') break;
           }
-          if (ran === 0) break;
-          learned += ran;
-          this.progress.record(this.options.now().getTime());
         }
-      }
-      const now = this.options.now();
-      if (
-        this.options.handoffRate !== undefined &&
-        now.getTime() - this.lastHandoffRateAt >= HANDOFF_RATE_INTERVAL_MS
-      ) {
-        this.lastHandoffRateAt = now.getTime();
-        try {
-          await this.options.handoffRate.check(scope);
-        } catch (error: unknown) {
-          this.options.logger.error({ err: error }, 'assistant: the handoff-rate check failed');
+        // TB8: learning jobs, after the conversations' own jobs — a customer waits on those. ONE
+        // per claim, each leased from the moment it is claimed (TB5 review, finding 4): a batch
+        // leased up front would wait out its lease behind its sibling's provider call.
+        const learning = this.options.learning;
+        let learned = 0;
+        if (learning !== undefined) {
+          for (let pass = 0; pass < ASSISTANT_LEARNING_BATCH; pass += 1) {
+            const at = this.options.now();
+            const learningCounts = await learning.runDue(scope, {
+              now: at,
+              leaseUntil: new Date(at.getTime() + ASSISTANT_LEASE_MS),
+              limit: 1,
+            });
+            let ran = 0;
+            for (const [label, n] of Object.entries(learningCounts)) {
+              counts[label] = (counts[label] ?? 0) + n;
+              ran += n;
+            }
+            if (ran === 0) break;
+            learned += ran;
+            this.progress.record(this.options.now().getTime());
+          }
         }
-      }
-      if (now.getTime() - this.lastRetentionAt >= RETENTION_INTERVAL_MS) {
-        counts.purged = await this.assist.purgeExpired(scope, now);
-        if (learning !== undefined) counts.purged_candidates = await learning.purge(scope, now);
-        this.lastRetentionAt = now.getTime();
-      }
-      if (claimed > 0 || learned > 0)
-        this.options.logger.info({ claimed, ...counts }, 'assistant pass');
-      // D5: a completed pass is the proof the worker cannot see — at most every watch interval.
-      const liveness = this.options.liveness;
-      if (
-        liveness !== undefined &&
-        now.getTime() - this.lastAliveAt >= SUPPORT_ASSISTANT_WATCH_INTERVAL_MS
-      ) {
-        if (await liveness.alive(scope)) {
-          this.options.logger.info({}, 'assistant: running again; the stalled condition closed');
+        const now = this.options.now();
+        if (
+          this.options.handoffRate !== undefined &&
+          now.getTime() - state.lastHandoffRateAt >= HANDOFF_RATE_INTERVAL_MS
+        ) {
+          state.lastHandoffRateAt = now.getTime();
+          try {
+            await this.options.handoffRate.check(scope);
+          } catch (error: unknown) {
+            this.options.logger.error({ err: error }, 'assistant: the handoff-rate check failed');
+          }
         }
-        this.lastAliveAt = now.getTime();
+        if (now.getTime() - state.lastRetentionAt >= RETENTION_INTERVAL_MS) {
+          counts.purged = await this.assist.purgeExpired(scope, now);
+          if (learning !== undefined) counts.purged_candidates = await learning.purge(scope, now);
+          state.lastRetentionAt = now.getTime();
+        }
+        if (claimed > 0 || learned > 0)
+          this.options.logger.info(
+            { tenantId: scope.tenantId, claimed, ...counts },
+            'assistant pass',
+          );
+        // D5: a completed pass is the proof the worker cannot see — at most every watch interval.
+        const liveness = this.options.liveness;
+        if (
+          liveness !== undefined &&
+          now.getTime() - state.lastAliveAt >= SUPPORT_ASSISTANT_WATCH_INTERVAL_MS
+        ) {
+          if (await liveness.alive(scope)) {
+            this.options.logger.info({}, 'assistant: running again; the stalled condition closed');
+          }
+          state.lastAliveAt = now.getTime();
+        }
+      });
+      if (report.served === 0 && !this.reportedNoScope) {
+        this.options.logger.info({}, 'assistant: no active tenant to serve yet; idle');
+        this.reportedNoScope = true;
       }
       this.progress.record(this.options.now().getTime());
     } catch (error: unknown) {

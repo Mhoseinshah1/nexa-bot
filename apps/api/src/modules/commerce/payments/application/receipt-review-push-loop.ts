@@ -5,6 +5,12 @@ import {
   type ReceiptReviewPushService,
 } from './receipt-review-push.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  isReportedTenantFailure,
+  reportedTenantFailure,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * How often the receipt push lane looks for work. Shorter than the customer lane's minute: a
@@ -36,7 +42,8 @@ export class ReceiptReviewPushLoop {
           limit: number,
         ): Promise<{ readonly claimed: number; readonly reaped: number }>;
       };
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => number;
       readonly logger: {
@@ -75,45 +82,59 @@ export class ReceiptReviewPushLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope === null) {
-        this.progress.record(this.options.now());
-        return;
-      }
-      /*
-       * The two lanes each run on their own (Codex review of #83, round 12). The refund
-       * cards used to run after the receipts inside one `try`, so a receipt pass that failed
-       * on every tick kept every refund card queued behind it, although the cards' own
-       * repository and sender were healthy. A failure is logged under its own lane and still
-       * costs the tick its progress, so readiness stays honest.
-       */
-      let failed = false;
-      try {
-        const report = await this.lane.deliverDue(scope, RECEIPT_PUSH_SWEEP_LIMIT);
-        if (report.claimed > 0 || report.reaped > 0) {
-          this.options.logger.info({ ...report }, 'receipt pushes dispatched');
-        }
-      } catch (error: unknown) {
-        failed = true;
-        this.options.logger.error({ err: error }, 'receipt push pass failed');
-      }
-      if (this.options.refundRequests !== undefined) {
+      // Once per tenant (Phase 6A PR-6); no tenant yet is a healthy pass that did nothing.
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        /*
+         * The two lanes each run on their own (Codex review of #83, round 12). The refund
+         * cards used to run after the receipts inside one `try`, so a receipt pass that failed
+         * on every tick kept every refund card queued behind it, although the cards' own
+         * repository and sender were healthy. A failure is logged under its own lane and still
+         * costs the tick its progress, so readiness stays honest.
+         */
+        let failed = false;
         try {
-          const cards = await this.options.refundRequests.deliverDue(
-            scope,
-            RECEIPT_PUSH_SWEEP_LIMIT,
-          );
-          if (cards.claimed > 0 || cards.reaped > 0) {
-            this.options.logger.info({ ...cards }, 'refund request cards dispatched');
+          const report = await this.lane.deliverDue(scope, RECEIPT_PUSH_SWEEP_LIMIT);
+          if (report.claimed > 0 || report.reaped > 0) {
+            this.options.logger.info(
+              { tenantId: scope.tenantId, ...report },
+              'receipt pushes dispatched',
+            );
           }
         } catch (error: unknown) {
           failed = true;
-          this.options.logger.error({ err: error }, 'refund request card pass failed');
+          this.options.logger.error(
+            { tenantId: scope.tenantId, err: error },
+            'receipt push pass failed',
+          );
         }
-      }
-      if (!failed) this.progress.record(this.options.now());
+        if (this.options.refundRequests !== undefined) {
+          try {
+            const cards = await this.options.refundRequests.deliverDue(
+              scope,
+              RECEIPT_PUSH_SWEEP_LIMIT,
+            );
+            if (cards.claimed > 0 || cards.reaped > 0) {
+              this.options.logger.info(
+                { tenantId: scope.tenantId, ...cards },
+                'refund request cards dispatched',
+              );
+            }
+          } catch (error: unknown) {
+            failed = true;
+            this.options.logger.error(
+              { tenantId: scope.tenantId, err: error },
+              'refund request card pass failed',
+            );
+          }
+        }
+        // Logged above, lane by lane; this tenant's pass is not progress.
+        if (failed) throw reportedTenantFailure('a receipt review push lane failed');
+      });
+      this.progress.record(this.options.now());
     } catch (error: unknown) {
-      this.options.logger.error({ err: error }, 'receipt push pass failed');
+      if (!isReportedTenantFailure(error)) {
+        this.options.logger.error({ err: error }, 'receipt push pass failed');
+      }
     } finally {
       this.running = false;
     }

@@ -1,7 +1,10 @@
-import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { BroadcastDispatcher } from './broadcast-dispatcher.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * How often the broadcast lane runs: every second, because its pacing is per second
@@ -27,7 +30,8 @@ export class BroadcastLoop {
   constructor(
     private readonly dispatcher: BroadcastDispatcher,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => number;
       readonly logger: {
@@ -71,15 +75,13 @@ export class BroadcastLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope === null) {
-        this.progress.record(this.options.now());
-        return;
-      }
-      const report = await this.dispatcher.pass(scope);
-      if (report.claimed + report.started + report.completed + report.reaped > 0) {
-        this.options.logger.info({ ...report }, 'broadcast pass');
-      }
+      // Once per tenant (Phase 6A PR-6); no tenant yet is a healthy pass that did nothing.
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        const report = await this.dispatcher.pass(scope);
+        if (report.claimed + report.started + report.completed + report.reaped > 0) {
+          this.options.logger.info({ tenantId: scope.tenantId, ...report }, 'broadcast pass');
+        }
+      });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       this.options.logger.error(

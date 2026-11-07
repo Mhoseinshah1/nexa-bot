@@ -1,7 +1,10 @@
-import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { GatewayPaymentService } from './gateway-payment.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * How often the gateway lane runs (WP11A §5.7).
@@ -39,7 +42,8 @@ export function gatewayLoopSlackIntervals(intervalMs: number, passBoundMs: numbe
  * Progress is recorded when a pass COMPLETES, including one that did nothing; a pass
  * that threw records nothing, and neither does one that returned with a lane that threw
  * (`laneFailures`), so a lane whose every pass fails goes stale and the worker's
- * readiness says so.
+ * readiness says so. Per tenant since Phase 6A PR-6: the owner's bot's lane failing, or
+ * every bot's, is what holds progress back (`TenantFanOut`).
  */
 export class GatewayPaymentLoop {
   private timer: NodeJS.Timeout | null = null;
@@ -49,9 +53,15 @@ export class GatewayPaymentLoop {
   constructor(
     private readonly lane: GatewayPaymentService,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
-      /** The longest one bounded pass may take: its calls times their timeout. */
+      /**
+       * The longest one bounded pass may take: its calls times their timeout. With a
+       * `TenantFanOut` pass it is ONE tenant's bound: the fan-out stops starting tenants
+       * after its budget (one interval), so a pass is at most budget + this bound, inside
+       * the `gatewayLoopSlackIntervals` tolerance (bound + three intervals).
+       */
       readonly passBoundMs: number;
       readonly now: () => number;
       readonly logger: {
@@ -95,32 +105,39 @@ export class GatewayPaymentLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope === null) {
-        this.progress.record(this.options.now());
-        return;
-      }
-      const report = await this.lane.runOnce(scope);
-      if (
-        report.created + report.createFailed + report.createUnknown + report.inquired > 0 ||
-        report.budgetExhausted ||
-        // FIX10 BUG-1: a pass that isolated a failing row says so, with the count.
-        report.rowFailures > 0 ||
-        report.laneFailures > 0 ||
-        // FIX10 R1: rows given back for want of lease, or taken over by another replica.
-        report.leaseReleased + report.leaseLost > 0
-      ) {
-        this.options.logger.info({ ...report }, 'gateway payment pass');
-      }
-      /*
-       * FIX10 (Codex #268 A): a pass in which a LANE threw is not progress, even though it
-       * returned. The other lanes ran — the sweeps above all — but the failed lane did
-       * nothing, and a lane that throws on every pass (its claim, say) must go stale like a
-       * pass that throws, or readiness stays fresh over a queue nobody is working. A row's
-       * failure is different: it was isolated and backed off, and the lane around it did its
-       * work, so that pass still counts.
-       */
-      if (report.laneFailures > 0) return;
+      // Once per tenant (Phase 6A PR-6); no tenant yet is a healthy pass that did nothing.
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        const report = await this.lane.runOnce(scope);
+        if (
+          report.created + report.createFailed + report.createUnknown + report.inquired > 0 ||
+          report.budgetExhausted ||
+          // FIX10 BUG-1: a pass that isolated a failing row says so, with the count.
+          report.rowFailures > 0 ||
+          report.laneFailures > 0 ||
+          // FIX10 R1: rows given back for want of lease, or taken over by another replica.
+          report.leaseReleased + report.leaseLost > 0
+        ) {
+          this.options.logger.info({ tenantId: scope.tenantId, ...report }, 'gateway payment pass');
+        }
+        /*
+         * FIX10 (Codex #268 A): a pass in which a LANE threw is not progress, even though it
+         * returned. The other lanes ran — the sweeps above all — but the failed lane did
+         * nothing, and a lane that throws on every pass (its claim, say) must go stale like a
+         * pass that throws, or readiness stays fresh over a queue nobody is working. A row's
+         * failure is different: it was isolated and backed off, and the lane around it did
+         * its work, so that pass still counts.
+         *
+         * Phase 6A PR-6: so a lane failure is this TENANT's failure. Thrown, it is judged by
+         * the fan-out's rule — the owner's bot, or every bot, failing records no progress;
+         * one hosted bot's broken lane is logged and the others' passes still count.
+         */
+        if (report.laneFailures > 0) {
+          // A plain Error, not a class: a class here would be read as freshness-bearing.
+          const failed = new Error(`${report.laneFailures} gateway lane(s) failed this pass`);
+          failed.name = 'GatewayLaneFailed';
+          throw failed;
+        }
+      });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       this.options.logger.error(

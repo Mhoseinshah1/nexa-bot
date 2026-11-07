@@ -1,7 +1,10 @@
-import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { PaymentExpiryService } from './payment-expiry.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * The timer that drives the payment and order expiry sweep, and the readiness it earns.
@@ -51,7 +54,8 @@ export class PaymentExpiryLoop {
   constructor(
     private readonly sweep: PaymentExpiryService,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => number;
       readonly logger: {
@@ -123,8 +127,9 @@ export class PaymentExpiryLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
       /*
+       * Once per tenant (Phase 6A PR-6), each its own sweep in its own scope.
+       *
        * No tenant yet is a healthy pass that did nothing, not a failure.
        *
        * The installation's tenant is a ROW, so a worker booted before `pnpm provision`
@@ -133,14 +138,15 @@ export class PaymentExpiryLoop {
        * install unhealthy for a reason the operator cannot act on, which is the
        * "different lie" `LoopProgress` names.
        */
-      if (scope === null) {
-        this.progress.record(this.options.now());
-        return;
-      }
-      const report = await this.sweep.runOnce(scope);
-      if (report.payments > 0 || report.orders > 0) {
-        this.options.logger.info({ ...report }, 'expired unpaid payments and orders');
-      }
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        const report = await this.sweep.runOnce(scope);
+        if (report.payments > 0 || report.orders > 0) {
+          this.options.logger.info(
+            { tenantId: scope.tenantId, ...report },
+            'expired unpaid payments and orders',
+          );
+        }
+      });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       /*

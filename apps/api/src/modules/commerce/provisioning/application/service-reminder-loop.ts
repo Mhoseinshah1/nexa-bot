@@ -2,6 +2,10 @@ import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { ServiceReminderService } from './service-reminder.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * How often the reminder sweep runs.
@@ -49,7 +53,8 @@ export class ServiceReminderLoop {
   constructor(
     private readonly sweep: ServiceReminderService,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => number;
       /**
@@ -95,9 +100,11 @@ export class ServiceReminderLoop {
     const reconcile = this.options.reconcileAtStart;
     if (reconcile === undefined) return;
     try {
-      const scope = this.options.scope();
-      if (scope === null) return;
-      await reconcile(scope, () => this.stopping);
+      // Once per tenant (Phase 6A PR-6); a stop finishes the tenant in hand and starts none.
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        if (this.stopping) return;
+        await reconcile(scope, () => this.stopping);
+      });
     } catch (error: unknown) {
       this.options.logger.error({ error }, 'imported-notice reconcile at start failed');
     }
@@ -140,22 +147,23 @@ export class ServiceReminderLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
       /*
-       * No tenant yet is a healthy pass that did nothing.
+       * Once per tenant (Phase 6A PR-6), each its own sweep in its own scope.
        *
-       * The installation's tenant is a ROW, so a worker booted before `pnpm provision`
-       * has none — and an installation with no tenant has no services to remind anybody
-       * about, so this loop is doing its job exactly.
+       * No tenant yet is a healthy pass that did nothing. The installation's tenant is a
+       * ROW, so a worker booted before `pnpm provision` has none — and an installation with
+       * no tenant has no services to remind anybody about, so this loop is doing its job
+       * exactly.
        */
-      if (scope === null) {
-        this.progress.record(this.options.now());
-        return;
-      }
-      const report = await this.sweep.runOnce(scope);
-      if (report.expiry > 0 || report.usage > 0) {
-        this.options.logger.info({ ...report }, 'raised service reminders');
-      }
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        const report = await this.sweep.runOnce(scope);
+        if (report.expiry > 0 || report.usage > 0) {
+          this.options.logger.info(
+            { tenantId: scope.tenantId, ...report },
+            'raised service reminders',
+          );
+        }
+      });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       /*
