@@ -16,7 +16,9 @@ import {
   PruneArgsError,
 } from '../../apps/api/src/customers-prune.cli';
 import { discoverDependents } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer-prune.repository';
-import { SEED_IDS, createTestContext, tenantA, type TestContext } from './harness';
+import { withDatabaseScope } from '../../apps/api/src/infrastructure/persistence/database-scope';
+import { ensureRowLevelSecurity } from '../../apps/api/src/infrastructure/persistence/row-level-security';
+import { SEED_IDS, createTestContext, tenantA, tenantB, type TestContext } from './harness';
 
 /**
  * `botctl customers prune-empty`, against a real database.
@@ -38,6 +40,13 @@ import { SEED_IDS, createTestContext, tenantA, type TestContext } from './harnes
  *   standing    blocked / imported customers stay. MUTATION: remove the `status`/`source`
  *               conditions from `pruneable`.
  *   typed word  MUTATION: make `confirmationAccepted` return true.
+ *   RLS         the suite runs as nexa_app (ADR-0037). The dependent check reads on the
+ *               system path, so a dependent row row-level security confines to ANOTHER
+ *               tenant still keeps the customer. MUTATION: call `listAcrossTenants` and
+ *               `lockAndRecheckAcrossTenants` directly, without `withSystemScope` /
+ *               `withSystemScopeIn` (the cross-tenant-dependent case fails). And only the
+ *               named tenant's customers are listed or deleted. MUTATION: drop
+ *               `c.tenant_id = …` from `pruneable` (the other-tenant case fails).
  */
 
 const BOT = SEED_IDS.botA1 as BotInstanceId;
@@ -421,6 +430,61 @@ describe('apply', () => {
     };
     await expect(prune().apply(tenantA, stranger, { expectedCount: 1 })).rejects.toBeDefined();
     expect(await customerCount()).toBe(1);
+  });
+});
+
+describe('under row-level security (ADR-0037)', () => {
+  const groupJoinIn = async (scope: typeof tenantB, bot: string): Promise<string> => {
+    nextTelegram += 1;
+    const { customer } = await ctx.container.customers.resolveFromUpdate(scope, ACTOR, {
+      intake: 'INTERNAL',
+      idempotencyKey: `prune-${String(nextTelegram)}`,
+      telegramUserId: String(nextTelegram),
+      from: { id: nextTelegram, first_name: 'کاربر', last_name: String(nextTelegram) },
+      botInstanceId: bot as BotInstanceId,
+    });
+    return customer.id;
+  };
+
+  it('keeps a customer whose only dependent is a row RLS confines to another tenant', async () => {
+    // A tenant table whose `customer_id` has no foreign key — like refunds.customer_id — so
+    // nothing stops a row of tenant B from naming tenant A's customer. Secured by the
+    // production step, exactly as the next migrate would secure it.
+    await db().execute(sql`
+      CREATE TABLE prune_probe_rls (id serial PRIMARY KEY, tenant_id uuid NOT NULL, customer_id uuid NOT NULL)`);
+    try {
+      expect(await ensureRowLevelSecurity(ctx.container.database)).toContain('prune_probe_rls');
+      const named = await groupJoin();
+      const empty = await groupJoin();
+      await db().execute(sql`
+        INSERT INTO prune_probe_rls (tenant_id, customer_id) VALUES (${tenantB.tenantId}, ${named})`);
+      // The premise: bound to tenant A, the application role cannot see that row at all.
+      const seenAsA = await withDatabaseScope(tenantA, () =>
+        ctx.applicationDatabase.db.execute(sql`SELECT count(*)::int AS n FROM prune_probe_rls`),
+      );
+      expect((seenAsA.rows[0] as { n: number }).n).toBe(0);
+
+      expect(await listedIds()).toEqual([empty]);
+      const result = await prune().apply(tenantA, ACTOR, { expectedCount: 1 });
+      expect(result.deleted).toBe(1);
+      expect(await exists(named)).toBe(true);
+      expect(await exists(empty)).toBe(false);
+    } finally {
+      await db().execute(sql`DROP TABLE IF EXISTS prune_probe_rls`);
+    }
+  });
+
+  it('lists and deletes only the named tenant’s customers', async () => {
+    const mine = await groupJoin();
+    const theirs = await groupJoinIn(tenantB, SEED_IDS.botB1);
+    expect(await listedIds()).toEqual([mine]);
+    const listingB = await prune().list(tenantB, ACTOR);
+    expect(listingB.candidates.map((c) => c.id)).toEqual([theirs]);
+
+    const result = await prune().apply(tenantA, ACTOR, { expectedCount: 1 });
+    expect(result.deleted).toBe(1);
+    expect(await exists(mine)).toBe(false);
+    expect(await exists(theirs)).toBe(true);
   });
 });
 

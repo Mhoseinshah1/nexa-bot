@@ -164,6 +164,7 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'reason: capacity limits: one tenant',
   'reason: capacity limits: the owner sets a tenant',
   'reason: customer notification text retention',
+  'reason: customer prune: dependents in every tenant',
   'reason: idempotency retention: interactive keys',
   'reason: outbox retention: published messages',
   'reason: restore-exclusion',

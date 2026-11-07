@@ -2,6 +2,11 @@ import { sql, type SQL } from 'drizzle-orm';
 import type { TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
+  ScopeBound,
+  withSystemScope,
+  withSystemScopeIn,
+} from '../../../../infrastructure/persistence/database-scope.js';
+import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -177,6 +182,19 @@ function toCandidate(row: CandidateRow): PruneCandidate {
 const DISPLAY_NAME = sql`COALESCE(NULLIF(btrim(concat_ws(' ', c.first_name, c.last_name)), ''),
   CASE WHEN c.username IS NULL THEN NULL ELSE '@' || c.username END, '—')`;
 
+/*
+ * Why the dependent check runs on the system path (ADR-0037). Under a tenant's
+ * binding row-level security would hide every dependent row another tenant holds — a
+ * `customer_id` column with no foreign key can name any customer — and the check would
+ * read "no dependent" for a customer that has one. So the reads that DECIDE run as
+ * nexa_system, which sees every row, and confine the CUSTOMERS to the tenant with their
+ * own explicit `c.tenant_id` predicate (`pruneable`). The DELETE does not: it runs under
+ * the tenant's binding, so row-level security refuses another tenant's customer even if
+ * a predicate were wrong. The reason is written out at each call, as a literal, so
+ * tests/unit/system-path.test.ts pins it.
+ */
+
+@ScopeBound()
 export class DrizzleCustomerPruneRepository implements CustomerPruneRepository {
   constructor(private readonly db: Database) {}
 
@@ -186,6 +204,13 @@ export class DrizzleCustomerPruneRepository implements CustomerPruneRepository {
 
   async list(scope: TenantContext): Promise<PruneListing> {
     const tenantId = requireTenantId(scope);
+    return withSystemScope('customer prune: dependents in every tenant', () =>
+      this.listAcrossTenants(tenantId),
+    );
+  }
+
+  /** `list`, on the system path: the customers are confined by `pruneable(tenantId)`. */
+  private async listAcrossTenants(tenantId: string): Promise<PruneListing> {
     const dependents = await discoverDependents(this.db);
     const rows = await this.db.execute(sql`
       SELECT c.id, c.telegram_user_id, ${DISPLAY_NAME} AS display_name, c.created_at
@@ -209,6 +234,17 @@ export class DrizzleCustomerPruneRepository implements CustomerPruneRepository {
   async lockAndRecheck(scope: TenantContext, tx: unknown): Promise<readonly PruneCandidate[]> {
     const tenantId = requireTenantId(scope);
     const db = this.exec(tx);
+    // On the caller's own transaction, so the row locks are its; back to the tenant's
+    // binding before `deleteByIds` runs.
+    return withSystemScopeIn(db, 'customer prune: dependents in every tenant', () =>
+      this.lockAndRecheckAcrossTenants(tenantId, db),
+    );
+  }
+
+  private async lockAndRecheckAcrossTenants(
+    tenantId: string,
+    db: Executor,
+  ): Promise<readonly PruneCandidate[]> {
     const dependents = await discoverDependents(db);
     // 1. Lock the rows that look empty. FOR UPDATE conflicts with the FOR KEY SHARE lock
     //    every foreign-key insert takes on its parent, so from here no new dependent that has
