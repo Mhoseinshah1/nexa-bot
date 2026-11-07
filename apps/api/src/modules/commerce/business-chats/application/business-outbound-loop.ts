@@ -1,7 +1,10 @@
-import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { BusinessOutboundService } from './business-outbound.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * How often the business outbound lane runs. Short, because an operator pressing send in the
@@ -24,7 +27,8 @@ export class BusinessOutboundLoop {
   constructor(
     private readonly lane: BusinessOutboundService,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => number;
       readonly logger: {
@@ -64,15 +68,16 @@ export class BusinessOutboundLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope === null) {
-        this.progress.record(this.options.now());
-        return;
-      }
-      const report = await this.lane.deliverDue(scope);
-      if (report.claimed > 0 || report.stranded > 0 || report.purged > 0) {
-        this.options.logger.info({ ...report }, 'business outbound lane pass');
-      }
+      // Once per tenant (Phase 6A PR-6); no tenant yet is a healthy pass that did nothing.
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        const report = await this.lane.deliverDue(scope);
+        if (report.claimed > 0 || report.stranded > 0 || report.purged > 0) {
+          this.options.logger.info(
+            { tenantId: scope.tenantId, ...report },
+            'business outbound lane pass',
+          );
+        }
+      });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       this.options.logger.error({ err: error }, 'business outbound lane pass failed');

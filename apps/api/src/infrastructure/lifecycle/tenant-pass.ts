@@ -57,6 +57,25 @@ function isTenantPass(source: LoopTenantScope): source is TenantPass {
   return typeof source === 'object' && source !== null && source.kind === 'tenant-pass';
 }
 
+const REPORTED = Symbol('nexa.tenant-pass.reported');
+
+/**
+ * A tenant's failure its loop has ALREADY logged — and paced, as the FX loop's back-off
+ * does. Thrown from a loop's body, it counts as that tenant's failure exactly like any
+ * other error (the pass throws when it is the owner's bot or every bot), but the fan-out
+ * does not log it again on every tick.
+ */
+export function reportedTenantFailure(message: string): Error {
+  const error = new Error(message);
+  error.name = 'ReportedTenantFailure';
+  Object.defineProperty(error, REPORTED, { value: true });
+  return error;
+}
+
+export function isReportedTenantFailure(error: unknown): boolean {
+  return error instanceof Error && (error as unknown as Record<symbol, unknown>)[REPORTED] === true;
+}
+
 /**
  * Runs `body` once per tenant of `source`. The one call a loop's tick makes in place of
  * `const scope = this.options.scope(); if (scope === null) return; …body…`.
@@ -91,14 +110,28 @@ export class TenantFanOut {
 
   constructor(private readonly deps: TenantFanOutDeps) {}
 
-  /** A pass for the loop `name`, which stops starting tenants after `budgetMs`. */
-  pass(name: string, options: { readonly budgetMs: number }): TenantPass {
+  /**
+   * A pass for the loop `name`, which stops starting tenants after `budgetMs`.
+   *
+   * `noTenant: 'throw'` keeps the readiness of a loop that has always reported a missing
+   * installation tenant as NOT ready (the provisioner): the pass throws instead of being a
+   * healthy pass that served nobody. The default, `'idle'`, is the latter.
+   */
+  pass(
+    name: string,
+    options: { readonly budgetMs: number; readonly noTenant?: 'idle' | 'throw' },
+  ): TenantPass {
     let cursor = 0;
     return {
       kind: 'tenant-pass',
       each: async (body) => {
         const primary = this.deps.installationTenantId();
-        if (primary === null) return { served: 0, failed: 0, deferred: 0 };
+        if (primary === null) {
+          if (options.noTenant === 'throw') {
+            throw new Error(`this installation has no tenant yet; ${name} has nothing to serve`);
+          }
+          return { served: 0, failed: 0, deferred: 0 };
+        }
         const active = await this.active();
         const others = [...new Set(active)].filter((id) => id !== primary).sort();
         const start = others.length === 0 ? 0 : cursor % others.length;
@@ -123,10 +156,12 @@ export class TenantFanOut {
             failed += 1;
             if (tenantId === primary) primaryFailed = true;
             firstError ??= error;
-            this.deps.logger.error(
-              { loop: name, tenantId, err: String(error) },
-              'background pass failed for one tenant; the others are still served',
-            );
+            if (!isReportedTenantFailure(error)) {
+              this.deps.logger.error(
+                { loop: name, tenantId, err: String(error) },
+                'background pass failed for one tenant; the others are still served',
+              );
+            }
           }
         }
         // The next pass starts with the first bot this one did not reach.

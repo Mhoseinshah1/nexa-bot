@@ -1,6 +1,12 @@
-import type { TenantContext } from '@nexa/contracts';
+import type { TenantContext, TenantId } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  isReportedTenantFailure,
+  reportedTenantFailure,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 import { phasedSweepDue } from '../../../platform/capacity/domain/schedule-offset.js';
 
 /**
@@ -49,12 +55,17 @@ export class CustomerReminderLoop {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private readonly progress: LoopProgress;
-  private readonly lastRunAt = new Map<string, number>();
+  /**
+   * When each sweep last ran, PER TENANT (Phase 6A PR-6): one loop serves every active bot,
+   * and one bot's pass must never consume another bot's due time.
+   */
+  private readonly lastRunAt = new Map<TenantId, Map<string, number>>();
 
   constructor(
     private readonly sweeps: readonly CustomerReminderSweep[],
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => number;
       /**
@@ -87,6 +98,15 @@ export class CustomerReminderLoop {
     this.timer.unref?.();
   }
 
+  private lastRunOf(tenantId: TenantId): Map<string, number> {
+    let runs = this.lastRunAt.get(tenantId);
+    if (runs === undefined) {
+      runs = new Map<string, number>();
+      this.lastRunAt.set(tenantId, runs);
+    }
+    return runs;
+  }
+
   /** Stops the timer and waits for a tick already inside a transaction. */
   async stop(): Promise<void> {
     if (this.timer !== null) {
@@ -107,31 +127,44 @@ export class CustomerReminderLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope === null) {
-        this.progress.record(this.options.now());
-        return;
-      }
-      let failed = false;
-      for (const sweep of this.sweeps) {
-        const at = this.options.now();
-        const last = this.lastRunAt.get(sweep.name);
-        const offset = this.options.offsetMs?.(scope, sweep.name, sweep.everyMs) ?? 0;
-        if (offset === 0) {
-          if (last !== undefined && at - last < sweep.everyMs) continue;
-        } else if (!phasedSweepDue(at, last ?? null, sweep.everyMs, offset)) {
-          continue;
+      // Once per tenant (Phase 6A PR-6); no tenant yet is a healthy tick that did nothing.
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        const lastRunAt = this.lastRunOf(scope.tenantId);
+        let failed = false;
+        for (const sweep of this.sweeps) {
+          const at = this.options.now();
+          const last = lastRunAt.get(sweep.name);
+          const offset = this.options.offsetMs?.(scope, sweep.name, sweep.everyMs) ?? 0;
+          if (offset === 0) {
+            if (last !== undefined && at - last < sweep.everyMs) continue;
+          } else if (!phasedSweepDue(at, last ?? null, sweep.everyMs, offset)) {
+            continue;
+          }
+          try {
+            const told = await sweep.runOnce(scope);
+            lastRunAt.set(sweep.name, at);
+            if (told > 0) {
+              this.options.logger.info(
+                { tenantId: scope.tenantId, sweep: sweep.name, told },
+                'queued reminders',
+              );
+            }
+          } catch (error: unknown) {
+            failed = true;
+            this.options.logger.error(
+              { tenantId: scope.tenantId, error, sweep: sweep.name },
+              'customer reminder sweep failed',
+            );
+          }
         }
-        try {
-          const told = await sweep.runOnce(scope);
-          this.lastRunAt.set(sweep.name, at);
-          if (told > 0) this.options.logger.info({ sweep: sweep.name, told }, 'queued reminders');
-        } catch (error: unknown) {
-          failed = true;
-          this.options.logger.error({ error, sweep: sweep.name }, 'customer reminder sweep failed');
-        }
+        // Logged above, sweep by sweep; this tenant's tick is not progress.
+        if (failed) throw reportedTenantFailure('a customer reminder sweep failed');
+      });
+      this.progress.record(this.options.now());
+    } catch (error: unknown) {
+      if (!isReportedTenantFailure(error)) {
+        this.options.logger.error({ error }, 'customer reminder tick failed');
       }
-      if (!failed) this.progress.record(this.options.now());
     } finally {
       this.running = false;
     }

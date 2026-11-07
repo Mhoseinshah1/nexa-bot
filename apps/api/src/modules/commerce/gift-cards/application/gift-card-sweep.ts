@@ -16,6 +16,10 @@ import type { SessionRepository } from '../../../platform/identity/application/p
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 import type { GiftCardSweepRepository } from './ports.js';
 
 /** Hourly: an export's window is a day, so a purge is at most an hour late. */
@@ -89,7 +93,8 @@ export class GiftCardSweepLoop {
   constructor(
     private readonly deps: GiftCardSweepDeps,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly initialDelayMs: number;
       readonly ids: Pick<IdGenerator, 'uuid'>;
@@ -139,24 +144,27 @@ export class GiftCardSweepLoop {
     if (this.running) return null;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope === null) {
-        this.progress.record(this.deps.clock.now().getTime());
-        return { exportsPurged: 0, attemptsDeleted: 0 };
-      }
-      const actor = systemJobActor('gift-card-sweep', this.options.ids.uuid() as CorrelationId);
-      let result: { readonly exportsPurged: number; readonly attemptsDeleted: number };
+      // Once per tenant (Phase 6A PR-6); no tenant yet is a healthy pass that removed nothing.
+      const total = { exportsPurged: 0, attemptsDeleted: 0 };
       try {
-        result = await sweepGiftCards(this.deps, scope, actor);
+        await forEachLoopTenant(this.options.scope, async (scope) => {
+          const actor = systemJobActor('gift-card-sweep', this.options.ids.uuid() as CorrelationId);
+          const result = await sweepGiftCards(this.deps, scope, actor);
+          total.exportsPurged += result.exportsPurged;
+          total.attemptsDeleted += result.attemptsDeleted;
+          if (result.exportsPurged + result.attemptsDeleted > 0) {
+            this.options.logger.info(
+              { tenantId: scope.tenantId, ...result },
+              'gift card exports purged and attempts deleted',
+            );
+          }
+        });
       } catch (error: unknown) {
         this.options.logger.error({ error }, 'gift card sweep failed');
         return null;
       }
       this.progress.record(this.deps.clock.now().getTime());
-      if (result.exportsPurged + result.attemptsDeleted > 0) {
-        this.options.logger.info(result, 'gift card exports purged and attempts deleted');
-      }
-      return result;
+      return total;
     } finally {
       this.running = false;
     }

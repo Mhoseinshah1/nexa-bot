@@ -4623,7 +4623,7 @@ export class GatewayPaymentService {
     errorCode: string,
     at: Date,
   ): Promise<void> {
-    if (!this.inquiryHealth.failure(provider, at.getTime())) return;
+    if (!this.inquiryHealth.failure(inquiryHealthKey(scope, provider), at.getTime())) return;
     const recorded = await recordQuietly(
       this.deps.opsLog,
       scope,
@@ -4640,7 +4640,8 @@ export class GatewayPaymentService {
     );
     // Only a WRITTEN record holds the next one off (Codex P2 on #260): `recordQuietly`
     // swallows a failure, and marking it recorded anyway silenced the outage for a window.
-    if (recorded !== null) this.inquiryHealth.recorded(provider, at.getTime());
+    if (recorded !== null)
+      this.inquiryHealth.recorded(inquiryHealthKey(scope, provider), at.getTime());
   }
 
   /**
@@ -4683,7 +4684,7 @@ export class GatewayPaymentService {
       this.deps.logger,
     );
     // The next answered inquiry looks for it at once, not a recheck later.
-    if (recorded !== null) this.inquiryHealth.forgetCheck(provider);
+    if (recorded !== null) this.inquiryHealth.forgetCheck(inquiryHealthKey(scope, provider));
   }
 
   /** An answered inquiry: closes the failing condition when one is open. Never throws. */
@@ -4692,7 +4693,7 @@ export class GatewayPaymentService {
     provider: PaymentGatewayProvider,
     at: Date,
   ): Promise<void> {
-    if (!this.inquiryHealth.success(provider, at.getTime())) return;
+    if (!this.inquiryHealth.success(inquiryHealthKey(scope, provider), at.getTime())) return;
     const dedupeKey = `${GATEWAY_INQUIRY_FAILING_CODE}:${provider}`;
     const credentialKey = PAYMENT_GATEWAY_DESCRIPTORS[provider].verifyKey
       ? inquiryCredentialConditionKey(provider)
@@ -4709,7 +4710,7 @@ export class GatewayPaymentService {
         { provider, error: error instanceof Error ? error.name : 'unknown' },
         'could not read the inquiry condition; it is checked again on a later answer',
       );
-      this.inquiryHealth.forgetCheck(provider);
+      this.inquiryHealth.forgetCheck(inquiryHealthKey(scope, provider));
       return;
     }
     if (credentialOpen && credentialKey !== null) {
@@ -4727,7 +4728,7 @@ export class GatewayPaymentService {
         },
         this.deps.logger,
       );
-      if (closed === null) this.inquiryHealth.forgetCheck(provider);
+      if (closed === null) this.inquiryHealth.forgetCheck(inquiryHealthKey(scope, provider));
     }
     if (!open) return;
     await recordQuietly(
@@ -4835,6 +4836,16 @@ export function finalMessagePath(
  */
 export function inquiryCredentialConditionKey(provider: PaymentGatewayProvider): string {
   return `${GATEWAY_MISCONFIGURED_CODE}:${provider}:verify-key`;
+}
+
+/**
+ * What `GatewayInquiryHealth` counts failures and recheck times under: one tenant's route
+ * to one gateway (Phase 6A PR-6). The worker's one lane serves every active tenant, each
+ * with its own credentials and its own operations condition, so one bot's failing gateway
+ * must neither open another bot's condition nor hold its record off for a window.
+ */
+function inquiryHealthKey(scope: TenantContext, provider: PaymentGatewayProvider): string {
+  return `${scope.tenantId}:${provider}`;
 }
 
 /**

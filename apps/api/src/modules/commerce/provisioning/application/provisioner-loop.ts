@@ -4,6 +4,12 @@ import type { OperationOutcomeAnnouncer } from '../../messaging/application/oper
 import type { ProvisionerService } from './provisioner.service.js';
 import type { OperationCardEditor } from './operation-card.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  isReportedTenantFailure,
+  reportedTenantFailure,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * The loop that drives the executor, and the readiness signal it earns.
@@ -84,7 +90,11 @@ export class ProvisionerLoop {
      */
     private readonly outcomes: OperationOutcomeAnnouncer,
     private readonly options: {
-      readonly scope: () => TenantContext;
+      /**
+       * Phase 6A PR-6: every active tenant's pass (`TenantFanOut`, built with `noTenant:
+       * 'throw'`), or one fixed scope that throws while the installation has no tenant.
+       */
+      readonly scope: LoopTenantScope;
       /**
        * The cashback earner (WP8 P9), driven by the SAME tick, after the drain that
        * delivers. A promise whose order was just delivered is credited one tick later at
@@ -164,111 +174,116 @@ export class ProvisionerLoop {
     this.running = true;
     this.startedAt ??= this.options.now();
     this.tickActivityAt = this.options.now();
-    let scope: TenantContext | null = null;
-    let failed = false;
     try {
-      scope = this.options.scope();
-      for (let drained = 0; drained < DRAIN_LIMIT; drained += 1) {
-        const result = await this.executor.runOnce(scope);
-        this.touch();
-        if (result.kind === 'IDLE') break;
-        /*
-         * ONE LINE PER OPERATION, and the reason it is here rather than inside
-         * the executor.
-         *
-         * The production report for order `01a0c54b` says the provisioner logs
-         * "contained no useful per-operation failure entry", and that was exactly
-         * true: this loop logged only a thrown tick, and a refusal does not throw
-         * — it returns a value. Seven minutes of retries produced no line at all.
-         *
-         * At `info` rather than `error`, including for failures: every one of
-         * these is an expected outcome the database already records, and a log
-         * level is how an operator decides what to wake up for. The operational
-         * event and `provisioning.stalled` are the alerting path; this is the
-         * trail that says what happened in what order.
-         *
-         * `secretsSafe` is the shape rather than a filter: `ExecutionResult`
-         * carries ids and enums and has nowhere to put a credential, a
-         * subscription URL or a provider's body. Spreading it is safe BECAUSE
-         * that is true, which is why the type says so at length.
-         */
-        this.options.logger.info(
-          { ...result, worker: 'provisioner' },
-          result.kind === 'REFUSED' ? 'provisioning refused' : 'provisioning attempted',
-        );
-        /*
-         * Announced BEFORE the `REFUSED` break, and for a refusal too.
-         *
-         * Three refusal paths terminalise the operation to `ABANDONED` — a missing
-         * service, a capability this release does not implement, a service in a state
-         * the operation is not legal from — and this used to break on `REFUSED` first.
-         * So a customer whose renewal was refused because their panel type cannot be
-         * renewed on was told nothing at all, deterministically, every time. Found by
-         * the Codex review of PR #30.
-         *
-         * `announce` reads the operation's own state and queues nothing for one that is
-         * not terminal, so calling it for every refusal — including the ones that hold
-         * off and retry — is correct rather than merely harmless. Queued, not sent.
-         */
-        await this.outcomes.announce(scope, result.operationId);
-        this.touch();
-        /*
-         * R3 item 10: a disable or enable asked from a service card is answered ON the
-         * card, in this tick. `answer` claims first and does nothing for any other
-         * operation, so calling it for every result is safe.
-         */
-        await this.options.cards?.answer(scope, result.operationId);
-        this.touch();
-        if (result.kind === 'REFUSED') break;
-      }
       /*
-       * Then the announcements, for the services the drain above just activated.
-       *
-       * ONE batch per tick, not drained to empty like the provisioning half. A
-       * provisioning backlog clears against panels this installation's operator owns
-       * and whose rate this installation's own budget already bounds; an announcement
-       * backlog clears against Telegram, whose limits are somebody else's and which
-       * answers a burst by refusing the rest. `DRAIN_LIMIT` per tick is the ceiling,
-       * and a backlog larger than that takes more ticks rather than one long one.
+       * Once per tenant (Phase 6A PR-6): the SAME tick — drain, announcements, settlement
+       * lanes — in each active tenant's scope. A tenant whose drain or lane failed is that
+       * tenant's failure (logged where it happened); the fan-out decides the tick's
+       * progress: the owner's bot, or every bot, failing costs it; one hosted bot does not.
+       * No installation tenant is still a failed tick (`noTenant: 'throw'`), as before.
        */
-      await this.delivery.deliverDue(scope, DRAIN_LIMIT);
-      this.touch();
-      /*
-       * And the operations a CRASH left terminal and unanswered.
-       *
-       * The line above this tick's drain — `await this.outcomes.announce(...)`
-       * — runs in a transaction AFTER the one that terminalised the operation,
-       * and a process that dies between them leaves an operation nothing will
-       * ever announce again: the loop has moved on and there is one call site.
-       * `announceDue` sweeps on the STATE rather than on a call site, so a
-       * terminalising path added later is covered without anybody remembering.
-       *
-       * Its grace period means the ordinary operation never reaches it — the
-       * synchronous call above answers within milliseconds — so anything this
-       * returns is a crash rather than a race with the loop.
-       *
-       * ONE batch per tick and not drained, for the same reason `deliverDue`
-       * gives one line up: what it queues is claimed against Telegram, whose
-       * limits are somebody else's.
-       */
-      await this.outcomes.announceDue(scope, DRAIN_LIMIT);
-      this.touch();
-      // R3: cards a crash left unanswered, after the grace.
-      await this.options.cards?.answerDue(scope, DRAIN_LIMIT);
-      this.laneProgressAt.set('provisioner', this.options.now());
-    } catch (error: unknown) {
-      /*
-       * A failed tick makes NO progress, deliberately.
-       *
-       * Swallowed so one bad tick does not kill the process, and NOT recorded as
-       * progress so readiness goes stale if every tick keeps failing. Those two
-       * together are what make the heartbeat honest.
-       */
-      failed = true;
-      this.options.logger.error({ error }, 'provisioner tick failed');
-    }
-    try {
-      if (scope !== null) {
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        let failed = false;
+        try {
+          for (let drained = 0; drained < DRAIN_LIMIT; drained += 1) {
+            const result = await this.executor.runOnce(scope);
+            this.touch();
+            if (result.kind === 'IDLE') break;
+            /*
+             * ONE LINE PER OPERATION, and the reason it is here rather than inside
+             * the executor.
+             *
+             * The production report for order `01a0c54b` says the provisioner logs
+             * "contained no useful per-operation failure entry", and that was exactly
+             * true: this loop logged only a thrown tick, and a refusal does not throw
+             * — it returns a value. Seven minutes of retries produced no line at all.
+             *
+             * At `info` rather than `error`, including for failures: every one of
+             * these is an expected outcome the database already records, and a log
+             * level is how an operator decides what to wake up for. The operational
+             * event and `provisioning.stalled` are the alerting path; this is the
+             * trail that says what happened in what order.
+             *
+             * `secretsSafe` is the shape rather than a filter: `ExecutionResult`
+             * carries ids and enums and has nowhere to put a credential, a
+             * subscription URL or a provider's body. Spreading it is safe BECAUSE
+             * that is true, which is why the type says so at length.
+             */
+            this.options.logger.info(
+              { ...result, worker: 'provisioner' },
+              result.kind === 'REFUSED' ? 'provisioning refused' : 'provisioning attempted',
+            );
+            /*
+             * Announced BEFORE the `REFUSED` break, and for a refusal too.
+             *
+             * Three refusal paths terminalise the operation to `ABANDONED` — a missing
+             * service, a capability this release does not implement, a service in a state
+             * the operation is not legal from — and this used to break on `REFUSED` first.
+             * So a customer whose renewal was refused because their panel type cannot be
+             * renewed on was told nothing at all, deterministically, every time. Found by
+             * the Codex review of PR #30.
+             *
+             * `announce` reads the operation's own state and queues nothing for one that is
+             * not terminal, so calling it for every refusal — including the ones that hold
+             * off and retry — is correct rather than merely harmless. Queued, not sent.
+             */
+            await this.outcomes.announce(scope, result.operationId);
+            this.touch();
+            /*
+             * R3 item 10: a disable or enable asked from a service card is answered ON the
+             * card, in this tick. `answer` claims first and does nothing for any other
+             * operation, so calling it for every result is safe.
+             */
+            await this.options.cards?.answer(scope, result.operationId);
+            this.touch();
+            if (result.kind === 'REFUSED') break;
+          }
+          /*
+           * Then the announcements, for the services the drain above just activated.
+           *
+           * ONE batch per tick, not drained to empty like the provisioning half. A
+           * provisioning backlog clears against panels this installation's operator owns
+           * and whose rate this installation's own budget already bounds; an announcement
+           * backlog clears against Telegram, whose limits are somebody else's and which
+           * answers a burst by refusing the rest. `DRAIN_LIMIT` per tick is the ceiling,
+           * and a backlog larger than that takes more ticks rather than one long one.
+           */
+          await this.delivery.deliverDue(scope, DRAIN_LIMIT);
+          this.touch();
+          /*
+           * And the operations a CRASH left terminal and unanswered.
+           *
+           * The line above this tick's drain — `await this.outcomes.announce(...)`
+           * — runs in a transaction AFTER the one that terminalised the operation,
+           * and a process that dies between them leaves an operation nothing will
+           * ever announce again: the loop has moved on and there is one call site.
+           * `announceDue` sweeps on the STATE rather than on a call site, so a
+           * terminalising path added later is covered without anybody remembering.
+           *
+           * Its grace period means the ordinary operation never reaches it — the
+           * synchronous call above answers within milliseconds — so anything this
+           * returns is a crash rather than a race with the loop.
+           *
+           * ONE batch per tick and not drained, for the same reason `deliverDue`
+           * gives one line up: what it queues is claimed against Telegram, whose
+           * limits are somebody else's.
+           */
+          await this.outcomes.announceDue(scope, DRAIN_LIMIT);
+          this.touch();
+          // R3: cards a crash left unanswered, after the grace.
+          await this.options.cards?.answerDue(scope, DRAIN_LIMIT);
+          this.laneProgressAt.set('provisioner', this.options.now());
+        } catch (error: unknown) {
+          /*
+           * A failed tick makes NO progress, deliberately.
+           *
+           * Swallowed so one bad tick does not kill the process, and NOT recorded as
+           * progress so readiness goes stale if every tick keeps failing. Those two
+           * together are what make the heartbeat honest.
+           */
+          failed = true;
+          this.options.logger.error({ tenantId: scope.tenantId, error }, 'provisioner tick failed');
+        }
         /*
          * Then the settlement lanes, EACH on its own (Codex review of #83, round 11).
          *
@@ -293,11 +308,21 @@ export class ProvisionerLoop {
           } catch (error: unknown) {
             failed = true;
             this.touch();
-            this.options.logger.error({ error, lane }, 'provisioner settlement lane failed');
+            this.options.logger.error(
+              { tenantId: scope.tenantId, error, lane },
+              'provisioner settlement lane failed',
+            );
           }
         }
+        if (failed) throw reportedTenantFailure('a provisioner lane failed for this tenant');
+      });
+      this.lastProgressAt = this.options.now();
+    } catch (error: unknown) {
+      // A tenant's failure was logged where it happened; anything else (no tenant yet, the
+      // read of the active tenants) is logged here. Neither is progress.
+      if (!isReportedTenantFailure(error)) {
+        this.options.logger.error({ error }, 'provisioner tick failed');
       }
-      if (!failed) this.lastProgressAt = this.options.now();
     } finally {
       this.running = false;
       this.tickActivityAt = null;

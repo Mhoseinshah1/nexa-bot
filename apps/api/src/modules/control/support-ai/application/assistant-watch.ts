@@ -13,6 +13,10 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { DrizzleSupportAiJobRepository } from '../infrastructure/drizzle-support-ai-job.repository.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /** The one open row of the condition: an installation has one assistant role. */
 export const SUPPORT_ASSISTANT_STALLED_DEDUPE_KEY = `${SUPPORT_ASSISTANT_STALLED_CODE}:watch`;
@@ -139,7 +143,8 @@ export class SupportAssistantWatchLoop {
   constructor(
     private readonly watch: Pick<SupportAssistantWatch, 'check'>,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => number;
       readonly logger: {
@@ -179,10 +184,15 @@ export class SupportAssistantWatchLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope !== null && (await this.watch.check(scope)) === 'STALLED') {
-        this.options.logger.warn({}, 'support assistant: due AI work is waiting unclaimed');
-      }
+      // Once per tenant (Phase 6A PR-6): each bot's own jobs, its own condition.
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        if ((await this.watch.check(scope)) === 'STALLED') {
+          this.options.logger.warn(
+            { tenantId: scope.tenantId },
+            'support assistant: due AI work is waiting unclaimed',
+          );
+        }
+      });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       this.options.logger.error({ err: error }, 'support assistant watch pass failed');
