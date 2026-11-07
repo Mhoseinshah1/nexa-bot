@@ -12,12 +12,17 @@ don't stop to ask; order PR-1/PR-4 → PR-2 → PR-3 → PR-5). Worktrees under 
 
 ## Open
 
-- PR-5 `feat/late-payment-policy` — money-tier agent implementing (worktree /home/user/wt/pr5).
-- PR-3 `feat/service-auto-delete` — money-tier agent implementing.
+- PR-5 `feat/late-payment-policy` — built, `pnpm verify` green, lead-reviewed; branch pushed, NO PR yet. Migration
+  0322_late_payment_policy (data only, hand-registered) must become 0325 after PR-3 merges. Body draft:
+  `docs/ob1-handoff/pr5-body-draft.md`.
+- PR-3 https://github.com/Mhoseinshah1/nexa-bot/pull/422 — migration 0324 (renumbered from 0322, NOT byte-identical:
+  the kind CHECK also lists #421's two reseller kinds). Codex findings P1/P2 being fixed in one commit; deploy-smoke
+  reds on 58045405 died in the image build (apt.postgresql.org), re-check on the fix head.
 
 ## Next step (exact)
 
-PR-3: merge main, renumber its migration past 0323, gate, push, PR, Codex, merge. Then PR-5 the same.
+Merge PR-3 on green. Then PR-5: merge main, renumber its hand-registered migration to 0325 (journal `when` =
+Date.now()), db:check, migration suites, push, open PR with the draft body, `@codex review`, one fix commit, merge.
 
 ## Decisions taken
 
@@ -31,3 +36,8 @@ PR-3: merge main, renumber its migration past 0323, gate, push, PR, Codex, merge
   reopens it). Approve reuses `ResellerAdminService.registerWithin` in the approval's transaction; an applicant who
   became a reseller another way is refused, request stays PENDING. No new permission (resellers.view/edit).
 - PR-3: a transferred service keeps state_since; its scheduled run is cancelled and the new owner gets a full warning.
+- PR-5: keys kept, value type boolean→WALLET|REVIEW|DELIVER. Terminal order → a fulfilment order tied to the payment
+  (copies the frozen line and totals). Exactly once: one ledger key `<paymentId>:late-credit` (unique) under the payment's
+  FOR UPDATE; DELIVER writes it inside the purchase tx, any failed check rolls back to the WALLET credit. Both operator
+  choices need `payments.reconcile` (no payments-approve permission exists). Ops-group buttons are URL buttons to the
+  Web Admin decision dialog.
