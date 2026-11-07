@@ -1822,7 +1822,6 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.reseller_request.start_bot':
     'برای ادامه، ربات را یک بار در چت خصوصی باز کنید (/start) و دوباره دکمه را بزنید.',
   'bot.admin.reseller_request.cancelled': 'انصراف داده شد؛ چیزی فرستاده نشد.',
-  'bot.admin.reseller_request.not_implemented': 'تأیید درخواست هنوز در دسترس نیست.',
   'bot.admin.reseller_request.already_reseller':
     'این متقاضی همین حالا نماینده است؛ چیزی تغییر نکرد و درخواست باز ماند. می‌توانید آن را رد کنید یا سطح او را در صفحهٔ نمایندگان تغییر دهید.',
   'bot.admin.reseller_request.button_confirm': '✅ تأیید نهایی',

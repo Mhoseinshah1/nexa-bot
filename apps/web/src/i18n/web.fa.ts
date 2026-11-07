@@ -7286,7 +7286,6 @@ export const WEB_FA = {
   'web.err_rr_answer_invalid': 'پاسخ یکی از سؤال‌های اجباری کامل نیست.',
   'web.err_rr_tier_invalid': 'سطح انتخابی وجود ندارد.',
   'web.err_rr_attachment_unavailable': 'این پیوست دیگر در دسترس نیست.',
-  'web.err_rr_approve_not_implemented': 'تأیید درخواست هنوز فعال نشده است.',
   'web.opslog_type_reseller_request': 'درخواست نمایندگی (ثبت، پاسخ متقاضی و تصمیم)',
   'web.opslog_type_report_summary': 'گزارش شبانه — خلاصه',
   'web.opslog_type_report_financial': 'گزارش شبانه — مالی',

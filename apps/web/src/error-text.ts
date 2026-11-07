@@ -616,7 +616,6 @@ export const ERROR_TEXT = {
   'reseller_request.answer_invalid': 'web.err_rr_answer_invalid',
   'reseller_request.tier_invalid': 'web.err_rr_tier_invalid',
   'reseller_request.attachment_unavailable': 'web.err_rr_attachment_unavailable',
-  'reseller_request.approve_not_implemented': 'web.err_rr_approve_not_implemented',
   'ticket.category_invalid': 'web.err_ticket_category_invalid',
   'ticket.category_limit': 'web.err_ticket_category_limit',
   'ticket.category_not_found': 'web.err_ticket_category_not_found',

@@ -89,8 +89,6 @@ export const RESELLER_REQUEST_ERROR_CODES = {
   /** The chosen tier is not an existing, active reseller tier of this tenant. */
   TIER_INVALID: 'reseller_request.tier_invalid',
   ATTACHMENT_UNAVAILABLE: 'reseller_request.attachment_unavailable',
-  /** The approval transaction is the next change's: the boundary exists, the body does not. */
-  APPROVE_NOT_IMPLEMENTED: 'reseller_request.approve_not_implemented',
 } as const;
 export type ResellerRequestErrorCode =
   (typeof RESELLER_REQUEST_ERROR_CODES)[keyof typeof RESELLER_REQUEST_ERROR_CODES];
@@ -440,7 +438,6 @@ export const RESELLER_REQUEST_TEMPLATES = [
     'bot.admin.reseller_request.cancelled',
     'PR-2: the operator cancelled a prompt; nothing was sent.',
   ),
-  tpl('bot.admin.reseller_request.not_implemented', 'PR-2: approval is not available yet.'),
   tpl(
     'bot.admin.reseller_request.already_reseller',
     'PR-2: the applicant became a reseller some other way while the request was open; nothing was changed and the request stays open.',

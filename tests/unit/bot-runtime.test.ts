@@ -1693,7 +1693,6 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.reseller_request.done_message',
       'bot.admin.reseller_request.done_rejected',
       'bot.admin.reseller_request.message_prompt',
-      'bot.admin.reseller_request.not_implemented',
       'bot.admin.reseller_request.reject_prompt',
       'bot.admin.reseller_request.start_bot',
       'bot.admin.reseller_request.tiers',
