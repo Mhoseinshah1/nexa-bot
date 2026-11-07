@@ -71,6 +71,30 @@ export class CapacityLimitsService {
     };
   }
 
+  /**
+   * The saved answer of an earlier `set` under the same idempotency key, or null when there
+   * is none — WITHOUT changing anything. For a caller that spends something before `set`
+   * (the creator panel's fresh code): a retried request must get its first result back,
+   * never a second charge. A reused key with a different payload is refused, as in `set`.
+   */
+  async replayOf(
+    scope: ScopeContext,
+    actor: ActorContext,
+    input: unknown,
+  ): Promise<CapacitySetLimitResponse | null> {
+    await this.authorize(scope, actor, 'capacity.limit.set');
+    const command = capacitySetLimitRequestSchema.parse(input);
+    const replay = await this.deps.idempotency.find<{ tenantId: string }>(
+      scope,
+      actor.surface,
+      command.idempotencyKey,
+      setLimitRequestHash(command),
+    );
+    return replay === null
+      ? null
+      : { tenant: await this.tenantView(command.tenantId), replayed: true };
+  }
+
   async set(
     scope: ScopeContext,
     actor: ActorContext,
@@ -98,11 +122,7 @@ export class CapacityLimitsService {
         { resource: command.resource, problem: 'INSTALLATION_ONLY' },
       );
     }
-    const requestHash = hashRequest({
-      tenantId: command.tenantId,
-      resource: command.resource,
-      limit: command.limit,
-    });
+    const requestHash = setLimitRequestHash(command);
     const replay = await this.deps.idempotency.find<{ tenantId: string }>(
       scope,
       actor.surface,
@@ -229,4 +249,17 @@ export class CapacityLimitsService {
       }),
     };
   }
+}
+
+/** The request a `set` idempotency key is bound to (one definition: `set` and `replayOf`). */
+function setLimitRequestHash(command: {
+  readonly tenantId: string;
+  readonly resource: string;
+  readonly limit: unknown;
+}): string {
+  return hashRequest({
+    tenantId: command.tenantId,
+    resource: command.resource,
+    limit: command.limit,
+  });
 }

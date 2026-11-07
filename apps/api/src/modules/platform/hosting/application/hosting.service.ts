@@ -59,7 +59,7 @@ export interface HostingServiceDeps {
   readonly system: HostedTenantSystemPath;
   readonly section: HostingSectionService;
   readonly owner: HostingOwnerGuard;
-  readonly capacityLimits: Pick<CapacityLimitsService, 'list' | 'set'>;
+  readonly capacityLimits: Pick<CapacityLimitsService, 'list' | 'replayOf' | 'set'>;
   readonly capacityResolver: Pick<CapacityLimitResolver, 'numberOf' | 'tierOf'>;
   readonly idempotency: IdempotencyStore;
   readonly scopeActivity: ScopeActivityReader;
@@ -446,8 +446,9 @@ export class HostingService {
 
   /**
    * One limit, «نامحدود» included: PR-2's `CapacityLimitsService.set` (its validation, its
-   * idempotency, its audit row), after the section and a fresh code. The code is spent in
-   * its own transaction first; PR-2's service then runs its own.
+   * idempotency, its audit row), after the section and a fresh code. A replay of a saved
+   * change is answered first, spending no code; otherwise the code is spent in its own
+   * transaction first and PR-2's service then runs its own.
    */
   async setLimit(
     scope: ScopeContext,
@@ -467,6 +468,17 @@ export class HostingService {
     const command = hostedBotSetLimitRequestSchema.parse(input);
     // Only the installation's own bot or a bot it hosts.
     if (tenantId !== installation.tenantId) await this.requireRow(installation, tenantId);
+    const limitCommand = {
+      idempotencyKey: command.idempotencyKey,
+      tenantId,
+      resource: command.resource,
+      limit: command.limit,
+    };
+    // A retry of a change that already committed answers its first result BEFORE a code is
+    // spent, as every other hosting mutation does: a retried request is never refused for a
+    // code it already used, and retries never count towards the factor's lockout.
+    const replay = await this.deps.capacityLimits.replayOf(installation, actor, limitCommand);
+    if (replay !== null) return replay;
     await this.deps.section.withFreshProof(
       installation,
       actor,
@@ -474,12 +486,7 @@ export class HostingService {
       'hosting.set_limit',
       async (tx) => this.inTransaction(installation, actor, token, tx),
     );
-    return this.deps.capacityLimits.set(installation, actor, {
-      idempotencyKey: command.idempotencyKey,
-      tenantId,
-      resource: command.resource,
-      limit: command.limit,
-    });
+    return this.deps.capacityLimits.set(installation, actor, limitCommand);
   }
 
   /**

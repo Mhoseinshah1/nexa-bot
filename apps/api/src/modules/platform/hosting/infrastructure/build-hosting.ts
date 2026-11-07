@@ -64,7 +64,7 @@ export function buildHosting(deps: {
     isLive(scope: ScopeContext, id: AdminSessionId, now: Date, tx?: unknown): Promise<boolean>;
   };
   readonly verifyOwnPassword: HostingSectionDeps['verifyOwnPassword'];
-  readonly capacityLimits: Pick<CapacityLimitsService, 'list' | 'set'>;
+  readonly capacityLimits: Pick<CapacityLimitsService, 'list' | 'replayOf' | 'set'>;
   readonly capacityResolver: Pick<CapacityLimitResolver, 'numberOf' | 'tierOf'>;
   readonly systemProbe: SystemProbe;
   readonly diskPaths: readonly string[];

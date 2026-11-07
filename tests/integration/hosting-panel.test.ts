@@ -633,6 +633,25 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
       expect((await act('activate')).bot).toMatchObject({ state: 'ACTIVE', deletedAt: null });
       await act('delete');
 
+      // A deleted bot whose date has passed: ACTIVATE refuses it until the date changes, and
+      // changing the date leaves it deleted (the Web Admin offers the expiry action there).
+      const soon = new Date(now().getTime() + 60_000).toISOString();
+      await api.container.hosting.setExpiry(tenantA, ownerActor, panel.token, id, {
+        idempotencyKey: key(),
+        proof: { code: code(panel.secret) },
+        expiresAt: soon,
+      });
+      offsetMs += 120_000;
+      expect(await codeOf(act('activate'))).toBe(HOSTING_ERROR_CODES.EXPIRY_PASSED);
+      const redated = await api.container.hosting.setExpiry(tenantA, ownerActor, panel.token, id, {
+        idempotencyKey: key(),
+        proof: { code: code(panel.secret) },
+        expiresAt: null,
+      });
+      expect(redated.bot).toMatchObject({ state: 'DELETED', expiresAt: null });
+      expect((await act('activate')).bot).toMatchObject({ state: 'ACTIVE', deletedAt: null });
+      await act('delete');
+
       const preview = await api.container.hosting.purgePreview(
         tenantA,
         ownerActor,
@@ -678,17 +697,41 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
       });
       expect(cleared.bot.expiresAt).toBeNull();
 
-      const changed = await api.container.hosting.setLimit(tenantA, ownerActor, panel.token, id, {
+      const limitInput = {
         idempotencyKey: key(),
         proof: { code: code(panel.secret) },
-        resource: 'UPDATE_CONCURRENCY',
-        limit: { mode: 'UNLIMITED' },
-      });
+        resource: 'UPDATE_CONCURRENCY' as const,
+        limit: { mode: 'UNLIMITED' as const },
+      };
+      const changed = await api.container.hosting.setLimit(
+        tenantA,
+        ownerActor,
+        panel.token,
+        id,
+        limitInput,
+      );
+      expect(changed.replayed).toBe(false);
       expect(
         changed.tenant.limits.find((limit) => limit.resource === 'UPDATE_CONCURRENCY')?.limit,
       ).toEqual({
         mode: 'UNLIMITED',
       });
+      // A retry with the same key (and so the code it already spent) answers the saved result:
+      // it is not refused for the used code, and it counts nothing towards the lockout.
+      const [before] = await api.container.database.db.select().from(hostingTotpFactors);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const retried = await api.container.hosting.setLimit(
+          tenantA,
+          ownerActor,
+          panel.token,
+          id,
+          limitInput,
+        );
+        expect(retried.replayed).toBe(true);
+      }
+      const [after] = await api.container.database.db.select().from(hostingTotpFactors);
+      expect(after?.failedAttempts).toBe(before?.failedAttempts);
+      expect(after?.lastUsedStep).toBe(before?.lastUsedStep);
       // Without a fresh code, PR-2's limit is not reached through the panel.
       expect(
         await codeOf(
