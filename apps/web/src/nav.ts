@@ -454,6 +454,17 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_resellers',
   },
   {
+    // PR-2: «درخواست‌های نمایندگی» and its «سؤال‌ها» tab.
+    id: 'reseller-requests',
+    path: '/reseller-requests',
+    label: 'web.nav_reseller_requests',
+    icon: 'resellers',
+    // Reading is `resellers.view`; the message, the decision and the questions are
+    // `resellers.edit`, passed to the page as a prop and charged again by the service.
+    permission: 'resellers.view',
+    group: 'web.navgroup_resellers',
+  },
+  {
     id: 'bots',
     path: '/bots',
     label: 'web.nav_bots',

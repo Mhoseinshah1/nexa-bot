@@ -7,6 +7,9 @@ import {
   BROADCAST_ACTION_COMMANDS,
   type BroadcastAction,
   REFERRAL_MENU_COMMAND,
+  RESELLER_REQUEST_CALLBACKS,
+  RESELLER_REQUEST_MENU_COMMAND,
+  RESELLER_REQUEST_STEP_ACTIONS,
   TRIAL_MENU_COMMAND,
   USAGE_REMINDER_PERCENT_MAX,
   USAGE_REMINDER_PERCENT_MIN,
@@ -590,6 +593,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     // WP-A7: the ticket desk, before the one-letter prefixes.
     const ticket = ticketCallbackCommand(data, id);
     if (ticket !== null) return ticket;
+    // PR-2: «درخواست نمایندگی» — the applicant's steps and the operator's group buttons.
+    const resellerRequest = resellerRequestCallbackCommand(data, id);
+    if (resellerRequest !== null) return resellerRequest;
     if (data === SUPPORT_CALLBACK_DATA) {
       return { intent: 'SUPPORT', targetId: null, callbackQueryId: id };
     }
@@ -1455,6 +1461,10 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
   if (command === `/${REFERRAL_MENU_COMMAND}`) {
     return { intent: 'REFERRAL_INVITE', targetId: null, callbackQueryId: null };
   }
+  // PR-2: «👨‍💻 درخواست نمایندگی» — button-only, answered from the flag's own state.
+  if (command === `/${RESELLER_REQUEST_MENU_COMMAND}`) {
+    return { intent: 'RESELLER_REQUEST', targetId: null, callbackQueryId: null };
+  }
   /*
    * The management panel's three text entries (Phase 5T).
    *
@@ -1804,6 +1814,59 @@ function ticketCallbackCommand(data: string, id: string | null): BotCommand | nu
   ];
   for (const [prefix, intent] of routes) {
     if (data.startsWith(prefix)) return callbackCommand(intent, data.slice(prefix.length), id);
+  }
+  return null;
+}
+
+/**
+ * PR-2 — «درخواست نمایندگی»'s callbacks, or null when `data` is none of them. Every id is
+ * validated here (a draft, a request, or a request with a tier); anything malformed is
+ * UNSUPPORTED before a handler sees it. None of this authorizes anything: the customer's
+ * steps are checked against the draft, the operator's against the permission.
+ */
+function resellerRequestCallbackCommand(data: string, id: string | null): BotCommand | null {
+  const unsupported: BotCommand = { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+  const c = RESELLER_REQUEST_CALLBACKS;
+  if (data.startsWith(c.step)) {
+    const [action, draft, ...rest] = data.slice(c.step.length).split(':');
+    const parsed = uuidV7Schema.safeParse(draft);
+    if (
+      rest.length > 0 ||
+      action === undefined ||
+      !(RESELLER_REQUEST_STEP_ACTIONS as readonly string[]).includes(action) ||
+      !parsed.success
+    ) {
+      return unsupported;
+    }
+    return {
+      intent: 'RESELLER_REQUEST_STEP',
+      targetId: parsed.data,
+      secondaryId: action,
+      callbackQueryId: id,
+    };
+  }
+  const single: readonly (readonly [string, BotIntent])[] = [
+    [c.reply, 'RESELLER_REQUEST_REPLY'],
+    [c.approve, 'ADMIN_RESELLER_REQUEST_APPROVE'],
+    [c.reject, 'ADMIN_RESELLER_REQUEST_REJECT'],
+    [c.message, 'ADMIN_RESELLER_REQUEST_MESSAGE'],
+    [c.rejectPlain, 'ADMIN_RESELLER_REQUEST_REJECT_PLAIN'],
+    [c.cancel, 'ADMIN_RESELLER_REQUEST_CANCEL'],
+  ];
+  for (const [prefix, intent] of single) {
+    if (data.startsWith(prefix)) return callbackCommand(intent, data.slice(prefix.length), id);
+  }
+  const pairs: readonly (readonly [string, BotIntent])[] = [
+    [c.tier, 'ADMIN_RESELLER_REQUEST_TIER'],
+    [c.confirm, 'ADMIN_RESELLER_REQUEST_CONFIRM'],
+  ];
+  for (const [prefix, intent] of pairs) {
+    if (!data.startsWith(prefix)) continue;
+    const pair = decodeIdPair(data.slice(prefix.length));
+    const request = uuidV7Schema.safeParse(pair?.first);
+    const tier = uuidV7Schema.safeParse(pair?.second);
+    if (!request.success || !tier.success) return unsupported;
+    return { intent, targetId: request.data, secondaryId: tier.data, callbackQueryId: id };
   }
   return null;
 }

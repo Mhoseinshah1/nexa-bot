@@ -421,6 +421,18 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * send time from that row: a reader, not a payload (ADR 0030 §1).
    */
   'SERVICE_AUTO_DELETE_WARNING',
+  /*
+   * PR-2, «درخواست نمایندگی»: an operator wrote to the applicant. `reseller_request_messages.id`
+   * is the subject — the `TICKET_REPLY` shape: a kind and an id, the words read from the row
+   * at send time (ADR 0030 §1). Its one button is «پاسخ».
+   */
+  'RESELLER_REQUEST_MESSAGE',
+  /*
+   * PR-2: the request was decided. `reseller_requests.id` is the subject; the outcome, the
+   * tier's name and the reason are read from the request row at send time. Rendered as
+   * `bot.reseller_request.rejected`, or `bot.reseller_request.approved` when the row says so.
+   */
+  'RESELLER_REQUEST_DECISION',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -505,6 +517,9 @@ export const CUSTOMER_NOTIFICATION_AUTOMATED: Readonly<Record<CustomerNotificati
     RESELLER_EXPIRED: true,
     // PR-3: raised by the auto-delete sweep, not by anything the customer did then.
     SERVICE_AUTO_DELETE_WARNING: true,
+    // PR-2: an operator wrote, or decided, on purpose.
+    RESELLER_REQUEST_MESSAGE: false,
+    RESELLER_REQUEST_DECISION: false,
   };
 
 /**
@@ -729,6 +744,9 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * moment, and the flag is on.
    */
   SERVICE_AUTO_DELETE_WARNING: true,
+  // PR-2: an operator's own message, and the answer to the customer's own request.
+  RESELLER_REQUEST_MESSAGE: false,
+  RESELLER_REQUEST_DECISION: false,
 };
 
 /**
@@ -826,6 +844,9 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
    * raised, so a warning held until morning would eat the customer's window to renew.
    */
   SERVICE_AUTO_DELETE_WARNING: false,
+  // PR-2: an operator wrote, or decided, now; the applicant is told now.
+  RESELLER_REQUEST_MESSAGE: false,
+  RESELLER_REQUEST_DECISION: false,
 };
 
 /**
@@ -927,6 +948,9 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   RESELLER_EXPIRED: 'bot.reseller.expired',
   // PR-3: values read at send time from the auto-delete run row.
   SERVICE_AUTO_DELETE_WARNING: 'bot.service.auto_delete_warning',
+  // PR-2: values read at send time from the message row / the request row.
+  RESELLER_REQUEST_MESSAGE: 'bot.reseller_request.message_from_owner',
+  RESELLER_REQUEST_DECISION: 'bot.reseller_request.rejected',
 };
 
 /**

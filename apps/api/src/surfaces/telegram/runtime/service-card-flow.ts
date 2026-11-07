@@ -191,24 +191,42 @@ export function inCard(serviceId: string, reply: PendingReply): PendingReply {
   return { ...reply, ...(lost ? { buttons: [backToCardButton(serviceId)] } : {}), edit: true };
 }
 
+/** Which buttons of the search row are drawn: the two flags, both off by default. */
+export interface ServicesSearchRow {
+  readonly label: boolean;
+  readonly search: boolean;
+}
+
+/** The search row's switches now; a stand-in without the port draws neither (the default). */
+async function searchRowOf(rt: BotRuntime, scope: TenantContext): Promise<ServicesSearchRow> {
+  return (await rt.deps.servicesSearchRow?.(scope)) ?? { label: false, search: false };
+}
+
 /**
- * The list's bottom controls (§G): the search pair, the pager, back to the menu. The
- * page indicator is a real button — a tap re-renders the page — and the arrows appear
- * only where there is a page to go to.
+ * The list's bottom controls (§G): the search row (each button behind its own flag, none by
+ * default), the pager, back to the menu. The page indicator is a real button - a tap
+ * re-renders the page - and the arrows appear only where there is a page to go to.
  */
-export function servicesListControls(page: number, pages: number): readonly CustomerButton[] {
-  const controls: CustomerButton[] = [
-    {
+export function servicesListControls(
+  page: number,
+  pages: number,
+  searchRow: ServicesSearchRow = { label: false, search: false },
+): readonly CustomerButton[] {
+  const controls: CustomerButton[] = [];
+  if (searchRow.label) {
+    controls.push({
       ...inlineLabel('services.search_label'),
       data: SERVICES_SEARCH_CALLBACK_DATA,
       row: 100,
-    },
-    {
+    });
+  }
+  if (searchRow.search) {
+    controls.push({
       ...inlineLabel('services.search'),
       data: SERVICES_SEARCH_CALLBACK_DATA,
       row: 100,
-    },
-  ];
+    });
+  }
   if (page > 1) {
     controls.push({
       ...inlineLabel('services.previous_page'),
@@ -274,7 +292,7 @@ export async function services(
   }
   const now = rt.deps.clock.now();
   const buttons: CustomerButton[] = page.items.map((service) => serviceListButton(service, now));
-  buttons.push(...servicesListControls(page.page, page.pages));
+  buttons.push(...servicesListControls(page.page, page.pages, await searchRowOf(rt, scope)));
   return {
     key: 'bot.service.list',
     values: { page: page.page, pages: page.pages, total: page.count },
@@ -1008,6 +1026,19 @@ export async function servicesSearchBegin(
   botInstanceId: BotInstanceId,
   idempotencyKey: string,
 ): Promise<PendingReply> {
+  /*
+   * NEXA-OWNER-BATCH-1 PR-1: both search switches off means no search button exists, so a tap on
+   * one drawn earlier opens no capture (no row is written): the usual "no longer active" toast,
+   * and the list redrawn in the tapped message.
+   */
+  const row = await searchRowOf(rt, scope);
+  if (!row.label && !row.search) {
+    return {
+      ...(await services(rt, scope, customer, 1)),
+      edit: true,
+      toast: { key: 'bot.callback.stale', values: {} },
+    };
+  }
   await rt.deps.captures.open(scope, actor, {
     idempotencyKey: `${idempotencyKey}:search-open`,
     botInstanceId,

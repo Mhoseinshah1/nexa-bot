@@ -164,6 +164,7 @@ describe('custom buttons in the builder', () => {
       ['trial', 'referral'],
       ['apps'],
       ['tickets'],
+      ['reseller_request'],
       [REF_LINK],
     ]);
     expect(sent.layout['customButtons']).toEqual([
@@ -487,6 +488,11 @@ describe('the panel that defines the buttons', () => {
     await waitFor(() => expect(save.disabled).toBe(false));
     fireEvent.click(save);
     await waitFor(() => expect(mediaPuts()).toHaveLength(1));
+    // The refusal is on screen only once the failed save has settled; `disabled` alone can still
+    // read false before React has flushed the in-flight state, and a click then is swallowed.
+    expect(
+      (await screen.findAllByText(t('web.err_custom_menu_button_storage_full'))).length,
+    ).toBeGreaterThan(0);
     await waitFor(() => expect(save.disabled).toBe(false));
     expect(detailPuts()).toHaveLength(1);
     expect((detailPuts()[0]?.body as { expectedVersion: number }).expectedVersion).toBe(1);

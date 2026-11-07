@@ -1,5 +1,5 @@
 {
-  "id": "8e53d7ad-1d74-4e83-a833-2b80e0cec6c3",
+  "id": "7b6469c1-a5e8-46c3-be03-4d4dc6075f3d",
   "prevId": "3321c538-e946-434e-8eca-aefa6aadf4b0",
   "version": "7",
   "dialect": "postgresql",
@@ -9645,7 +9645,7 @@
         },
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'GATEWAY_LATE_PAYMENT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE', 'WALLET_ADMIN_CREDITED', 'WALLET_ADMIN_DEBITED', 'ACCOUNT_UNBLOCKED', 'SERVICE_TRAFFIC_ADDED', 'SERVICE_TIME_ADDED', 'SERVICE_AUTO_RENEW_FUNDS_SHORT', 'SERVICE_AUTO_RENEW_PRICE_CHANGED', 'RESELLER_EXPIRED', 'SERVICE_AUTO_DELETE_WARNING')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'GATEWAY_LATE_PAYMENT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE', 'WALLET_ADMIN_CREDITED', 'WALLET_ADMIN_DEBITED', 'ACCOUNT_UNBLOCKED', 'SERVICE_TRAFFIC_ADDED', 'SERVICE_TIME_ADDED', 'SERVICE_AUTO_RENEW_FUNDS_SHORT', 'SERVICE_AUTO_RENEW_PRICE_CHANGED', 'RESELLER_EXPIRED', 'RESELLER_REQUEST_MESSAGE', 'RESELLER_REQUEST_DECISION')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -10156,7 +10156,7 @@
       "checkConstraints": {
         "customer_text_captures_purpose_check": {
           "name": "customer_text_captures_purpose_check",
-          "value": "purpose IN ('TOPUP_AMOUNT', 'SERVICE_SEARCH', 'SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD', 'GIFT_CARD_CODE')"
+          "value": "purpose IN ('TOPUP_AMOUNT', 'SERVICE_SEARCH', 'SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'RESELLER_REQUEST_ANSWER', 'RESELLER_REQUEST_REPLY', 'RESELLER_REQUEST_ADMIN_MESSAGE', 'RESELLER_REQUEST_ADMIN_REASON', 'GATEWAY_REFUND_CARD', 'GIFT_CARD_CODE')"
         },
         "customer_text_captures_state_check": {
           "name": "customer_text_captures_state_check",
@@ -10188,7 +10188,7 @@
         },
         "customer_text_captures_subject_check": {
           "name": "customer_text_captures_subject_check",
-          "value": "(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD')) = (subject_id IS NOT NULL)"
+          "value": "(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD', 'RESELLER_REQUEST_ANSWER', 'RESELLER_REQUEST_REPLY', 'RESELLER_REQUEST_ADMIN_MESSAGE', 'RESELLER_REQUEST_ADMIN_REASON')) = (subject_id IS NOT NULL)"
         },
         "customer_text_captures_custom_volume_check": {
           "name": "customer_text_captures_custom_volume_check",
@@ -32160,6 +32160,870 @@
       },
       "isRLSEnabled": false
     },
+    "public.reseller_request_drafts": {
+      "name": "reseller_request_drafts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bot_instance_id": {
+          "name": "bot_instance_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "questions": {
+          "name": "questions",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "answers": {
+          "name": "answers",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "reseller_request_drafts_tenant_id_tenants_id_fk": {
+          "name": "reseller_request_drafts_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_request_drafts",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_request_drafts_bot_instance_id_bot_instances_id_fk": {
+          "name": "reseller_request_drafts_bot_instance_id_bot_instances_id_fk",
+          "tableFrom": "reseller_request_drafts",
+          "tableTo": "bot_instances",
+          "columnsFrom": [
+            "bot_instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_request_drafts_customer_fk": {
+          "name": "reseller_request_drafts_customer_fk",
+          "tableFrom": "reseller_request_drafts",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "reseller_request_drafts_tenant_id_key": {
+          "name": "reseller_request_drafts_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "reseller_request_drafts_customer_key": {
+          "name": "reseller_request_drafts_customer_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "customer_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "reseller_request_drafts_questions_check": {
+          "name": "reseller_request_drafts_questions_check",
+          "value": "jsonb_typeof(questions) = 'array'"
+        },
+        "reseller_request_drafts_answers_check": {
+          "name": "reseller_request_drafts_answers_check",
+          "value": "jsonb_typeof(answers) = 'array'"
+        },
+        "reseller_request_drafts_position_check": {
+          "name": "reseller_request_drafts_position_check",
+          "value": "position >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.reseller_request_messages": {
+      "name": "reseller_request_messages",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_id": {
+          "name": "request_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "seq": {
+          "name": "seq",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "reseller_request_messages_seq_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "sender_type": {
+          "name": "sender_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "author_admin_id": {
+          "name": "author_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachment_kind": {
+          "name": "attachment_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachment_bot_instance_id": {
+          "name": "attachment_bot_instance_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachment_file_id": {
+          "name": "attachment_file_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachment_file_unique_id": {
+          "name": "attachment_file_unique_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachment_mime_type": {
+          "name": "attachment_mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachment_file_size": {
+          "name": "attachment_file_size",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_hash": {
+          "name": "request_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "reseller_request_messages_request_idx": {
+          "name": "reseller_request_messages_request_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "request_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "seq",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "reseller_request_messages_tenant_id_tenants_id_fk": {
+          "name": "reseller_request_messages_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_request_messages",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_request_messages_attachment_bot_instance_id_bot_instances_id_fk": {
+          "name": "reseller_request_messages_attachment_bot_instance_id_bot_instances_id_fk",
+          "tableFrom": "reseller_request_messages",
+          "tableTo": "bot_instances",
+          "columnsFrom": [
+            "attachment_bot_instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_request_messages_request_fk": {
+          "name": "reseller_request_messages_request_fk",
+          "tableFrom": "reseller_request_messages",
+          "tableTo": "reseller_requests",
+          "columnsFrom": [
+            "tenant_id",
+            "request_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_request_messages_author_fk": {
+          "name": "reseller_request_messages_author_fk",
+          "tableFrom": "reseller_request_messages",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "tenant_id",
+            "author_admin_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "reseller_request_messages_tenant_id_key": {
+          "name": "reseller_request_messages_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "reseller_request_messages_key": {
+          "name": "reseller_request_messages_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "reseller_request_messages_sender_check": {
+          "name": "reseller_request_messages_sender_check",
+          "value": "sender_type IN ('CUSTOMER', 'ADMIN')"
+        },
+        "reseller_request_messages_attachment_kind_check": {
+          "name": "reseller_request_messages_attachment_kind_check",
+          "value": "attachment_kind IS NULL OR attachment_kind IN ('PHOTO')"
+        },
+        "reseller_request_messages_body_check": {
+          "name": "reseller_request_messages_body_check",
+          "value": "body IS NULL OR length(body) BETWEEN 1 AND 2000"
+        },
+        "reseller_request_messages_attachment_check": {
+          "name": "reseller_request_messages_attachment_check",
+          "value": "(attachment_kind IS NULL) = (attachment_file_id IS NULL)\n          AND (attachment_kind IS NULL) = (attachment_file_unique_id IS NULL)\n          AND (attachment_kind IS NULL) = (attachment_bot_instance_id IS NULL)"
+        },
+        "reseller_request_messages_shape_check": {
+          "name": "reseller_request_messages_shape_check",
+          "value": "CASE sender_type\n            WHEN 'ADMIN' THEN author_admin_id IS NOT NULL AND body IS NOT NULL AND attachment_kind IS NULL\n            WHEN 'CUSTOMER' THEN author_admin_id IS NULL AND (body IS NOT NULL OR attachment_kind IS NOT NULL)\n            ELSE false\n          END"
+        },
+        "reseller_request_messages_key_check": {
+          "name": "reseller_request_messages_key_check",
+          "value": "length(idempotency_key) BETWEEN 1 AND 300"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.reseller_request_questions": {
+      "name": "reseller_request_questions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "text": {
+          "name": "text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "required": {
+          "name": "required",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "max_length": {
+          "name": "max_length",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 500
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "reseller_request_questions_order_idx": {
+          "name": "reseller_request_questions_order_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "position",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "reseller_request_questions_tenant_id_tenants_id_fk": {
+          "name": "reseller_request_questions_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_request_questions",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "reseller_request_questions_tenant_id_key": {
+          "name": "reseller_request_questions_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "reseller_request_questions_position_check": {
+          "name": "reseller_request_questions_position_check",
+          "value": "position >= 0"
+        },
+        "reseller_request_questions_text_check": {
+          "name": "reseller_request_questions_text_check",
+          "value": "length(btrim(text)) BETWEEN 1 AND 500"
+        },
+        "reseller_request_questions_max_length_check": {
+          "name": "reseller_request_questions_max_length_check",
+          "value": "max_length BETWEEN 1 AND 2000"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.reseller_requests": {
+      "name": "reseller_requests",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "number": {
+          "name": "number",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "reseller_requests_number_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bot_instance_id": {
+          "name": "bot_instance_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "answers": {
+          "name": "answers",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
+        },
+        "decided_by_admin_id": {
+          "name": "decided_by_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tier_id": {
+          "name": "tier_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "opening_key": {
+          "name": "opening_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_message_at": {
+          "name": "last_message_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "reseller_requests_one_pending_key": {
+          "name": "reseller_requests_one_pending_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "customer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "status = 'PENDING'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "reseller_requests_tenant_created_idx": {
+          "name": "reseller_requests_tenant_created_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "reseller_requests_tenant_status_idx": {
+          "name": "reseller_requests_tenant_status_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "reseller_requests_customer_decided_idx": {
+          "name": "reseller_requests_customer_decided_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "customer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "decided_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "reseller_requests_tenant_id_tenants_id_fk": {
+          "name": "reseller_requests_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_requests",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_requests_bot_instance_id_bot_instances_id_fk": {
+          "name": "reseller_requests_bot_instance_id_bot_instances_id_fk",
+          "tableFrom": "reseller_requests",
+          "tableTo": "bot_instances",
+          "columnsFrom": [
+            "bot_instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_requests_customer_fk": {
+          "name": "reseller_requests_customer_fk",
+          "tableFrom": "reseller_requests",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_requests_decided_by_fk": {
+          "name": "reseller_requests_decided_by_fk",
+          "tableFrom": "reseller_requests",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "tenant_id",
+            "decided_by_admin_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_requests_tier_fk": {
+          "name": "reseller_requests_tier_fk",
+          "tableFrom": "reseller_requests",
+          "tableTo": "reseller_tiers",
+          "columnsFrom": [
+            "tenant_id",
+            "tier_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "reseller_requests_tenant_id_key": {
+          "name": "reseller_requests_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "reseller_requests_opening_key": {
+          "name": "reseller_requests_opening_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "opening_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "reseller_requests_status_check": {
+          "name": "reseller_requests_status_check",
+          "value": "status IN ('PENDING', 'APPROVED', 'REJECTED')"
+        },
+        "reseller_requests_decided_check": {
+          "name": "reseller_requests_decided_check",
+          "value": "(status = 'PENDING') = (decided_at IS NULL)"
+        },
+        "reseller_requests_approved_check": {
+          "name": "reseller_requests_approved_check",
+          "value": "status <> 'APPROVED' OR (tier_id IS NOT NULL AND decided_by_admin_id IS NOT NULL)"
+        },
+        "reseller_requests_tier_only_approved_check": {
+          "name": "reseller_requests_tier_only_approved_check",
+          "value": "status = 'APPROVED' OR tier_id IS NULL"
+        },
+        "reseller_requests_reason_check": {
+          "name": "reseller_requests_reason_check",
+          "value": "reason IS NULL OR (status = 'REJECTED' AND length(reason) BETWEEN 1 AND 500)"
+        },
+        "reseller_requests_answers_check": {
+          "name": "reseller_requests_answers_check",
+          "value": "jsonb_typeof(answers) = 'array'"
+        },
+        "reseller_requests_opening_key_check": {
+          "name": "reseller_requests_opening_key_check",
+          "value": "length(opening_key) BETWEEN 1 AND 300"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.reseller_tier_grants": {
       "name": "reseller_tier_grants",
       "schema": "",
@@ -33440,280 +34304,6 @@
         "service_addons_duration_bound_check": {
           "name": "service_addons_duration_bound_check",
           "value": "duration_days IS NULL OR duration_days <= 3650"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.service_auto_delete_runs": {
-      "name": "service_auto_delete_runs",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "service_id": {
-          "name": "service_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "panel_id": {
-          "name": "panel_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "cycle_state": {
-          "name": "cycle_state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "cycle_since": {
-          "name": "cycle_since",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "cause": {
-          "name": "cause",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "days": {
-          "name": "days",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "service_label": {
-          "name": "service_label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "delete_after": {
-          "name": "delete_after",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "warned_at": {
-          "name": "warned_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "operation_id": {
-          "name": "operation_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "planned_at": {
-          "name": "planned_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "service_auto_delete_runs_cycle_key": {
-          "name": "service_auto_delete_runs_cycle_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "service_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "cycle_since",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "state <> 'CANCELLED'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "service_auto_delete_runs_due_idx": {
-          "name": "service_auto_delete_runs_due_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "delete_after",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "state = 'SCHEDULED'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "service_auto_delete_runs_panel_planned_idx": {
-          "name": "service_auto_delete_runs_panel_planned_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "panel_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "planned_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "state = 'PLANNED'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "service_auto_delete_runs_tenant_id_tenants_id_fk": {
-          "name": "service_auto_delete_runs_tenant_id_tenants_id_fk",
-          "tableFrom": "service_auto_delete_runs",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "service_auto_delete_runs_service_fk": {
-          "name": "service_auto_delete_runs_service_fk",
-          "tableFrom": "service_auto_delete_runs",
-          "tableTo": "services",
-          "columnsFrom": [
-            "tenant_id",
-            "service_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "service_auto_delete_runs_customer_fk": {
-          "name": "service_auto_delete_runs_customer_fk",
-          "tableFrom": "service_auto_delete_runs",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "service_auto_delete_runs_panel_fk": {
-          "name": "service_auto_delete_runs_panel_fk",
-          "tableFrom": "service_auto_delete_runs",
-          "tableTo": "panels",
-          "columnsFrom": [
-            "tenant_id",
-            "panel_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "service_auto_delete_runs_state_check": {
-          "name": "service_auto_delete_runs_state_check",
-          "value": "state IN ('SCHEDULED', 'PLANNED', 'CANCELLED')"
-        },
-        "service_auto_delete_runs_cause_check": {
-          "name": "service_auto_delete_runs_cause_check",
-          "value": "cause IN ('TRAFFIC', 'TIME', 'SUSPENDED')"
-        },
-        "service_auto_delete_runs_cycle_state_check": {
-          "name": "service_auto_delete_runs_cycle_state_check",
-          "value": "cycle_state IN ('EXPIRED', 'SUSPENDED')"
-        },
-        "service_auto_delete_runs_planned_check": {
-          "name": "service_auto_delete_runs_planned_check",
-          "value": "(state = 'PLANNED') = (operation_id IS NOT NULL AND planned_at IS NOT NULL)"
-        },
-        "service_auto_delete_runs_days_check": {
-          "name": "service_auto_delete_runs_days_check",
-          "value": "days >= 1"
         }
       },
       "isRLSEnabled": false
@@ -36729,18 +37319,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "state_since": {
-          "name": "state_since",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "expiry_cause": {
-          "name": "expiry_cause",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -37093,10 +37671,6 @@
         "services_state_check": {
           "name": "services_state_check",
           "value": "state IN ('PENDING_PROVISION', 'ACTIVE', 'SUSPENDED', 'EXPIRED', 'TERMINATED', 'UNRECONCILED')"
-        },
-        "services_expiry_cause_check": {
-          "name": "services_expiry_cause_check",
-          "value": "expiry_cause IS NULL OR expiry_cause IN ('TRAFFIC', 'TIME')"
         },
         "services_traffic_check": {
           "name": "services_traffic_check",
@@ -41740,11 +42314,11 @@
       "checkConstraints": {
         "telegram_wizards_kind_check": {
           "name": "telegram_wizards_kind_check",
-          "value": "kind IN ('ORDER', 'TOPUP')"
+          "value": "kind IN ('ORDER', 'TOPUP', 'RESELLER_REQUEST')"
         },
         "telegram_wizards_step_check": {
           "name": "telegram_wizards_step_check",
-          "value": "step IN ('CATEGORIES', 'PRODUCTS', 'USERNAME', 'DISCOUNT', 'PREINVOICE', 'AWAITING_PAYMENT', 'METHODS', 'AMOUNT', 'INVOICE_LOADING', 'INVOICE_PENDING', 'INVOICE', 'NOTICE', 'CLOSED', 'RECEIPT_WAIT', 'RECEIPT_REVIEW')"
+          "value": "step IN ('CATEGORIES', 'PRODUCTS', 'USERNAME', 'DISCOUNT', 'PREINVOICE', 'AWAITING_PAYMENT', 'METHODS', 'AMOUNT', 'INVOICE_LOADING', 'INVOICE_PENDING', 'INVOICE', 'NOTICE', 'CLOSED', 'RECEIPT_WAIT', 'RECEIPT_REVIEW', 'RR_INTRO', 'RR_QUESTION', 'RR_SUMMARY')"
         },
         "telegram_wizards_version_check": {
           "name": "telegram_wizards_version_check",

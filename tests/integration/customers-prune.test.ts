@@ -521,3 +521,38 @@ describe('the command line', () => {
     });
   });
 });
+
+describe('a reseller request (PR-2)', () => {
+  const addRequest = async (customerId: string): Promise<string> => {
+    const id = randomUUID();
+    await db().execute(sql`
+      INSERT INTO reseller_requests (id, tenant_id, customer_id, bot_instance_id, answers, opening_key)
+      VALUES (${id}, ${tenantA.tenantId}, ${customerId}, ${BOT}, '[]'::jsonb, ${`open:${id}`})`);
+    return id;
+  };
+  const addDraft = (customerId: string) =>
+    db().execute(sql`
+      INSERT INTO reseller_request_drafts (id, tenant_id, customer_id, bot_instance_id, questions, answers)
+      VALUES (${randomUUID()}, ${tenantA.tenantId}, ${customerId}, ${BOT}, '[]'::jsonb, '[]'::jsonb)`);
+
+  it('is discovered as a dependent of a customer through the foreign-key graph, with no list to maintain', async () => {
+    const tables = new Set((await discoverDependents(db())).map((d) => d.table));
+    expect(tables.has('reseller_requests')).toBe(true);
+    expect(tables.has('reseller_request_drafts')).toBe(true);
+  });
+
+  it('keeps a customer who filed a request, or has a half-written one, out of the listing and out of apply', async () => {
+    const empty = await groupJoin();
+    const withRequest = await groupJoin();
+    const withDraft = await groupJoin();
+    await addRequest(withRequest);
+    await addDraft(withDraft);
+
+    expect(await listedIds()).toEqual([empty]);
+    const result = await prune().apply(tenantA, ACTOR, { expectedCount: 1 });
+    expect(result.deleted).toBe(1);
+    expect(await exists(empty)).toBe(false);
+    expect(await exists(withRequest)).toBe(true);
+    expect(await exists(withDraft)).toBe(true);
+  });
+});

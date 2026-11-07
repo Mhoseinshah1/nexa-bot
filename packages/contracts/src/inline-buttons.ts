@@ -321,6 +321,13 @@ export const INLINE_BUTTONS = [
   button('marketing.opt_in', 'SUPPORT', 'bot.marketing.opt_in_button'),
   button('reminders.opt_out', 'SUPPORT', 'bot.reminders.opt_out_button'),
   button('reminders.opt_in', 'SUPPORT', 'bot.reminders.opt_in_button'),
+  // PR-2, «درخواست نمایندگی»: the edit-in-place steps and the applicant's «پاسخ».
+  button('reseller_request.start', 'SUPPORT', 'bot.reseller_request.button_start'),
+  button('reseller_request.skip', 'SUPPORT', 'bot.reseller_request.button_skip'),
+  button('reseller_request.back', 'SUPPORT', 'bot.reseller_request.button_back'),
+  button('reseller_request.send', 'SUPPORT', 'bot.reseller_request.button_send'),
+  button('reseller_request.edit', 'SUPPORT', 'bot.reseller_request.button_edit'),
+  button('reseller_request.reply', 'SUPPORT', 'bot.reseller_request.button_reply'),
 
   // Referral
   button('referral.share', 'REFERRAL', 'bot.referral.share_button', 'URL'),

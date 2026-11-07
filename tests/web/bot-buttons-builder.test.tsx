@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
-  DEFAULT_EXPLICIT_MAIN_MENU,
+  DEFAULT_MAIN_MENU_LAYOUT,
+  explicitFromLegacy,
   MAIN_MENU_BUTTON_STYLES,
   type BotMenuBuilderResponse,
   type ExplicitMainMenu,
@@ -27,6 +28,13 @@ import {
   refusal,
   revision,
 } from './bot-buttons-builder-fixture';
+
+/**
+ * The plain starting layout these tests were written against: the registry packed two to a row,
+ * every style `default`. The shipped default (`DEFAULT_EXPLICIT_MAIN_MENU`) is Mirza's arrangement
+ * since NEXA-OWNER-BATCH-1 PR-1; the drag, style and inspector mechanics are layout-independent.
+ */
+const DEFAULT_EXPLICIT_MAIN_MENU = explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT);
 
 /**
  * Round T (T3) — the button builder on «دکمه‌های ربات».
@@ -181,6 +189,7 @@ describe('the button builder — editing the draft', () => {
       ['trial'],
       ['apps'],
       ['tickets'],
+      ['reseller_request'],
       ['wallet'],
     ]);
     expect(clicked).toEqual(dragged);
@@ -454,7 +463,14 @@ describe('the button builder — saving', () => {
     // The read answers the PRE-save draft (no version) even after the save: a stale answer.
     const withoutHelp: ExplicitMainMenu = {
       ...DEFAULT_EXPLICIT_MAIN_MENU,
-      rows: [['catalog', 'services'], ['wallet'], ['trial', 'referral'], ['apps'], ['tickets']],
+      rows: [
+        ['catalog', 'services'],
+        ['wallet'],
+        ['trial', 'referral'],
+        ['apps'],
+        ['tickets'],
+        ['reseller_request'],
+      ],
     };
     const api = builderApi(builderView(), [saved({ version: 1, layout: withoutHelp })]);
     renderPage(page());
@@ -862,7 +878,14 @@ describe('the button builder — banners and permissions', () => {
 describe('the button builder — review of PR #134', () => {
   const withoutHelp: ExplicitMainMenu = {
     ...DEFAULT_EXPLICIT_MAIN_MENU,
-    rows: [['catalog', 'services'], ['wallet'], ['trial', 'referral'], ['apps'], ['tickets']],
+    rows: [
+      ['catalog', 'services'],
+      ['wallet'],
+      ['trial', 'referral'],
+      ['apps'],
+      ['tickets'],
+      ['reseller_request'],
+    ],
   };
   const explicitView = (overrides: Parameters<typeof builderView>[0] = {}) =>
     builderView({

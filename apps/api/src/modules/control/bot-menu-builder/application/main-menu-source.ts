@@ -116,7 +116,12 @@ export class PublishedMainMenuSource implements MainMenuSource {
       });
     }
     return {
-      snapshot: { source: answer, legacy: setting.value as readonly MainMenuLayoutEntry[] },
+      snapshot: {
+        source: answer,
+        legacy: setting.value as readonly MainMenuLayoutEntry[],
+        // Nothing stored in `bot.main_menu`: the value is the registry default (PR-1).
+        legacyIsDefault: setting.source === 'DEFAULT',
+      },
       setting,
     };
   }

@@ -58,6 +58,20 @@ export const CUSTOMER_CAPTURE_PURPOSES = [
   /** WP-A7: a reply to one of the customer's tickets. `subject_id` names the TICKET. */
   'TICKET_REPLY',
   /**
+   * PR-2: a typed answer to one of the owner's reseller-request questions. `subject_id` names
+   * the customer's DRAFT; which question is asked is the draft's own position.
+   */
+  'RESELLER_REQUEST_ANSWER',
+  /** PR-2: the applicant's reply (text or a photo). `subject_id` names the REQUEST. */
+  'RESELLER_REQUEST_REPLY',
+  /**
+   * PR-2: what an operator types in a private chat after tapping «💬 پیام به متقاضی» /
+   * «❌ رد» in the group. `subject_id` names the REQUEST; the capture belongs to the
+   * operator's own customer row and is read only for a bound administrator.
+   */
+  'RESELLER_REQUEST_ADMIN_MESSAGE',
+  'RESELLER_REQUEST_ADMIN_REASON',
+  /**
    * Round 6 (TonPays Telegram): the card and holder a refund for an OVERPAYMENT is to be sent
    * to, typed as two lines in one message. `subject_id` names the PAYMENT. The text is never
    * stored as typed: it is validated, sealed for the gateway worker, and kept masked.

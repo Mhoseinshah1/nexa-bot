@@ -561,6 +561,7 @@ describe('round P — the Telegram command-menu sync lane', () => {
         ['referral', 5, true, 'referral'],
         ['apps', 6, true, 'apps'],
         ['tickets', 7, true, 'tickets'],
+        ['reseller_request', 8, true, 'reseller_request'],
       ]);
       const wallet = body.layout.items[0];
       expect(wallet).toMatchObject({

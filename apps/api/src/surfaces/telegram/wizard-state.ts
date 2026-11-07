@@ -232,6 +232,11 @@ const TOPUP = (...from: TelegramWizardStep[]): WizardGate => ({
   adoptAs: 'TOPUP',
   from,
 });
+const RESELLER_REQUEST = (...from: TelegramWizardStep[]): WizardGate => ({
+  kind: 'RESELLER_REQUEST',
+  adoptAs: 'RESELLER_REQUEST',
+  from,
+});
 
 export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, WizardGate>([
   // Purchase: category → product → username → pre-invoice → method → invoice.
@@ -276,6 +281,8 @@ export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, Wiz
    */
   ['SERVICE_BUY_TRAFFIC', { ...ORDER('PRODUCTS'), lenient: true }],
   ['SERVICE_BUY_TIME', { ...ORDER('PRODUCTS'), lenient: true }],
+  // PR-2: the reseller request — intro → questions → summary, one message edited in place.
+  ['RESELLER_REQUEST_STEP', RESELLER_REQUEST('RR_INTRO', 'RR_QUESTION', 'RR_SUMMARY')],
   // Wallet top-up: amount → method → invoice. Its entry is the wallet screen's button.
   ['TOPUP_MENU', TOPUP('NOTICE')],
   ['TOPUP_PICK', TOPUP('AMOUNT')],

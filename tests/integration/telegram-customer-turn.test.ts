@@ -255,10 +255,11 @@ describe('the customer Telegram turn', () => {
       | undefined;
     expect(markup, 'the welcome carried no keyboard at all').toBeDefined();
     expect(markup?.keyboard?.map((row) => row.map((button) => button.text))).toEqual([
-      [CATALOGUE_FA['bot.menu.catalog'], CATALOGUE_FA['bot.menu.services']],
-      [CATALOGUE_FA['bot.menu.wallet'], CATALOGUE_FA['bot.menu.help']],
-      // WP-A10: app downloads and connection guides, on a row of its own.
+      [CATALOGUE_FA['bot.menu.catalog']],
+      [CATALOGUE_FA['bot.menu.wallet'], CATALOGUE_FA['bot.menu.services']],
+      // WP-A10: app downloads and connection guides (the referral button is off, so it is alone).
       [CATALOGUE_FA['bot.menu.apps']],
+      [CATALOGUE_FA['bot.menu.help']],
       // WP-A7: «🎫 پشتیبانی / تیکت‌ها», on a row of its own.
       [CATALOGUE_FA['bot.menu.tickets']],
     ]);
@@ -274,8 +275,9 @@ describe('the customer Telegram turn', () => {
     // The six this release always draws (WP-A10's apps and WP-A7's tickets included),
     // plus R1's trial and referral buttons, which a tenant with no panel offering a trial
     // (F5) and the referral flag off — every tenant by default — does not see: the
-    // keyboard above is exactly the six.
-    expect(MAIN_MENU_BUTTONS).toHaveLength(8);
+    // keyboard above is exactly the six. The ninth is the reseller request, its flag off by
+    // default, so it is not drawn either.
+    expect(MAIN_MENU_BUTTONS).toHaveLength(9);
   });
 
   it('draws the tenant’s own main menu — order, switches, flags, labels — and routes a renamed button (R1)', async () => {

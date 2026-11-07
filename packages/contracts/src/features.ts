@@ -532,6 +532,32 @@ export const FEATURE_FLAGS = [
     configuredBy: [],
   },
   {
+    key: 'services_search_label_button',
+    description:
+      'NEXA-OWNER-BATCH-1 PR-1: draw the label button of the search row on the customer\u2019s ' +
+      'services list (`bot.service.search_label_button`, \u00ABجستجوی نام کاربری\u00BB). Off by ' +
+      'default: the button is not drawn. With `services_search_button` also off the whole ' +
+      'search row is gone; with that one on, only its button is drawn. With both off a tap on ' +
+      'a search button drawn earlier is answered as no longer active and the list is redrawn ' +
+      'in place; the search capture is not opened. Nothing is deleted.',
+    defaultEnabled: false,
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
+    key: 'services_search_button',
+    description:
+      'NEXA-OWNER-BATCH-1 PR-1: draw the search button of the search row on the customer\u2019s ' +
+      'services list (`bot.service.search_button`, \u00AB🔎 جستجو\u00BB). Off by default: the ' +
+      'button is not drawn. With `services_search_label_button` also off the whole search row ' +
+      'is gone; with that one on, only its button is drawn. With both off a tap on a search ' +
+      'button drawn earlier is answered as no longer active and the list is redrawn in place; ' +
+      'the search capture is not opened. Nothing is deleted.',
+    defaultEnabled: false,
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
     key: 'mini_app',
     description:
       'Round 9, C5: the customer Telegram Mini App. On, every ACTIVE bot of the tenant gets a ' +
@@ -734,6 +760,22 @@ export const FEATURE_FLAGS = [
     // TENANT_WIDE: turning it off reminds every customer who had opted out, all at once.
     blastRadius: 'TENANT_WIDE',
     configuredBy: [],
+  },
+  {
+    key: 'reseller_requests',
+    description:
+      'Owner batch 1, PR-2: a customer may ask to become a reseller from the main-menu button ' +
+      '«👨‍💻 درخواست نمایندگی»: they answer the questions the owner defined, the request reaches ' +
+      'the operations log group and the Web Admin, and an operator may talk with them before ' +
+      'approving (which makes them a reseller on a tier the operator picks, through the same ' +
+      'service as the customer page) or rejecting. Off by default. While it is off the button ' +
+      'is not drawn and nobody can start a request; a request already sent stays decidable ' +
+      'and its conversation continues. A new request after a rejection waits ' +
+      'reseller_request.cooldown_days (7 by default, 0 = no wait).',
+    defaultEnabled: false,
+    // LOCAL: one button and its flow; no price, wallet or existing reseller changes with it.
+    blastRadius: 'LOCAL',
+    configuredBy: ['reseller_request.cooldown_days'],
   },
 ] as const satisfies readonly FeatureFlagDefinition[];
 

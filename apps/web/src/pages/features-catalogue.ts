@@ -270,6 +270,18 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: 'web.feature_customer_reminder_opt_out_off_effect',
     confirmEnable: null,
   },
+  // PR-2. Off withdraws the offer only: the button goes, a request already sent stays
+  // decidable and its conversation continues.
+  reseller_requests: {
+    title: 'web.feature_reseller_requests_title',
+    summary: 'web.feature_reseller_requests_summary',
+    category: 'sales',
+    where: ['bot', 'web_admin'],
+    offEffect: 'web.feature_reseller_requests_off_effect',
+    related: { path: '/reseller-requests', label: 'web.nav_reseller_requests' },
+    disableEffect: null,
+    confirmEnable: null,
+  },
   // Off: an attribution is made only at registration and never afterwards, so a
   // customer who joins through a referral link while this is off is never attributed.
   referrals: {
@@ -474,6 +486,28 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     offEffect: 'web.feature_addon_time_in_renew_menu_off',
     related: null,
     // A display choice: nothing is lost by switching it off, so it does not ask first.
+    disableEffect: null,
+    confirmEnable: null,
+  },
+  // NEXA-OWNER-BATCH-1 PR-1: the services list's search row, one switch per button, both off by
+  // default. A display choice (nothing is lost, the search itself is unchanged), so no confirmation.
+  services_search_label_button: {
+    title: 'web.feature_services_search_label_button_title',
+    summary: 'web.feature_services_search_label_button_summary',
+    category: 'customer',
+    where: ['bot'],
+    offEffect: 'web.feature_services_search_label_button_off',
+    related: { path: '/bot-buttons', label: 'web.nav_bot_buttons' },
+    disableEffect: null,
+    confirmEnable: null,
+  },
+  services_search_button: {
+    title: 'web.feature_services_search_button_title',
+    summary: 'web.feature_services_search_button_summary',
+    category: 'customer',
+    where: ['bot'],
+    offEffect: 'web.feature_services_search_button_off',
+    related: { path: '/bot-buttons', label: 'web.nav_bot_buttons' },
     disableEffect: null,
     confirmEnable: null,
   },

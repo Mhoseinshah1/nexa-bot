@@ -17,7 +17,8 @@ describe('R12 F3 item 6: texts that name wrong buttons or are wrong', () => {
 
   it('the FAQ default points at the real apps and tutorial button', () => {
     expect(text('bot.faq.default_6_answer')).toContain(`«${text('bot.menu.apps')}»`);
-    expect(text('bot.faq.default_6_answer')).not.toContain('📚 آموزش»');
+    // PR-1: the apps button is «📚 آموزش» now; the FAQ no longer names the old label.
+    expect(text('bot.faq.default_6_answer')).not.toContain('📱 دانلود برنامه و آموزش اتصال');
   });
 
   it('the refund notice names no command', () => {

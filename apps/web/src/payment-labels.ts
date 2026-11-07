@@ -163,6 +163,8 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES: Readonly<Record<CustomerNotificat
     SERVICE_AUTO_RENEW_PRICE_CHANGED: 'web.pay_notice_service_auto_renew_price_changed',
     RESELLER_EXPIRED: 'web.pay_notice_reseller_expired',
     SERVICE_AUTO_DELETE_WARNING: 'web.pay_notice_service_auto_delete_warning',
+    RESELLER_REQUEST_MESSAGE: 'web.pay_notice_reseller_request_message',
+    RESELLER_REQUEST_DECISION: 'web.pay_notice_reseller_request_decision',
   };
 
 /**

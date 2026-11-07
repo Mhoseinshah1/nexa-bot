@@ -55,8 +55,14 @@ function layoutWith(options: {
   readonly offerReads?: { count: number };
   /** Round T: the published-layout source; absent is the legacy path. */
   readonly source?: MainMenuSourceAnswer;
+  /** PR-1: `bot.main_menu` has no stored row (the registry default is in force). */
+  readonly legacyIsDefault?: boolean;
 }): MainMenuLayout {
-  const answer = options.source;
+  const answer =
+    options.source ??
+    (options.legacyIsDefault === true
+      ? ({ kind: 'LEGACY', superseded: false, publishedUnreadable: false } as const)
+      : undefined);
   return new MainMenuLayout({
     ...(answer === undefined
       ? {}
@@ -66,6 +72,9 @@ function layoutWith(options: {
               Promise.resolve({
                 source: answer,
                 legacy: options.stored ?? DEFAULT_MAIN_MENU_LAYOUT,
+                ...(options.legacyIsDefault === undefined
+                  ? {}
+                  : { legacyIsDefault: options.legacyIsDefault }),
               }),
           },
         }),
@@ -98,6 +107,8 @@ describe('the main-menu arrangement (bot.main_menu)', () => {
       ['trial', 'referral'],
       ['apps'],
       ['tickets'],
+      // PR-2: «درخواست نمایندگی», behind its flag.
+      ['reseller_request'],
     ]);
     // An odd button before a wide one keeps its row to itself rather than pairing across.
     const [catalog, , , , , , apps, tickets] = MAIN_MENU_BUTTONS;
@@ -120,6 +131,7 @@ describe('the main-menu arrangement (bot.main_menu)', () => {
       'referral',
       'apps',
       'tickets',
+      'reseller_request',
     ]);
     expect(resolved.find((entry) => entry.button === 'trial')?.enabled).toBe(false);
     expect(resolved.filter((entry) => entry.enabled)).toHaveLength(MAIN_MENU_BUTTON_IDS.length - 1);
@@ -145,6 +157,7 @@ describe('the main-menu arrangement (bot.main_menu)', () => {
     expect(onlyGated.filter((entry) => entry.enabled).map((entry) => entry.button)).toEqual([
       'trial',
       'referral',
+      'reseller_request',
     ]);
     expect(mainMenuLayoutSchema.safeParse(onlyGated).success).toBe(false);
     // F5: the trial button is gated by a panel offer, not by a flag — so a keyboard with
@@ -244,6 +257,7 @@ describe('the main-menu item model (round P: target and appearance slot)', () =>
       'referral',
       'apps',
       'tickets',
+      'reseller_request',
     ]);
   });
 });
@@ -330,6 +344,8 @@ describe('MainMenuLayout — the keyboard and the route table from one object', 
       ['help', null, null, true],
       ['apps', null, null, true],
       ['tickets', null, null, true],
+      // PR-2: its flag is off in this fixture, so it is not drawn.
+      ['reseller_request', 'FEATURE', false, false],
     ]);
     expect(reads.count).toBe(0);
     // `buttonsFor` is exactly the shown subset of the same answer.
@@ -480,6 +496,7 @@ describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
       ['services', false],
       ['apps', false],
       ['tickets', false],
+      ['reseller_request', false],
     ]);
   });
 
@@ -512,7 +529,7 @@ describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
       const keyboard = await layoutWith({
         source: published(layout),
         trialOffered: true,
-        flags: { referrals: true },
+        flags: { referrals: true, reseller_requests: true },
       }).keyboardFor(scope);
       const byId = new Map(buttons.map((one) => [one.button, one]));
       const expected = rows
@@ -548,8 +565,9 @@ describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
     }
   });
 
-  it('the converted default is the default keyboard', async () => {
-    expect(DEFAULT_EXPLICIT_MAIN_MENU).toEqual(explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT));
+  it('the default explicit layout is the keyboard drawn where nothing is saved', async () => {
+    // NEXA-OWNER-BATCH-1 PR-1: the default is Mirza's arrangement, not the legacy conversion.
+    expect(DEFAULT_EXPLICIT_MAIN_MENU).not.toEqual(explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT));
     const flags = { referrals: true };
     expect(
       await layoutWith({
@@ -557,7 +575,9 @@ describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
         flags,
         trialOffered: true,
       }).rowsFor(scope),
-    ).toEqual(await layoutWith({ flags, trialOffered: true }).rowsFor(scope));
+    ).toEqual(
+      await layoutWith({ flags, trialOffered: true, legacyIsDefault: true }).rowsFor(scope),
+    );
   });
 });
 

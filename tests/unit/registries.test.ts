@@ -364,6 +364,9 @@ describe('the feature flag registry', () => {
       // (inert until a minimum is set); both are raised by the reseller-minimum sweep.
       'reseller_minimum_achieved_notices',
       'reseller_minimum_reminders',
+      // PR-2. Off by default; the main-menu button and the request flow it switches on are
+      // reachable, and a request already sent stays decidable when it is turned off.
+      'reseller_requests',
       // R4 PR-F. Both off by default; the rich-message seam in the customer messenger is
       // reachable, and with rich_messages off every request is byte for byte the old one.
       'rich_messages',
@@ -385,6 +388,10 @@ describe('the feature flag registry', () => {
       // hourly snapshot written beside an existing usage read are reachable behind it.
       'service_usage_chart',
       'service_usage_reminders',
+      // NEXA-OWNER-BATCH-1 PR-1. Both off by default; the services list's search row (label button,
+      // search button) is drawn only behind them, one switch each, and a stale tap opens nothing.
+      'services_search_button',
+      'services_search_label_button',
       // R10 D5 (a). Off by default; the captcha gate in front of a new customer's turns
       // and the mini app's matching gate are reachable, and with it off nobody is asked.
       'start_captcha',

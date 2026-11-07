@@ -304,6 +304,14 @@ export const CUSTOMER_NOTIFICATION_COMPACTION: Readonly<
       'PR-3: the only record that the customer was warned before their service was deleted ' +
       'automatically; one per (service, due cycle).',
   },
+  RESELLER_REQUEST_MESSAGE: {
+    compact: 'NEVER',
+    reason: 'The only delivery record of what an operator wrote to an applicant; rare.',
+  },
+  RESELLER_REQUEST_DECISION: {
+    compact: 'NEVER',
+    reason: 'The only delivery record of the answer to a reseller request; one per request.',
+  },
 };
 
 /** The resolved states a row may be removed in. PENDING and UNCONFIRMED never. */

@@ -224,13 +224,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // acceptance. These four are ROUTES as well as labels: `intentOf` matches the
   // text a tap sends against exactly these strings, so an edit here changes what
   // the bot answers and not merely what it shows.
-  'bot.menu.catalog': '🛒 خرید اشتراک',
-  'bot.menu.services': '📱 سرویس‌های من',
-  'bot.menu.wallet': '💰 کیف پول',
-  'bot.menu.help': '💬 پشتیبانی',
+  'bot.menu.catalog': '🔐 خرید اشتراک',
+  'bot.menu.services': '🛍 سرویس های من',
+  'bot.menu.wallet': '🏦 کیف پول + شارژ',
+  'bot.menu.help': '☎️ پشتیبانی',
   // R1: each behind its feature flag, and arranged on the bot-buttons page.
-  'bot.menu.trial': '🧪 دریافت سرویس تست',
-  'bot.menu.referral': '👥 زیرمجموعه‌گیری',
+  'bot.menu.trial': 'اشتراک رایگان {تست}',
+  'bot.menu.referral': '👥 زیر مجموعه گیری',
 
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
   'bot.catalog.heading': 'سرویس‌های قابل خرید:',
@@ -1245,7 +1245,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // WP-A10: app downloads and connection guides. No app, store or link is named: the
   // entries are the operator's, and the defaults below say only what is true of all.
   'bot.command.apps': 'دانلود برنامه و آموزش اتصال',
-  'bot.menu.apps': '📱 دانلود برنامه و آموزش اتصال',
+  'bot.menu.apps': '📚 آموزش',
   'bot.tutorial.other_button': '🧩 سایر',
   'bot.apps.platform':
     '📲 برنامه‌های پیشنهادی برای این سیستم عامل:\n\nبرای دیدن لینک دانلود و آموزش اتصال، یکی از برنامه‌های زیر را انتخاب کنید.',
@@ -1281,8 +1281,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.faq.default_5_answer':
     'لوکیشن سرویس شما پس از خرید در کارت سرویس نمایش داده می‌شود. برای اطلاع از لوکیشن‌های هر محصول پیش از خرید، توضیحات محصول را ببینید یا از پشتیبانی بپرسید.',
   'bot.faq.default_6_question': 'چطور باید از این فیلترشکن استفاده کنم؟',
-  'bot.faq.default_6_answer':
-    'برای آموزش استفاده از برنامه، روی دکمه «📱 دانلود برنامه و آموزش اتصال» بزنید.',
+  'bot.faq.default_6_answer': 'برای آموزش استفاده از برنامه، روی دکمه «📚 آموزش» بزنید.',
   'bot.faq.default_7_question': 'فیلترشکن وصل نمیشه، چیکار کنم؟',
   'bot.faq.default_7_answer': 'به همراه یک عکس از پیغام خطایی که میگیرید به پشتیبانی مراجعه کنید.',
   'bot.faq.default_8_question': 'فیلترشکن شما تضمینی هست که همیشه مواقع متصل بشه؟',
@@ -1770,4 +1769,65 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'پیام آزمایشی ظاهر ربات\n\n' +
     'در خط زیر، هر جایگاهی که ایموجی سفارشی برایش تنظیم شده با همان ایموجی فرستاده شده و بقیه با ایموجی پیش‌فرض. ' +
     'اگر آیکون‌های سفارشی را می‌بینید، این ربات می‌تواند از ایموجی سفارشی استفاده کند.',
+  // --- PR-2: «درخواست نمایندگی» ------------------------------------------------------------
+  'bot.menu.reseller_request': '👨‍💻 درخواست نمایندگی',
+  'bot.reseller_request.intro':
+    '👨‍💻 درخواست نمایندگی\n\nبرای نماینده شدن چند سؤال کوتاه را پاسخ بدهید. پاسخ‌های شما همراه درخواست برای مدیریت فرستاده می‌شود و نتیجه همین‌جا به شما اطلاع داده می‌شود.',
+  'bot.reseller_request.question':
+    'سؤال {index} از {total}\n\n{question}\n\nپاسخ این سؤال لازم است؛ آن را بنویسید و بفرستید.\n✍️ پاسخ قبلی شما: {current}',
+  'bot.reseller_request.question_optional':
+    'سؤال {index} از {total}\n\n{question}\n\nپاسخ این سؤال اختیاری است؛ بنویسید یا «رد کردن» را بزنید.\n✍️ پاسخ قبلی شما: {current}',
+  'bot.reseller_request.summary':
+    '📋 خلاصهٔ درخواست شما\n\n{answers}\n\nاگر درست است «ارسال» را بزنید، وگرنه «ویرایش».',
+  'bot.reseller_request.submitted':
+    '{icon:success} درخواست شما ثبت شد.\nشمارهٔ درخواست: {number}\nنتیجه و هر پیام مدیریت همین‌جا برایتان فرستاده می‌شود.',
+  'bot.reseller_request.already_reseller': 'شما هم‌اکنون نماینده هستید و نیازی به درخواست نیست.',
+  'bot.reseller_request.status_pending':
+    '{icon:time} درخواست نمایندگی شما (شمارهٔ {number}) در انتظار بررسی است.',
+  'bot.reseller_request.status_conversing':
+    '💬 درخواست نمایندگی شما (شمارهٔ {number}) در حال گفتگو با مدیریت است. پیام‌های مدیریت را با دکمهٔ «پاسخ» جواب بدهید.',
+  'bot.reseller_request.cooldown':
+    'درخواست قبلی شما رد شد. می‌توانید حدود {days} روز دیگر دوباره درخواست بدهید.\n📝 دلیل: {reason}',
+  'bot.reseller_request.unavailable': 'درخواست نمایندگی در حال حاضر در دسترس نیست.',
+  'bot.reseller_request.answer_invalid':
+    'پاسخ باید خالی نباشد و حداکثر {max} نویسه باشد. دوباره بنویسید.',
+  'bot.reseller_request.approved':
+    '🎉 درخواست نمایندگی شما تأیید شد و اکنون با سطح «{tier}» نماینده هستید.',
+  'bot.reseller_request.rejected':
+    '{icon:error} درخواست نمایندگی شما تأیید نشد.\n📝 دلیل: {reason}',
+  'bot.reseller_request.message_from_owner':
+    '💬 پیام مدیریت دربارهٔ درخواست نمایندگی شما (شمارهٔ {number})\n\n{text}',
+  'bot.reseller_request.reply_prompt':
+    'پاسخ خود را برای درخواست شمارهٔ {number} بنویسید یا یک عکس بفرستید.',
+  'bot.reseller_request.reply_sent': '{icon:success} پاسخ شما به درخواست اضافه شد.',
+  'bot.reseller_request.thread_closed': 'دربارهٔ این درخواست تصمیم گرفته شده و گفتگو بسته است.',
+  'bot.reseller_request.button_start': '▶️ شروع',
+  'bot.reseller_request.button_skip': '⏭ رد کردن',
+  'bot.reseller_request.button_back': '🔙 بازگشت',
+  'bot.reseller_request.button_send': '📤 ارسال',
+  'bot.reseller_request.button_edit': '✏️ ویرایش',
+  'bot.reseller_request.button_reply': '↩️ پاسخ',
+  'bot.admin.reseller_request.tiers':
+    '👨‍💻 درخواست نمایندگی شمارهٔ {number}\n\nمتقاضی با کدام سطح نماینده شود؟',
+  'bot.admin.reseller_request.confirm':
+    '⚠️ تأیید نهایی\n\nمتقاضیِ درخواست {number} با سطح «{tier}» نماینده می‌شود. موجودی و اعتبار او تغییری نمی‌کند.',
+  'bot.admin.reseller_request.reject_prompt':
+    '❌ رد درخواست {number}\n\nدلیل را بنویسید و بفرستید (اختیاری)، یا «رد بدون دلیل» را بزنید.',
+  'bot.admin.reseller_request.message_prompt':
+    '💬 پیام به متقاضیِ درخواست {number}\n\nمتن پیام را بنویسید و بفرستید.',
+  'bot.admin.reseller_request.done_approved':
+    '✅ درخواست {number} تأیید شد؛ متقاضی با سطح «{tier}» نماینده است.',
+  'bot.admin.reseller_request.done_rejected': '❌ درخواست {number} رد شد.',
+  'bot.admin.reseller_request.done_message':
+    '✅ پیام شما برای متقاضیِ درخواست {number} فرستاده شد.',
+  'bot.admin.reseller_request.closed':
+    'دربارهٔ این درخواست قبلاً تصمیم گرفته شده یا سطح انتخابی دیگر وجود ندارد؛ چیزی تغییر نکرد.',
+  'bot.admin.reseller_request.start_bot':
+    'برای ادامه، ربات را یک بار در چت خصوصی باز کنید (/start) و دوباره دکمه را بزنید.',
+  'bot.admin.reseller_request.cancelled': 'انصراف داده شد؛ چیزی فرستاده نشد.',
+  'bot.admin.reseller_request.already_reseller':
+    'این متقاضی همین حالا نماینده است؛ چیزی تغییر نکرد و درخواست باز ماند. می‌توانید آن را رد کنید یا سطح او را در صفحهٔ نمایندگان تغییر دهید.',
+  'bot.admin.reseller_request.button_confirm': '✅ تأیید نهایی',
+  'bot.admin.reseller_request.button_cancel': '✖️ انصراف',
+  'bot.admin.reseller_request.button_reject_plain': '❌ رد بدون دلیل',
 };

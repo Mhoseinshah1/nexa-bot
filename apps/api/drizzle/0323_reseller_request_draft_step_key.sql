@@ -1,0 +1,1 @@
+ALTER TABLE "reseller_request_drafts" ADD COLUMN "last_step_key" text;
