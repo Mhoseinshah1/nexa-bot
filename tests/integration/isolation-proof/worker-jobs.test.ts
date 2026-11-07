@@ -159,19 +159,13 @@ describe('isolation proof (PR-5) — worker jobs', () => {
   });
 
   /*
-   * PR-6 CANDIDATE (defence in depth, not an observed leak). The relay claims a batch that
-   * spans tenants on ONE transaction on the system path (`OutboxRelay` is `@ScopeBound()`,
-   * so its unscoped `processBatch` runs as `nexa_system`, reason `OutboxRelay.processBatch`),
-   * and each consumer's effect runs inside that transaction. A consumer's statement is
-   * therefore NOT confined to the event's tenant by row-level security: a consumer that
-   * dropped its tenant predicate would read or write every tenant's rows, which is exactly
-   * the "one missed predicate" ADR-0037 adopted RLS to catch. Today every consumer scopes
-   * its own SQL, so nothing leaks; the database does not enforce it. The fix (PR-6) is to
-   * bind the event's tenant for each consumer's savepoint (`SET LOCAL ROLE NONE` and
-   * `app.current_tenant_id`), or to run each consumer in its tenant's own unit of work.
-   * The assertion is the property; `it.fails` until PR-6 makes it hold.
+   * Phase 6A PR-6 (was PR-5's `it.fails`). The relay claims a batch that spans tenants on ONE
+   * transaction on the system path, and each consumer's effect runs inside it — so a consumer
+   * that dropped its tenant predicate would have read or written every tenant's rows. Each
+   * consumer now runs with the transaction switched to `nexa_app` bound to its event's tenant
+   * (`withTenantScopeIn`): the database, not the consumer's own SQL, confines it.
    */
-  it.fails('PR-6: a consumer’s transaction is confined by RLS to its event’s tenant', async () => {
+  it('a consumer’s transaction is confined by RLS to its event’s tenant', async () => {
     for (const label of LABELS) await enqueue(world.tenants[label], 1, 'confined');
     const deliveries: Delivery[] = [];
     await relayWith([recorder(deliveries)], 10).processBatch();
@@ -247,15 +241,11 @@ describe('isolation proof (PR-5) — worker jobs', () => {
   });
 
   /*
-   * PR-6 CANDIDATE (a hosted-bot functional gap, not a leak — it fails CLOSED). Every per-
-   * tenant loop the worker runs takes its scope from `installationTenantId` (container.ts:
-   * the customer notification lane, service and customer reminders, payment expiry, the
-   * gateway inquiry lane, broadcasts, campaigns, bulk operations, receipt-review pushes, the
-   * provisioner, …), so it serves the installation's PRIMARY only. A hosted tenant's due
-   * customer notification is never sent by the worker — nor, by the same wiring, are its
-   * reminders raised, its broadcasts dispatched, its gateway payments inquired or its
-   * services provisioned. Nothing crosses tenants; the hosted bot is simply not served.
-   * The assertion is the property; `it.fails` until PR-6 makes the loops iterate tenants.
+   * Phase 6A PR-6 (was PR-5's `it.fails`). Every per-tenant loop the worker runs used to take
+   * its scope from `installationTenantId`, so it served the installation's PRIMARY only and a
+   * hosted tenant's due notification was never sent. The loops now take a `TenantFanOut`
+   * pass (`infrastructure/lifecycle/tenant-pass.ts`) and run their same pass once per ACTIVE
+   * tenant, each in its own scope.
    */
   const pendingFor = async (tenantId: string) =>
     (
@@ -279,16 +269,13 @@ describe('isolation proof (PR-5) — worker jobs', () => {
     expect(await pendingFor(hosted.tenantId)).toBeGreaterThan(0);
   });
 
-  it.fails(
-    'PR-6: the worker’s notification loop delivers a hosted tenant’s due message',
-    async () => {
-      const hosted = world.tenants.HOSTED_2;
-      world.telegram.calls.length = 0;
-      for (let i = 0; i < 3; i += 1) await world.api.container.customerNotificationLoop.tick();
-      expect(await pendingFor(hosted.tenantId)).toBe(0);
-      expect(
-        world.telegram.calls.filter((call) => call.botId === hosted.telegramBotId).length,
-      ).toBeGreaterThan(0);
-    },
-  );
+  it('the worker’s notification loop delivers a hosted tenant’s due message, through its own bot', async () => {
+    const hosted = world.tenants.HOSTED_2;
+    world.telegram.calls.length = 0;
+    for (let i = 0; i < 3; i += 1) await world.api.container.customerNotificationLoop.tick();
+    expect(await pendingFor(hosted.tenantId)).toBe(0);
+    expect(
+      world.telegram.calls.filter((call) => call.botId === hosted.telegramBotId).length,
+    ).toBeGreaterThan(0);
+  });
 });

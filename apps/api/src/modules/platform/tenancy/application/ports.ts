@@ -29,6 +29,13 @@ export interface TenantRepository {
    * Web Admin authenticates against the installation's own tenant.
    */
   findPrimary(): Promise<Tenant | null>;
+  /**
+   * Phase 6A PR-6: every ACTIVE tenant's id, on the system path — the tenants the worker's
+   * per-tenant loops serve (`infrastructure/lifecycle/tenant-pass.ts`).
+   */
+  activeTenantIds(): Promise<TenantId[]>;
+  /** Every tenant's id, whatever its status, on the system path (delete-only sweeps). */
+  allTenantIds(): Promise<TenantId[]>;
   /** Scoped read: returns the tenant only if the scope permits seeing it. */
   findInScope(scope: ScopeContext): Promise<Tenant | null>;
 }

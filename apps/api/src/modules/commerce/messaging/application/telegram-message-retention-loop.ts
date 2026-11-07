@@ -7,10 +7,28 @@ import {
   type OperationalEventInput,
   type OperationalEventRecorder,
   type TenantContext,
+  type TenantId,
 } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { TelegramMessageStateService } from './telegram-message-state.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  isReportedTenantFailure,
+  reportedTenantFailure,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
+
+/** One tenant's failure streak (Phase 6A PR-6: one per tenant, each its own condition). */
+interface RetentionStreak {
+  consecutiveFailures: number;
+  /**
+   * When THIS process last WROTE the failing condition — set only once the write succeeded,
+   * so a failed write never leaves a recovery to be recorded for a condition that does not
+   * exist. Null when it has not.
+   */
+  failureRecordedAt: number | null;
+}
 
 /** Hourly, like the identity and ticket-file sweepers: the rows it removes are long dead. */
 export const TELEGRAM_MESSAGE_RETENTION_INTERVAL_MS = 3_600_000;
@@ -54,18 +72,17 @@ export class TelegramMessageRetentionLoop {
   private firstRun: NodeJS.Timeout | null = null;
   private running = false;
   private readonly progress: LoopProgress;
-  private consecutiveFailures = 0;
   /**
-   * When THIS process last WROTE the failing condition — set only once the write succeeded,
-   * so a failed write never leaves a recovery to be recorded for a condition that does not
-   * exist. Null when it has not.
+   * The failure streak, per tenant (Phase 6A PR-6): the condition is written to the failing
+   * tenant's log, so one bot's streak must neither open nor close another bot's condition.
    */
-  private failureRecordedAt: number | null = null;
+  private readonly streaks = new Map<TenantId, RetentionStreak>();
 
   constructor(
     private readonly service: Pick<TelegramMessageStateService, 'purgeExpired'>,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly initialDelayMs: number;
       readonly batchSize: number;
@@ -118,24 +135,37 @@ export class TelegramMessageRetentionLoop {
     if (this.running) return null;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope === null) {
-        this.progress.record(this.options.now());
-        return { wizards: 0, reviews: 0 };
-      }
-      let removed: { readonly wizards: number; readonly reviews: number };
+      // Once per tenant (Phase 6A PR-6); no tenant yet is a healthy pass that removed nothing.
+      const total = { wizards: 0, reviews: 0 };
       try {
-        removed = await this.drain(scope);
+        await forEachLoopTenant(this.options.scope, async (scope) => {
+          const streak = this.streakOf(scope.tenantId);
+          let removed: { readonly wizards: number; readonly reviews: number };
+          try {
+            removed = await this.drain(scope);
+          } catch (error: unknown) {
+            await this.failed(scope, streak, error);
+            throw reportedTenantFailure('telegram message retention failed for this tenant');
+          }
+          await this.succeeded(scope, streak);
+          total.wizards += removed.wizards;
+          total.reviews += removed.reviews;
+          if (removed.wizards + removed.reviews > 0) {
+            this.options.logger.info(
+              { tenantId: scope.tenantId, ...removed },
+              'telegram message state removed by retention',
+            );
+          }
+        });
       } catch (error: unknown) {
-        await this.failed(scope, error);
+        // A tenant's failure was logged (and counted) in `failed`; anything else is here.
+        if (!isReportedTenantFailure(error)) {
+          this.options.logger.error({ error }, 'telegram message retention tick failed');
+        }
         return null;
       }
       this.progress.record(this.options.now());
-      await this.succeeded(scope);
-      if (removed.wizards + removed.reviews > 0) {
-        this.options.logger.info(removed, 'telegram message state removed by retention');
-      }
-      return removed;
+      return total;
     } finally {
       this.running = false;
     }
@@ -164,17 +194,30 @@ export class TelegramMessageRetentionLoop {
     return { wizards, reviews };
   }
 
-  private async failed(scope: TenantContext, error: unknown): Promise<void> {
-    this.consecutiveFailures += 1;
+  private streakOf(tenantId: TenantId): RetentionStreak {
+    let streak = this.streaks.get(tenantId);
+    if (streak === undefined) {
+      streak = { consecutiveFailures: 0, failureRecordedAt: null };
+      this.streaks.set(tenantId, streak);
+    }
+    return streak;
+  }
+
+  private async failed(
+    scope: TenantContext,
+    streak: RetentionStreak,
+    error: unknown,
+  ): Promise<void> {
+    streak.consecutiveFailures += 1;
     this.options.logger.error(
-      { error, consecutiveFailures: this.consecutiveFailures },
+      { tenantId: scope.tenantId, error, consecutiveFailures: streak.consecutiveFailures },
       'telegram message retention tick failed',
     );
-    if (this.consecutiveFailures < TELEGRAM_MESSAGE_RETENTION_FAILURE_THRESHOLD) return;
+    if (streak.consecutiveFailures < TELEGRAM_MESSAGE_RETENTION_FAILURE_THRESHOLD) return;
     const now = this.options.now();
     if (
-      this.failureRecordedAt !== null &&
-      now - this.failureRecordedAt < TELEGRAM_MESSAGE_RETENTION_FAILURE_RECORD_INTERVAL_MS
+      streak.failureRecordedAt !== null &&
+      now - streak.failureRecordedAt < TELEGRAM_MESSAGE_RETENTION_FAILURE_RECORD_INTERVAL_MS
     ) {
       return;
     }
@@ -184,19 +227,19 @@ export class TelegramMessageRetentionLoop {
       message:
         'The Telegram message-state retention sweep keeps failing; its two tables are growing.',
       context: {
-        consecutiveFailures: this.consecutiveFailures,
+        consecutiveFailures: streak.consecutiveFailures,
         error: error instanceof Error ? error.message : String(error),
       },
       dedupeKey: TELEGRAM_MESSAGE_RETENTION_FAILING_CODE,
     });
     // Only a condition that was written is remembered: a write that failed is retried on the
     // next failed tick, and a good tick has no recovery of its own to record for it.
-    if (recorded) this.failureRecordedAt = now;
+    if (recorded) streak.failureRecordedAt = now;
   }
 
-  private async succeeded(scope: TenantContext): Promise<void> {
-    this.consecutiveFailures = 0;
-    let open = this.failureRecordedAt !== null;
+  private async succeeded(scope: TenantContext, streak: RetentionStreak): Promise<void> {
+    streak.consecutiveFailures = 0;
+    let open = streak.failureRecordedAt !== null;
     /*
      * With no failure of its own on record, a completed tick ASKS the log whether the
      * condition is open — on every completed tick, not once per process: another replica
@@ -228,7 +271,7 @@ export class TelegramMessageRetentionLoop {
       recoversDedupeKey: TELEGRAM_MESSAGE_RETENTION_FAILING_CODE,
     });
     // Kept when the recovery could not be written, so the next good tick tries again.
-    if (recorded) this.failureRecordedAt = null;
+    if (recorded) streak.failureRecordedAt = null;
   }
 
   /** Housekeeping never fails because the operations log could not be written. */

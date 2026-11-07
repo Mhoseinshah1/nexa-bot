@@ -1,7 +1,10 @@
-import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { BulkOperationProcessor } from './bulk-operation-processor.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * How often the mass-operation lane runs. Each pass processes up to `BULK_PASS_LIMIT` items,
@@ -23,7 +26,8 @@ export class BulkOperationLoop {
   constructor(
     private readonly processor: BulkOperationProcessor,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => number;
       readonly logger: {
@@ -64,18 +68,16 @@ export class BulkOperationLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope === null) {
-        this.progress.record(this.options.now());
-        return;
-      }
-      const report = await this.processor.pass(scope);
-      if (
-        report.credited + report.planned + report.skipped + report.settled + report.completed >
-        0
-      ) {
-        this.options.logger.info({ ...report }, 'bulk operation pass');
-      }
+      // Once per tenant (Phase 6A PR-6); no tenant yet is a healthy pass that did nothing.
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        const report = await this.processor.pass(scope);
+        if (
+          report.credited + report.planned + report.skipped + report.settled + report.completed >
+          0
+        ) {
+          this.options.logger.info({ tenantId: scope.tenantId, ...report }, 'bulk operation pass');
+        }
+      });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       this.options.logger.error(

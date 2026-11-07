@@ -393,8 +393,8 @@ M = [
     ('TP-19', [(GPS, "          nextInquiryAt: next,\n          postDeadline,\n        },\n        at,\n        tx,\n      );\n    });",
                 "          nextInquiryAt: outcome.verdict === 'OPEN' ? next : null,\n          postDeadline,\n        },\n        at,\n        tx,\n      );\n    });")],
      T_TP, 'keeps an unsuccessful inquiry scheduled until the failure is durable', 'KILL'),
-    ('TP-20', [(LOOP, "  return Math.ceil(passBoundMs / intervalMs) + 3;", "  return 3;")],
-     T_LOOP, 'tolerates the pass bound plus three intervals', 'KILL'),
+    ('TP-20', [(LOOP, "  return Math.ceil((TENANT_PASS_MANDATORY_BODIES * passBoundMs) / intervalMs) + 3;", "  return 3;")],
+     T_LOOP, 'tolerates two tenants’ pass bounds plus three intervals (the owner’s and one other bot)', 'KILL'),
 ]
 
 

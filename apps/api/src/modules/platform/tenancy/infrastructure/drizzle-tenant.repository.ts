@@ -145,6 +145,23 @@ export class DrizzleTenantRepository implements TenantRepository {
     return row ? toTenant(row) : null;
   }
 
+  async activeTenantIds(): Promise<TenantId[]> {
+    // Unscoped, so `@ScopeBound` runs it on the system path, reason
+    // `DrizzleTenantRepository.activeTenantIds`: the list of tenants precedes any one's scope.
+    const rows = await this.db
+      .select({ id: tenants.id })
+      .from(tenants)
+      .where(eq(tenants.status, 'ACTIVE'))
+      .orderBy(tenants.id);
+    return rows.map((row) => asId<'TenantId'>(row.id));
+  }
+
+  async allTenantIds(): Promise<TenantId[]> {
+    // Unscoped: the system path, reason `DrizzleTenantRepository.allTenantIds`.
+    const rows = await this.db.select({ id: tenants.id }).from(tenants).orderBy(tenants.id);
+    return rows.map((row) => asId<'TenantId'>(row.id));
+  }
+
   async findInScope(scope: ScopeContext): Promise<Tenant | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await this.db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);

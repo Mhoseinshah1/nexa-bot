@@ -103,6 +103,7 @@ import type {
 } from '@nexa/contracts';
 
 import { InstallationTenantGuard } from './infrastructure/lifecycle/installation-tenant-guard.js';
+import { TenantFanOut } from './infrastructure/lifecycle/tenant-pass.js';
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { readFileSync } from 'node:fs';
 import { rename, stat } from 'node:fs/promises';
@@ -2410,6 +2411,28 @@ export function createContainer(
   let installationTenantId: TenantId | null = null;
 
   /*
+   * Phase 6A PR-6: the worker serves every ACTIVE tenant, not only the installation's.
+   * Each per-tenant loop below is given `tenantFanOut.pass(<loop>, …)` as its `scope`
+   * instead of the one fixed installation scope, and runs its SAME pass once per active
+   * tenant (`infrastructure/lifecycle/tenant-pass.ts`). Installation-wide work (backups,
+   * recovery, compaction, the owner's restart and stall reports) keeps the installation
+   * scope. Nothing is served before the installation has a tenant, and there is no
+   * fallback to it: a tenant that is not ACTIVE is not served.
+   *
+   * Each pass's `budgetMs` is its loop's own interval: the fan-out stops STARTING tenants
+   * after it, so a pass lasts at most one interval plus one tenant's own bounded batch,
+   * inside every loop's stall tolerance (three intervals, or more — the gateway and FX
+   * loops add their pass bound). The tenants not reached go first next pass.
+   */
+  const tenantFanOut = new TenantFanOut({
+    activeTenants: () => tenants.activeTenantIds(),
+    allTenants: () => tenants.allTenantIds(),
+    installationTenantId: () => installationTenantId,
+    now: () => clock.now().getTime(),
+    logger,
+  });
+
+  /*
    * Phase 6A PR-2: capacity guards. The per-bot limits (`tenant_capacity_limits`, cached per
    * tenant), the owner's operations log (always the INSTALLATION tenant's group), the
    * pressure alert, the per-bot update queue and database share of the webhook, the
@@ -4363,10 +4386,9 @@ export function createContainer(
    * paces it — hourly, bounded batches, one condition for a failure streak.
    */
   const telegramMessageRetentionLoop = new TelegramMessageRetentionLoop(telegramMessageState, {
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    scope: tenantFanOut.pass('telegram-message-retention', {
+      budgetMs: TELEGRAM_MESSAGE_RETENTION_INTERVAL_MS,
+    }),
     intervalMs: TELEGRAM_MESSAGE_RETENTION_INTERVAL_MS,
     initialDelayMs: TELEGRAM_MESSAGE_RETENTION_INITIAL_DELAY_MS,
     batchSize: TELEGRAM_MESSAGE_RETENTION_BATCH,
@@ -4383,10 +4405,12 @@ export function createContainer(
   const giftCardSweepLoop = new GiftCardSweepLoop(
     { repository: giftCardRepository, uow, guard, audit, opsLog, sessions, clock },
     {
-      scope: () =>
-        installationTenantId === null
-          ? null
-          : { tenantId: installationTenantId, botInstanceId: null },
+      // Every tenant, stopped ones too: the purge keeps the 24-hour plaintext promise even
+      // for a bot an operator stopped (`gift-card-sweep.ts`).
+      scope: tenantFanOut.pass('gift-card-sweep', {
+        budgetMs: GIFT_CARD_SWEEP_INTERVAL_MS,
+        tenants: 'all',
+      }),
       intervalMs: GIFT_CARD_SWEEP_INTERVAL_MS,
       initialDelayMs: GIFT_CARD_SWEEP_INITIAL_DELAY_MS,
       ids,
@@ -4533,10 +4557,7 @@ export function createContainer(
     logger,
   });
   const gatewayPaymentLoop = new GatewayPaymentLoop(gatewayPayments, {
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    scope: tenantFanOut.pass('gateway-payments', { budgetMs: GATEWAY_PAYMENT_INTERVAL_MS }),
     intervalMs: GATEWAY_PAYMENT_INTERVAL_MS,
     // Every call a pass may make, one after another, each allowed its whole timeout — and,
     // since R2, the Telegram edit of the invoice message each of them may be followed by.
@@ -4632,14 +4653,10 @@ export function createContainer(
     }),
   });
   const paymentExpiryLoop = new PaymentExpiryLoop(paymentExpirySweep, {
-    // Resolved per pass: the installation's tenant is a row, so it is not known
-    // while this object is being built. The same closure the backup scheduler and
-    // the recovery executor use, and `PaymentExpiryLoop.tick` treats a null as a
-    // healthy pass that had nothing to do.
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    // Every active tenant, resolved per pass (Phase 6A PR-6): the tenants are rows, so
+    // they are not known while this object is being built, and a pass with no tenant yet
+    // is a healthy pass that had nothing to do.
+    scope: tenantFanOut.pass('payment-expiry', { budgetMs: PAYMENT_EXPIRY_INTERVAL_MS }),
     intervalMs: PAYMENT_EXPIRY_INTERVAL_MS,
     now: () => clock.now().getTime(),
     logger,
@@ -4759,10 +4776,7 @@ export function createContainer(
   });
   fxRef.current = fxService;
   const fxRefreshLoop = new FxRefreshLoop(fxService, {
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    scope: tenantFanOut.pass('fx-refresh', { budgetMs: FX_REFRESH_INTERVAL_MS }),
     baseAsset: 'USDT',
     intervalMs: FX_REFRESH_INTERVAL_MS,
     // Both sources, each allowed its whole timeout, back to back.
@@ -5175,10 +5189,7 @@ export function createContainer(
     logger,
   });
   const bulkOperationLoop = new BulkOperationLoop(bulkOperationProcessor, {
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    scope: tenantFanOut.pass('bulk-operations', { budgetMs: BULK_OPERATION_INTERVAL_MS }),
     intervalMs: BULK_OPERATION_INTERVAL_MS,
     now: () => clock.now().getTime(),
     logger,
@@ -5298,23 +5309,15 @@ export function createContainer(
       clock,
     }),
     {
-      scope: () =>
-        installationTenantId === null
-          ? null
-          : { tenantId: installationTenantId, botInstanceId: null },
+      scope: tenantFanOut.pass('nightly-reports', { budgetMs: NIGHTLY_REPORT_INTERVAL_MS }),
       intervalMs: NIGHTLY_REPORT_INTERVAL_MS,
       now: () => clock.now().getTime(),
       logger,
     },
   );
   const serviceReminderLoop = new ServiceReminderLoop(serviceReminderSweep, {
-    // The same per-pass closure the payment expiry loop uses, and for the same
-    // reason: the installation's tenant is a row, so it is not known while this
-    // object is being built.
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    // Every active tenant, resolved per pass (Phase 6A PR-6), as the payment expiry loop.
+    scope: tenantFanOut.pass('service-reminders', { budgetMs: SERVICE_REMINDER_INTERVAL_MS }),
     intervalMs: SERVICE_REMINDER_INTERVAL_MS,
     now: () => clock.now().getTime(),
     // Round 5A-2: the worker-start reconcile of imported services' baselines and notices,
@@ -5440,11 +5443,13 @@ export function createContainer(
         runOnce: async (scope) => resellerExpiryService.runOnce(scope),
       },
       {
-        // Phase 6A PR-3: a hosted bot's expiry date is a deadline too. The loop's scope is
-        // the installation's, which owns the register of hosted bots.
+        // Phase 6A PR-3: a hosted bot's expiry date is a deadline too. Installation-wide
+        // (phase 6B D7): only the installation's own pass runs it — its tenant owns the
+        // register of hosted bots — and every other tenant's pass skips it (PR-6).
         name: 'hosted-bot-expiry',
         everyMs: 0,
-        runOnce: async (scope) => hostedBotExpiry.runOnce(scope),
+        runOnce: async (scope) =>
+          scope.tenantId === installationTenantId ? hostedBotExpiry.runOnce(scope) : 0,
       },
       {
         /*
@@ -5460,10 +5465,7 @@ export function createContainer(
       },
     ],
     {
-      scope: () =>
-        installationTenantId === null
-          ? null
-          : { tenantId: installationTenantId, botInstanceId: null },
+      scope: tenantFanOut.pass('customer-reminders', { budgetMs: CUSTOMER_REMINDER_INTERVAL_MS }),
       intervalMs: CUSTOMER_REMINDER_INTERVAL_MS,
       now: () => clock.now().getTime(),
       // Phase 6A PR-2: each bot's sweeps in its own slot of their interval.
@@ -6462,10 +6464,7 @@ export function createContainer(
     conditions: new DrizzleOperationalConditionReader(database.db),
   });
   const incidentSchedulerLoop = new IncidentSchedulerLoop(incidentService, {
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    scope: tenantFanOut.pass('incident-scheduler', { budgetMs: INCIDENT_SCHEDULER_INTERVAL_MS }),
     intervalMs: INCIDENT_SCHEDULER_INTERVAL_MS,
     now: () => clock.now().getTime(),
     logger,
@@ -6632,10 +6631,9 @@ export function createContainer(
       logger,
     }),
     {
-      scope: () =>
-        installationTenantId === null
-          ? null
-          : { tenantId: installationTenantId, botInstanceId: null },
+      scope: tenantFanOut.pass('customer-notifications', {
+        budgetMs: CUSTOMER_NOTIFICATION_INTERVAL_MS,
+      }),
       intervalMs: CUSTOMER_NOTIFICATION_INTERVAL_MS,
       now: () => clock.now().getTime(),
       logger,
@@ -6712,10 +6710,7 @@ export function createContainer(
     marketingOptOut: marketingOptOutPolicy,
   });
   const broadcastLoop = new BroadcastLoop(broadcastDispatcher, {
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    scope: tenantFanOut.pass('broadcasts', { budgetMs: BROADCAST_INTERVAL_MS }),
     intervalMs: BROADCAST_INTERVAL_MS,
     now: () => clock.now().getTime(),
     logger,
@@ -6745,10 +6740,7 @@ export function createContainer(
     ids,
   });
   const campaignScheduleLoop = new CampaignScheduleLoop(campaignService, campaignRepository, {
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    scope: tenantFanOut.pass('campaign-schedule', { budgetMs: CAMPAIGN_SCHEDULE_INTERVAL_MS }),
     intervalMs: CAMPAIGN_SCHEDULE_INTERVAL_MS,
     now: () => clock.now(),
     ids,
@@ -6840,10 +6832,7 @@ export function createContainer(
   });
   const receiptReviewPushLoop = new ReceiptReviewPushLoop(receiptReviewPush, {
     refundRequests: serviceRefundPush,
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    scope: tenantFanOut.pass('receipt-review-push', { budgetMs: RECEIPT_PUSH_INTERVAL_MS }),
     intervalMs: RECEIPT_PUSH_INTERVAL_MS,
     now: () => clock.now().getTime(),
     logger,
@@ -7394,27 +7383,27 @@ export function createContainer(
     referrals: referralCommissionService,
     serviceRefunds: serviceRefundRequests,
     /*
-     * The installation's own tenant.
+     * Every ACTIVE tenant, the installation's own first (Phase 6A PR-6), resolved per tick
+     * rather than captured, so a process that started before provisioning was resolved
+     * does not hold a stale context for its lifetime.
      *
-     * One tenant per installation is the deployment model — `resolveInstallationTenant`
-     * establishes it at boot for the worker and the monitor alike — and the loop asks
-     * for it per tick rather than capturing it, so a process that started before
-     * provisioning was resolved does not hold a stale context for its lifetime.
+     * No tenant yet: a fresh installation boots before `pnpm provision` runs, and the loop
+     * must not invent a tenant id to keep itself busy. `noTenant: 'throw'` makes that pass
+     * throw, which the tick catches and records no progress for — so readiness stays false
+     * until the installation has a tenant, which is the truth (as before PR-6).
      */
-    scope: () => {
-      if (installationTenantId === null) {
-        /*
-         * No tenant yet.
-         *
-         * A fresh installation boots before `pnpm provision` runs, and the loop must
-         * not invent a tenant id to keep itself busy. Throwing is caught by the tick,
-         * which records no progress — so readiness stays false until the installation
-         * has a tenant, which is the truth.
-         */
-        throw new Error('this installation has no tenant yet; nothing can be provisioned');
-      }
-      return { tenantId: installationTenantId, botInstanceId: null };
-    },
+    /*
+     * EVERY tenant, stopped ones too — as the installation's tenant was always passed here
+     * whether stopped or not. The provisioner's `OperationOutcomeAnnouncer` is the stated
+     * exception to "a stopped scope accepts no work" (`docs/conventions.md`): it tells a
+     * customer what became of work already done. Every other lane of the pass refuses a
+     * stopped scope inside its own transaction, as before.
+     */
+    scope: tenantFanOut.pass('provisioner', {
+      budgetMs: config.PROVISIONER_TICK_MS,
+      noTenant: 'throw',
+      tenants: 'all',
+    }),
     tickMs: config.PROVISIONER_TICK_MS,
     /*
      * Stall REPORTING only (Codex P2 on #258): one step of a tick may be a provider
@@ -7616,10 +7605,9 @@ export function createContainer(
    * by default): two minutes after the owner's content stops changing, and nightly.
    */
   const supportKnowledgeRefreshLoop = new SupportKnowledgeRefreshLoop(supportKnowledgeBuild, {
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    scope: tenantFanOut.pass('support-knowledge-refresh', {
+      budgetMs: SUPPORT_KNOWLEDGE_REFRESH_INTERVAL_MS,
+    }),
     intervalMs: SUPPORT_KNOWLEDGE_REFRESH_INTERVAL_MS,
     now: () => clock.now(),
     correlationId: () => ids.uuid(),
@@ -7826,10 +7814,7 @@ export function createContainer(
       uow,
       scopeActivity: tenants,
     }),
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    scope: tenantFanOut.pass('assistant', { budgetMs: ASSISTANT_INTERVAL_MS }),
     intervalMs: ASSISTANT_INTERVAL_MS,
     now: () => clock.now(),
     logger,
@@ -7843,10 +7828,9 @@ export function createContainer(
       clock,
     }),
     {
-      scope: () =>
-        installationTenantId === null
-          ? null
-          : { tenantId: installationTenantId, botInstanceId: null },
+      scope: tenantFanOut.pass('support-assistant-watch', {
+        budgetMs: SUPPORT_ASSISTANT_WATCH_INTERVAL_MS,
+      }),
       intervalMs: SUPPORT_ASSISTANT_WATCH_INTERVAL_MS,
       now: () => clock.now().getTime(),
       logger,
@@ -7870,10 +7854,7 @@ export function createContainer(
       logger,
     }),
     {
-      scope: () =>
-        installationTenantId === null
-          ? null
-          : { tenantId: installationTenantId, botInstanceId: null },
+      scope: tenantFanOut.pass('business-outbound', { budgetMs: BUSINESS_OUTBOUND_INTERVAL_MS }),
       intervalMs: BUSINESS_OUTBOUND_INTERVAL_MS,
       now: () => clock.now().getTime(),
       logger,
@@ -7923,10 +7904,7 @@ export function createContainer(
   const opsGroupSystemActor = () => systemJobActor('ops-group', newCorrelationId(ids.uuid()));
   const opsGroupRouter = new OpsGroupRouter(opsGroups, opsGroupSystemActor);
   const opsGroupMaintainer = new OpsGroupMaintainer(opsGroups, {
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
+    scope: tenantFanOut.pass('ops-group', { budgetMs: OPS_GROUP_MAINTAIN_INTERVAL_MS }),
     actor: opsGroupSystemActor,
     intervalMs: OPS_GROUP_MAINTAIN_INTERVAL_MS,
     now: () => clock.now().getTime(),

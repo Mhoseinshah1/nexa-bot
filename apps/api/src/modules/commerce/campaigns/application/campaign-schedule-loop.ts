@@ -9,6 +9,10 @@ import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress
 import type { CampaignRepository } from './ports.js';
 import type { CampaignService } from './campaign.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * The campaign lane (`docs/round-n-campaigns-audit.md` D11), in the WORKER.
@@ -40,7 +44,8 @@ export class CampaignScheduleLoop {
     >,
     private readonly campaigns: Pick<CampaignRepository, 'dueToStart' | 'dueToComplete'>,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => Date;
       readonly ids: Pick<IdGenerator, 'uuid'>;
@@ -83,19 +88,25 @@ export class CampaignScheduleLoop {
     if (this.running) return { started: 0, completed: 0 };
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope === null) {
-        this.progress.record(this.options.now().getTime());
-        return { started: 0, completed: 0 };
-      }
-      const result = await this.runOnce(scope);
-      const released = await this.releaseOnce(scope);
-      if (released > 0) this.options.logger.info({ released }, 'frozen audiences released');
+      // Once per tenant (Phase 6A PR-6); no tenant yet is a healthy tick that moved nothing.
+      const total = { started: 0, completed: 0 };
+      await forEachLoopTenant(this.options.scope, async (scope) => {
+        const result = await this.runOnce(scope);
+        const released = await this.releaseOnce(scope);
+        if (released > 0) {
+          this.options.logger.info(
+            { tenantId: scope.tenantId, released },
+            'frozen audiences released',
+          );
+        }
+        total.started += result.started;
+        total.completed += result.completed;
+        if (result.started + result.completed > 0) {
+          this.options.logger.info({ tenantId: scope.tenantId, ...result }, 'campaigns moved');
+        }
+      });
       this.progress.record(this.options.now().getTime());
-      if (result.started + result.completed > 0) {
-        this.options.logger.info(result, 'campaigns moved');
-      }
-      return result;
+      return total;
     } catch (error: unknown) {
       this.options.logger.error({ error }, 'campaign schedule tick failed');
       return { started: 0, completed: 0 };

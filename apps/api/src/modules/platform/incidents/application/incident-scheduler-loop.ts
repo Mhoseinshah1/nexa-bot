@@ -1,7 +1,10 @@
-import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { IncidentService } from './incident.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import {
+  forEachLoopTenant,
+  type LoopTenantScope,
+} from '../../../../infrastructure/lifecycle/tenant-pass.js';
 
 /**
  * The timer that starts scheduled maintenance windows (Phase E3), in the WORKER. Its own
@@ -16,7 +19,8 @@ export class IncidentSchedulerLoop {
   constructor(
     private readonly incidents: Pick<IncidentService, 'startDue'>,
     private readonly options: {
-      readonly scope: () => TenantContext | null;
+      /** Phase 6A PR-6: every active tenant's pass (`TenantFanOut`), or one fixed scope. */
+      readonly scope: LoopTenantScope;
       readonly intervalMs: number;
       readonly now: () => number;
       readonly logger: {
@@ -56,11 +60,16 @@ export class IncidentSchedulerLoop {
     if (this.running) return;
     this.running = true;
     try {
-      const scope = this.options.scope();
-      if (scope !== null) {
+      // Once per tenant (Phase 6A PR-6): an incident is a tenant's own record.
+      await forEachLoopTenant(this.options.scope, async (scope) => {
         const started = await this.incidents.startDue(scope);
-        if (started > 0) this.options.logger.info({ started }, 'scheduled incidents started');
-      }
+        if (started > 0) {
+          this.options.logger.info(
+            { tenantId: scope.tenantId, started },
+            'scheduled incidents started',
+          );
+        }
+      });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       this.options.logger.error(

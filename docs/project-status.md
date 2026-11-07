@@ -557,8 +557,10 @@ installation tenant and NOT a reseller sub-tenant; the panel is the installation
 recovery codes and 12-hour section session, and every sensitive action asks for a fresh code;
 suspension, expiry and deletion stop the bot through the hosted TENANT row's status, which every
 write path's `ScopeActivityReader`, the webhook and Web Admin sign-in already refuse. Creating
-hosted bots stays closed in production until PR-1 (RLS) and PR-5 (isolation proof) are merged:
-the compiled `HOSTED_BOTS_PRODUCTION_RELEASE_MARKER` is flipped by PR-5 and nothing else.
+hosted bots was closed in production until PR-1 (RLS) and PR-5 (isolation proof) were merged and
+the worker served every tenant under its own RLS binding (PR-6): the compiled
+`HOSTED_BOTS_PRODUCTION_RELEASE_MARKER` is flipped by PR-6 and nothing else, and
+`HOSTED_BOTS_CREATE_ENABLED` stays the operator's second key.
 
 ## Deployment
 

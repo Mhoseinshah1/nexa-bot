@@ -1170,7 +1170,9 @@ describe('the TonPays Telegram provider review window', () => {
           now: () => nowMs,
           logger: { info: () => undefined, error: () => undefined },
         });
-        const window = 15_000 + 3 * GATEWAY_PAYMENT_INTERVAL_MS;
+        // Two tenants' pass bounds plus three intervals (Phase 6A PR-6: a fan-out pass always
+        // serves the owner's bot and one other, so the lane allows two bounds).
+        const window = 2 * 15_000 + 3 * GATEWAY_PAYMENT_INTERVAL_MS;
         return {
           async passesFor(totalMs: number) {
             loop.start();

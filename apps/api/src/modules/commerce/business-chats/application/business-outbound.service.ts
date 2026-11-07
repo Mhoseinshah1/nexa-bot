@@ -8,6 +8,7 @@ import {
   type CorrelationId,
   type IdGenerator,
   type Logger,
+  isSystemContext,
   type ScopeContext,
   type UnitOfWork,
 } from '@nexa/contracts';
@@ -89,7 +90,11 @@ type Outcome = 'delivered' | 'superseded' | 'unconfirmed' | 'failed' | 'rateLimi
  *      person's own send that failed is shown to them and changes nothing about control.
  */
 export class BusinessOutboundService {
-  private lastRetentionAt = 0;
+  /**
+   * When the retention last ran, per tenant (Phase 6A PR-6): the worker's one lane serves
+   * every active bot, and one bot's purge must not hold another bot's off for ten minutes.
+   */
+  private readonly lastRetentionAt = new Map<string, number>();
 
   constructor(private readonly deps: BusinessOutboundServiceDeps) {}
 
@@ -460,7 +465,10 @@ export class BusinessOutboundService {
 
   /** The 30-day text retention (ADR-0033 §8), at most every ten minutes. */
   private async purgeIfDue(scope: ScopeContext, now: Date): Promise<number> {
-    if (now.getTime() - this.lastRetentionAt < BUSINESS_RETENTION_INTERVAL_MS) return 0;
+    const key = isSystemContext(scope) ? 'SYSTEM' : scope.tenantId;
+    if (now.getTime() - (this.lastRetentionAt.get(key) ?? 0) < BUSINESS_RETENTION_INTERVAL_MS) {
+      return 0;
+    }
     const cutoff = new Date(now.getTime() - BUSINESS_MESSAGE_TEXT_RETENTION_DAYS * 86_400_000);
     const purged = await this.deps.uow.run(scope, async (tx) => {
       const texts = await this.deps.messages.purgeText(scope, cutoff, now, RETENTION_BATCH, tx);
@@ -468,7 +476,7 @@ export class BusinessOutboundService {
       const notes = await this.deps.escalations.purgeText(scope, cutoff, now, RETENTION_BATCH, tx);
       return texts + bodies + notes;
     });
-    this.lastRetentionAt = now.getTime();
+    this.lastRetentionAt.set(key, now.getTime());
     return purged;
   }
 }
