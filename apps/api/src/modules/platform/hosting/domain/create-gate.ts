@@ -17,15 +17,20 @@ import type { HostingCreateRefusal } from '@nexa/contracts';
  *
  * Outside production (development, test, CI) the flag alone decides, so the feature can be
  * built and tested before the proof lands. `tests/unit/hosting-create-gate.test.ts` pins
- * the marker as unreleased: flipping it fails that test, so the flip is a deliberate,
- * visible edit to a test as well as to this file.
+ * the marker's value (released by PR-5): changing it either way fails that test, so every
+ * flip is a deliberate, visible edit to a test as well as to this file.
  */
 
 /** The exact value PR-5 sets the marker to. Any other value keeps the gate shut. */
 export const HOSTED_BOTS_RELEASE_MARKER_VALUE = 'p6a-pr1-rls+p6a-pr5-isolation-proof';
 
-/** `null` until PR-5. Never read from the environment. */
-export const HOSTED_BOTS_PRODUCTION_RELEASE_MARKER: string | null = null;
+/**
+ * Set by PR-5 (phase 6A D3): PR-1's row-level security is merged and PR-5's isolation proof
+ * (`tests/integration/isolation-proof/`) is green, including its mutation check. Never read
+ * from the environment; setting it back to `null` shuts the gate again.
+ */
+export const HOSTED_BOTS_PRODUCTION_RELEASE_MARKER: string | null =
+  HOSTED_BOTS_RELEASE_MARKER_VALUE;
 
 export interface CreateGateInput {
   readonly nodeEnv: string;
