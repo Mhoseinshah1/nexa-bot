@@ -12,20 +12,28 @@ import type { HostingCreateRefusal } from '@nexa/contracts';
  *
  *   1. `HOSTED_BOTS_CREATE_ENABLED` — an operator's env flag (config, default `false`).
  *   2. `HOSTED_BOTS_PRODUCTION_RELEASE_MARKER` below — a CODE constant. Only a reviewed
- *      commit changes it, and PR-5 is the commit that does, once its isolation proof is
+ *      commit changes it, and PR-6 is the commit that does, once PR-5's isolation proof is
  *      green. An env var, a setting or a database row cannot: the marker is compiled in.
  *
  * Outside production (development, test, CI) the flag alone decides, so the feature can be
  * built and tested before the proof lands. `tests/unit/hosting-create-gate.test.ts` pins
- * the marker as unreleased: flipping it fails that test, so the flip is a deliberate,
- * visible edit to a test as well as to this file.
+ * the marker's value (released by PR-6): changing it either way fails that test, so every
+ * flip is a deliberate, visible edit to a test as well as to this file.
  */
 
 /** The exact value PR-5 sets the marker to. Any other value keeps the gate shut. */
 export const HOSTED_BOTS_RELEASE_MARKER_VALUE = 'p6a-pr1-rls+p6a-pr5-isolation-proof';
 
-/** `null` until PR-5. Never read from the environment. */
-export const HOSTED_BOTS_PRODUCTION_RELEASE_MARKER: string | null = null;
+/**
+ * Set by PR-6 (phase 6A): PR-1's row-level security is merged, PR-5's isolation proof
+ * (`tests/integration/isolation-proof/`) is green with no `it.fails` or skipped case left,
+ * including its mutation check, and the worker serves every active tenant under its own RLS
+ * binding (PR-6). PR-5 flipped it first and was reverted, because the worker then served the
+ * installation's tenant only. Never read
+ * from the environment; setting it back to `null` shuts the gate again.
+ */
+export const HOSTED_BOTS_PRODUCTION_RELEASE_MARKER: string | null =
+  HOSTED_BOTS_RELEASE_MARKER_VALUE;
 
 export interface CreateGateInput {
   readonly nodeEnv: string;

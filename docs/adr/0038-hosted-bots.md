@@ -80,7 +80,7 @@ role or a GRANT override. Every refusal writes a DENIED audit row.
 
 Creating is refused unless `HOSTED_BOTS_CREATE_ENABLED` is on AND, in any NODE_ENV other than
 `development`/`test`, the compiled `HOSTED_BOTS_PRODUCTION_RELEASE_MARKER` equals its exact value.
-The marker is a code constant (`null` today); PR-5 sets it once RLS (PR-1) and the isolation proof
+The marker is a code constant, set by PR-6 (it was `null` before) once RLS (PR-1) and the isolation proof
 (PR-5) are merged, editing `tests/unit/hosting-create-gate.test.ts` in the same commit.
 
 ### Cross-tenant work: one port, on the RLS system path

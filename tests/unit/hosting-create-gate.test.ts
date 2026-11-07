@@ -17,13 +17,14 @@ import { HOSTED_BOT_TRANSITIONS, HOSTED_BOT_TENANT_STATUS, isNexaError } from '@
  *
  * The gate is the owner's condition that no hosted bot exists in production before row-level
  * security (PR-1) and the isolation proof (PR-5) are merged. These cases are what make
- * opening it a deliberate edit: the marker is pinned as unreleased here, so PR-5 changes this
- * test in the same commit that flips it.
+ * moving it a deliberate edit: the marker is pinned here, so PR-6 changed this test in the
+ * same commit that flipped it, and shutting it again would change it back.
  */
 describe('the hosted-bot create gate', () => {
-  it('ships CLOSED: the compiled release marker is unset', () => {
-    // PR-5 flips this (and this assertion) once tenant isolation is enforced and proven.
-    expect(HOSTED_BOTS_PRODUCTION_RELEASE_MARKER).toBeNull();
+  it('is RELEASED by PR-6: the compiled marker is the exact release value', () => {
+    // PR-1 (row-level security) is merged and PR-5's isolation proof is green.
+    expect(HOSTED_BOTS_PRODUCTION_RELEASE_MARKER).toBe(HOSTED_BOTS_RELEASE_MARKER_VALUE);
+    expect(HOSTED_BOTS_RELEASE_MARKER_VALUE).toBe('p6a-pr1-rls+p6a-pr5-isolation-proof');
   });
 
   it('is shut in production with the flag on and no marker — and with a wrong marker', () => {
@@ -76,12 +77,12 @@ describe('the hosted-bot create gate', () => {
     ).toBeNull();
   });
 
-  it('the wired service reads the compiled marker: production with the flag on stays shut', () => {
+  it('the wired service reads the compiled marker: production opens with the flag, not without', () => {
     const fake = {} as never;
-    const built = (nodeEnv: string) =>
+    const built = (nodeEnv: string, flag = true) =>
       buildHosting({
         db: fake,
-        config: { NODE_ENV: nodeEnv, HOSTED_BOTS_CREATE_ENABLED: true },
+        config: { NODE_ENV: nodeEnv, HOSTED_BOTS_CREATE_ENABLED: flag },
         uow: fake,
         guard: fake,
         audit: fake,
@@ -104,7 +105,9 @@ describe('the hosted-bot create gate', () => {
         diskPaths: [],
         installationTenantId: () => null,
       }).hosting.createGate();
-    expect(built('production')).toEqual({ enabled: false, refusal: 'PRODUCTION_NOT_RELEASED' });
+    expect(built('production')).toEqual({ enabled: true, refusal: null });
+    // The operator's flag is still the second key: off, production stays shut.
+    expect(built('production', false)).toEqual({ enabled: false, refusal: 'FLAG_OFF' });
     expect(built('development')).toEqual({ enabled: true, refusal: null });
   });
 });
