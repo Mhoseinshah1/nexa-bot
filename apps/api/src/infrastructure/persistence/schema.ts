@@ -18909,6 +18909,8 @@ export const resellerRequestDrafts = pgTable(
     /** One entry per question, `null` while unanswered or skipped. */
     answers: jsonb('answers').notNull(),
     position: integer('position').notNull().default(0),
+    /** The idempotency key of the step that last changed the draft: a redelivery replays. */
+    lastStepKey: text('last_step_key'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },

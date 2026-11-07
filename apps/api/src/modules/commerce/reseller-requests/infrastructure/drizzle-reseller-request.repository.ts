@@ -92,6 +92,7 @@ function toDraft(row: DraftRow): DraftRecord {
     questions: row.questions as AskedQuestion[],
     answers: row.answers as (string | null)[],
     position: row.position,
+    lastStepKey: row.lastStepKey,
     updatedAt: row.updatedAt,
   };
 }
@@ -255,7 +256,11 @@ export class DrizzleResellerRequestRepository implements ResellerRequestReposito
   async saveDraft(
     scope: TenantContext,
     id: string,
-    patch: { readonly answers: readonly (string | null)[]; readonly position: number },
+    patch: {
+      readonly answers: readonly (string | null)[];
+      readonly position: number;
+      readonly stepKey: string | null;
+    },
     now: Date,
     tx: unknown,
   ): Promise<void> {
@@ -265,6 +270,7 @@ export class DrizzleResellerRequestRepository implements ResellerRequestReposito
       .set({
         answers: patch.answers as unknown as string[],
         position: patch.position,
+        lastStepKey: patch.stepKey,
         updatedAt: now,
       })
       .where(and(eq(resellerRequestDrafts.tenantId, tenantId), eq(resellerRequestDrafts.id, id)));

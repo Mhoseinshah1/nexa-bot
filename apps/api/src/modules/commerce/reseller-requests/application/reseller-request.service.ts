@@ -352,6 +352,8 @@ export class ResellerRequestService {
       readonly draftId: string;
       readonly action: DraftAction;
       readonly text?: string;
+      /** The update's key: a step already applied under it replays the draft as it is now. */
+      readonly idempotencyKey?: string;
     },
   ): Promise<DraftOutcome> {
     return runAuthorizedMutation(
@@ -366,6 +368,12 @@ export class ResellerRequestService {
         const draft = await this.deps.requests.findDraftByCustomer(scope, input.customerId, tx);
         if (draft === null || draft.id !== input.draftId) return { kind: 'GONE' };
         const total = draft.questions.length;
+        if (input.idempotencyKey !== undefined && draft.lastStepKey === input.idempotencyKey) {
+          return {
+            kind: 'VIEW',
+            view: draftView(draft, draft.position >= total ? 'SUMMARY' : 'QUESTION'),
+          };
+        }
         const answers = [...draft.answers];
         let position = draft.position;
         const now = this.deps.clock.now();
@@ -405,7 +413,13 @@ export class ResellerRequestService {
             position = 0;
             break;
         }
-        await this.deps.requests.saveDraft(scope, draft.id, { answers, position }, now, tx);
+        await this.deps.requests.saveDraft(
+          scope,
+          draft.id,
+          { answers, position, stepKey: input.idempotencyKey ?? null },
+          now,
+          tx,
+        );
         return {
           kind: 'VIEW',
           view: draftView(

@@ -177,7 +177,13 @@ export function viewReply(view: DraftView): PendingReply {
           { ...inlineLabel('reseller_request.back'), data: stepData('b', view.draftId), row: 1 },
         ],
         orderId: null,
-        wizard: { kind: 'RESELLER_REQUEST', step: 'RR_SUMMARY', subjectId: view.draftId },
+        wizard: {
+          kind: 'RESELLER_REQUEST',
+          step: 'RR_SUMMARY',
+          subjectId: view.draftId,
+          // A final typed answer edits the question message, so no older button stays live.
+          anchor: { steps: ['RR_QUESTION'], subjectId: view.draftId },
+        },
       };
   }
 }
@@ -243,6 +249,7 @@ export async function stepTurn(
     const outcome = await service.step(scope, actor, {
       customerId: customer.id,
       draftId,
+      idempotencyKey: input.idempotencyKey,
       action: { g: 'START', s: 'SKIP', b: 'BACK', e: 'EDIT' }[action] as
         'START' | 'SKIP' | 'BACK' | 'EDIT',
     });
@@ -297,6 +304,7 @@ export async function answerText(
       draftId: capture.subjectId,
       action: 'ANSWER',
       text,
+      idempotencyKey: input.idempotencyKey,
     });
     return viewOf(rt, scope, actor, customer, capture.subjectId, outcome, input, 'typed');
   } catch (error) {

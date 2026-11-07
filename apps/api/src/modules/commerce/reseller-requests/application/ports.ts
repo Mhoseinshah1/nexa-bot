@@ -33,6 +33,8 @@ export interface DraftRecord {
   /** One per question; `null` while unanswered or skipped. */
   readonly answers: readonly (string | null)[];
   readonly position: number;
+  /** The key of the step that last changed the draft; a redelivered step replays. */
+  readonly lastStepKey: string | null;
   readonly updatedAt: Date;
 }
 
@@ -131,7 +133,11 @@ export interface ResellerRequestRepository {
   saveDraft(
     scope: TenantContext,
     id: string,
-    patch: { readonly answers: readonly (string | null)[]; readonly position: number },
+    patch: {
+      readonly answers: readonly (string | null)[];
+      readonly position: number;
+      readonly stepKey: string | null;
+    },
     now: Date,
     tx: unknown,
   ): Promise<void>;

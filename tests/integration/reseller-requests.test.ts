@@ -354,6 +354,46 @@ describe('reseller requests (PR-2)', () => {
       expect((await say(f, LABEL, TG.customer)).replyKey).toBe('bot.reseller_request.intro');
     });
 
+    it('applies a redelivered typed answer once: the next question is not answered by the repeat', async () => {
+      const draft = await begin();
+      const input = {
+        customerId: f.customer,
+        draftId: draft,
+        action: 'ANSWER' as const,
+        text: 'فروشگاه',
+        idempotencyKey: key(),
+      };
+      await c().resellerRequests.step(tenantA, systemActor('bot'), input);
+      await c().resellerRequests.step(tenantA, systemActor('bot'), input);
+      const [draftRow] = await rows<{ position: number; answers: unknown }>(
+        f,
+        sql`SELECT position, answers FROM reseller_request_drafts WHERE id = ${draft}`,
+      );
+      expect(draftRow?.position).toBe(1);
+      expect(draftRow?.answers).toEqual(['فروشگاه', null]);
+      // A new update (new key) is a new step.
+      await c().resellerRequests.step(tenantA, systemActor('bot'), {
+        ...input,
+        text: 'توضیح',
+        idempotencyKey: key(),
+      });
+      const [after] = await rows<{ position: number }>(
+        f,
+        sql`SELECT position FROM reseller_request_drafts WHERE id = ${draft}`,
+      );
+      expect(after?.position).toBe(2);
+    });
+
+    it('shows the summary by editing the question message when the last answer is typed', async () => {
+      await begin();
+      await say(f, 'فروشگاه', TG.customer);
+      await say(f, 'سه سال سابقه', TG.customer);
+      const summary = f.sent.filter((one) =>
+        String(one.body['text'] ?? '').includes('سه سال سابقه'),
+      );
+      expect(summary.map((one) => one.method)).toEqual(['editMessageText']);
+    });
+
     it('files at most once for a redelivered «ارسال»', async () => {
       const draft = await begin();
       await say(f, 'فروشگاه', TG.customer);
