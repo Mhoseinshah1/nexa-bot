@@ -3,6 +3,8 @@ import { expect } from 'vitest';
 import {
   API_PREFIX,
   BROADCAST_ROUTES,
+  CLIENT_APP_ROUTES,
+  GIFT_CARD_ROUTES,
   SESSION_COOKIE_NAME,
   TELEGRAM_SECRET_TOKEN_HEADER,
   TENANT_MEDIA_ROUTES,
@@ -84,6 +86,10 @@ export interface TenantWorld {
   readonly ticketMessageId: string;
   readonly walletAmountMinor: string;
   readonly broadcastId: string;
+  /** A gift-card batch (its codes are an export: a file of bearer instruments). */
+  readonly giftCardBatchId: string;
+  /** A client-app entry with a stored image (a file served by the entry's id). */
+  readonly clientAppId: string;
   readonly owner: SeededAdmin;
   readonly ownerActor: ActorContext;
   readonly staffId: string;
@@ -186,6 +192,16 @@ const quote = (productId: string, amount: string) =>
 export function png(size = 64): Buffer {
   const bytes = Buffer.alloc(size, 0x11);
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes);
+  return bytes;
+}
+
+/** A PNG whose IHDR names its dimensions (a client app's image is checked for them). */
+export function sizedPng(width: number, height: number, total: number): Buffer {
+  const bytes = Buffer.alloc(total, 0x2a);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]).copy(bytes);
+  bytes.write('IHDR', 12, 'latin1');
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
   return bytes;
 }
 
@@ -316,9 +332,11 @@ export async function buildWorld(env: Partial<NodeJS.ProcessEnv> = {}): Promise<
     const serviceId = newId();
     await run(sql`INSERT INTO services
         (id, tenant_id, customer_id, order_id, panel_id, product_id, provider_username, state,
-         delivery_state, traffic_limit_bytes, traffic_used_bytes, provisioned_at, delivered_at)
+         delivery_state, traffic_limit_bytes, traffic_used_bytes, provisioned_at, delivered_at,
+         subscription_url)
       VALUES (${serviceId}, ${tenantId}, ${customerId}, ${orderId}, ${panelId}, ${productId},
-              ${`svc${spec.marker}`}, 'ACTIVE', 'DELIVERED', 53687091200, 0, now(), now())`);
+              ${`svc${spec.marker}`}, 'ACTIVE', 'DELIVERED', 53687091200, 0, now(), now(),
+              ${`https://${spec.marker}.panel.test/sub/svc${spec.marker}`})`);
     const paymentId = newId();
     await run(sql`INSERT INTO payments
         (id, tenant_id, customer_id, order_id, state, method, amount, currency, reference,
@@ -398,6 +416,73 @@ export async function buildWorld(env: Partial<NodeJS.ProcessEnv> = {}): Promise<
     });
     expect(media.statusCode, media.body).toBeLessThan(300);
 
+    // A gift-card batch (an export) and a client app with an image (a file), through the API.
+    const giftFlag = (await api.container.featureFlags.list(scope, ownerActor)).find(
+      (flag) => flag.key === 'gift_cards',
+    );
+    if (giftFlag === undefined) throw new Error('no gift_cards flag');
+    await api.container.featureFlags.set(scope, ownerActor, {
+      idempotencyKey: key(),
+      key: 'gift_cards',
+      enabled: true,
+      expectedVersion: giftFlag.version,
+      confirmKey: 'gift_cards',
+      reason: 'isolation proof',
+    });
+    const gift = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${GIFT_CARD_ROUTES.batches}`,
+      headers: { origin: ORIGIN, cookie },
+      payload: {
+        idempotencyKey: key(),
+        label: `Gift ${spec.marker}`,
+        amountMinor: '10000',
+        currency: 'IRT',
+        count: 2,
+        expiresAt: new Date(Date.now() + 30 * 24 * 3_600_000).toISOString(),
+        perCustomerLimit: null,
+        reason: `Reason ${spec.marker}`,
+        expectedTotalMinor: '20000',
+        typedCount: 2,
+      },
+    });
+    expect(gift.statusCode, gift.body).toBeLessThan(300);
+    const giftCardBatchId = (gift.json() as { batch: { id: string } }).batch.id;
+    const app = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${CLIENT_APP_ROUTES.create}`,
+      headers: { origin: ORIGIN, cookie },
+      payload: {
+        idempotencyKey: key(),
+        platform: 'ANDROID',
+        name: `App ${spec.marker}`,
+        icon: null,
+        description: `About ${spec.marker}`,
+        officialUrl: `https://${spec.marker}.downloads.test/app.apk`,
+        alternativeUrl: null,
+        helpUrl: null,
+        guide: `Guide ${spec.marker}`,
+        deliveryKinds: [],
+        protocols: [],
+        providerTypes: [],
+        sortOrder: 10,
+      },
+    });
+    expect(app.statusCode, app.body).toBe(201);
+    const clientAppId = (app.json() as { id: string }).id;
+    const image = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${CLIENT_APP_ROUTES.image(clientAppId)}`,
+      headers: { origin: ORIGIN, cookie },
+      payload: {
+        idempotencyKey: key(),
+        expectedVersion: 1,
+        mimeType: 'image/png',
+        contentBase64: sizedPng(256, 256, 300).toString('base64'),
+      },
+    });
+    expect(image.statusCode, image.body).toBe(201);
+
     tenants[label] = {
       label,
       tenantId,
@@ -421,6 +506,8 @@ export async function buildWorld(env: Partial<NodeJS.ProcessEnv> = {}): Promise<
       ticketMessageId,
       walletAmountMinor: spec.walletAmount,
       broadcastId,
+      giftCardBatchId,
+      clientAppId,
       owner: ownerAdmin,
       ownerActor,
       staffId: staff.id,
@@ -480,6 +567,18 @@ export async function victimRows(world: World, victim: TenantWorld): Promise<str
     payment: await one('payments', victim.paymentId),
     ticket: await one('tickets', victim.ticketId),
     broadcast: await one('broadcasts', victim.broadcastId),
+    giftCardBatch: await one('gift_card_batches', victim.giftCardBatchId),
+    clientApp: (
+      await db.execute(
+        sql`SELECT to_jsonb(t) - 'image_content' AS row FROM client_apps t
+             WHERE id = ${victim.clientAppId}`,
+      )
+    ).rows[0] ?? null,
+    giftCards: (
+      await db.execute(
+        sql`SELECT id, state FROM gift_card_codes WHERE tenant_id = ${victim.tenantId} ORDER BY id`,
+      )
+    ).rows,
     owner: await one('admins', victim.owner.id),
     staff: await one('admins', victim.staffId),
     wallet: (
@@ -540,6 +639,8 @@ export function fingerprints(t: TenantWorld): string[] {
     t.ticketId,
     t.ticketMessageId,
     t.broadcastId,
+    t.giftCardBatchId,
+    t.clientAppId,
     t.owner.id,
     t.staffId,
     t.botId,

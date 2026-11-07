@@ -6,6 +6,7 @@ import {
   leaks,
   ORIGIN,
   PAIRS,
+  sizedPng,
   victimRows,
   type TenantWorld,
   type World,
@@ -95,6 +96,16 @@ const READS: readonly ReadCase[] = [
     path: (v) => `/ticket-messages/${v.ticketMessageId}/attachment`,
     ownStatus: (status) => status !== 404,
   },
+  // A client app's stored image: bytes the API serves itself, by the entry's id.
+  { surface: 'files', path: (v) => `/client-apps/${v.clientAppId}/image` },
+  { surface: 'client-apps', path: (v) => `/client-apps/${v.clientAppId}/videos` },
+  { surface: 'gift-cards', path: (v) => `/gift-card-batches/${v.giftCardBatchId}` },
+  {
+    surface: 'gift-cards',
+    path: (v) => `/gift-card-batches/${v.giftCardBatchId}/disable-preview`,
+  },
+  // A gift-card batch's codes: a CSV of bearer instruments, the most valuable export there is.
+  { surface: 'exports', path: (v) => `/gift-card-batches/${v.giftCardBatchId}/export` },
 ];
 
 const LISTS: readonly ListCase[] = [
@@ -122,6 +133,8 @@ const LISTS: readonly ListCase[] = [
   { surface: 'tickets', path: () => '/tickets' },
   { surface: 'broadcasts', path: () => '/broadcasts' },
   { surface: 'admins', path: () => '/admins' },
+  { surface: 'gift-cards', path: () => '/gift-card-batches' },
+  { surface: 'client-apps', path: () => '/client-apps' },
   // Gateways and settings are keyed by provider / key, never by an id: one tenant's list
   // is its own rows, and the fingerprint is the victim's distinct setting value.
   { surface: 'gateways', path: () => '/payment-gateways', ownShowsData: false },
@@ -210,6 +223,36 @@ const WRITES: readonly WriteCase[] = [
     surface: 'admins',
     path: (v) => `/admins/${v.staffId}/status`,
     body: () => ({ status: 'DISABLED', reason: 'cross-tenant attempt' }),
+  },
+  {
+    surface: 'gift-cards',
+    path: (v) => `/gift-card-batches/${v.giftCardBatchId}/disable`,
+    body: (key) => ({
+      idempotencyKey: key,
+      reason: 'cross-tenant attempt',
+      expectedUnredeemed: 2,
+      confirmed: true,
+    }),
+  },
+  {
+    surface: 'client-apps',
+    path: (v) => `/client-apps/${v.clientAppId}/status`,
+    body: (key) => ({ idempotencyKey: key, status: 'DISABLED', expectedVersion: 2 }),
+  },
+  {
+    surface: 'files',
+    path: (v) => `/client-apps/${v.clientAppId}/image`,
+    body: (key) => ({
+      idempotencyKey: key,
+      expectedVersion: 2,
+      mimeType: 'image/png',
+      contentBase64: sizedPng(128, 128, 200).toString('base64'),
+    }),
+  },
+  {
+    surface: 'files',
+    path: (v) => `/client-apps/${v.clientAppId}/image/clear`,
+    body: (key) => ({ idempotencyKey: key, expectedVersion: 2 }),
   },
   {
     surface: 'admins',

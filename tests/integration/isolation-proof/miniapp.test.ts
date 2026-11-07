@@ -7,6 +7,7 @@ import {
   buildWorld,
   leaks,
   PAIRS,
+  png,
   TWIN_TELEGRAM_USER_ID,
   victimRows,
   type TenantWorld,
@@ -97,6 +98,9 @@ describe('isolation proof (PR-5) — the Mini App', () => {
     (v) => miniAppPath(MINIAPP_ROUTES.payment, { paymentId: v.paymentId }),
     (v) => miniAppPath(MINIAPP_ROUTES.service, { serviceId: v.serviceId }),
     (v) => miniAppPath(MINIAPP_ROUTES.ticket, { ticketId: v.ticketId }),
+    // Files drawn from a record: the service's subscription QR (an image) and its locations.
+    (v) => miniAppPath(MINIAPP_ROUTES.serviceQr, { serviceId: v.serviceId }),
+    (v) => miniAppPath(MINIAPP_ROUTES.serviceLocations, { serviceId: v.serviceId }),
   ];
   // There is no order list in the mini app (orders are reached through payments and
   // services), and the notifications screen is behind its own flag.
@@ -194,6 +198,29 @@ describe('isolation proof (PR-5) — the Mini App', () => {
         expect(await victimRows(world, victim())).toBe(before);
       },
     );
+
+    it('a receipt image uploaded onto the victim’s payment is refused and files nothing', async () => {
+      const receipts = async () =>
+        (
+          (
+            await world.api.container.database.db.execute(
+              sql`SELECT count(*)::int AS n FROM payment_receipts WHERE tenant_id = ${victim().tenantId}`,
+            )
+          ).rows[0] as { n: number }
+        ).n;
+      const path = miniAppPath(MINIAPP_ROUTES.paymentReceipt, { paymentId: victim().paymentId });
+      const body = { mimeType: 'image/png', imageBase64: png(96).toString('base64') };
+      const before = await victimRows(world, victim());
+      const count = await receipts();
+      const refused = await call(await sessionOf(attacker()), 'POST', path, body);
+      expect([403, 404], `${path}: ${refused.body}`).toContain(refused.statusCode);
+      expect(leaks(refused.body, victim())).toEqual([]);
+      expect(await victimRows(world, victim())).toBe(before);
+      expect(await receipts()).toBe(count);
+      // Not vacuous: the victim's own launch gets past the lookup with the same body.
+      const own = await call(await sessionOf(victim()), 'POST', path, body);
+      expect(own.statusCode, `${path} as its owner: ${own.body}`).not.toBe(404);
+    });
 
     it('a launch signed with one bot’s token is refused by the other bot, both ways', async () => {
       const forged = await mint(victim().botId, attacker().botToken);
