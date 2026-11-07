@@ -165,7 +165,11 @@ const LISTS: readonly ListCase[] = [
   // Reports carry figures, not records: the fingerprint is the victim's distinct amount.
   { surface: 'reports', path: () => '/reports/summary?range=LAST_7_DAYS', ownShowsData: false },
   { surface: 'reports', path: () => '/reports/orders?range=LAST_7_DAYS', ownShowsData: false },
-  { surface: 'reports', path: () => '/reports/products?range=LAST_7_DAYS', ownShowsData: false },
+  {
+    surface: 'reports',
+    path: () => '/reports/products?range=LAST_7_DAYS&by=REVENUE',
+    ownShowsData: false,
+  },
   { surface: 'reports', path: () => '/reports/wallet?range=LAST_7_DAYS', ownShowsData: false },
   { surface: 'reports', path: () => '/reports/payments?range=LAST_7_DAYS', ownShowsData: false },
 ];
@@ -258,6 +262,140 @@ const WRITES: readonly WriteCase[] = [
     surface: 'admins',
     path: (v) => `/admins/${v.staffId}/sessions/revoke`,
     body: () => ({ reason: 'cross-tenant attempt' }),
+  },
+];
+
+/**
+ * The aggregate reports and their CSVs, figure by figure. "None of the victim's amounts in
+ * the body" proves nothing for a sum: a total over every tenant (250000 + 370000 + 490000)
+ * contains none of the parts. So each report is parsed and its EXACT figures compared with
+ * what the asking tenant's own household (fixtures.ts: one PAID order, one PENDING manual
+ * payment, one wallet credit, one customer with one active service, all inside the last
+ * seven days) adds up to. The victim's own call is held to its own exact figures too, so
+ * the comparison cannot pass on an empty report.
+ */
+interface ReportCase {
+  readonly name: string;
+  readonly path: string;
+  readonly figures: (body: string) => unknown;
+  readonly expected: (t: TenantWorld) => unknown;
+}
+
+/** The data lines of a CSV export: its header and blank lines dropped. */
+const csvRows = (body: string) =>
+  body
+    .split(/\r?\n/u)
+    .slice(1)
+    .filter((line) => line.trim() !== '');
+
+const REPORTS: readonly ReportCase[] = [
+  {
+    name: 'summary',
+    path: '/reports/summary?range=LAST_7_DAYS',
+    figures: (body) => {
+      const r = JSON.parse(body) as Record<string, unknown> & {
+        sales: { current: number };
+        successfulOrders: { current: number };
+        newUsers: { current: number };
+        newBuyers: { current: number };
+        newServices: { current: number };
+      };
+      return {
+        sales: r.sales.current,
+        successfulOrders: r.successfulOrders.current,
+        newUsers: r.newUsers.current,
+        newBuyers: r.newBuyers.current,
+        newServices: r.newServices.current,
+        revenue: r.revenue,
+        grossValue: r.grossValue,
+        activeServices: r.activeServices,
+        activeCustomers: r.activeCustomers,
+      };
+    },
+    expected: (t) => ({
+      sales: 1,
+      successfulOrders: 1,
+      newUsers: 1,
+      newBuyers: 1,
+      newServices: 1,
+      revenue: [{ currency: 'IRT', current: t.orderAmountMinor, previous: '0' }],
+      grossValue: [{ currency: 'IRT', current: t.orderAmountMinor, previous: '0' }],
+      activeServices: 1,
+      activeCustomers: 1,
+    }),
+  },
+  {
+    name: 'orders',
+    path: '/reports/orders?range=LAST_7_DAYS',
+    figures: (body) =>
+      (
+        JSON.parse(body) as { rows: { orderId: string; total: string; customerId: string }[] }
+      ).rows.map((row) => [row.orderId, row.total, row.customerId]),
+    expected: (t) => [[t.orderId, t.orderAmountMinor, t.customerId]],
+  },
+  {
+    name: 'products',
+    path: '/reports/products?range=LAST_7_DAYS&by=REVENUE',
+    figures: (body) => {
+      const r = JSON.parse(body) as {
+        totalRows: number;
+        rows: { productId: string; orders: number; revenue: string }[];
+      };
+      return {
+        totalRows: r.totalRows,
+        rows: r.rows.map((row) => [row.productId, row.orders, row.revenue]),
+      };
+    },
+    expected: (t) => ({ totalRows: 1, rows: [[t.productId, 1, t.orderAmountMinor]] }),
+  },
+  {
+    name: 'wallet',
+    path: '/reports/wallet?range=LAST_7_DAYS',
+    figures: (body) => {
+      const r = JSON.parse(body) as { groups: unknown; balances: unknown };
+      return { groups: r.groups, balances: r.balances };
+    },
+    expected: (t) => ({
+      groups: [
+        { group: 'ADMINISTRATIVE', currency: 'IRT', entries: 1, amount: t.walletAmountMinor },
+      ],
+      balances: [{ currency: 'IRT', amount: t.walletAmountMinor }],
+    }),
+  },
+  {
+    name: 'payments',
+    path: '/reports/payments?range=LAST_7_DAYS',
+    figures: (body) => (JSON.parse(body) as { totals: unknown }).totals,
+    expected: () => ({
+      attempts: 1,
+      confirmed: 0,
+      failed: 0,
+      cancelled: 0,
+      expired: 0,
+      pending: 1,
+      unknown: 0,
+      successRateBasisPoints: null,
+      confirmedAmount: [],
+    }),
+  },
+  {
+    name: 'sales CSV',
+    path: '/reports/export?report=SALES&format=csv&range=LAST_7_DAYS',
+    // Order id, then the money columns (subtotal, discount, total, currency), then the customer.
+    figures: (body) =>
+      csvRows(body).map((line) => {
+        const cells = line.split(',');
+        return [cells[0], cells[6], cells[7], cells[8], cells[9], cells[12]];
+      }),
+    expected: (t) => [
+      [t.orderId, t.orderAmountMinor, '0', t.orderAmountMinor, 'IRT', t.customerId],
+    ],
+  },
+  {
+    name: 'payments CSV',
+    path: '/reports/export?report=PAYMENTS&format=csv&range=LAST_7_DAYS',
+    figures: (body) => csvRows(body),
+    expected: () => ['MANUAL_TRANSFER,,ORDER,1,0,0,0,0,1,0,,,'],
   },
 ];
 
@@ -373,6 +511,24 @@ describe('isolation proof (PR-5) — the Web Admin API', () => {
           });
           expect(back.statusCode, back.body).toBeLessThan(300);
         }
+      },
+    );
+
+    it.each(REPORTS.map((c) => [c.name, c] as const))(
+      'report %s carries exactly the asking tenant’s own figures',
+      async (_name, c) => {
+        const listed = await get(attacker(), c.path, {
+          'x-tenant-id': victim().tenantId,
+          'x-nexa-tenant': victim().tenantId,
+        });
+        expect(listed.statusCode, `${c.path}: ${listed.body}`).toBe(200);
+        expect(c.figures(listed.body), `${c.path} as ${attackerLabel}`).toEqual(
+          c.expected(attacker()),
+        );
+        // Not vacuous: the victim's own report is its own exact figures (counts alike, sums not).
+        const own = await get(victim(), c.path);
+        expect(own.statusCode, `${c.path} as its owner: ${own.body}`).toBe(200);
+        expect(c.figures(own.body), `${c.path} as ${victimLabel}`).toEqual(c.expected(victim()));
       },
     );
 
