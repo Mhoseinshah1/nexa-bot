@@ -87,7 +87,7 @@ const EMPTY: AutoDeleteReport = { stamped: 0, scheduled: 0, warned: 0, planned: 
 
 export interface ServiceAutoDeleteDeps {
   readonly repository: AutoDeleteRepository;
-  readonly services: Pick<ServiceRepository, 'lockForUpdate'>;
+  readonly services: Pick<ServiceRepository, 'lockForUpdate' | 'lockLifecycle'>;
   readonly provisioning: Pick<ProvisioningService, 'planAutoDeleteWithin'>;
   /** Readers, not services, for the reason `ServiceReminderService` gives. */
   readonly features: {
@@ -310,6 +310,14 @@ export class ServiceAutoDeleteService {
       // before is seen by the re-reads below.
       const service = await this.deps.services.lockForUpdate(scope, run.serviceId, tx);
       if (service === null) return 'SKIPPED';
+      /*
+       * Then the lifecycle lock, BEFORE the blockers are read (Codex review of #422), and held
+       * through the plan. A paid renewal's settlement serialises on this lock alone, not on the
+       * row (`prepareCommercialAction`): read before it, a renewal committing between the read
+       * and the plan would be deleted the moment it was paid for. The plan takes it again,
+       * which is a no-op; taken in the order every TERMINATE planner takes it (row, then this).
+       */
+      await this.deps.services.lockLifecycle(scope, service.id, tx);
       // Still the cycle that was warned: same state, same moment, still SCHEDULED.
       if (!(await this.deps.repository.stillDeletable(scope, run.id, tx))) return 'SKIPPED';
       if (await this.deps.repository.isBlocked(scope, service.id, tx)) return 'BLOCKED';

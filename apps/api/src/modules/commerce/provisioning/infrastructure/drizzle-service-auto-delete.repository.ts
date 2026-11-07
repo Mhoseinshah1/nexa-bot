@@ -211,7 +211,11 @@ export class DrizzleServiceAutoDeleteRepository implements AutoDeleteRepository 
              AND r.state = 'SCHEDULED'
              AND r.delete_after <= ${input.now}
              AND d.days > 0
-             AND r.cycle_since + make_interval(days => d.days) <= ${input.now}`;
+             AND r.cycle_since + make_interval(days => d.days) <= ${input.now}
+             -- Blocked cycles are left out BEFORE the batch is limited (Codex review of #422):
+             -- otherwise a blocked run at the head fills the panel's whole allowance on every
+             -- pass and starves the rest. \`plan\` still re-checks under its locks.
+             AND ${NOT_BLOCKED}`;
   }
 
   async deletablePanels(

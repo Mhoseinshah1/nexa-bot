@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { Client } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMPTY_PRODUCT_DISPLAY,
@@ -19,7 +20,10 @@ import {
 } from '../../apps/api/src/infrastructure/persistence/database';
 import { withDatabaseScope } from '../../apps/api/src/infrastructure/persistence/database-scope';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
-import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
+import {
+  DrizzleServiceRepository,
+  SERVICE_LIFECYCLE_LOCK_CLASS,
+} from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleServiceTransferRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository';
 import { DrizzleNotificationSubjectReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader';
 import { DrizzleOpsLogFacts } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/drizzle-ops-log-facts';
@@ -62,6 +66,9 @@ import {
  *   new owner would be deleted without a full window after their warning).
  * - `s.customer_id = r.customer_id` removed from the reader, `deletable` and `stillDeletable`:
  *   "a run scheduled under another owner …".
+ * Codex review of #422 (each run and seen red, then restored):
+ * - the lifecycle lock in `plan` removed: "a paid action committing while the deletion waits …".
+ * - `NOT_BLOCKED` removed from `deletable`: "a blocked run at the head of a panel …".
  */
 
 const BOT_A = SEED_IDS.botA1 as BotInstanceId;
@@ -753,6 +760,92 @@ describe('PR-3 — automatic deletion of finished services', () => {
     await leadElapsed();
     await ctx.container.serviceAutoDelete.runOnce(tenantA);
     expect(await terminates(serviceId)).toHaveLength(0);
+  });
+
+  it('a paid action committing while the deletion waits on the lifecycle lock blocks it (Codex #422)', async () => {
+    await setSetting(a, 'after_time_days', 2);
+    const serviceId = await activeService(a, '960141');
+    await expire(serviceId, { trafficUsedUp: false });
+    await age(serviceId, 3);
+    await ctx.container.serviceAutoDelete.runOnce(tenantA); // scheduled and warned
+    await leadElapsed();
+    const waiters = async () =>
+      Number(
+        (
+          await rows(sql`SELECT count(*)::int AS n FROM pg_stat_activity
+                          WHERE datname = current_database() AND wait_event_type = 'Lock'`)
+        )[0]?.['n'] ?? 0,
+      );
+    // A settlement in flight: it holds the service's lifecycle lock, as `prepareCommercialAction`
+    // does, and its paid operation commits with it.
+    const settlement = new Client({ connectionString: process.env['TEST_DATABASE_URL'] });
+    await settlement.connect();
+    let pending: Promise<unknown> | null = null;
+    try {
+      await settlement.query('BEGIN');
+      await settlement.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+        SERVICE_LIFECYCLE_LOCK_CLASS,
+        `${tenantA.tenantId}:${serviceId}`,
+      ]);
+      let done = false;
+      const pass = ctx.container.serviceAutoDelete.runOnce(tenantA).finally(() => {
+        done = true;
+      });
+      pending = pass;
+      for (let i = 0; i < 200 && !done && (await waiters()) === 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      await settlement.query(
+        `INSERT INTO provisioning_operations
+         SELECT (jsonb_populate_record(NULL::provisioning_operations, to_jsonb(o) || jsonb_build_object(
+                   'id', $2::text, 'operation_id', substr(md5($2::text), 1, 16), 'type', 'RENEW',
+                   'state', 'PLANNED', 'attempts', 0, 'next_attempt_at', NULL, 'claimed_by', NULL,
+                   'lease_until', NULL, 'call_started_at', NULL, 'completed_at', NULL,
+                   'announced_at', NULL, 'failure_kind', NULL, 'failure_message', NULL,
+                   'provider_reference', NULL, 'create_accepted_at', NULL,
+                   'target_expires_at', now() + interval '30 days'))).*
+           FROM provisioning_operations o
+          WHERE o.service_id = $1 AND o.type = 'PROVISION'
+          LIMIT 1`,
+        [serviceId, ctx.container.ids.uuid()],
+      );
+      await settlement.query('COMMIT');
+      const report = await pass;
+      expect(report.planned).toBe(0);
+      expect(await terminates(serviceId)).toHaveLength(0);
+    } finally {
+      // Never leave the pass waiting on this connection's lock into the next test.
+      await settlement.end();
+      await pending?.catch(() => undefined);
+    }
+  });
+
+  it('a blocked run at the head of a panel does not starve the rest of its batch (Codex #422)', async () => {
+    await setSetting(a, 'after_time_days', 2);
+    await setSetting(a, 'max_per_minute', 1);
+    const blocked = await activeService(a, '960151');
+    const free = await activeService(a, '960152');
+    for (const id of [blocked, free]) {
+      await expire(id, { trafficUsedUp: false });
+      await age(id, 3);
+    }
+    await ctx.container.serviceAutoDelete.runOnce(tenantA); // both scheduled and warned
+    const service = await services.findById(tenantA, blocked);
+    if (service === null) throw new Error('no service');
+    // After the warning, the oldest one's customer starts a renewal: an open order.
+    await ctx.container.commercialActions.draft(tenantA, botActor('renew'), service.customerId, {
+      serviceId: blocked,
+      kind: 'RENEW',
+      idempotencyKey: key('renew'),
+    });
+    await run(sql`UPDATE service_auto_delete_runs SET delete_after = ${ago(120_000)}
+                   WHERE service_id = ${blocked}`);
+    await run(sql`UPDATE service_auto_delete_runs SET delete_after = ${ago(60_000)}
+                   WHERE service_id = ${free}`);
+    const report = await ctx.container.serviceAutoDelete.runOnce(tenantA);
+    expect(report.planned).toBe(1);
+    expect(await terminates(free)).toHaveLength(1);
+    expect(await terminates(blocked)).toHaveLength(0);
   });
 
   it('RLS: one tenant’s pass and its rows never reach another tenant', async () => {
