@@ -237,7 +237,37 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
     telegram.calls.length = 0;
   });
 
-  it('keeps a never-published tenant’s keyboard byte for byte on an ELIGIBLE bot: the default Mirza layout and styles, no icon', async () => {
+  it('keeps a never-published tenant’s keyboard byte for byte on an ELIGIBLE bot: no style, no icon', async () => {
+    // PR-1: a tenant that SAVED bot.main_menu but never published keeps the old packing, plain.
+    await api.container.settingsService.set(tenantA, owner, {
+      idempotencyKey: key('saved-menu'),
+      key: 'bot.main_menu',
+      value: ['catalog', 'services', 'wallet', 'help', 'apps', 'tickets'].map((button) => ({
+        button,
+        enabled: true,
+      })),
+      expectedVersion: null,
+    });
+    expect((await say(BOT_A1)).statusCode).toBe(201);
+    expect(sends()).toHaveLength(1);
+    const markup = sends()[0]?.body['reply_markup'];
+    expect(JSON.stringify(markup)).toBe(
+      JSON.stringify({
+        keyboard: [
+          [{ text: label('bot.menu.catalog') }, { text: label('bot.menu.services') }],
+          [{ text: label('bot.menu.wallet') }, { text: label('bot.menu.help') }],
+          [{ text: label('bot.menu.apps') }],
+          [{ text: label('bot.menu.tickets') }],
+        ],
+        resize_keyboard: true,
+        is_persistent: true,
+        one_time_keyboard: false,
+        selective: false,
+      }),
+    );
+  });
+
+  it('keeps a never-published tenant’s keyboard byte for byte on an ELIGIBLE bot: the Mirza default layout and styles for a tenant that never saved a menu, no icon', async () => {
     expect((await say(BOT_A1)).statusCode).toBe(201);
     expect(sends()).toHaveLength(1);
     const markup = sends()[0]?.body['reply_markup'];
