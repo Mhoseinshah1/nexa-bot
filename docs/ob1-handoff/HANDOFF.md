@@ -1,8 +1,7 @@
-# Handoff — NEXA owner batch 1 (after Phase 6A), 2026-11-07
+# Handoff — NEXA owner batch 1 (after Phase 6A) — ROUND COMPLETE, 2026-11-07
 
-Lives on `claude/elegant-noether-g9v8x9` only. Binding prompt: `docs/ob1-handoff/NEXA-OWNER-BATCH-1.md`
-(merge permission per PR on green + one Codex fix commit; never push main, never force-push, never tag;
-don't stop to ask; order PR-1/PR-4 → PR-2 → PR-3 → PR-5). Worktrees under `/home/user/wt/<pr>`.
+Lives on `claude/elegant-noether-g9v8x9` only. Binding prompt: `docs/ob1-handoff/NEXA-OWNER-BATCH-1.md`.
+Report: `docs/round-reports/owner-batch-1.md` (on this branch).
 
 ## Merged (main)
 
@@ -10,32 +9,38 @@ don't stop to ask; order PR-1/PR-4 → PR-2 → PR-3 → PR-5). Worktrees under 
 - PR-1 https://github.com/Mhoseinshah1/nexa-bot/pull/420 — Mirza menu defaults, search switches — `1f1d5545d`.
 - PR-2 https://github.com/Mhoseinshah1/nexa-bot/pull/421 — reseller requests — `795cfa85c`. Migrations 0322/0323.
 - PR-3 https://github.com/Mhoseinshah1/nexa-bot/pull/422 — automatic deletion — `5d0c286c1`. Migration 0324.
+- PR-5 https://github.com/Mhoseinshah1/nexa-bot/pull/423 — late-payment policy — `649e18d69`. Migration 0325.
+- main @ `649e18d69`; newest migration 0325_late_payment_policy.
 
 ## Open
 
-- PR-5 `feat/late-payment-policy` — built, `pnpm verify` green, lead-reviewed; branch pushed, NO PR yet. Migration
-  0322_late_payment_policy (data only, hand-registered) must become 0325 after PR-3 merges. Body draft:
-  `docs/ob1-handoff/pr5-body-draft.md`.
+- Nothing in this batch. Worktrees and test databases removed.
+- Remote branches not deleted (the permission check refused the delete): feat/menu-mirza-defaults,
+  fix/webadmin-secrets-forms-json, feat/reseller-request, feat/service-auto-delete, feat/late-payment-policy.
+
+## Follow-ups noticed (not in scope)
+
+- `bot.start.welcome` / `welcome_back` default texts still name the old menu labels.
+- PR-5: a late completion logged while its payment is still PENDING (not yet swept) has no decision buttons.
+- CI's deployment smoke image build depends on apt.postgresql.org, which failed on three heads today.
 
 ## Next step (exact)
 
-PR-5 (merge-main agent running): merge main, renumber its hand-registered migration to 0325 (journal `when` =
-Date.now()), db:check, migration suites, push, open PR with the draft body, `@codex review`, one fix commit, merge.
+The owner's next brief. Phase 6B (from the 6A handoff) is still pending.
 
 ## Decisions taken
 
-- PR-4: password-type allowlist = app.tsx, pages/account.tsx, pages/hosted-activate.tsx. One Save only where a
-  dialog had several separately-saved secrets (gateway key drawer); existing endpoints called in turn, no batch
-  endpoint. SecretInput blocks copy/cut while masked (automated security note; CSS masking is the owner's design).
-- PR-1: `{تست}` is literal because the engine only substitutes ASCII `{name}`. A stored `bot.main_menu` row keeps the
-  old packing. Stale search tap refused only when both flags are off. `tickets` stays after support.
-- The report and handoff live on the session branch (as in phase 6A), not on main.
-- PR-2: own message table, not tickets (a ticket has category/priority/assignee/AI hold and a customer reply
-  reopens it). Approve reuses `ResellerAdminService.registerWithin` in the approval's transaction; an applicant who
-  became a reseller another way is refused, request stays PENDING. No new permission (resellers.view/edit).
-- PR-3: a transferred service keeps state_since; its scheduled run is cancelled and the new owner gets a full warning.
-- PR-5: keys kept, value type boolean→WALLET|REVIEW|DELIVER. Terminal order → a fulfilment order tied to the payment
-  (copies the frozen line and totals). Exactly once: one ledger key `<paymentId>:late-credit` (unique) under the payment's
-  FOR UPDATE; DELIVER writes it inside the purchase tx, any failed check rolls back to the WALLET credit. Both operator
-  choices need `payments.reconcile` (no payments-approve permission exists). Ops-group buttons are URL buttons to the
-  Web Admin decision dialog.
+- PR-4: password-type allowlist = app.tsx, pages/account.tsx, pages/hosted-activate.tsx. One Save where a dialog had
+  several separately-saved secrets (gateway key drawer); existing endpoints called in turn. SecretInput blocks copy/cut
+  while masked.
+- PR-1: `{تست}` is literal (the engine substitutes only ASCII `{name}`). A stored `bot.main_menu` row keeps the old
+  packing. A stale search tap is refused only when both flags are off. `tickets` stays after support.
+- PR-2: its own message table, not tickets (a ticket has category/priority/assignee/AI hold, and a customer reply
+  reopens it). Approve reuses `ResellerAdminService.registerWithin` inside the approval's transaction. An applicant who
+  became a reseller another way is refused, and the request stays PENDING. No new permission (resellers.view/edit).
+- PR-3: cause = TRAFFIC when usage ≥ a finite limit at expiry, otherwise TIME; stored at the transition. A service with
+  no clock is stamped when the worker first sees it, never back-dated. A transferred service keeps `state_since`; its
+  scheduled run is cancelled and the new owner gets a full warning. Renumber not byte-identical (the shared kind CHECK).
+- PR-5: keys kept; value boolean→WALLET|REVIEW|DELIVER (true→WALLET, false→REVIEW). Terminal order → a fulfilment order
+  tied to the payment. Exactly once via the unique `<paymentId>:late-credit` ledger key under the payment lock. Operator
+  choices need `payments.reconcile`. Stars and card-to-card unchanged.
