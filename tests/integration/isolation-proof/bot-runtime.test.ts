@@ -159,7 +159,13 @@ describe('isolation proof (PR-5) — the bot runtime', () => {
         victim(),
         {
           update_id: id,
-          message: { message_id: id, date: 0, chat: { id: 1, type: 'private' }, from, text: '/start' },
+          message: {
+            message_id: id,
+            date: 0,
+            chat: { id: 1, type: 'private' },
+            from,
+            text: '/start',
+          },
         },
         { [TELEGRAM_SECRET_TOKEN_HEADER]: own },
       );
@@ -177,7 +183,11 @@ describe('isolation proof (PR-5) — the bot runtime', () => {
       });
       const correlation = 'iso-proof' as CorrelationId;
       expect(
-        await world.api.container.telegramAdmins.resolve(attacker().scope, telegramUserId, correlation),
+        await world.api.container.telegramAdmins.resolve(
+          attacker().scope,
+          telegramUserId,
+          correlation,
+        ),
       ).toBeNull();
       expect(
         (

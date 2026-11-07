@@ -151,7 +151,10 @@ describe('isolation proof (PR-5) — the database layer, as nexa_app', () => {
         }
         // The row is there, as the owner sees it, and the victim's own binding reads it.
         expect(
-          await countAs(null, sql`SELECT count(*)::int AS n FROM ${ident(table)} WHERE id = ${target}`),
+          await countAs(
+            null,
+            sql`SELECT count(*)::int AS n FROM ${ident(table)} WHERE id = ${target}`,
+          ),
         ).toBe(1);
         expect(
           await countAs(

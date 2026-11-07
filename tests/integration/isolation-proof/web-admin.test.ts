@@ -292,8 +292,9 @@ describe('isolation proof (PR-5) — the Web Admin API', () => {
   const settingOf = (v: TenantWorld) =>
     v.label === 'PRIMARY' ? 4 : v.label === 'HOSTED_1' ? 5 : 6;
   const listedSetting = (body: string) =>
-    (JSON.parse(body) as { settings: { key: string; value: unknown; version: number | null }[] })
-      .settings.find((row) => row.key === SETTING);
+    (
+      JSON.parse(body) as { settings: { key: string; value: unknown; version: number | null }[] }
+    ).settings.find((row) => row.key === SETTING);
 
   it('runs as the application role, which row-level security binds', async () => {
     expect(await world.api.container.database.scopeEnforcement()).toBe('owner');
@@ -379,8 +380,9 @@ describe('isolation proof (PR-5) — the Web Admin API', () => {
       const before = await victimRows(world, victim());
       const gateways = await get(attacker(), '/payment-gateways');
       expect(gateways.statusCode).toBe(200);
-      const provider = (gateways.json() as { gateways: { provider: string; status: string }[] })
-        .gateways.find((row) => row.status === 'ACTIVE')?.provider;
+      const provider = (
+        gateways.json() as { gateways: { provider: string; status: string }[] }
+      ).gateways.find((row) => row.status === 'ACTIVE')?.provider;
       expect(provider).toBeDefined();
       const toggled = await post(attacker(), `/payment-gateways/${String(provider)}/status`, {
         idempotencyKey: world.key(),

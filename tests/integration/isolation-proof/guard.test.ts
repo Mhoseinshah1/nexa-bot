@@ -148,7 +148,9 @@ describe('isolation proof (PR-5) — no fallback to the PRIMARY', () => {
  */
 describe.skip('isolation proof (PR-5) — PR-4 activation surfaces (enable once #416 merges)', () => {
   it.todo('Host → tenant sign-in signs in to the addressed hosted tenant only');
-  it.todo('a hosted owner’s credentials on another tenant’s or the installation’s host are refused');
+  it.todo(
+    'a hosted owner’s credentials on another tenant’s or the installation’s host are refused',
+  );
   it.todo('a one-time activation link redeemed on another tenant’s domain is refused and unspent');
   it.todo('the activation routes refuse a hosted owner’s session for another hosted tenant');
   it.todo('the certificate ask answers 200 for verified hosted domains only');

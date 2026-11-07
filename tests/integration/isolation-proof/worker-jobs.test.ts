@@ -63,7 +63,7 @@ describe('isolation proof (PR-5) — worker jobs', () => {
           eventType: 'SystemPinged',
           aggregateType: 'System',
           aggregateId: `${tag}-${tenant.label}-${String(i)}`,
-          payload: { source: 'isolation-proof' },
+          payload: { source: 'test' },
         }),
       );
     }
@@ -171,20 +171,17 @@ describe('isolation proof (PR-5) — worker jobs', () => {
    * `app.current_tenant_id`), or to run each consumer in its tenant's own unit of work.
    * The assertion is the property; `it.fails` until PR-6 makes it hold.
    */
-  it.fails(
-    'PR-6: a consumer’s transaction is confined by RLS to its event’s tenant',
-    async () => {
-      for (const label of LABELS) await enqueue(world.tenants[label], 1, 'confined');
-      const deliveries: Delivery[] = [];
-      await relayWith([recorder(deliveries)], 10).processBatch();
-      expect(deliveries).toHaveLength(3);
-      for (const delivery of deliveries) {
-        expect(delivery.role).toBe('nexa_app');
-        expect(delivery.boundTenant).toBe(delivery.eventTenant);
-        expect(delivery.foreignCustomers).toBe(0);
-      }
-    },
-  );
+  it.fails('PR-6: a consumer’s transaction is confined by RLS to its event’s tenant', async () => {
+    for (const label of LABELS) await enqueue(world.tenants[label], 1, 'confined');
+    const deliveries: Delivery[] = [];
+    await relayWith([recorder(deliveries)], 10).processBatch();
+    expect(deliveries).toHaveLength(3);
+    for (const delivery of deliveries) {
+      expect(delivery.role).toBe('nexa_app');
+      expect(delivery.boundTenant).toBe(delivery.eventTenant);
+      expect(delivery.foreignCustomers).toBe(0);
+    }
+  });
 
   const customerLane = () =>
     (
@@ -282,13 +279,16 @@ describe('isolation proof (PR-5) — worker jobs', () => {
     expect(await pendingFor(hosted.tenantId)).toBeGreaterThan(0);
   });
 
-  it.fails('PR-6: the worker’s notification loop delivers a hosted tenant’s due message', async () => {
-    const hosted = world.tenants.HOSTED_2;
-    world.telegram.calls.length = 0;
-    for (let i = 0; i < 3; i += 1) await world.api.container.customerNotificationLoop.tick();
-    expect(await pendingFor(hosted.tenantId)).toBe(0);
-    expect(
-      world.telegram.calls.filter((call) => call.botId === hosted.telegramBotId).length,
-    ).toBeGreaterThan(0);
-  });
+  it.fails(
+    'PR-6: the worker’s notification loop delivers a hosted tenant’s due message',
+    async () => {
+      const hosted = world.tenants.HOSTED_2;
+      world.telegram.calls.length = 0;
+      for (let i = 0; i < 3; i += 1) await world.api.container.customerNotificationLoop.tick();
+      expect(await pendingFor(hosted.tenantId)).toBe(0);
+      expect(
+        world.telegram.calls.filter((call) => call.botId === hosted.telegramBotId).length,
+      ).toBeGreaterThan(0);
+    },
+  );
 });

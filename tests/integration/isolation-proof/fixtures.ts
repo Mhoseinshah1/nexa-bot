@@ -16,7 +16,10 @@ import {
 import type { ApiApp } from '../../../apps/api/src/bootstrap';
 import { seed } from '../../../apps/api/src/infrastructure/persistence/seed';
 import { TENANT_POLICY } from '../../../apps/api/src/infrastructure/persistence/row-level-security';
-import { startFakeTelegramBotApi, type FakeTelegramBotApi } from '../../support/fake-telegram-bot-api';
+import {
+  startFakeTelegramBotApi,
+  type FakeTelegramBotApi,
+} from '../../support/fake-telegram-bot-api';
 import {
   createAdmin,
   createApiApp,
@@ -568,12 +571,13 @@ export async function victimRows(world: World, victim: TenantWorld): Promise<str
     ticket: await one('tickets', victim.ticketId),
     broadcast: await one('broadcasts', victim.broadcastId),
     giftCardBatch: await one('gift_card_batches', victim.giftCardBatchId),
-    clientApp: (
-      await db.execute(
-        sql`SELECT to_jsonb(t) - 'image_content' AS row FROM client_apps t
+    clientApp:
+      (
+        await db.execute(
+          sql`SELECT to_jsonb(t) - 'image_content' AS row FROM client_apps t
              WHERE id = ${victim.clientAppId}`,
-      )
-    ).rows[0] ?? null,
+        )
+      ).rows[0] ?? null,
     giftCards: (
       await db.execute(
         sql`SELECT id, state FROM gift_card_codes WHERE tenant_id = ${victim.tenantId} ORDER BY id`,
@@ -618,7 +622,7 @@ export async function victimRows(world: World, victim: TenantWorld): Promise<str
     ).rows,
   };
   return JSON.stringify(rows, (_key, value: unknown) =>
-    typeof value === "bigint" ? value.toString() : value,
+    typeof value === 'bigint' ? value.toString() : value,
   );
 }
 

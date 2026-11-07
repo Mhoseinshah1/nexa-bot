@@ -186,9 +186,7 @@ describe('isolation proof (PR-5) — the Mini App', () => {
         const token = await sessionOf(attacker());
         const before = await victimRows(world, victim());
         const refused = await call(token, 'POST', path(victim()), { enabled: false });
-        expect([400, 403, 404], `${path(victim())}: ${refused.body}`).toContain(
-          refused.statusCode,
-        );
+        expect([400, 403, 404], `${path(victim())}: ${refused.body}`).toContain(refused.statusCode);
         if (refused.statusCode === 400) {
           // A 400 must be the body, not a lookup that passed: the same call on the
           // attacker's own record answers the same 400 or succeeds.
