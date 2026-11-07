@@ -1459,6 +1459,15 @@ export function SecretInput({
         autoCapitalize="none"
         autoCorrect="off"
         {...rest}
+        // A masked value must not leave through the clipboard; shown, it may.
+        onCopy={(event) => {
+          if (!shown) event.preventDefault();
+          rest.onCopy?.(event);
+        }}
+        onCut={(event) => {
+          if (!shown) event.preventDefault();
+          rest.onCut?.(event);
+        }}
         type="text"
         name={name ?? generated}
         autoComplete="off"

@@ -72,6 +72,12 @@ function isTonPaysRoute(provider: string | null | undefined): boolean {
 }
 
 /** The text key of the webhook-secret field: TetraPay and TonPays each have their own words. */
+/** What one secret step sends: the route and the value as typed when Save was pressed. */
+interface SecretArgs {
+  readonly provider: string;
+  readonly value: string;
+}
+
 function secretKeyOf(
   keying: string | null,
   part: 'input' | 'hint' | 'save',
@@ -554,13 +560,14 @@ export function PaymentGatewaysPage({
   });
 
   const credential = useMutation({
-    mutationFn: () => {
-      if (keying === null) throw new Error('no route is being keyed');
+    // The route and the typed value are captured when Save is pressed (the fields stay
+    // editable while an earlier step runs), never read from state mid-batch.
+    mutationFn: ({ provider, value: apiKey }: SecretArgs) => {
       return setPaymentGatewayCredential({
-        provider: keying,
+        provider,
         apiKey,
         // A new key for a new value, so correcting a mistyped key is a new command.
-        idempotencyKey: keyed.current({ provider: keying, apiKey }),
+        idempotencyKey: keyed.current({ provider, apiKey }),
       });
     },
     onSuccess: () => {
@@ -573,12 +580,11 @@ export function PaymentGatewaysPage({
   });
 
   const secret = useMutation({
-    mutationFn: () => {
-      if (keying === null) throw new Error('no route is being keyed');
+    mutationFn: ({ provider, value: webhookSecret }: SecretArgs) => {
       return setPaymentGatewayWebhookSecret({
-        provider: keying,
+        provider,
         secret: webhookSecret,
-        idempotencyKey: secretKeyed.current({ provider: keying, webhookSecret }),
+        idempotencyKey: secretKeyed.current({ provider, webhookSecret }),
       });
     },
     onSuccess: () => {
@@ -598,12 +604,11 @@ export function PaymentGatewaysPage({
   });
 
   const verify = useMutation({
-    mutationFn: () => {
-      if (keying === null) throw new Error('no route is being keyed');
+    mutationFn: ({ provider, value: verifyKey }: SecretArgs) => {
       return setPaymentGatewayVerifyKey({
-        provider: keying,
+        provider,
         verifyKey,
-        idempotencyKey: verifyKeyed.current({ provider: keying, verifyKey }),
+        idempotencyKey: verifyKeyed.current({ provider, verifyKey }),
       });
     },
     onSuccess: () => {
@@ -660,6 +665,7 @@ export function PaymentGatewaysPage({
   const [savingSecrets, setSavingSecrets] = useState(false);
   const saveSecrets = async () => {
     if (keying === null) return;
+    const provider = keying;
     const descriptor =
       PAYMENT_GATEWAY_DESCRIPTORS[keying as keyof typeof PAYMENT_GATEWAY_DESCRIPTORS];
     credential.reset();
@@ -668,16 +674,20 @@ export function PaymentGatewaysPage({
     setSavingSecrets(true);
     try {
       const result = await saveChangedSecrets([
-        { field: 'apiKey', value: apiKey, run: () => credential.mutateAsync() },
+        {
+          field: 'apiKey',
+          value: apiKey,
+          run: () => credential.mutateAsync({ provider, value: apiKey }),
+        },
         {
           field: 'webhookSecret',
           value: descriptor?.webhookSecret === true ? webhookSecret : '',
-          run: () => secret.mutateAsync(),
+          run: () => secret.mutateAsync({ provider, value: webhookSecret }),
         },
         {
           field: 'verifyKey',
           value: descriptor?.verifyKey === true ? verifyKey : '',
-          run: () => verify.mutateAsync(),
+          run: () => verify.mutateAsync({ provider, value: verifyKey }),
         },
       ]);
       if (result.ok) setKeying(null);
@@ -1150,7 +1160,10 @@ export function PaymentGatewaysPage({
         */}
         <Drawer
           open={mayEdit && keying !== null}
-          onClose={closeKeying}
+          onClose={() => {
+            // The batch reads nothing from state, but closing mid-save would hide its errors.
+            if (!savingSecrets) closeKeying();
+          }}
           title={titled(
             t('web.payment_gateway_credential_title'),
             rows.find((row) => row.provider === keying),

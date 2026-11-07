@@ -46,6 +46,27 @@ describe('SecretInput', () => {
     expect(input.classList.contains('secret-masked')).toBe(true);
   });
 
+  it('gives each mount its own non-login name', () => {
+    const { container } = render(
+      <>
+        <SecretInput />
+        <SecretInput />
+      </>,
+    );
+    const [a, b] = Array.from(container.querySelectorAll('input')).map((i) => i.name);
+    expect(a).not.toBe(b);
+    for (const name of [a, b]) expect(name).toMatch(/^nx-secret-[a-zA-Z0-9]+$/u);
+  });
+
+  it('blocks copy and cut while masked, and allows them while shown', () => {
+    const input = draw();
+    expect(fireEvent.copy(input)).toBe(false);
+    expect(fireEvent.cut(input)).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: t('web.secret_show') }));
+    expect(fireEvent.copy(input)).toBe(true);
+    expect(fireEvent.cut(input)).toBe(true);
+  });
+
   it('keeps an explicit name', () => {
     const { container } = render(<SecretInput name="gateway-key" />);
     expect(container.querySelector('input')!.name).toBe('gateway-key');

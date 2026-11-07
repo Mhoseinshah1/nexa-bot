@@ -143,4 +143,32 @@ describe('the gateway dialog saves every secret with one button', () => {
     expect(((await screen.findByLabelText(API_KEY)) as HTMLInputElement).value).toBe('np_bad');
     expect((screen.getByLabelText(IPN) as HTMLInputElement).value).toBe('');
   });
+
+  it('sends what was typed when Save was pressed, even if a field is edited or the drawer dismissed mid-save', async () => {
+    let release: (() => void) | undefined;
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [NOWPAYMENTS] } },
+      { url: '/payment-gateways/NOWPAYMENTS/credential', body: { gateway: NOWPAYMENTS } },
+      { url: '/payment-gateways/NOWPAYMENTS/webhook-secret', body: { gateway: NOWPAYMENTS } },
+    ]);
+    const realFetch = globalThis.fetch;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = ((input: unknown, init?: RequestInit) =>
+      String(input).includes('/credential') && init?.method === 'POST'
+        ? gate.then(() => (realFetch as typeof fetch)(input as string, init))
+        : (realFetch as typeof fetch)(input as string, init)) as typeof fetch;
+    const { apiKey, ipn } = await open();
+    fireEvent.change(apiKey, { target: { value: 'np_key_1' } });
+    fireEvent.change(ipn, { target: { value: 'ipn_pressed' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    // While the first step is in flight: edit the second field and try to dismiss.
+    await waitFor(() => expect(screen.getByRole('button', { name: t('web.save') })).toBeDisabled());
+    fireEvent.change(ipn, { target: { value: 'ipn_edited_late' } });
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    release?.();
+    await waitFor(() => expect(posts(api)).toHaveLength(2));
+    expect((posts(api)[1]!.body as Record<string, unknown>)['secret']).toBe('ipn_pressed');
+  });
 });
