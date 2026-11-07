@@ -49,6 +49,16 @@ diff-check (no deletions / wholesale rewrites) before every merge and say so in 
    (only if PR-5 or the load test exposes something), the phase report, and the #358 comment.
 
 ## Decisions taken
+- (2026-11-07 resume) `feat/p6a-d0-hardening-ops` is fully contained in #411; left unused.
+- Installation tenant guard FAILS CLOSED (owner, 2026-11-07): a role records the cached tenant's kind
+  when it sets it (boot, backup CLI, restore re-resolve). Only a vanished tenant recorded as PRIMARY may
+  re-resolve to findPrimary() (#413 restore). Any other kind, or UNKNOWN: no fallback, writes refused,
+  scope stopped, one CRITICAL owner-only ops alert (`tenancy.cached_tenant_vanished`); UNKNOWN also exits 1.
+  The earlier "first-check edge case" acceptance is withdrawn.
+- The fail-closed fix shipped as two commits, not one: the new ops code is a contract change and
+  CLAUDE.md requires its own commit (skill/CLAUDE.md safety rule wins over the prompt).
+- prune-empty decides on the system path (reason "customer prune: dependents in every tenant"),
+  customers confined by an explicit tenant predicate, DELETE under the tenant's own binding.
 - Push to the named branches works this session, so each PR has its own branch.
 - `gh auth status` says the token is invalid, but `gh api` REST (ci-status.sh) works. PRs, merges and
   `@codex review` go through the GitHub MCP tools.
