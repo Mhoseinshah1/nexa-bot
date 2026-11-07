@@ -275,8 +275,9 @@ describe('the customer Telegram turn', () => {
     // The six this release always draws (WP-A10's apps and WP-A7's tickets included),
     // plus R1's trial and referral buttons, which a tenant with no panel offering a trial
     // (F5) and the referral flag off — every tenant by default — does not see: the
-    // keyboard above is exactly the six.
-    expect(MAIN_MENU_BUTTONS).toHaveLength(8);
+    // keyboard above is exactly the six. The ninth is the reseller request, its flag off by
+    // default, so it is not drawn either.
+    expect(MAIN_MENU_BUTTONS).toHaveLength(9);
   });
 
   it('draws the tenant’s own main menu — order, switches, flags, labels — and routes a renamed button (R1)', async () => {
