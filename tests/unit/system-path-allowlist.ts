@@ -150,6 +150,7 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleSessionRepository.revoke',
   'DrizzleSessionRepository.touch',
   'DrizzleTenantRepository.activeTenantIds',
+  'DrizzleTenantRepository.allTenantIds',
   'DrizzleTenantRepository.findById',
   'DrizzleTenantRepository.findBySlug',
   'DrizzleTenantRepository.findPrimary',

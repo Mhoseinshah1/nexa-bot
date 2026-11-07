@@ -34,6 +34,8 @@ export interface TenantRepository {
    * per-tenant loops serve (`infrastructure/lifecycle/tenant-pass.ts`).
    */
   activeTenantIds(): Promise<TenantId[]>;
+  /** Every tenant's id, whatever its status, on the system path (delete-only sweeps). */
+  allTenantIds(): Promise<TenantId[]>;
   /** Scoped read: returns the tenant only if the scope permits seeing it. */
   findInScope(scope: ScopeContext): Promise<Tenant | null>;
 }

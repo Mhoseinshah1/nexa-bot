@@ -24,8 +24,8 @@ import type { TenantContext, TenantId } from '@nexa/contracts';
  * - the owner's own bot (the installation tenant) is served first on every pass — the
  *   "double turn / front of the queue" PR-2 gives it — and every other bot in a rotation
  *   that starts where the previous pass stopped.
- * - a pass stops starting new tenants once it has run `budgetMs` (at least one tenant is
- *   always served). The tenants it did not reach are the first ones served next pass, so a
+ * - a pass stops starting new tenants once it has run `budgetMs` (the owner's bot and at
+ *   least one other bot are always served, so the rotation always advances). The tenants it did not reach are the first ones served next pass, so a
  *   bot with a long backlog makes the pass longer for one tenant at a time, never starves
  *   another, and the loop's own stall tolerance still holds (budget + one tenant's bound).
  * - every tenant's body is the loop's own bounded batch (its per-pass limit), in that
@@ -94,6 +94,12 @@ export async function forEachLoopTenant(
 export interface TenantFanOutDeps {
   /** The ACTIVE tenants, read on the system path. */
   readonly activeTenants: () => Promise<readonly TenantId[]>;
+  /**
+   * EVERY tenant, whatever its status, for a pass with `tenants: 'all'`: work that must
+   * happen even for a stopped bot because it only DELETES what was promised to be deleted
+   * (the gift-card plaintext export purge). Absent, such a pass serves the active ones.
+   */
+  readonly allTenants?: () => Promise<readonly TenantId[]>;
   /** The installation's own tenant; null before provisioning (then nobody is served). */
   readonly installationTenantId: () => TenantId | null;
   readonly now: () => number;
@@ -119,7 +125,11 @@ export class TenantFanOut {
    */
   pass(
     name: string,
-    options: { readonly budgetMs: number; readonly noTenant?: 'idle' | 'throw' },
+    options: {
+      readonly budgetMs: number;
+      readonly noTenant?: 'idle' | 'throw';
+      readonly tenants?: 'active' | 'all';
+    },
   ): TenantPass {
     let cursor = 0;
     return {
@@ -132,7 +142,10 @@ export class TenantFanOut {
           }
           return { served: 0, failed: 0, deferred: 0 };
         }
-        const active = await this.active();
+        const active =
+          options.tenants === 'all' && this.deps.allTenants !== undefined
+            ? await this.deps.allTenants()
+            : await this.active();
         const others = [...new Set(active)].filter((id) => id !== primary).sort();
         const start = others.length === 0 ? 0 : cursor % others.length;
         const order = [
@@ -147,7 +160,10 @@ export class TenantFanOut {
         let firstError: unknown = undefined;
         let servedOthers = 0;
         for (const tenantId of order) {
-          if (served > 0 && this.deps.now() - startedAt >= options.budgetMs) break;
+          // The budget is checked only once ONE other bot has been served too, so an owner's
+          // pass that outlasts the budget cannot starve every hosted bot: the rotation still
+          // advances by at least one bot per pass.
+          if (servedOthers > 0 && this.deps.now() - startedAt >= options.budgetMs) break;
           served += 1;
           if (tenantId !== primary) servedOthers += 1;
           try {

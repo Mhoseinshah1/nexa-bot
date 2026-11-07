@@ -2426,6 +2426,7 @@ export function createContainer(
    */
   const tenantFanOut = new TenantFanOut({
     activeTenants: () => tenants.activeTenantIds(),
+    allTenants: () => tenants.allTenantIds(),
     installationTenantId: () => installationTenantId,
     now: () => clock.now().getTime(),
     logger,
@@ -4404,7 +4405,12 @@ export function createContainer(
   const giftCardSweepLoop = new GiftCardSweepLoop(
     { repository: giftCardRepository, uow, guard, audit, opsLog, sessions, clock },
     {
-      scope: tenantFanOut.pass('gift-card-sweep', { budgetMs: GIFT_CARD_SWEEP_INTERVAL_MS }),
+      // Every tenant, stopped ones too: the purge keeps the 24-hour plaintext promise even
+      // for a bot an operator stopped (`gift-card-sweep.ts`).
+      scope: tenantFanOut.pass('gift-card-sweep', {
+        budgetMs: GIFT_CARD_SWEEP_INTERVAL_MS,
+        tenants: 'all',
+      }),
       intervalMs: GIFT_CARD_SWEEP_INTERVAL_MS,
       initialDelayMs: GIFT_CARD_SWEEP_INITIAL_DELAY_MS,
       ids,

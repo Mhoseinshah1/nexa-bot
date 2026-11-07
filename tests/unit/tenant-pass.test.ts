@@ -81,10 +81,38 @@ describe('TenantFanOut', () => {
     expect(await served(pass, slow)).toEqual([OWNER, A]);
   });
 
-  it('always serves at least one tenant, however small the budget', async () => {
-    const h = harness({ active: [OWNER, A] });
+  it('always serves the owner and at least one other bot, however small the budget', async () => {
+    const h = harness({ active: [OWNER, A, B] });
     const pass = h.fanOut.pass('test', { budgetMs: 0 });
-    expect(await served(pass)).toEqual([OWNER]);
+    expect(await served(pass)).toEqual([OWNER, A]);
+    expect(await served(pass)).toEqual([OWNER, B]);
+  });
+
+  it("an owner's pass that outlasts the budget cannot starve the hosted bots", async () => {
+    const h = harness({ active: [OWNER, A, B], cacheMs: 0 });
+    const pass = h.fanOut.pass('test', { budgetMs: 100 });
+    // The owner's own pass alone takes longer than the whole budget, every time.
+    const ownerSlow = async (scope: TenantContext) => h.advance(scope.tenantId === OWNER ? 500 : 1);
+    expect(await served(pass, ownerSlow)).toEqual([OWNER, A]);
+    expect(await served(pass, ownerSlow)).toEqual([OWNER, B]);
+    expect(await served(pass, ownerSlow)).toEqual([OWNER, A]);
+  });
+
+  it("a pass with tenants: 'all' serves stopped tenants too; the default does not", async () => {
+    const stopped = 'tenant-stopped' as TenantId;
+    const fanOut = new TenantFanOut({
+      activeTenants: () => Promise.resolve([OWNER, A]),
+      allTenants: () => Promise.resolve([OWNER, A, stopped]),
+      installationTenantId: () => OWNER,
+      now: () => 0,
+      logger: { error: () => {} },
+    });
+    expect(await served(fanOut.pass('purge', { budgetMs: 60_000, tenants: 'all' }))).toEqual([
+      OWNER,
+      A,
+      stopped,
+    ]);
+    expect(await served(fanOut.pass('other', { budgetMs: 60_000 }))).toEqual([OWNER, A]);
   });
 
   it('serves nobody while the installation has no tenant', async () => {

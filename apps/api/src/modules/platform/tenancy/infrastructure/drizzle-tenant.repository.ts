@@ -156,6 +156,12 @@ export class DrizzleTenantRepository implements TenantRepository {
     return rows.map((row) => asId<'TenantId'>(row.id));
   }
 
+  async allTenantIds(): Promise<TenantId[]> {
+    // Unscoped: the system path, reason `DrizzleTenantRepository.allTenantIds`.
+    const rows = await this.db.select({ id: tenants.id }).from(tenants).orderBy(tenants.id);
+    return rows.map((row) => asId<'TenantId'>(row.id));
+  }
+
   async findInScope(scope: ScopeContext): Promise<Tenant | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await this.db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
