@@ -31,6 +31,7 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import type { EventConsumer } from '../application/event-consumer.js';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 import { groupInOrder, weightedRoundRobin } from '../../capacity/domain/round-robin.js';
 
 export interface OutboxRelayOptions {
@@ -121,6 +122,7 @@ export function nextRelayDelayMs(result: RelayBatchResult, pollIntervalMs: numbe
  * visible rather than silent. An exhausted message is excluded from the lag: it is shown
  * in the diagnostics instead, and would otherwise keep the worker unhealthy for good.
  */
+@ScopeBound()
 export class OutboxRelay {
   private running = false;
   private timer: NodeJS.Timeout | null = null;

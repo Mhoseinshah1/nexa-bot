@@ -27,6 +27,7 @@ import {
   resellerMinimumAchievedHolds,
   resellerMinimumReminderHolds,
 } from '../../resellers/infrastructure/drizzle-reseller-minimum-facts.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * WP-A9: which service reminder a notification kind carries, inverted from the contract's
@@ -103,6 +104,7 @@ const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
  * against `!== 'ACTIVE'`. Every other kind is a terminal fact that an hour's delay does
  * not make false.
  */
+@ScopeBound()
 export class DrizzleNotificationSubjectReader implements NotificationSubjectReader {
   constructor(private readonly db: Database) {}
 

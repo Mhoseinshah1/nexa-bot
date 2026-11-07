@@ -16,6 +16,7 @@ import type {
   ServiceUsernameRepository,
   UsernameReservation,
 } from '../application/username-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * A PostgreSQL unique violation, however deep the driver wrapped it.
@@ -63,6 +64,7 @@ function toRecord(row: Row): UsernameReservation {
  * the state the loser started from — and the loser here is a second customer who is
  * told they have a name they do not have.
  */
+@ScopeBound()
 export class DrizzleServiceUsernameRepository
   implements ServiceUsernameRepository, PanelNamespaceRebinder
 {

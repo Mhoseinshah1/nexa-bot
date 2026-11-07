@@ -31,11 +31,13 @@ import type {
   OrderCashbackRepository,
   RuleCursor,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The order states in which a promise can no longer be kept: nothing was delivered. */
 const ENDED_ORDER_STATES = ['CANCELLED', 'EXPIRED', 'REFUNDED'] as const;
 
 /** Cashback rules, in PostgreSQL. Every query carries the tenant. */
+@ScopeBound()
 export class DrizzleCashbackRuleRepository implements CashbackRuleRepository {
   constructor(private readonly db: Database) {}
 
@@ -169,6 +171,7 @@ export class DrizzleCashbackRuleRepository implements CashbackRuleRepository {
 }
 
 /** Order cashback promises and their reversals, in PostgreSQL. */
+@ScopeBound()
 export class DrizzleOrderCashbackRepository implements OrderCashbackRepository {
   constructor(private readonly db: Database) {}
 

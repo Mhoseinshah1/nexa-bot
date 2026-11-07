@@ -10,8 +10,10 @@ import {
   legacyImportMap,
 } from '../../../../infrastructure/persistence/schema.js';
 import type { HistoryRecord, HistoryRecordReader } from '../application/materialize-support.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The archive (`legacy_history_records`) and the importer's customer map, read only. */
+@ScopeBound()
 export class DrizzleHistoryRecordReader implements HistoryRecordReader {
   constructor(private readonly db: Database) {}
 

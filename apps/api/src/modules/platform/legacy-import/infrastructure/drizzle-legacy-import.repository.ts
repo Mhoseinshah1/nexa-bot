@@ -44,6 +44,7 @@ import {
   type LegacyReviewCountRow,
   type LegacyReviewTransitionOutcome,
 } from '../application/legacy-import-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type RunRow = typeof legacyImportRuns.$inferSelect;
 type MapRow = typeof legacyImportMap.$inferSelect;
@@ -101,6 +102,7 @@ function mapInsertValues(tenantId: string, write: LegacyImportMapWrite) {
  * in its WHERE clause, including the primary-key lookups, so another tenant's run or row
  * never leaves the database and can never be written through.
  */
+@ScopeBound()
 export class DrizzleLegacyImportRepository implements LegacyImportRepository {
   constructor(private readonly db: Database) {}
 

@@ -9,6 +9,7 @@ import type {
   PanelCredentialSummary,
   PanelCredentialWrite,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Panel credentials, encrypted at rest and bound to the row that owns them.
@@ -32,6 +33,7 @@ interface CredentialField {
   readonly keyId: string | null;
 }
 
+@ScopeBound()
 export class DrizzlePanelCredentialStore implements PanelCredentialStore {
   constructor(
     private readonly db: Database,

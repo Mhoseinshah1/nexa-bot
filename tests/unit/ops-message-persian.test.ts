@@ -64,6 +64,8 @@ describe('operational messages read in Persian', () => {
       code.startsWith('recovery.') ||
       // Phase 6A PR-2: every capacity recorder writes its Persian sentence at the source.
       code.startsWith('capacity.') ||
+      // PR #411: the installation tenant guard writes its Persian sentence at the source.
+      code === 'tenancy.cached_tenant_vanished' ||
       code.startsWith('panel.health.') ||
       code === 'telegram.customer_send_ok' ||
       code === 'telegram.customer_send_failed' ||

@@ -34,6 +34,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** `pg_advisory_xact_lock` class of the learning enqueue ('LJ'), keyed by the tenant. */
 export const SUPPORT_LEARNING_ENQUEUE_LOCK_CLASS = 0x4c4a;
@@ -231,6 +232,7 @@ function exec(db: Database, tx?: unknown): Executor {
  * UPDATE naming the states it may leave and, where an operator edits, the version they read:
  * zero rows is the answer "it moved", never a silent overwrite. There is no `setState`.
  */
+@ScopeBound()
 export class DrizzleSupportKnowledgeRepository {
   constructor(private readonly db: Database) {}
 

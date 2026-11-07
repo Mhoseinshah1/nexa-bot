@@ -2,10 +2,11 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ActorContext, BotInstanceId, CorrelationId, TenantContext } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { startFakeTelegramBotApi, type FakeTelegramBotApi } from '../support/fake-telegram-bot-api';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

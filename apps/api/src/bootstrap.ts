@@ -163,7 +163,9 @@ export async function resolveInstallationTenant(container: Container): Promise<v
   container.installationKeyLoader.start(INSTALLATION_KEY_REFRESH_MS);
 
   const primary = await container.tenants.findPrimary();
-  container.setInstallationTenant(primary?.id ?? null);
+  // Its kind is recorded HERE, where the scope is set (PR #411): the guard never has to learn
+  // later whether the tenant it watches is the installation's PRIMARY.
+  container.setInstallationTenant(primary?.id ?? null, primary?.kind ?? null);
   // A restore replaces the database under this long-running role; its cached tenant is
   // then re-resolved, or the role exits to be restarted. See InstallationTenantGuard.
   container.installationTenantGuard.start();

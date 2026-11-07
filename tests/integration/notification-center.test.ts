@@ -14,15 +14,16 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createContainer } from '../../apps/api/src/container';
 import {
   NotificationCenterService,
   type NotificationCenterDeps,
 } from '../../apps/api/src/modules/platform/opslog/application/notification-center.service';
 import { DrizzleNotificationInboxRepository } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-notification-inbox.repository';
 import {
+  createTestContainer,
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,
@@ -382,7 +383,7 @@ describe('Phase B3 — notification center', () => {
       read: true,
     });
     // A second, fresh process over the same database.
-    const fresh = createContainer(testConfig(), 'api');
+    const fresh = createTestContainer(testConfig(), 'api');
     try {
       const after = await fresh.notificationCenter.summary(tenantA, adminActorFor(owner));
       expect(after.unread).toBe(1);

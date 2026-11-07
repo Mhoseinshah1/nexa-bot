@@ -129,7 +129,7 @@ Required:
   --panel-map PATH       the explicit legacy code_panel -> NEXA panel map P7 reads
                          (format nexa-legacy-panel-map/v1; omit with --synthetic-panels)
   --nexa-env FILE        shell-sourceable KEY=VALUE config for the NEXA CLIs
-                         (SECRETS_KEYS, REDIS_URL, ...). DATABASE_URL in it is IGNORED:
+                         (SECRETS_KEYS, REDIS_URL, ...). DATABASE_URL and DATABASE_APP_URL in it are IGNORED:
                          the harness always points the CLIs at its own database.
   --pg-url URL           postgres://USER@HOST:PORT — a server, no database path and NO
                          password (refused: argv is world-readable); the password comes
@@ -681,6 +681,10 @@ with_nexa_env() {
     set +a
     DATABASE_URL="$CLI_DATABASE_URL"
     export DATABASE_URL
+    # ADR-0037: and never the application role's URL from that file, which names ANOTHER
+    # database (.env.example's is nexa_dev's). Every rehearsal process works on the
+    # rehearsal database above, as its owner.
+    unset DATABASE_APP_URL
     # The synthetic fake panels listen on 127.0.0.2/3; NEVER set for a staging run.
     if [ "$SYNTHETIC_PANELS" -eq 1 ]; then
       PANEL_HTTP_ALLOW_LOOPBACK=true

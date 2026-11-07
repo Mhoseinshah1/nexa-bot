@@ -11,8 +11,10 @@ import type {
   TrialGrantRecord,
   TrialGrantRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Trial grants, in PostgreSQL. Every query leads with the tenant. */
+@ScopeBound()
 export class DrizzleTrialGrantRepository implements TrialGrantRepository {
   constructor(private readonly db: Database) {}
 

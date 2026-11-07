@@ -19,6 +19,7 @@ import type {
   DeliveryTutorialRepository,
   DeliveryTutorialWrite,
 } from '../application/delivery-tutorial.service.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof deliveryTutorials.$inferSelect;
 
@@ -43,6 +44,7 @@ function toRecord(row: Row): DeliveryTutorialRecord {
  * tenant's panel unstorable. The write is conditional on the revision the operator was
  * shown — the panel trial repository's shape.
  */
+@ScopeBound()
 export class DrizzleDeliveryTutorialRepository implements DeliveryTutorialRepository {
   constructor(private readonly db: Database) {}
 

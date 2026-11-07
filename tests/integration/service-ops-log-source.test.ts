@@ -22,12 +22,13 @@ import {
   type ProductId,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import type { EventConsumer } from '../../apps/api/src/modules/platform/eventing/application/event-consumer';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

@@ -2,6 +2,7 @@ import { eq, sql } from 'drizzle-orm';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { processRuns } from '../../../../infrastructure/persistence/schema.js';
 import type { ProcessRunRecord, ProcessRunStore } from '../application/process-run-state.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * `process_runs`: the latest life of each process role, one row per role.
@@ -15,6 +16,7 @@ import type { ProcessRunRecord, ProcessRunStore } from '../application/process-r
  * transaction-scoped advisory lock rather than `SELECT ... FOR UPDATE`, because the first
  * boot of a role has no row to lock.
  */
+@ScopeBound()
 export class DrizzleProcessRunStore implements ProcessRunStore {
   constructor(private readonly db: Database) {}
 

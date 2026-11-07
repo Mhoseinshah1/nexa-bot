@@ -1209,6 +1209,121 @@ nexa_backup_cpu_percent_setting() {
   printf '%s\n' "$value"
 }
 
+# --- The application's database role (ADR-0037) ------------------------------
+#
+# Row-level security binds only a role that does not own the tables, so the
+# application connects as `nexa_app` through DATABASE_APP_URL; DATABASE_URL stays the
+# owner's, for migrations, dumps and restores. Migration 0318 creates the roles with no
+# login. This gives `nexa_app` its login and its password — generated here once, then
+# read back on every later run and RE-ASSERTED, so a cluster that lost the role (a
+# fresh volume, a restore) agrees with the file again — and only then writes the URL,
+# so no process is ever pointed at a role that cannot log in. Until the file exists
+# the processes keep connecting as the owner, where the policies are inert, which is
+# what makes a failure here safe to leave.
+#
+# Its OWN file, `app-database.env` (0600), which compose reads after nexa.env: nexa.env
+# is the operator's and an update never rewrites it. The password never reaches an
+# argv or an environment: it travels to psql on STDIN, written by the `printf`
+# builtin, and into the file by a rename.
+NEXA_APP_DB_ENV_NAME=app-database.env
+
+# The alphabet `random_password` in install.sh uses: base64 without `+/=`.
+nexa_app_db_password_valid() { [[ "$1" =~ ^[A-Za-z0-9]{24,64}$ ]]; }
+
+nexa_ensure_app_db_role() {
+  local app_env="${NEXA_CONFIG_DIR}/nexa.env" pg_env="${NEXA_CONFIG_DIR}/postgres.env"
+  local role_env="${NEXA_CONFIG_DIR}/${NEXA_APP_DB_ENV_NAME}"
+  local pg_user pg_db owner_url app_url password='' adding=0
+  pg_user="$(nexa_env_value "$pg_env" POSTGRES_USER 2>/dev/null)" || {
+    nexa_warn "no POSTGRES_USER in ${pg_env}; the application keeps connecting as the owner."
+    return 1
+  }
+  pg_db="$(nexa_env_value "$pg_env" POSTGRES_DB 2>/dev/null)" || pg_db="$pg_user"
+  owner_url="$(nexa_env_value "$app_env" DATABASE_URL 2>/dev/null)" || {
+    nexa_warn "no DATABASE_URL in ${app_env}; the application role was not configured."
+    return 1
+  }
+  app_url="$(nexa_env_value "$role_env" DATABASE_APP_URL 2>/dev/null || true)"
+  if [ -n "$app_url" ]; then
+    # postgres://nexa_app:<password>@host:port/db — parameter expansion, no subprocess.
+    password="${app_url#postgres://nexa_app:}"
+    password="${password%%@*}"
+    nexa_app_db_password_valid "$password" || {
+      nexa_warn "DATABASE_APP_URL in ${role_env} is not the form this installer writes; it was left as it is."
+      return 1
+    }
+  else
+    adding=1
+    password="$(head -c 24 /dev/urandom | base64 -w0 | tr -d '=+/' | cut -c1-32)"
+    nexa_app_db_password_valid "$password" || {
+      nexa_warn "could not generate a password for the application role."
+      return 1
+    }
+  fi
+
+  nexa_step "configuring the application's database role (row-level security)"
+  # Idempotent, and refuses a role that could bypass the policies rather than
+  # repairing it silently: somebody granted that, and an operator should know.
+  #
+  # The session first stops the server recording the statement that carries the password:
+  # not in the log (log_statement, the duration and error logs) and not in
+  # pg_stat_statements, which compose preloads. Superuser settings, which a Docker
+  # install's owner holds; an owner that cannot set them is refused rather than logged.
+  if ! printf '%s\n' \
+    "SET log_statement = 'none';" \
+    "SET log_min_duration_statement = -1;" \
+    "SET log_min_error_statement = 'panic';" \
+    "SET pg_stat_statements.track_utility = off;" \
+    "DO \$\$ BEGIN" \
+    "  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexa_system') THEN" \
+    "    CREATE ROLE nexa_system NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF;" \
+    "  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexa_app') THEN" \
+    "    CREATE ROLE nexa_app NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; END IF;" \
+    "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname IN ('nexa_app', 'nexa_system') AND (rolsuper OR rolbypassrls)) THEN" \
+    "    RAISE EXCEPTION 'nexa_app or nexa_system is SUPERUSER or BYPASSRLS'; END IF;" \
+    "  IF NOT EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid" \
+    "                 JOIN pg_roles u ON u.oid = m.member" \
+    "                 WHERE g.rolname = 'nexa_system' AND u.rolname = 'nexa_app') THEN" \
+    "    GRANT nexa_system TO nexa_app WITH INHERIT FALSE, SET TRUE; END IF;" \
+    "  ALTER ROLE nexa_system NOLOGIN;" \
+    "  ALTER ROLE nexa_app LOGIN PASSWORD '${password}';" \
+    "END \$\$;" |
+    nexa_compose exec -T postgres psql -U "$pg_user" -d "$pg_db" -XAtq -v ON_ERROR_STOP=1 \
+      >/dev/null 2>&1; then
+    nexa_warn "the application role could not be configured; the application keeps connecting as the owner, where row-level security is inert. Nothing else changed."
+    return 1
+  fi
+
+  [ "$adding" -eq 1 ] || {
+    nexa_ok "the application connects as nexa_app (the password was not printed)"
+    return 0
+  }
+  # The owner's URL with the application's credential: same host, port and database.
+  local rest="${owner_url#*@}" tmp
+  tmp="$(mktemp "${role_env}.XXXXXX")" || {
+    nexa_warn "cannot write ${role_env}; the application keeps connecting as the owner."
+    return 1
+  }
+  chmod 0600 "$tmp"
+  {
+    printf '# The application role (ADR-0037), written by the installer and botctl.\n'
+    printf '# The processes connect as nexa_app, which row-level security binds; the\n'
+    printf "# owner's DATABASE_URL in nexa.env stays for migrations and backups.\n"
+    printf 'DATABASE_APP_URL=postgres://nexa_app:%s@%s\n' "$password" "$rest"
+  } >"$tmp" || {
+    rm -f "$tmp"
+    nexa_warn "cannot write ${role_env} (is /var full?); the application keeps connecting as the owner."
+    return 1
+  }
+  sync "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$role_env" || {
+    rm -f "$tmp"
+    nexa_warn "cannot install ${role_env}; the application keeps connecting as the owner."
+    return 1
+  }
+  nexa_ok "the application now connects as nexa_app (the password was not printed)"
+}
+
 # The limits for a percent (empty: the default) and a host memory in MB (empty: not printed).
 # Pure, so the arithmetic is tested without Docker.
 nexa_backup_verify_limits() {

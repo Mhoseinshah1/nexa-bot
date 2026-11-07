@@ -30,6 +30,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof supportAiJobs.$inferSelect;
 
@@ -136,6 +137,7 @@ function exec(db: Database, tx?: unknown): Executor {
  * state it leaves: a job the operator discarded while the `assistant` role was producing it is
  * never resurrected by the result arriving late.
  */
+@ScopeBound()
 export class DrizzleSupportAiJobRepository {
   constructor(private readonly db: Database) {}
 

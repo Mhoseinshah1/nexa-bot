@@ -30,7 +30,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { MainMenuLayout } from '../../apps/api/src/modules/commerce/messaging/application/main-menu';
 import { BotMenuBuilderService } from '../../apps/api/src/modules/control/bot-menu-builder/application/bot-menu-builder.service';
 import { PublishedMainMenuSource } from '../../apps/api/src/modules/control/bot-menu-builder/application/main-menu-source';
@@ -46,6 +46,7 @@ import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import type { Container } from '../../apps/api/src/container';
 import { frozenLayoutSchema } from '../support/frozen-main-menu-schema';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

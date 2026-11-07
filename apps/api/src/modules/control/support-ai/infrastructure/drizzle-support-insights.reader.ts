@@ -13,6 +13,7 @@ import {
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { KNOWLEDGE_GAP_REASONS, type GapRow } from '../domain/support-gaps.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 const SNAPSHOT = { isolationLevel: 'repeatable read', accessMode: 'read only' } as const;
 /** Escalations read for the gaps report, newest first. */
@@ -37,6 +38,7 @@ const kindOf = (raw: string | null): BusinessHandoffKind | null =>
  * That is why they are not part of the analytics reader, whose rule is that no statement
  * selects a text column.
  */
+@ScopeBound()
 export class DrizzleSupportInsightsReader {
   constructor(private readonly db: Pick<Database, 'transaction'>) {}
 

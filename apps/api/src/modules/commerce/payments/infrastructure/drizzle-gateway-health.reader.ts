@@ -21,6 +21,7 @@ import {
   RECONCILE_INQUIRY_ACTION,
 } from '../application/payment.service.js';
 import { paymentOpsQueueCondition } from './payment-ops-queue-sql.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Gateway Health's recorded facts, in PostgreSQL (program §11). Reads only.
@@ -35,6 +36,7 @@ import { paymentOpsQueueCondition } from './payment-ops-queue-sql.js';
  * - the open operational conditions with a gateway-health code, by the code index;
  * - the last reconcile / "ask again" audit row naming the route.
  */
+@ScopeBound()
 export class DrizzleGatewayHealthReader implements GatewayHealthReader {
   constructor(private readonly db: Database) {}
 

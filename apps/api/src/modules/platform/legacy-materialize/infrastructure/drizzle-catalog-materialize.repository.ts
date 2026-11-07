@@ -33,6 +33,7 @@ import {
   type HistoryRow,
   type MirzaAgentTier,
 } from '../application/catalog-records.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 const CHUNK = 500;
 const EVERY = '*';
@@ -56,6 +57,7 @@ function chunks<T>(items: readonly T[]): T[][] {
  * touches `wallet_entries`, the outbox, a notification or a provider — those tables are not
  * imported by this file, and a test pins that they stay empty.
  */
+@ScopeBound()
 export class DrizzleCatalogMaterializeRepository
   implements ProductsRepository, ResellersRepository, DiscountsRepository
 {

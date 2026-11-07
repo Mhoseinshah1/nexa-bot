@@ -30,6 +30,7 @@ import {
   NEXA_CANCEL_KEY_PREFIX,
   NEXA_EXPIRY_CANCEL_KEY_PREFIX,
 } from '../application/gateway-invoice-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type RequestRow = typeof gatewayProviderRequests.$inferSelect;
 
@@ -65,6 +66,7 @@ function recordOf(row: RequestRow): GatewayProviderRequestRecord {
  * stamps the send or decides the row — the CHECK `gateway_provider_requests_sealed_card_check`
  * refuses any other end state. No method returns it to a surface, and none logs it.
  */
+@ScopeBound()
 export class DrizzleGatewayProviderRequestRepository implements GatewayProviderRequestRepository {
   constructor(private readonly db: Database) {}
 

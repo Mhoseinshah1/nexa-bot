@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
-import { migrateOnce, testConfig } from './harness';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
+import { createApiApp, migrateOnce, testConfig } from './harness';
 
 /**
  * Two applications in one process must not share configuration.

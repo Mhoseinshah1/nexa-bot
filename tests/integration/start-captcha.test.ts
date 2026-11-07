@@ -8,9 +8,10 @@ import {
   type CorrelationId,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

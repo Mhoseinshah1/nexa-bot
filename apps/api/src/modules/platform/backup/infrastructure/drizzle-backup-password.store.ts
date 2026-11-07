@@ -11,6 +11,7 @@ import type {
   BackupPasswordStore,
   StoredBackupPassword,
 } from '../application/backup-password.service.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The backup passwords table (E4): the writer the password service uses, and the
@@ -21,6 +22,7 @@ import type {
  * Admin applies to the next run in every process (the worker seals, the api verifies an
  * upload, the recovery executor re-opens) with no restart and no cache to invalidate.
  */
+@ScopeBound()
 export class DrizzleBackupPasswordStore implements BackupPasswordStore {
   constructor(
     private readonly db: Database,

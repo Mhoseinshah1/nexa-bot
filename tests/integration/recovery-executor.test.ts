@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { Client } from 'pg';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createContainer, type Container } from '../../apps/api/src/container';
+import { type Container } from '../../apps/api/src/container';
 import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { adminActorFor, createAdmin, tenantA, testConfig } from './harness';
+import { createTestContainer, adminActorFor, createAdmin, tenantA, testConfig } from './harness';
 
 /**
  * The recovery executor, against a real PostgreSQL, INCLUDING the real renames.
@@ -97,7 +97,7 @@ describe('the recovery executor', () => {
       RECOVERY_WORK_DIR: recoveryRoot,
       LEGACY_MIGRATION_WORK_DIR: legacyRoot,
     });
-    container = createContainer(config, 'recovery');
+    container = createTestContainer(config, 'recovery');
     await seed(container.database.db, container.cipher);
     container.setInstallationTenant(tenantA.tenantId);
   });

@@ -10,6 +10,7 @@ import {
   ticketCategorySeeds,
 } from '../../../../infrastructure/persistence/schema.js';
 import type { TicketCategoryRecord, TicketCategoryRepository } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** One tenant's category writes, serialised (`lockTenant`). 'TC'. */
 export const TICKET_CATEGORY_LOCK_CLASS = 0x5443;
@@ -28,6 +29,7 @@ function toRecord(row: Row): TicketCategoryRecord {
 }
 
 /** The tenant's ticket categories and their seed marker. Every query carries the tenant. */
+@ScopeBound()
 export class DrizzleTicketCategoryRepository implements TicketCategoryRepository {
   constructor(private readonly db: Database) {}
 

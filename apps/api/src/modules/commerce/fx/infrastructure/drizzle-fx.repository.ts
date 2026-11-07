@@ -13,6 +13,7 @@ import type {
   FxSourceStateRow,
   FxStoredQuote,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The central rate's rows (package FX). Every statement names the tenant, and every
@@ -20,6 +21,7 @@ import type {
  * read followed by a write in a process: two worker replicas is the normal case on every
  * rolling update, and both may ask at once.
  */
+@ScopeBound()
 export class DrizzleFxQuoteRepository implements FxQuoteRepository {
   constructor(private readonly db: Database) {}
 

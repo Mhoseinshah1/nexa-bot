@@ -11,6 +11,7 @@ import {
   type PanelFleetStats,
   type PanelFleetStatsReader,
 } from '../application/panel-health-dashboard.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** A page of panel ids as bound parameters — never text spliced into the statement. */
 function idList(ids: readonly string[]): SQL {
@@ -38,6 +39,7 @@ function idList(ids: readonly string[]): SQL {
  * Tenant-scoped: every statement names the tenant, so a panel id of another tenant
  * contributes nothing.
  */
+@ScopeBound()
 export class DrizzlePanelFleetStatsReader implements PanelFleetStatsReader {
   constructor(private readonly db: Database) {}
 

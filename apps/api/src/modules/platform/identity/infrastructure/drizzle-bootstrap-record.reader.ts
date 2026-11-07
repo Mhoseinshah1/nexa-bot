@@ -3,6 +3,7 @@ import type { TenantContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { auditLogs } from '../../../../infrastructure/persistence/schema.js';
 import type { BootstrapRecordReader } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The installer's proof that it, and not somebody else, created this
@@ -19,6 +20,7 @@ import type { BootstrapRecordReader } from '../application/ports.js';
  * and the retention sweeper touches only sessions and login attempts, so the
  * answer does not expire.
  */
+@ScopeBound()
 export class DrizzleBootstrapRecordReader implements BootstrapRecordReader {
   constructor(private readonly db: Database) {}
 

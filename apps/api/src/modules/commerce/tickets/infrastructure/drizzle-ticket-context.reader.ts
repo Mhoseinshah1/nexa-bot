@@ -7,11 +7,13 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { orders, payments, services } from '../../../../infrastructure/persistence/schema.js';
 import type { TicketContextReader } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Who owns a service, an order or a payment — the one question linking a ticket's context
  * asks, and nothing else. Tenant-scoped: another tenant's id is "no owner".
  */
+@ScopeBound()
 export class DrizzleTicketContextReader implements TicketContextReader {
   constructor(private readonly db: Database) {}
 

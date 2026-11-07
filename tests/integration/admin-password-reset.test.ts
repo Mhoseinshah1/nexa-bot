@@ -18,9 +18,10 @@ import {
   parsePasswordResetArgs,
   PasswordResetArgsError,
   readPasswordFromStdin,
+  resolveResetScope,
 } from '../../apps/api/src/admin-password-reset.cli';
 import { Readable } from 'node:stream';
-import { createAdmin, createTestContext, tenantA, type TestContext } from './harness';
+import { createAdmin, createTestContext, tenantA, tenantB, type TestContext } from './harness';
 
 /**
  * `botctl admin reset-password`, against a real database.
@@ -176,6 +177,62 @@ describe('ServerPasswordRecovery', () => {
     const dump = JSON.stringify([audit, events]);
     expect(dump).not.toContain(NEW);
     expect(dump).not.toContain(await storedHash('owner'));
+  });
+});
+
+describe('one tenant of many, under row-level security (ADR-0037)', () => {
+  /*
+   * The suite's container runs as nexa_app. Tenant B (slug `globex`) also has an `owner`;
+   * `--tenant globex` must reset B's and nobody else's. MUTATION: make
+   * `resolveResetScope` ignore its slug (always the primary) — this case fails.
+   */
+  const hashIn = async (tenantId: string, username: string): Promise<string> => {
+    const [row] = await ctx.container.database.db
+      .select({ hash: admins.passwordHash })
+      .from(admins)
+      .where(and(eq(admins.tenantId, tenantId), eq(admins.username, username)));
+    return row!.hash;
+  };
+  const throttleIn = async (tenantId: string, username: string): Promise<number> =>
+    (
+      await ctx.container.database.db
+        .select({ s: adminLoginThrottle.subject })
+        .from(adminLoginThrottle)
+        .where(
+          and(
+            eq(adminLoginThrottle.tenantId, tenantId),
+            eq(adminLoginThrottle.subjectKind, 'USERNAME'),
+            eq(adminLoginThrottle.subject, username),
+          ),
+        )
+    ).length;
+
+  it('`--tenant <slug>` resets that tenant’s administrator only; no slug means the primary', async () => {
+    await createAdmin(ctx.container, tenantB, {
+      username: 'owner',
+      password: OLD,
+      roleKeys: ['owner'],
+    });
+    await lockOut('owner');
+    const a = tenantA.tenantId as string;
+    const b = tenantB.tenantId as string;
+    const aBefore = await hashIn(a, 'owner');
+
+    // Resolved unbound, as the CLI does: the directory reads take the system path.
+    const scopeB = await resolveResetScope(ctx.container.tenants, 'globex');
+    expect(scopeB).toEqual({ tenantId: b, botInstanceId: null });
+    expect(await resolveResetScope(ctx.container.tenants, null)).toEqual({
+      tenantId: a,
+      botInstanceId: null,
+    });
+    await expect(resolveResetScope(ctx.container.tenants, 'no-such')).rejects.toBeInstanceOf(
+      PasswordResetArgsError,
+    );
+
+    await recovery().resetPasswordFromServer(scopeB, { username: 'owner', password: NEW });
+    expect(await ctx.container.hasher.verify(NEW, await hashIn(b, 'owner'))).toBe(true);
+    expect(await hashIn(a, 'owner')).toBe(aBefore);
+    expect(await throttleIn(a, 'owner')).toBe(1);
   });
 });
 

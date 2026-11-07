@@ -12,6 +12,7 @@ import type {
   StartCaptchaReissue,
   StartCaptchaRepository,
 } from '../application/start-captcha-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 function toRecord(row: typeof customerCaptchas.$inferSelect): StartCaptchaRecord {
   return {
@@ -41,6 +42,7 @@ function challengeColumns(challenge: StartCaptchaChallenge) {
 }
 
 /** R10 D5 (a): the `/start` captcha rows, in PostgreSQL. Every query carries the tenant. */
+@ScopeBound()
 export class DrizzleStartCaptchaRepository implements StartCaptchaRepository {
   constructor(private readonly db: Database) {}
 

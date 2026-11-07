@@ -9,6 +9,7 @@ import { payments } from '../../../../infrastructure/persistence/schema.js';
 import { paymentFingerprint, type PaymentWrite } from '../application/payment-history.step.js';
 import { MIRZA_SOURCE, type PlannedRepository } from '../application/materialize-support.js';
 import type { MaterializeContext } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Payments per INSERT: 18 parameters a row, so 3 000 rows stay under PostgreSQL's 65 535. */
 const CHUNK = 3000;
@@ -17,6 +18,7 @@ const CHUNK = 3000;
  * `payments` rows of source MIRZA. Direct inserts: this is the one place the import writes a
  * payment, and it writes a RECORD — terminal state, no order, no ledger entry, no event.
  */
+@ScopeBound()
 export class DrizzlePaymentHistoryRepository implements PlannedRepository<PaymentWrite> {
   constructor(
     private readonly db: Database,

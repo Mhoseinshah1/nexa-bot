@@ -7,12 +7,19 @@ import {
   SESSION_COOKIE_NAME,
   paymentGatewayListResponseSchema,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleGatewayCredentialStore } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-credentials';
 import { tonpaysSignatureOf } from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-signature';
 import { GATEWAY_WEBHOOK_BODY_LIMIT_BYTES } from '../../apps/api/src/surfaces/gateway/webhook.controller';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * WP11A over HTTP: the Web Admin's gateway routes and the public TonPays webhook.

@@ -1,6 +1,10 @@
 # ADR-0004 — Application-level tenant scoping, without row-level security
 
-**Status:** Accepted. **Deviates from the architecture review's ADR-004, which
+**Status:** **Superseded by [ADR-0037](0037-row-level-security.md)** (owner decision,
+2026-11-01): one install now hosts many unrelated owners' bots, which is this ADR's own
+first "Revisit when" condition. Kept as the record of the earlier decision.
+
+**Previously:** Accepted. **Deviates from the architecture review's ADR-004, which
 is marked ACCEPTED.** The deviation was raised explicitly with the owner and
 chosen deliberately.
 

@@ -28,6 +28,7 @@ import type {
   LegacyCutoverStopSalesFacts,
   NewLegacyCutoverApproval,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 const a = legacyCutoverApprovals;
 const r = legacyCutoverApprovalRevocations;
@@ -97,6 +98,7 @@ const num = (value: string | number | null | undefined): number => Number(value 
  * the cutover gate and the final report v2 read. Every statement is tenant-scoped; there is
  * no UPDATE and no DELETE here.
  */
+@ScopeBound()
 export class DrizzleLegacyCutoverRepository implements LegacyCutoverRepository {
   constructor(private readonly db: Database) {}
 

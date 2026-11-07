@@ -27,6 +27,7 @@ import type {
   ReceiptCaptureRecord,
   ReceiptCaptureRepository,
 } from '../application/receipt-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The advisory-lock CLASS for a customer's receipt work.
@@ -44,6 +45,7 @@ export const RECEIPT_CAPTURE_LOCK_CLASS = 0x5243;
  * Every query carries the tenant, the primary-key lookups included, for the reason the
  * product repository states: a lookup without it returns another tenant's row.
  */
+@ScopeBound()
 export class DrizzleReceiptCaptureRepository implements ReceiptCaptureRepository {
   constructor(private readonly db: Database) {}
 
@@ -234,6 +236,7 @@ export class DrizzleReceiptCaptureRepository implements ReceiptCaptureRepository
 }
 
 /** The receipts themselves. Insert and select only: the table refuses the rest (0066). */
+@ScopeBound()
 export class DrizzlePaymentReceiptRepository implements PaymentReceiptRepository {
   constructor(private readonly db: Database) {}
 

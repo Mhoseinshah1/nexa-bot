@@ -431,7 +431,7 @@ export async function runCutoverRehearsal(
           calendar: 'jalali',
           currency: 'IRT',
         });
-        container = createContainer(config, 'migration', { logTo: 'stderr' });
+        container = createContainer(config, 'migration', { logTo: 'stderr', connection: 'owner' });
         await resolveInstallationTenant(container);
         scope = { tenantId: provisioned.tenantId as TenantId, botInstanceId: null };
         const bootstrapped = await container.bootstrapOwner.execute(scope, {

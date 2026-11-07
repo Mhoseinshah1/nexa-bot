@@ -6,12 +6,12 @@ import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { ActorContext, CorrelationId } from '@nexa/contracts';
-import { createContainer, type Container } from '../../apps/api/src/container';
+import type { Container } from '../../apps/api/src/container';
 import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
 import { tenants, recoveryRequests } from '../../apps/api/src/infrastructure/persistence/schema';
 import { FileCutoverJournal } from '../../apps/api/src/modules/platform/recovery/infrastructure/cutover-journal';
 import { isTenantForeignKeyViolation } from '../../apps/api/src/infrastructure/lifecycle/installation-tenant-guard';
-import { createAdmin, testConfig } from './harness';
+import { createAdmin, createTestContainer, testConfig } from './harness';
 
 /**
  * A backup from install A restored on install B: the restored database has A's tenant, and
@@ -72,12 +72,15 @@ describe('a restore that brings a different tenant', () => {
     url.pathname = `/${dbName}`;
     await runMigrations(url.toString());
     recoveryRoot = await mkdtemp(join(tmpdir(), 'nexa-tenantguard-'));
-    container = createContainer(
+    // As nexa_app, under row-level security (ADR-0037); `container.database` is the owner's,
+    // for the fixtures and the read-back, and the guard's own lookups take the system path.
+    container = createTestContainer(
       testConfig({ DATABASE_URL: url.toString(), RECOVERY_WORK_DIR: recoveryRoot }),
       'recovery',
     );
     await container.database.db.insert(tenants).values(tenantRow(OLD));
-    container.setInstallationTenant(OLD as never);
+    // What `resolveInstallationTenant` does at boot: the PRIMARY, with its kind recorded.
+    container.setInstallationTenant(OLD as never, 'PRIMARY');
   });
 
   afterAll(async () => {
@@ -121,8 +124,8 @@ describe('a restore that brings a different tenant', () => {
   });
 
   it('the recovery role records a completed cutover once, under the live tenant, without a loop', async () => {
-    // Back to the stale state: the process still holds a tenant that is gone.
-    container.setInstallationTenant(OLD as never);
+    // Back to the stale state: the process still holds the PRIMARY it resolved at boot, gone.
+    container.setInstallationTenant(OLD as never, 'PRIMARY');
     const reassert = vi.spyOn(container.recoveryRequests, 'reassert');
     const recoveryId = '0192f000-0000-7000-8000-00000000f001';
     await new FileCutoverJournal(recoveryRoot).write({

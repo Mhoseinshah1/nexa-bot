@@ -7,11 +7,13 @@ import {
   type BotInstanceId,
   type CorrelationId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   adminActorFor,
   createAdmin,
+  // The harness's: the application as nexa_app, `container.database` the owner's (ADR-0037).
+  createApiApp,
   migrateOnce,
   resetDatabase,
   tenantA,

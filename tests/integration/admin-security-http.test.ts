@@ -17,13 +17,20 @@ import {
   SESSION_COOKIE_NAME,
   totpEnrolResponseSchema,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   totpForStep,
   totpStepAt,
 } from '../../apps/api/src/modules/platform/identity/application/totp';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * Phase D2 over real HTTP: the challenge cookie, the second step, the account-security

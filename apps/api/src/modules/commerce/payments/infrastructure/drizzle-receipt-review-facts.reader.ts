@@ -24,6 +24,7 @@ import type {
   ReceiptWalletMovement,
   ReceiptWalletMovementReader,
 } from '../application/receipt-review-caption.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The order-side facts File 01 §4 asks a reviewer's caption to carry, read by reference to
@@ -38,6 +39,7 @@ import type {
  * Read-only, no lock: a caption is a snapshot at render time and must never wait on a
  * disposition's row locks.
  */
+@ScopeBound()
 export class DrizzleReceiptReviewFactsReader
   implements ReceiptReviewFactsReader, ReceiptWalletMovementReader
 {

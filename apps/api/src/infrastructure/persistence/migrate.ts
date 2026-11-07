@@ -10,6 +10,7 @@ import {
 import { ensureOnlineIndexes } from './online-indexes.js';
 import { MigrationPreflightError, preflightMigrations } from './preflight.js';
 import { backfillPublicCodes } from './public-code-backfill.js';
+import { ensureRowLevelSecurity } from './row-level-security.js';
 
 /**
  * Applies pending migrations. Forward-only: an applied migration is never
@@ -36,6 +37,11 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
   const handle = createDatabase(databaseUrl, 1);
   try {
     await migrate(handle.db, { migrationsFolder: migrationsFolder() });
+    // Row-level security on every tenant table (ADR-0037), after the migrator for the
+    // same reason as the indexes below: one ACCESS EXCLUSIVE lock per table, each in its
+    // own short transaction under a lock_timeout, never two hundred of them held at once.
+    const secured = await ensureRowLevelSecurity(handle);
+    if (secured.length > 0) console.warn(`Row-level security applied to ${secured.length} tables`);
     // AFTER the migrator, deliberately, and outside its transaction. See
     // `online-indexes.ts`: these are the indexes that must not lock the table
     // they are built on, and drizzle runs every migration inside one

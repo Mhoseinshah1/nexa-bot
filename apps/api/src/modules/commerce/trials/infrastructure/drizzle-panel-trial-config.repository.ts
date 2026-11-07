@@ -8,6 +8,7 @@ import type {
   PanelTrialConfigRepository,
   PanelTrialConfigWrite,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof panelTrialConfigs.$inferSelect;
 
@@ -30,6 +31,7 @@ function toRecord(row: Row): PanelTrialConfigRecord {
  * tenant's panel unstorable. The write is conditional on the revision the operator was
  * shown — the panel policy repository's shape (WP-A8), for the same reason.
  */
+@ScopeBound()
 export class DrizzlePanelTrialConfigRepository implements PanelTrialConfigRepository {
   constructor(private readonly db: Database) {}
 

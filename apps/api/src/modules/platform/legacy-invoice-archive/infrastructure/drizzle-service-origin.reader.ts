@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { TenantContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * What the reader answers, restated structurally: this module imports nothing of the commerce
@@ -25,6 +26,7 @@ export interface ArchivedOriginalPurchase {
  * is free by `orders_legacy_adoption_shape_check`). The archive's price is metadata — never a
  * price anything charges, renews at or refunds.
  */
+@ScopeBound()
 export class DrizzleServiceOriginReader {
   constructor(private readonly db: Database) {}
 

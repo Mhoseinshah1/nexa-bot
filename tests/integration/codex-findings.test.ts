@@ -8,7 +8,7 @@ import {
   type AdminId,
   type CorrelationId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { ScryptPasswordHasher } from '../../apps/api/src/infrastructure/crypto/password-hasher';
 import {
   adminLoginThrottle,
@@ -18,6 +18,7 @@ import {
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

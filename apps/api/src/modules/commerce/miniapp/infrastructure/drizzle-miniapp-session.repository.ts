@@ -7,8 +7,10 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { miniAppSessions } from '../../../../infrastructure/persistence/schema.js';
 import type { MiniAppSessionRecord, MiniAppSessionRepository } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Mini-app sessions in PostgreSQL. The launch key's uniqueness is the replay rule. */
+@ScopeBound()
 export class DrizzleMiniAppSessionRepository implements MiniAppSessionRepository {
   constructor(private readonly db: Database) {}
 

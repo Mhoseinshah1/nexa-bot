@@ -21,6 +21,7 @@ import type {
   CustomerCaptureRecord,
   CustomerCaptureRepository,
 } from '../application/customer-capture-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The SAME advisory lock as the username and discount-code windows, deliberately.
@@ -34,6 +35,7 @@ import type {
  */
 export const CUSTOMER_CAPTURE_LOCK_CLASS = USERNAME_CAPTURE_LOCK_CLASS;
 
+@ScopeBound()
 export class DrizzleCustomerCaptureRepository implements CustomerCaptureRepository {
   constructor(private readonly db: Database) {}
 

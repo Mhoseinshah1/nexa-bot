@@ -31,6 +31,7 @@ import type {
   RefundRecord,
   RefundRepository,
 } from '../application/refund-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The columns the record is built from. Selected explicitly, in one place. */
 const COLUMNS = {
@@ -104,6 +105,7 @@ function toRecord(row: Row): RefundRecord {
  * returns another tenant's row and leaves the caller holding financial evidence it
  * should never have seen.
  */
+@ScopeBound()
 export class DrizzleRefundRepository implements RefundRepository {
   constructor(private readonly db: Database) {}
 

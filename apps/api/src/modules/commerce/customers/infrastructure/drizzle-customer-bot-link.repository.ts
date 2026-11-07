@@ -6,6 +6,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerBotLinkRepository } from '../application/customer-bot-link.service.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Customers the legacy importer created and nobody has linked to a bot yet.
@@ -30,6 +31,7 @@ function importedCreated(c: SQL): SQL {
                   AND m.reason_code IS DISTINCT FROM 'EXISTING_CUSTOMER'))`;
 }
 
+@ScopeBound()
 export class DrizzleCustomerBotLinkRepository implements CustomerBotLinkRepository {
   constructor(private readonly db: Database) {}
 

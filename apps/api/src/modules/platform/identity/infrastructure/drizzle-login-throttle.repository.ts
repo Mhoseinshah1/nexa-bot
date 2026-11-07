@@ -11,6 +11,7 @@ import type {
   ThrottleState,
   ThrottleSubjectKind,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Durable login throttling.
@@ -29,6 +30,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
 
+@ScopeBound()
 export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
   constructor(private readonly db: Database) {}
 

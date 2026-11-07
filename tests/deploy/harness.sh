@@ -1100,6 +1100,14 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
         # v0.9.7: the one SELECT botctl makes for the backup CPU setting. Empty is
         # "nothing stored"; `backup_cpu_query_fails` is a database that did not answer.
         case "$*" in
+          # ADR-0037: the application role's SQL arrives on stdin (it carries the
+          # password, which must never be an argument). Kept for the assertions;
+          # `app_role_fails` is a database that refused it.
+          *ON_ERROR_STOP=1*)
+            cat >"${FAKE_DIR}/app_role_sql"
+            [ "$(read_state app_role_fails 0)" != 1 ] || exit 1
+            exit 0
+            ;;
           *backup.cpu_limit_percent*)
             [ "$(read_state backup_cpu_query_fails 0)" != 1 ] || exit 1
             printf '%s\n' "$(read_state backup_cpu_percent '')"

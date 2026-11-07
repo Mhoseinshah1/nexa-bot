@@ -33,10 +33,12 @@ import type {
   IncidentRepository,
   SubjectPeer,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof incidents.$inferSelect;
 
 /** Incidents and everything recorded about them (Phase E3). Every query names the tenant. */
+@ScopeBound()
 export class DrizzleIncidentRepository implements IncidentRepository {
   constructor(private readonly db: Database) {}
 

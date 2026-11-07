@@ -20,6 +20,10 @@ import type {
   StoredTotpFactor,
   StoredTotpState,
 } from '../application/ports.js';
+import {
+  ScopeBound,
+  withSystemScope,
+} from '../../../../infrastructure/persistence/database-scope.js';
 
 function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
@@ -45,6 +49,7 @@ function toFactor(row: FactorRow): StoredTotpFactor {
  * The second factor's rows (Phase D2). Every method is tenant-scoped through
  * `requireTenantId`; the ciphertext leaves this file only on the way to `SecretCipher`.
  */
+@ScopeBound()
 export class DrizzleSecondFactorRepository implements SecondFactorRepository {
   constructor(private readonly db: Database) {}
 
@@ -298,6 +303,7 @@ function toChallenge(row: ChallengeRow): StoredLoginChallenge {
   };
 }
 
+@ScopeBound()
 export class DrizzleLoginChallengeRepository implements LoginChallengeRepository {
   constructor(private readonly db: Database) {}
 
@@ -321,11 +327,14 @@ export class DrizzleLoginChallengeRepository implements LoginChallengeRepository
   }
 
   async findByTokenHash(tokenHash: string): Promise<StoredLoginChallenge | null> {
-    const [row] = await this.db
-      .select()
-      .from(adminLoginChallenges)
-      .where(eq(adminLoginChallenges.tokenHash, tokenHash))
-      .limit(1);
+    // Before any tenant is known, like the session lookup: the system path (ADR-0037).
+    const [row] = await withSystemScope('admin login challenge lookup by token hash', () =>
+      this.db
+        .select()
+        .from(adminLoginChallenges)
+        .where(eq(adminLoginChallenges.tokenHash, tokenHash))
+        .limit(1),
+    );
     return row ? toChallenge(row) : null;
   }
 
@@ -395,6 +404,7 @@ export class DrizzleLoginChallengeRepository implements LoginChallengeRepository
  * because the person reading is the account holder looking for a sign-in they do not
  * recognise — and those two columns are how they would.
  */
+@ScopeBound()
 export class DrizzleSecurityEventReader implements SecurityEventReader {
   constructor(private readonly db: Database) {}
 

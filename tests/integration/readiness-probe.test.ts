@@ -131,9 +131,9 @@ describe('a readiness timeout stops the query it was waiting on', () => {
    */
   const slowContainer = (): Container => {
     const database = {
-      ...ctx.container.database,
+      ...ctx.applicationDatabase,
       withClient: (fn: Parameters<Container['database']['withClient']>[0], options?: unknown) =>
-        ctx.container.database.withClient(
+        ctx.applicationDatabase.withClient(
           async (client: PoolClient) => {
             await client.query('SELECT pg_sleep(20)');
             return fn(client);
@@ -160,7 +160,7 @@ describe('a readiness timeout stops the query it was waiting on', () => {
 
   const sleepingStatements = async () =>
     (
-      await ctx.container.database.withClient((client) =>
+      await ctx.applicationDatabase.withClient((client) =>
         client.query<{ n: string }>(
           `SELECT count(*)::text AS n FROM pg_stat_activity
             WHERE state = 'active' AND query LIKE '%pg_sleep(20)%' AND pid <> pg_backend_pid()`,
@@ -186,7 +186,7 @@ describe('a readiness timeout stops the query it was waiting on', () => {
     // borrows from the same pool of two; it hangs if both are still held.
     await expect(
       Promise.race([
-        ctx.container.database.withClient((client) => client.query('SELECT 1')),
+        ctx.applicationDatabase.withClient((client) => client.query('SELECT 1')),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('the pool did not get its connections back')), 3_000),
         ),
@@ -200,11 +200,11 @@ describe('a readiness timeout stops the query it was waiting on', () => {
       expect(result.degraded).toBe(true);
     }
     expect(Number(await sleepingStatements())).toBe(0);
-    expect(ctx.container.database.pool.totalCount).toBeLessThanOrEqual(2);
-    expect(ctx.container.database.pool.waitingCount).toBe(0);
+    expect(ctx.applicationDatabase.pool.totalCount).toBeLessThanOrEqual(2);
+    expect(ctx.applicationDatabase.pool.waitingCount).toBe(0);
     // And the pool still serves ordinary work promptly.
     const started = Date.now();
-    await ctx.container.database.withClient((client) => client.query('SELECT 1'));
+    await ctx.applicationDatabase.withClient((client) => client.query('SELECT 1'));
     expect(Date.now() - started).toBeLessThan(1_000);
   }, 40_000);
 
@@ -212,7 +212,7 @@ describe('a readiness timeout stops the query it was waiting on', () => {
     // `RESET` after the probe, or every later query on that connection runs
     // under a three-second cap nothing would explain.
     await new ReadinessProbe(slowContainer()).run();
-    const setting = await ctx.container.database.withClient(async (client) => {
+    const setting = await ctx.applicationDatabase.withClient(async (client) => {
       const result = await client.query<{ v: string }>(
         "SELECT current_setting('statement_timeout') AS v",
       );

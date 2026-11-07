@@ -15,6 +15,7 @@ import type {
   GatewayCredentialStore,
   PublicOriginReader,
 } from '../application/gateway-invoice-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * A payment route's API key, encrypted at rest (WP11A).
@@ -26,6 +27,7 @@ import type {
  * rules on the same row, each under its own purpose. `setAt` is the only read a response
  * builder can reach, and it selects a timestamp — never the ciphertext.
  */
+@ScopeBound()
 export class DrizzleGatewayCredentialStore implements GatewayCredentialStore {
   constructor(
     private readonly db: Database,
@@ -371,6 +373,7 @@ export class DrizzleGatewayCredentialStore implements GatewayCredentialStore {
  * `WHERE` on the conflict update is the whole decision, so two replicas asking at once
  * are serialised by the row and at most `limit` calls are granted per window.
  */
+@ScopeBound()
 export class DrizzleGatewayCallBudget implements GatewayCallBudget {
   constructor(private readonly db: Database) {}
 
@@ -404,6 +407,7 @@ export class DrizzleGatewayCallBudget implements GatewayCallBudget {
  * installation has already proven it serves — for the gateway callback URL. No new
  * configuration, and no URL an operator types (brief §14).
  */
+@ScopeBound()
 export class DrizzlePublicOriginReader implements PublicOriginReader {
   constructor(private readonly db: Database) {}
 
