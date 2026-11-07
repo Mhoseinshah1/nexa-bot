@@ -62,11 +62,14 @@ move, D7 per-bot backups through the shared heavy-job queue. Read `docs/round-re
 
 ## Local state
 
-No agent worktrees left; nexa_test was recreated this session (stale migration 0296), nexa_load holds
-the PR-6 load fixture (safe to drop).
+No agent worktrees left; nexa_test was recreated this session (stale migration 0296), nexa_load is dropped.
 Known flaky unit test, not phase work: `tests/unit/rickpanel-load-protection.test.ts` "two reads of the same panel at once
 never overlap". It compares real 15 ms timer pacing with only 1 ms of slack, and failed once on CI for #417.
-Candidate for a small fix: use a fake clock.
-Remote branches to delete after the phase: test/p6a-load-harness, feat/p6a-capacity-guards,
-feat/p6a-d0-hardening-ops, feat/p6a-d0-tenant-hardening, feat/p6a-d1-creator-panel(-ui),
-feat/p6a-d2-activation, and test/p6a-d3-isolation-proof once merged.
+Candidate for a small fix: use a fake clock. Also seen once on #418 (passed on the next head and 6/6 locally,
+no web code in that PR): `tests/web/custom-menu-buttons.test.tsx` "resumes at the file when only the file
+was refused…", a `waitFor` on the media PUT; look at it if it recurs.
+**Remote branches NOT deleted (this session's proxy refuses branch deletion, both `git push --delete` and the
+REST API).** All nine are fully merged into main and safe to delete in GitHub's branch list:
+`test/p6a-load-harness`, `feat/p6a-capacity-guards`, `feat/p6a-d0-hardening-ops`, `feat/p6a-d0-tenant-hardening`,
+`feat/p6a-d1-creator-panel`, `feat/p6a-d1-creator-panel-ui`, `feat/p6a-d2-activation`,
+`test/p6a-d3-isolation-proof`, `fix/p6a-hardening-followups`. Local copies and agent branches are deleted.
