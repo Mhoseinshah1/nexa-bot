@@ -105,6 +105,8 @@ const PATHS = {
   logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
   sidebar: 'M3 3h18v18H3zM15 3v18',
   archive: 'M21 8v13H3V8M1 3h22v5H1zM10 12h4',
+  // PR-2: the grip of a drag-and-drop list (two columns of three dots).
+  grip: 'M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01',
 } as const;
 
 export type IconName = keyof typeof PATHS;

@@ -54,6 +54,7 @@ import { SupportPage } from './pages/support';
 import { TermsPage } from './pages/terms';
 import { ClientAppsPage } from './pages/client-apps';
 import { TicketDetailPage, TicketsPage } from './pages/tickets';
+import { ResellerRequestDetailPage, ResellerRequestsPage } from './pages/reseller-requests';
 import { BusinessChatDetailPage, BusinessChatsPage } from './pages/business-chats';
 import { SupportAiPage } from './pages/support-ai';
 import { SupportAnalyticsPage } from './pages/support-analytics';
@@ -235,6 +236,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/resellers',
   '/reseller-tiers',
   '/reseller-plans',
+  '/reseller-requests',
+  '/reseller-requests/:id',
   '/reports',
   '/panels',
   '/panels/new',
@@ -629,6 +632,36 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.tickets_title') }],
       title: t('web.tickets_title'),
+    };
+  }
+
+  // PR-2: reseller requests — the list with its «سؤال‌ها» tab, and one request.
+  if (route.path === '/reseller-requests') {
+    return {
+      element: (
+        <ResellerRequestsPage
+          route={route}
+          denied={!may('resellers.view')}
+          mayEdit={may('resellers.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.rr_title') }],
+      title: t('web.rr_title'),
+    };
+  }
+  const resellerRequest = match('/reseller-requests/:id', route.path);
+  if (resellerRequest !== null) {
+    return {
+      element: (
+        <ResellerRequestDetailPage
+          key={resellerRequest['id'] ?? ''}
+          id={resellerRequest['id'] ?? ''}
+          denied={!may('resellers.view')}
+          mayEdit={may('resellers.edit')}
+        />
+      ),
+      crumbs: [nav('reseller-requests'), { label: t('web.rr_detail') }],
+      title: t('web.rr_detail'),
     };
   }
 

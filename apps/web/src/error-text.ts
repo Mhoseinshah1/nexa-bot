@@ -34,6 +34,7 @@ import type {
   SUPPORT_KNOWLEDGE_BUILD_ERROR_CODES,
   SUPPORT_KNOWLEDGE_ERROR_CODES,
   TERMS_ERROR_CODES,
+  RESELLER_REQUEST_ERROR_CODES,
   TICKET_ERROR_CODES,
   TONPAYS_ERROR_CODES,
   TONPAYS_TELEGRAM_ERROR_CODES,
@@ -92,6 +93,7 @@ export type ContractErrorCode =
   | CodesOf<typeof SUPPORT_KNOWLEDGE_BUILD_ERROR_CODES>
   | CodesOf<typeof SUPPORT_KNOWLEDGE_ERROR_CODES>
   | CodesOf<typeof TERMS_ERROR_CODES>
+  | CodesOf<typeof RESELLER_REQUEST_ERROR_CODES>
   | CodesOf<typeof TICKET_ERROR_CODES>
   | CodesOf<typeof TONPAYS_ERROR_CODES>
   | CodesOf<typeof TONPAYS_TELEGRAM_ERROR_CODES>
@@ -602,6 +604,19 @@ export const ERROR_TEXT = {
   'ticket.attachment_refused': 'web.err_ticket_attachment_refused',
   'ticket.attachment_storage_full': 'web.err_ticket_attachment_storage_full',
   'ticket.attachment_unavailable': 'web.err_ticket_attachment_unavailable',
+  'reseller_request.not_found': 'web.err_rr_not_found',
+  'reseller_request.unavailable': 'web.err_rr_unavailable',
+  'reseller_request.already_reseller': 'web.err_rr_already_reseller',
+  'reseller_request.already_open': 'web.err_rr_already_open',
+  'reseller_request.cooldown': 'web.err_rr_cooldown',
+  'reseller_request.closed': 'web.err_rr_closed',
+  'reseller_request.message_invalid': 'web.err_rr_message_invalid',
+  'reseller_request.message_limit': 'web.err_rr_message_limit',
+  'reseller_request.questions_invalid': 'web.err_rr_questions_invalid',
+  'reseller_request.answer_invalid': 'web.err_rr_answer_invalid',
+  'reseller_request.tier_invalid': 'web.err_rr_tier_invalid',
+  'reseller_request.attachment_unavailable': 'web.err_rr_attachment_unavailable',
+  'reseller_request.approve_not_implemented': 'web.err_rr_approve_not_implemented',
   'ticket.category_invalid': 'web.err_ticket_category_invalid',
   'ticket.category_limit': 'web.err_ticket_category_limit',
   'ticket.category_not_found': 'web.err_ticket_category_not_found',
