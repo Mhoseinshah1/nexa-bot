@@ -4617,6 +4617,14 @@ export const WEB_FA = {
   'web.flag_service_usage_reminders': 'یادآور مصرف حجم سرویس',
   // WP-A9: the names of the reminder keys and switches this package added.
   'web.setting_reminders_expiry_early_days': 'یادآور هفتگی پیش از انقضا',
+  'web.setting_reseller_request_cooldown_days': 'فاصلهٔ درخواست مجدد نمایندگی پس از رد',
+  'web.setting_reseller_request_cooldown_days_desc':
+    'مشتری‌ای که درخواست نمایندگی‌اش رد شده، تا این تعداد روز نمی‌تواند درخواست تازه بدهد. صفر یعنی بدون انتظار.',
+  'web.feature_reseller_requests_title': 'درخواست نمایندگی از ربات',
+  'web.feature_reseller_requests_summary':
+    'دکمهٔ «درخواست نمایندگی» در منوی ربات نمایش داده می‌شود. مشتری به سؤال‌هایی که شما تعریف کرده‌اید پاسخ می‌دهد و درخواست او در گروه گزارش و در بخش «درخواست‌های نمایندگی» پنل دیده می‌شود. می‌توانید پیش از تصمیم با او گفتگو کنید، سپس با انتخاب سطح نماینده‌اش کنید یا رد کنید.',
+  'web.feature_reseller_requests_off_effect':
+    'دکمه از منوی ربات برداشته می‌شود و کسی نمی‌تواند درخواست تازه شروع کند. درخواست‌های ثبت‌شده و گفتگوی آن‌ها سر جایش می‌ماند و هنوز قابل تصمیم‌گیری است.',
   'web.setting_reminders_reseller_minimum_days':
     'یادآوری حداقل فروش نمایندگان (روز پیش از پایان ماه)',
   'web.setting_reminders_reseller_minimum_days_desc':
@@ -7182,6 +7190,8 @@ export const WEB_FA = {
   'web.opslog_type_error_operation': 'خطای تمدید، حجم، زمان اضافه، اکانت تست یا هدیهٔ حجم',
   'web.opslog_type_panel_state': 'قطع و وصل شدن پنل',
   'web.opslog_type_ticket_new': 'تیکت جدید یا پیام تازهٔ کاربر',
+  'web.nav_reseller_requests': 'درخواست‌های نمایندگی',
+  'web.opslog_type_reseller_request': 'درخواست نمایندگی (ثبت، پاسخ متقاضی و تصمیم)',
   'web.opslog_type_report_summary': 'گزارش شبانه — خلاصه',
   'web.opslog_type_report_financial': 'گزارش شبانه — مالی',
   'web.opslog_type_report_panels': 'گزارش شبانه — پنل‌ها و نماینده‌ها',
@@ -11464,6 +11474,8 @@ export const WEB_FA = {
   'web.pay_notice_service_auto_renew_funds_short': 'کمبود موجودی برای تمدید خودکار',
   'web.pay_notice_service_auto_renew_price_changed': 'تغییر مبلغ تمدید خودکار',
   'web.pay_notice_reseller_expired': 'پایان مهلت نمایندگی',
+  'web.pay_notice_reseller_request_message': 'پیام مدیریت دربارهٔ درخواست نمایندگی',
+  'web.pay_notice_reseller_request_decision': 'نتیجهٔ درخواست نمایندگی',
   'web.pay_provider_pending': 'در انتظار',
   'web.pay_provider_processing': 'در حال پردازش',
   'web.pay_provider_completed': 'تکمیل‌شده',
@@ -11876,6 +11888,9 @@ export const WEB_FA = {
   'web.outbox_event_ticket_message_posted': 'پیام تیکت',
   'web.outbox_event_ticket_status_changed': 'تغییر وضعیت تیکت',
   'web.outbox_event_ticket_assigned': 'واگذاری تیکت',
+  'web.outbox_event_reseller_request_submitted': 'ثبت درخواست نمایندگی',
+  'web.outbox_event_reseller_request_message_posted': 'پیام در گفتگوی درخواست نمایندگی',
+  'web.outbox_event_reseller_request_decided': 'تصمیم دربارهٔ درخواست نمایندگی',
   'web.outbox_event_broadcast_state_changed': 'تغییر وضعیت پیام همگانی',
   'web.outbox_event_bulk_operation_state_changed': 'تغییر وضعیت عملیات گروهی',
   'web.outbox_event_customer_direct_message_queued': 'پیام مستقیم به مشتری',

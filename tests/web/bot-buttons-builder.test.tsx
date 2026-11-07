@@ -181,6 +181,7 @@ describe('the button builder — editing the draft', () => {
       ['trial'],
       ['apps'],
       ['tickets'],
+      ['reseller_request'],
       ['wallet'],
     ]);
     expect(clicked).toEqual(dragged);
@@ -454,7 +455,14 @@ describe('the button builder — saving', () => {
     // The read answers the PRE-save draft (no version) even after the save: a stale answer.
     const withoutHelp: ExplicitMainMenu = {
       ...DEFAULT_EXPLICIT_MAIN_MENU,
-      rows: [['catalog', 'services'], ['wallet'], ['trial', 'referral'], ['apps'], ['tickets']],
+      rows: [
+        ['catalog', 'services'],
+        ['wallet'],
+        ['trial', 'referral'],
+        ['apps'],
+        ['tickets'],
+        ['reseller_request'],
+      ],
     };
     const api = builderApi(builderView(), [saved({ version: 1, layout: withoutHelp })]);
     renderPage(page());
@@ -862,7 +870,14 @@ describe('the button builder — banners and permissions', () => {
 describe('the button builder — review of PR #134', () => {
   const withoutHelp: ExplicitMainMenu = {
     ...DEFAULT_EXPLICIT_MAIN_MENU,
-    rows: [['catalog', 'services'], ['wallet'], ['trial', 'referral'], ['apps'], ['tickets']],
+    rows: [
+      ['catalog', 'services'],
+      ['wallet'],
+      ['trial', 'referral'],
+      ['apps'],
+      ['tickets'],
+      ['reseller_request'],
+    ],
   };
   const explicitView = (overrides: Parameters<typeof builderView>[0] = {}) =>
     builderView({

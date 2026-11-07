@@ -713,6 +713,22 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: [],
   },
+  {
+    key: 'reseller_requests',
+    description:
+      'Owner batch 1, PR-2: a customer may ask to become a reseller from the main-menu button ' +
+      '«👨‍💻 درخواست نمایندگی»: they answer the questions the owner defined, the request reaches ' +
+      'the operations log group and the Web Admin, and an operator may talk with them before ' +
+      'approving (which makes them a reseller on a tier the operator picks, through the same ' +
+      'service as the customer page) or rejecting. Off by default. While it is off the button ' +
+      'is not drawn and nobody can start a request; a request already sent stays decidable ' +
+      'and its conversation continues. A new request after a rejection waits ' +
+      'reseller_request.cooldown_days (7 by default, 0 = no wait).',
+    defaultEnabled: false,
+    // LOCAL: one button and its flow; no price, wallet or existing reseller changes with it.
+    blastRadius: 'LOCAL',
+    configuredBy: ['reseller_request.cooldown_days'],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

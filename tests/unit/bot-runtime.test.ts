@@ -266,6 +266,8 @@ describe('a Telegram turn, decided before any I/O', () => {
       ['apps'],
       // WP-A7: the ticket desk, on a row of its own.
       ['tickets'],
+      // PR-2: «درخواست نمایندگی», behind the reseller_requests flag.
+      ['reseller_request'],
     ]);
     expect(MAIN_MENU_BUTTONS.map((button) => button.label)).toEqual([
       'bot.menu.catalog',
@@ -276,6 +278,7 @@ describe('a Telegram turn, decided before any I/O', () => {
       'bot.menu.referral',
       'bot.menu.apps',
       'bot.menu.tickets',
+      'bot.menu.reseller_request',
     ]);
     // The referral button names its flag; the trial button (F5) waits for a panel offering
     // a trial and names no flag; every other button is always drawn.
@@ -284,7 +287,10 @@ describe('a Telegram turn, decided before any I/O', () => {
         button.id,
         button.feature,
       ]),
-    ).toEqual([['referral', 'referrals']]);
+    ).toEqual([
+      ['referral', 'referrals'],
+      ['reseller_request', 'reseller_requests'],
+    ]);
     expect(
       MAIN_MENU_BUTTONS.filter((button) => button.needsTrialOffer).map((button) => button.id),
     ).toEqual(['trial']);

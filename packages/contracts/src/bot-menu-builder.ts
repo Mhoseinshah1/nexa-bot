@@ -345,7 +345,13 @@ export function defaultCustomMenuButtonConfig(ref: CustomMenuRef): CustomMenuBut
 
 /** The configuration a button has before anybody chose one. */
 export function defaultMainMenuButtonConfig(id: MainMenuButtonId): MainMenuButtonConfig {
-  return { button: id, enabled: true, style: 'default', iconSlot: null, appearanceSlot: null };
+  return {
+    button: id,
+    enabled: true,
+    style: mainMenuButton(id).defaultStyle ?? 'default',
+    iconSlot: null,
+    appearanceSlot: null,
+  };
 }
 
 /**

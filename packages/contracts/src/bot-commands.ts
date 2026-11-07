@@ -90,6 +90,12 @@ export type AdminOnlyCommand = (typeof ADMIN_ONLY_COMMANDS)[number];
  */
 export const TRIAL_MENU_COMMAND = 'trial';
 export const REFERRAL_MENU_COMMAND = 'referral';
+/**
+ * PR-2 (owner batch 1): «👨‍💻 درخواست نمایندگی». Like the two above it is button-only and not
+ * registered with `setMyCommands` — a tenant that does not offer reseller requests (the
+ * `reseller_requests` flag, off by default) must not advertise one in the client's menu.
+ */
+export const RESELLER_REQUEST_MENU_COMMAND = 'reseller_request';
 
 /**
  * Round P: what a main-menu item may DO — the closed set of real actions. Exactly the
@@ -108,12 +114,16 @@ export const MAIN_MENU_TARGETS = [
   REFERRAL_MENU_COMMAND,
   'apps',
   'tickets',
+  RESELLER_REQUEST_MENU_COMMAND,
 ] as const satisfies readonly MainMenuCommand[];
 export type MainMenuTarget = (typeof MAIN_MENU_TARGETS)[number];
 
 /** What a main-menu button may stand for: a registered command, or one of the two above. */
 export type MainMenuCommand =
-  BotCommandName | typeof TRIAL_MENU_COMMAND | typeof REFERRAL_MENU_COMMAND;
+  | BotCommandName
+  | typeof TRIAL_MENU_COMMAND
+  | typeof REFERRAL_MENU_COMMAND
+  | typeof RESELLER_REQUEST_MENU_COMMAND;
 
 /**
  * The stable identity of each main-menu button (R1, «دکمه‌های ربات»).
@@ -131,6 +141,7 @@ export const MAIN_MENU_BUTTON_IDS = [
   'referral',
   'apps',
   'tickets',
+  'reseller_request',
 ] as const;
 export type MainMenuButtonId = (typeof MAIN_MENU_BUTTON_IDS)[number];
 
@@ -153,7 +164,7 @@ export interface BotMenuButton {
    * A keyboard is a promise, so a button for a feature a tenant has switched off is not
    * drawn at all — whatever the bot-buttons page says.
    */
-  readonly feature: 'referrals' | null;
+  readonly feature: 'referrals' | 'reseller_requests' | null;
   /**
    * F5: drawn only while at least one panel offers a trial NOW — `trialOffersFor`, the one
    * answer the claim, the overview and this keyboard share. The trial has no flag since
@@ -168,6 +179,11 @@ export interface BotMenuButton {
    * package's catalogue (`MENU_APPEARANCE_SLOTS`), never an emoji or a fragment of markup.
    */
   readonly appearanceSlot: MenuAppearanceSlot;
+  /**
+   * The style the button has until the owner chooses one (`default` = no style). Absent
+   * means `default`. PR-2: «درخواست نمایندگی» is `danger` out of the box.
+   */
+  readonly defaultStyle?: 'default' | 'primary' | 'success' | 'danger';
 }
 
 /**
@@ -296,6 +312,17 @@ export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
     feature: null,
     needsTrialOffer: false,
     appearanceSlot: 'support',
+  },
+  // PR-2: after the support entries, before the administrator's own row (appended per turn).
+  {
+    id: 'reseller_request',
+    label: 'bot.menu.reseller_request',
+    command: RESELLER_REQUEST_MENU_COMMAND,
+    wide: false,
+    feature: 'reseller_requests',
+    needsTrialOffer: false,
+    appearanceSlot: 'support',
+    defaultStyle: 'danger',
   },
 ];
 

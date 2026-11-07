@@ -1776,6 +1776,20 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
+    key: 'reseller_request.cooldown_days',
+    description:
+      'How many days a customer whose reseller request was REJECTED must wait before sending a ' +
+      'new one. Seven by default; zero means no wait. Counted from the moment of the ' +
+      'rejection. Inert while the reseller_requests flag is off.',
+    schema: z.number().int().min(0).max(365),
+    defaultValue: 7,
+    configures: 'reseller_requests',
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
     key: 'reminders.payment_pending_minutes',
     description:
       'How many minutes before its deadline a customer is reminded, once, about a ' +

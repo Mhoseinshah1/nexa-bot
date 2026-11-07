@@ -651,6 +651,13 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'reminders',
     control: { kind: 'integer', unit: 'web.unit_minutes' },
   },
+  // PR-2: the wait after a rejected reseller request.
+  'reseller_request.cooldown_days': {
+    title: 'web.setting_reseller_request_cooldown_days',
+    description: 'web.setting_reseller_request_cooldown_days_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
   // Round N, package D.
   'reminders.reseller_minimum_days': {
     title: 'web.setting_reminders_reseller_minimum_days',

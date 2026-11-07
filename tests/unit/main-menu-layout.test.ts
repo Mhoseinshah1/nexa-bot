@@ -98,6 +98,8 @@ describe('the main-menu arrangement (bot.main_menu)', () => {
       ['trial', 'referral'],
       ['apps'],
       ['tickets'],
+      // PR-2: «درخواست نمایندگی», behind its flag.
+      ['reseller_request'],
     ]);
     // An odd button before a wide one keeps its row to itself rather than pairing across.
     const [catalog, , , , , , apps, tickets] = MAIN_MENU_BUTTONS;
@@ -120,6 +122,7 @@ describe('the main-menu arrangement (bot.main_menu)', () => {
       'referral',
       'apps',
       'tickets',
+      'reseller_request',
     ]);
     expect(resolved.find((entry) => entry.button === 'trial')?.enabled).toBe(false);
     expect(resolved.filter((entry) => entry.enabled)).toHaveLength(MAIN_MENU_BUTTON_IDS.length - 1);
@@ -145,6 +148,7 @@ describe('the main-menu arrangement (bot.main_menu)', () => {
     expect(onlyGated.filter((entry) => entry.enabled).map((entry) => entry.button)).toEqual([
       'trial',
       'referral',
+      'reseller_request',
     ]);
     expect(mainMenuLayoutSchema.safeParse(onlyGated).success).toBe(false);
     // F5: the trial button is gated by a panel offer, not by a flag — so a keyboard with
@@ -244,6 +248,7 @@ describe('the main-menu item model (round P: target and appearance slot)', () =>
       'referral',
       'apps',
       'tickets',
+      'reseller_request',
     ]);
   });
 });
@@ -330,6 +335,8 @@ describe('MainMenuLayout — the keyboard and the route table from one object', 
       ['help', null, null, true],
       ['apps', null, null, true],
       ['tickets', null, null, true],
+      // PR-2: its flag is off in this fixture, so it is not drawn.
+      ['reseller_request', 'FEATURE', false, false],
     ]);
     expect(reads.count).toBe(0);
     // `buttonsFor` is exactly the shown subset of the same answer.
@@ -480,6 +487,7 @@ describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
       ['services', false],
       ['apps', false],
       ['tickets', false],
+      ['reseller_request', false],
     ]);
   });
 
@@ -512,7 +520,7 @@ describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
       const keyboard = await layoutWith({
         source: published(layout),
         trialOffered: true,
-        flags: { referrals: true },
+        flags: { referrals: true, reseller_requests: true },
       }).keyboardFor(scope);
       const byId = new Map(buttons.map((one) => [one.button, one]));
       const expected = rows
