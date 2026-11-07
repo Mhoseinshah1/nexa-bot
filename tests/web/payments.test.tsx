@@ -1941,6 +1941,56 @@ describe('a TonPays Telegram payment on the detail', () => {
     expect(screen.queryByText(t('web.payment_reinquire'))).not.toBeInTheDocument();
   });
 
+  // NEXA-OWNER-BATCH-1 PR-5: the two decisions on a late completion.
+  const LATE = {
+    situation: {
+      situation: 'LATE_COMPLETION',
+      money: 'AT_PROVIDER',
+      customer: 'WAIT_DO_NOT_PAY_AGAIN',
+      actions: ['LATE_DELIVER', 'LATE_TO_WALLET', 'VERIFY_AT_PROVIDER'],
+      needsAction: false,
+    },
+  };
+
+  it('a late completion with payments.reconcile: «تحویل سرویس» asks first, then sends DELIVER once', async () => {
+    const api = render({ state: 'EXPIRED', ...LATE }, true, [
+      {
+        url: `/payments/${ROW_ID}/late-decision`,
+        body: {
+          payment: {
+            ...payment({ state: 'EXPIRED', method: 'GATEWAY' }),
+            evidenceNote: null,
+            resolutionNote: null,
+            destination: null,
+          },
+        },
+      },
+    ]);
+    expect(await screen.findByText(t('web.payment_late_decision_title'))).toBeInTheDocument();
+    fireEvent.click(screen.getByText(t('web.payment_late_deliver')));
+    expect(screen.getByText(t('web.payment_late_deliver_explain'))).toBeInTheDocument();
+    expect(api.calls.some((call) => call.url.endsWith(PAYMENT_ROUTES.lateDecision(ROW_ID)))).toBe(
+      false,
+    );
+    fireEvent.click(inDialog(t('web.payment_late_deliver')));
+    await waitFor(() =>
+      expect(
+        api.calls.filter((call) => call.url.endsWith(PAYMENT_ROUTES.lateDecision(ROW_ID))),
+      ).toHaveLength(1),
+    );
+    const sent = api.calls.find((call) => call.url.endsWith(PAYMENT_ROUTES.lateDecision(ROW_ID)));
+    expect(sent?.method).toBe('POST');
+    expect(sent?.body).toMatchObject({ choice: 'DELIVER', confirm: true });
+    expect(typeof (sent?.body as { idempotencyKey?: unknown }).idempotencyKey).toBe('string');
+  });
+
+  it('a late completion without payments.reconcile: names the permission and draws no decision', async () => {
+    render({ state: 'EXPIRED', ...LATE }, false);
+    expect(await screen.findByText(t('web.payment_late_decision_denied'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.payment_late_deliver'))).not.toBeInTheDocument();
+    expect(screen.queryByText(t('web.payment_late_to_wallet'))).not.toBeInTheDocument();
+  });
+
   it('the list marks a payment in the provider review', async () => {
     stubApi(list([payment({ method: 'GATEWAY', ...REVIEW })]));
     renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);

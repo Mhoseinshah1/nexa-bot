@@ -33,6 +33,7 @@ import type {
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
 import { failureStatusOf, paymentFailureOutcome } from '../domain/payment-failure-outcome.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
+import { lateDecisionOpen } from './late-delivery.js';
 import type { ServiceRefundRequestRepository } from './service-refund-request-ports.js';
 
 /** The notification lane, as the financial log needs it. `NotificationService` is it. */
@@ -403,17 +404,29 @@ export class FinancialLogConsumer implements EventConsumer {
           at: new Date(event.occurredAt),
         };
         await this.withOrderCode(scope, payment, values, tx);
-        // The payment is not credited: the one thing an operator can do is credit it by hand.
+        /*
+         * NEXA-OWNER-BATCH-1 PR-5: a late completion on a route with a late-payment policy has
+         * two decisions — «تحویل سرویس» and «به کیف پول» — each taken on the payment's page under
+         * `payments.reconcile` (the buttons open it there; the message carries no authority).
+         * Otherwise the one thing an operator can do is credit it by hand.
+         */
+        const decidable = late && lateDecisionOpen(payment);
         return {
           templateKey: (late
             ? 'ops.financial.late_completion'
             : 'ops.financial.outcome_unknown') as TemplateKey,
           values,
           logType: 'PAYMENT_LATE',
-          buttons: [
-            { kind: 'MANUAL_CREDIT', ref: payment.customerId },
-            { kind: 'USER', ref: payment.customerId },
-          ],
+          buttons: decidable
+            ? [
+                { kind: 'LATE_DELIVER', ref: payment.id },
+                { kind: 'LATE_TO_WALLET', ref: payment.id },
+                { kind: 'USER', ref: payment.customerId },
+              ]
+            : [
+                { kind: 'MANUAL_CREDIT', ref: payment.customerId },
+                { kind: 'USER', ref: payment.customerId },
+              ],
         };
       }
       case 'GatewayPaymentAttentionRaised': {
@@ -484,6 +497,17 @@ export class FinancialLogConsumer implements EventConsumer {
         const { payment, customer } = found;
         const occurredAt = new Date(event.occurredAt);
         const currency = payload.currency as CurrencyCode;
+        // NEXA-OWNER-BATCH-1 PR-5: a delivery, or a delivery that went to the wallet instead.
+        if (payload.disposition === 'DELIVERED' || payload.disposition === 'DELIVERY_FALLBACK') {
+          return this.lateDeliveryLog(
+            scope,
+            payload,
+            found.payment,
+            found.customer,
+            occurredAt,
+            tx,
+          );
+        }
         // R12 F1: money returned for an attempt that could no longer pay its order has its own
         // message — it was never "approved after the deadline". An older event is a late approval.
         const returned = payload.basis === 'RETURNED';
@@ -638,6 +662,78 @@ export class FinancialLogConsumer implements EventConsumer {
     if (order?.code !== null && order?.code !== undefined) values['orderCode'] = order.code;
     // R11 A7: and, when that order is tied to a service, the service's panel account name.
     await this.withServiceUsername(scope, payment.orderId, values, tx);
+  }
+
+  /**
+   * NEXA-OWNER-BATCH-1 PR-5: the log of a late approval delivered as the order's service
+   * (naming the gateway and the delivered service's panel username), or of a delivery that
+   * could not happen and went to the wallet (naming the gateway and the reason).
+   */
+  private async lateDeliveryLog(
+    scope: TenantContext,
+    payload: ReturnType<(typeof EVENT_PAYLOAD_SCHEMAS)['PaymentLateCredited']['parse']>,
+    payment: PaymentRecord,
+    customer: CustomerRecord | null,
+    occurredAt: Date,
+    tx: TransactionScope,
+  ): Promise<{
+    readonly templateKey: TemplateKey;
+    readonly values: TemplateValues;
+    readonly logType: OpsLogTypeId;
+    readonly buttons: readonly OpsLogButton[];
+  }> {
+    const { words, facts } = this.deps;
+    const currency = payload.currency as CurrencyCode;
+    const values: Record<string, TemplateValue> = {
+      gateway: words.gatewayName(payload.provider),
+      ...who(customer, words),
+      reference: paymentTrackingCode(payment),
+      amount: money(BigInt(payload.amountMinor), currency),
+      approvedAt: occurredAt,
+      byWhom: words.lateDecidedBy(payload.decidedBy ?? 'POLICY'),
+    };
+    const buttons: OpsLogButton[] = [
+      { kind: 'USER', ref: payment.customerId },
+      { kind: 'PAYMENT', ref: payment.id },
+    ];
+    if (payload.disposition === 'DELIVERED' && payload.deliveredOrderId !== undefined) {
+      const order = await facts.order(scope, payload.deliveredOrderId, tx);
+      if (order !== null) {
+        if (order.code !== null) values['orderCode'] = order.code;
+        values['productTitle'] = order.title;
+        buttons.push({ kind: 'ORDER', ref: order.id });
+      }
+      // The service the delivery created, by its panel account name.
+      await this.withServiceUsername(scope, payload.deliveredOrderId, values, tx);
+      return {
+        templateKey: 'ops.financial.late_delivered' as TemplateKey,
+        values,
+        logType: 'PAYMENT_LATE',
+        buttons,
+      };
+    }
+    if (payment.orderId !== null) {
+      const order = await facts.order(scope, payment.orderId, tx);
+      if (order?.code !== null && order?.code !== undefined) values['orderCode'] = order.code;
+    }
+    values['cause'] = words.lateDeliveryFallback(payload.fallbackReason ?? 'PURCHASE_REFUSED');
+    const balance = await facts.balanceAround(
+      scope,
+      payment.customerId,
+      currency,
+      [payload.entryId],
+      tx,
+    );
+    if (balance !== null) {
+      values['balanceBefore'] = balance.before;
+      values['balanceAfter'] = balance.after;
+    }
+    return {
+      templateKey: 'ops.financial.late_delivery_fallback' as TemplateKey,
+      values,
+      logType: 'PAYMENT_LATE',
+      buttons,
+    };
   }
 
   /**

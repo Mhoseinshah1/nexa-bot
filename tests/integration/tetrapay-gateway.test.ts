@@ -938,7 +938,7 @@ describe('TetraPay, through the one settlement path', () => {
 
     it('is credited to the wallet once through the late-credit path when the switch is ON', async () => {
       await enableTetraPay();
-      await setSetting(LATE_SWITCH, true);
+      await setSetting(LATE_SWITCH, 'WALLET');
       const { paymentId, orderId } = await createdAttempt();
       await pastDeadline(paymentId);
       fake.pay(orderId);

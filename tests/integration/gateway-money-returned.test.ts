@@ -290,8 +290,8 @@ describe('R12 F1 — gateway money for an attempt that can no longer pay its ord
      * Both routes' late-credit switches OFF, explicitly (TonPays' default is ON): everything
      * returned below is returned whatever the switch says.
      */
-    await setSetting('payments.late_credit.tonpays_enabled', false);
-    await setSetting('payments.late_credit.tetrapay_enabled', false);
+    await setSetting('payments.late_credit.tonpays_enabled', 'REVIEW');
+    await setSetting('payments.late_credit.tetrapay_enabled', 'REVIEW');
   });
 
   async function setSetting(settingKey: string, value: unknown) {

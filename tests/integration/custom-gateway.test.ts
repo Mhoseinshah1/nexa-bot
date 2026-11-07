@@ -767,7 +767,7 @@ describe('the custom gateway, through the one settlement path', () => {
 
     it('is credited once to the wallet when the switch is ON', async () => {
       await enableCustom();
-      await setSetting(LATE_SWITCH, true);
+      await setSetting(LATE_SWITCH, 'WALLET');
       const { paymentId, orderId } = await createdAttempt();
       await pastDeadline(paymentId);
       bridge.set(orderId, 'PAID', RIAL);

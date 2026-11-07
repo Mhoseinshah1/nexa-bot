@@ -186,6 +186,57 @@ export const LATE_CREDIT_SETTING_KEYS = {
   RIALIT: 'payments.late_credit.rialit_enabled',
   CUSTOM: 'payments.late_credit.custom_enabled',
 } as const;
+/**
+ * NEXA-OWNER-BATCH-1 PR-5: what a route does with a LATE approval its provider re-verified —
+ * the value of each `LATE_CREDIT_SETTING_KEYS` setting. The keys are kept (each descriptor,
+ * audit row and history entry still names the same setting); the value changed from a boolean
+ * to one of three policies, and migration 0322 rewrote every stored value: `true` → `WALLET`,
+ * `false` → `REVIEW`, so nothing changes for an installation until its owner picks `DELIVER`.
+ *
+ * - `WALLET` — the switch's old "on": the payment's own amount is credited to the wallet once
+ *   (`GATEWAY_LATE_CREDIT`, `<paymentId>:late-credit`); the order is not reopened.
+ * - `REVIEW` — the old "off": recorded as a late completion; an operator decides (deliver the
+ *   service, or credit the wallet), each under `payments.reconcile`, each once.
+ * - `DELIVER` — the paid order's service is delivered as if paid on time, when the product is
+ *   still sellable, the payment covers the order's frozen total, the panel has room and the
+ *   customer is not blocked; if any of those fails the money takes the `WALLET` path.
+ *
+ * One resolver reads it for every route (`latePaymentPolicyOf`); Stars and card-to-card name
+ * no setting and keep their own rules.
+ */
+export const LATE_PAYMENT_POLICIES = ['WALLET', 'REVIEW', 'DELIVER'] as const;
+export type LatePaymentPolicy = (typeof LATE_PAYMENT_POLICIES)[number];
+export const latePaymentPolicySchema = z.enum(LATE_PAYMENT_POLICIES);
+
+/**
+ * The policy a stored value names. Anything that is not one of the three — a value a stale
+ * binary wrote, a programming error — is `REVIEW`: the one policy that moves no money by
+ * itself and leaves the decision to a person.
+ */
+export function latePaymentPolicyOf(value: unknown): LatePaymentPolicy {
+  return value === 'WALLET' || value === 'DELIVER' ? value : 'REVIEW';
+}
+
+/**
+ * Why a `DELIVER` (the route's policy, or an operator's «تحویل سرویس») went to the wallet
+ * instead. Each is logged in the operations group; the customer is told the credit.
+ */
+export const LATE_DELIVERY_FALLBACK_REASONS = [
+  'PRODUCT_NOT_SELLABLE',
+  'AMOUNT_DOES_NOT_COVER',
+  'PANEL_FULL',
+  'CUSTOMER_BLOCKED',
+  // The customer cancelled the order, or it was paid another way: there is nothing to deliver.
+  'ORDER_CLOSED',
+  // A renewal, an add-on or a custom service: only a new service of a catalogue product is delivered.
+  'PURPOSE_NOT_DELIVERABLE',
+  // An UNKNOWN payment is never settled into an order automatically (R5A item 4).
+  'PAYMENT_UNKNOWN',
+  // The wallet purchase refused for a reason of its own (a negative balance, a transfer in review).
+  'PURCHASE_REFUSED',
+] as const;
+export type LateDeliveryFallbackReason = (typeof LATE_DELIVERY_FALLBACK_REASONS)[number];
+
 export const LATE_CREDIT_WINDOW_SETTING_KEY = 'payments.late_credit.window_hours' as const;
 export const LATE_CREDIT_WINDOW_HOURS_MIN = 1;
 export const LATE_CREDIT_WINDOW_HOURS_MAX = 720;

@@ -59,6 +59,11 @@ export const OPS_LOG_BODIES_FA = {
   // R12 F1: money for a cancelled attempt, or a second payment for an order already paid.
   'ops.financial.late_credit_returned':
     '💰 پرداخت دیرهنگام به کیف پول برگشت\n\nدرگاه پولی را برای پرداختی تأیید کرد که دیگر نمی‌توانست سفارش را پرداخت کند (این پرداخت لغو شده بود یا سفارش از راه دیگری پرداخت شده بود). استعلام درگاه تأیید را دوباره بررسی کرد و اصل مبلغ به کیف پول مشتری برگشت. سفارش تغییری نکرد و سرویسی ساخته نشد.\n\n💠 درگاه: {gateway}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n👤 نام کاربری سرویس: {serviceUsername}\n💰 مبلغ برگشتی به کیف پول: {amount}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n✅ زمان تأیید: {approvedAt}',
+  // NEXA-OWNER-BATCH-1 PR-5: a late approval delivered as the service, or sent to the wallet instead.
+  'ops.financial.late_delivered':
+    '📦 تأیید دیرهنگام — سرویس تحویل شد\n\nدرگاه این پرداخت را پس از پایان مهلت تأیید کرد، استعلام درگاه تأیید را دوباره بررسی کرد و سرویس سفارش با همان مبلغ ثبت‌شدهٔ سفارش، مانند پرداخت به‌موقع، تحویل شد. مبلغ یک بار از کیف پول گذشت (واریز دیرهنگام و سپس خرید).\n\n💠 درگاه: {gateway}\n🙋 تصمیم‌گیرنده: {byWhom}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n🛍 محصول: {productTitle}\n👤 نام کاربری سرویس: {serviceUsername}\n💰 مبلغ: {amount}\n✅ زمان تأیید: {approvedAt}',
+  'ops.financial.late_delivery_fallback':
+    '💰 تأیید دیرهنگام — تحویل ممکن نبود، واریز به کیف پول\n\nقرار بود سرویس این پرداخت دیرهنگام تحویل شود، اما یکی از شرط‌ها برقرار نبود؛ اصل مبلغ یک بار به کیف پول مشتری واریز شد و سرویسی ساخته نشد.\n\n⚠️ علت: {cause}\n💠 درگاه: {gateway}\n🙋 تصمیم‌گیرنده: {byWhom}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ واریزشده: {amount}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n✅ زمان تأیید: {approvedAt}',
   'ops.financial.outcome_unknown':
     '❓ نتیجهٔ پرداخت درگاه نامعلوم ماند\n\nمهلت بررسی درگاه بدون پاسخ قطعی تمام شد. هیچ مبلغی ثبت یا رد نشده است؛ نیاز به تطبیق دستی دارد.\n\n💠 درگاه: {gateway}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n👤 نام کاربری سرویس: {serviceUsername}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
   'ops.financial.credit_amount_mismatch':
@@ -323,6 +328,18 @@ export const OPS_LOG_WORDS_FA = {
   },
   operationStates: { FAILED: 'ناموفق', UNKNOWN: 'نتیجه نامشخص' },
   byWhom: { CUSTOMER: 'مشتری', ADMIN: 'ادمین', SYSTEM: 'سیستم' },
+  // NEXA-OWNER-BATCH-1 PR-5: who chose what a late approval became, and why a delivery fell back.
+  lateDecidedBy: { POLICY: 'سیاست پرداخت دیرهنگام درگاه', OPERATOR: 'تصمیم مدیر' },
+  lateDeliveryFallback: {
+    PRODUCT_NOT_SELLABLE: 'محصول دیگر قابل فروش نیست',
+    AMOUNT_DOES_NOT_COVER: 'مبلغ پرداخت‌شده مبلغ سفارش را پوشش نمی‌دهد',
+    PANEL_FULL: 'پنل ظرفیت ندارد',
+    CUSTOMER_BLOCKED: 'کاربر مسدود است',
+    ORDER_CLOSED: 'سفارش لغو شده یا از راه دیگری پرداخت شده است',
+    PURPOSE_NOT_DELIVERABLE: 'این سفارش خرید سرویس جدید نیست (تمدید، افزودنی یا سرویس سفارشی)',
+    PAYMENT_UNKNOWN: 'نتیجهٔ پرداخت نامعلوم بود و خودکار به سفارش وصل نمی‌شود',
+    PURCHASE_REFUSED: 'خرید از کیف پول پذیرفته نشد',
+  },
 
   providerFailures: {
     AUTHENTICATION_FAILED: 'پنل نام کاربری یا رمز عبور را نپذیرفت',
@@ -517,6 +534,9 @@ export const OPS_LOG_BUTTON_LABELS_FA: Readonly<Record<OpsLogButtonKind, string>
   BULK_OPERATION: '📋 عملیات گروهی',
   DASHBOARD: '📈 داشبورد',
   NOTIFICATIONS: '📋 فهرست کامل در پنل',
+  // NEXA-OWNER-BATCH-1 PR-5: the two decisions on a late completion, each on the payment's page.
+  LATE_DELIVER: '📦 تحویل سرویس',
+  LATE_TO_WALLET: '💰 به کیف پول',
   RESELLER_REQUEST: '👨‍💻 درخواست در پنل',
   RESELLER_REQUEST_APPROVE: '✅ تأیید',
   RESELLER_REQUEST_REJECT: '❌ رد',

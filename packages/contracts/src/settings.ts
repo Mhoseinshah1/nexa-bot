@@ -105,6 +105,7 @@ import {
   LATE_CREDIT_WINDOW_HOURS_MAX,
   LATE_CREDIT_WINDOW_HOURS_MIN,
   LATE_CREDIT_WINDOW_SETTING_KEY,
+  latePaymentPolicySchema,
 } from './payment-gateways.js';
 import { connectionFileCaptionTemplateIssues } from './templates.js';
 import {
@@ -1398,14 +1399,17 @@ export const SETTINGS = [
   {
     key: LATE_CREDIT_SETTING_KEYS.TONPAYS,
     description:
-      'R5A item 4: whether a TonPays (website) approval that arrives AFTER the payment closed ' +
-      '(deadline passed, EXPIRED, or UNKNOWN) is credited to the customer\u2019s wallet ' +
-      'automatically. The credit happens only when the provider\u2019s own inquiry re-verifies ' +
-      'the approval (completed AND paid, for the amount invoiced), exactly once, to the wallet ' +
-      'and never to the order: the order is not reopened and no service is built. Off: the ' +
-      'approval is recorded as a late completion and an operator decides, as before.',
-    schema: z.boolean(),
-    defaultValue: true,
+      'NEXA-OWNER-BATCH-1 PR-5: what happens to a TonPays (website) approval that arrives AFTER the ' +
+      'payment closed (deadline passed, EXPIRED, or UNKNOWN), once the provider\u2019s own ' +
+      're-verification confirms it for exactly the amount asked. WALLET: the payment\u2019s own ' +
+      'amount is credited to the customer\u2019s wallet once and the order is not reopened. ' +
+      'REVIEW: recorded as a late completion; an operator delivers the service or credits the ' +
+      'wallet, once. DELIVER: the order\u2019s service is delivered as if paid on time, at the ' +
+      'order\u2019s frozen total, when the product is still sellable, the payment covers it, the ' +
+      'panel has room and the customer is not blocked; otherwise the WALLET path. R5A item 4 (default on, now WALLET); ' +
+      'migration 0322 mapped a stored true to WALLET and false to REVIEW.',
+    schema: latePaymentPolicySchema,
+    defaultValue: 'WALLET',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
@@ -1415,12 +1419,17 @@ export const SETTINGS = [
   {
     key: LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM,
     description:
-      'R5A item 4: the same switch for TonPays Telegram (card-to-card through TonPays): a ' +
-      'late or UNKNOWN approval, re-verified by the provider\u2019s inquiry, is credited to the ' +
-      'customer\u2019s wallet once and never settles the order. Off: recorded as a late ' +
-      'completion for an operator, as before.',
-    schema: z.boolean(),
-    defaultValue: true,
+      'NEXA-OWNER-BATCH-1 PR-5: what happens to a TonPays Telegram (card-to-card through TonPays) approval that arrives AFTER the ' +
+      'payment closed (deadline passed, EXPIRED, or UNKNOWN), once the provider\u2019s own ' +
+      're-verification confirms it for exactly the amount asked. WALLET: the payment\u2019s own ' +
+      'amount is credited to the customer\u2019s wallet once and the order is not reopened. ' +
+      'REVIEW: recorded as a late completion; an operator delivers the service or credits the ' +
+      'wallet, once. DELIVER: the order\u2019s service is delivered as if paid on time, at the ' +
+      'order\u2019s frozen total, when the product is still sellable, the payment covers it, the ' +
+      'panel has room and the customer is not blocked; otherwise the WALLET path. R5A item 4 (default on, now WALLET); ' +
+      'migration 0322 mapped a stored true to WALLET and false to REVIEW.',
+    schema: latePaymentPolicySchema,
+    defaultValue: 'WALLET',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
@@ -1430,14 +1439,17 @@ export const SETTINGS = [
   {
     key: LATE_CREDIT_SETTING_KEYS.TETRAPAY,
     description:
-      'Round 6 item 6: the same switch for TetraPay: a payment its verify reports as paid AFTER ' +
-      'the attempt closed (deadline passed, EXPIRED, or UNKNOWN) is credited to the ' +
-      'customer\u2019s wallet once and never settles the order. The credit happens only when ' +
-      'TetraPay\u2019s own verify re-confirms it (status paid, this attempt\u2019s order id and ' +
-      'exactly the rial amount asked). OFF by default: a new route moves no money that its ' +
-      'owner has not chosen to move. Off: recorded as a late completion for an operator.',
-    schema: z.boolean(),
-    defaultValue: false,
+      'NEXA-OWNER-BATCH-1 PR-5: what happens to a TetraPay approval that arrives AFTER the ' +
+      'payment closed (deadline passed, EXPIRED, or UNKNOWN), once the provider\u2019s own ' +
+      're-verification confirms it for exactly the amount asked. WALLET: the payment\u2019s own ' +
+      'amount is credited to the customer\u2019s wallet once and the order is not reopened. ' +
+      'REVIEW: recorded as a late completion; an operator delivers the service or credits the ' +
+      'wallet, once. DELIVER: the order\u2019s service is delivered as if paid on time, at the ' +
+      'order\u2019s frozen total, when the product is still sellable, the payment covers it, the ' +
+      'panel has room and the customer is not blocked; otherwise the WALLET path. Round 6 item 6 (default off, now REVIEW: a route moves no money its owner has not chosen to move); ' +
+      'migration 0322 mapped a stored true to WALLET and false to REVIEW.',
+    schema: latePaymentPolicySchema,
+    defaultValue: 'REVIEW',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
@@ -1447,16 +1459,17 @@ export const SETTINGS = [
   {
     key: LATE_CREDIT_SETTING_KEYS.RIALIT,
     description:
-      'Round 9 item C4: the same switch for Rialit, whose document says an expired or ' +
-      'cancelled payment can still become paid when its support approves a late payment. A ' +
-      'payment Rialit\u2019s own status read reports as paid AFTER the attempt closed (deadline ' +
-      'passed, EXPIRED, or UNKNOWN) is credited to the customer\u2019s wallet once and never ' +
-      'settles the order, and only when that read re-confirms it (status paid, this ' +
-      'attempt\u2019s order id, exactly the Toman asked and no payer fee). OFF by default: a ' +
-      'new route moves no money that its owner has not chosen to move. Off: recorded as a late ' +
-      'completion for an operator.',
-    schema: z.boolean(),
-    defaultValue: false,
+      'NEXA-OWNER-BATCH-1 PR-5: what happens to a Rialit approval that arrives AFTER the ' +
+      'payment closed (deadline passed, EXPIRED, or UNKNOWN), once the provider\u2019s own ' +
+      're-verification confirms it for exactly the amount asked. WALLET: the payment\u2019s own ' +
+      'amount is credited to the customer\u2019s wallet once and the order is not reopened. ' +
+      'REVIEW: recorded as a late completion; an operator delivers the service or credits the ' +
+      'wallet, once. DELIVER: the order\u2019s service is delivered as if paid on time, at the ' +
+      'order\u2019s frozen total, when the product is still sellable, the payment covers it, the ' +
+      'panel has room and the customer is not blocked; otherwise the WALLET path. Round 9 item C4 (default off, now REVIEW: a route moves no money its owner has not chosen to move); ' +
+      'migration 0322 mapped a stored true to WALLET and false to REVIEW.',
+    schema: latePaymentPolicySchema,
+    defaultValue: 'REVIEW',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
@@ -1466,15 +1479,17 @@ export const SETTINGS = [
   {
     key: LATE_CREDIT_SETTING_KEYS.CUSTOM,
     description:
-      'Round 10 item C1: the same switch for the custom gateway (`docs/protocols/custom-gateway.md`). ' +
-      'A payment the bridge\u2019s own signed inquiry reports as PAID AFTER the attempt closed ' +
-      '(deadline passed, EXPIRED, or UNKNOWN) is credited to the customer\u2019s wallet once and ' +
-      'never settles the order, and only when that inquiry re-confirms it (status PAID, this ' +
-      'attempt\u2019s invoice id and the bridge reference, exactly the rial amount asked and paid). ' +
-      'OFF by default: a new route moves no money that its owner has not chosen to move. Off: ' +
-      'recorded as a late completion for an operator.',
-    schema: z.boolean(),
-    defaultValue: false,
+      'NEXA-OWNER-BATCH-1 PR-5: what happens to an approval of the custom gateway that arrives AFTER the ' +
+      'payment closed (deadline passed, EXPIRED, or UNKNOWN), once the provider\u2019s own ' +
+      're-verification confirms it for exactly the amount asked. WALLET: the payment\u2019s own ' +
+      'amount is credited to the customer\u2019s wallet once and the order is not reopened. ' +
+      'REVIEW: recorded as a late completion; an operator delivers the service or credits the ' +
+      'wallet, once. DELIVER: the order\u2019s service is delivered as if paid on time, at the ' +
+      'order\u2019s frozen total, when the product is still sellable, the payment covers it, the ' +
+      'panel has room and the customer is not blocked; otherwise the WALLET path. Round 10 item C1 (default off, now REVIEW: a route moves no money its owner has not chosen to move); ' +
+      'migration 0322 mapped a stored true to WALLET and false to REVIEW.',
+    schema: latePaymentPolicySchema,
+    defaultValue: 'REVIEW',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
@@ -1487,7 +1502,8 @@ export const SETTINGS = [
       'R5A item 4: how long after a gateway payment closed its still-open invoice keeps being ' +
       'asked about, slowly (5 minutes, then 15, then hourly, inside the provider\u2019s inquiry ' +
       'budget), so a late approval is seen without a webhook. Hours. Only routes whose ' +
-      'late-credit switch is on are asked; when it is off nothing is asked after the deadline ' +
+      'late-payment policy is WALLET or DELIVER are asked; under REVIEW nothing is asked after the ' +
+      'deadline ' +
       'except what a webhook or an operator brings forward, as before.',
     schema: z.number().int().min(LATE_CREDIT_WINDOW_HOURS_MIN).max(LATE_CREDIT_WINDOW_HOURS_MAX),
     defaultValue: LATE_CREDIT_WINDOW_HOURS_DEFAULT,
