@@ -4934,6 +4934,21 @@ export const paymentReconcileRequestSchema = z.object({
 export type PaymentReconcileRequest = z.infer<typeof paymentReconcileRequestSchema>;
 
 /**
+ * NEXA-OWNER-BATCH-1 PR-5: an operator's decision on a LATE completion of a route with a
+ * late-payment policy, under `payments.reconcile`. `DELIVER` («تحویل سرویس») delivers the
+ * order's service with the same checks as the route's DELIVER policy and the same wallet
+ * fallback; `WALLET` («به کیف پول») credits the payment's own amount to the wallet. The
+ * server decides again under the payment's lock, from the provider's RECORDED approval, and
+ * either happens at most once per payment. `confirm: true` is the explicit final step.
+ */
+export const paymentLateDecisionRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  choice: z.enum(['DELIVER', 'WALLET']),
+  confirm: z.literal(true),
+});
+export type PaymentLateDecisionRequest = z.infer<typeof paymentLateDecisionRequestSchema>;
+
+/**
  * R12 F3 item 8: approving a card-to-card receipt. `confirm: true` is the explicit final
  * confirmation (the Web Admin asks first), stated in the body so a request that omits it is
  * refused at the schema rather than executed. The server settles the payment's OWN amount —
@@ -5323,6 +5338,8 @@ export const PAYMENT_ROUTES = {
    * the inquiry evidence does not already show, and the server re-decides it under the lock.
    */
   reconcile: (id: string) => `/payments/${encodeURIComponent(id)}/reconcile`,
+  /** NEXA-OWNER-BATCH-1 PR-5: an operator delivers a late completion, or credits it to the wallet. */
+  lateDecision: (id: string) => `/payments/${encodeURIComponent(id)}/late-decision`,
   /** Bring the next provider inquiry of an `UNKNOWN` gateway payment forward: a row write only. */
   reinquire: (id: string) => `/payments/${encodeURIComponent(id)}/reinquire`,
   /*

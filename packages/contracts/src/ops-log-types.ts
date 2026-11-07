@@ -121,6 +121,10 @@ export const OPS_LOG_TYPES = {
       'ops.financial.late_credit',
       // R12 F1: money for an attempt that could no longer pay its order, returned to the wallet.
       'ops.financial.late_credit_returned',
+      // NEXA-OWNER-BATCH-1 PR-5: a late approval delivered as the order's service, or a delivery
+      // that could not happen and went to the wallet instead.
+      'ops.financial.late_delivered',
+      'ops.financial.late_delivery_fallback',
       // R9 C1: the provider's webhook `credit_amount` differs from what Nexa invoiced.
       'ops.financial.credit_amount_mismatch',
     ],
@@ -257,6 +261,14 @@ export const OPS_LOG_BUTTON_KINDS = [
   'BULK_OPERATION',
   'DASHBOARD',
   'NOTIFICATIONS',
+  /*
+   * NEXA-OWNER-BATCH-1 PR-5: the two decisions on a late completion («تحویل سرویس», «به کیف
+   * پول»). URL buttons like every other: each opens the payment's page with that decision's
+   * confirmation, where it is taken under `payments.reconcile` — a log message carries no
+   * authority of its own.
+   */
+  'LATE_DELIVER',
+  'LATE_TO_WALLET',
 ] as const;
 export type OpsLogButtonKind = (typeof OPS_LOG_BUTTON_KINDS)[number];
 
@@ -295,6 +307,14 @@ export function opsLogButtonPath(button: OpsLogButton): string | null {
     case 'PAYMENT': {
       const id = needsRef();
       return id === null ? null : `/payments/${id}`;
+    }
+    case 'LATE_DELIVER': {
+      const id = needsRef();
+      return id === null ? null : `/payments/${id}?late=deliver`;
+    }
+    case 'LATE_TO_WALLET': {
+      const id = needsRef();
+      return id === null ? null : `/payments/${id}?late=wallet`;
     }
     case 'ORDER': {
       const id = needsRef();
@@ -742,6 +762,24 @@ export const OPS_LOG_TEMPLATES = [
       ...req('gateway', 'reference', 'amount', 'approvedAt'),
       ...WHO(),
       ...opt('orderCode', 'serviceUsername', 'balanceBefore', 'balanceAfter'),
+    ],
+  ),
+  logTemplate(
+    'ops.financial.late_delivered',
+    'Log L5 (NEXA-OWNER-BATCH-1 PR-5): a gateway approved a payment after Nexa had closed it, its inquiry re-verified the approval, and — by the route’s DELIVER policy or an operator’s «تحویل سرویس» — the order’s service was delivered as if paid on time, at the order’s frozen total. The money passed through the wallet once (late credit, then the purchase).',
+    [
+      ...req('gateway', 'reference', 'amount', 'approvedAt'),
+      ...WHO(),
+      ...opt('orderCode', 'serviceUsername', 'productTitle', 'byWhom'),
+    ],
+  ),
+  logTemplate(
+    'ops.financial.late_delivery_fallback',
+    'Log L5 (NEXA-OWNER-BATCH-1 PR-5): a late approval was to be delivered as the order’s service, but a condition failed (the product is not sellable, the payment does not cover the order, the panel is full, the customer is blocked, …); the payment’s own amount was credited to the customer’s wallet instead, once.',
+    [
+      ...req('gateway', 'reference', 'amount', 'approvedAt', 'cause'),
+      ...WHO(),
+      ...opt('orderCode', 'byWhom', 'balanceBefore', 'balanceAfter'),
     ],
   ),
   logTemplate(

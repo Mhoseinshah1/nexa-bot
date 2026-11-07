@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { actorRefSchema, type ActorRef } from './actor.js';
+import { LATE_DELIVERY_FALLBACK_REASONS } from './payment-gateways.js';
 
 /**
  * Domain events.
@@ -542,6 +543,19 @@ export const EVENT_PAYLOAD_SCHEMAS = {
      * `LATE_APPROVAL`, and an older consumer ignores the field.
      */
     basis: z.enum(['LATE_APPROVAL', 'RETURNED']).optional(),
+    /*
+     * NEXA-OWNER-BATCH-1 PR-5: what the late approval became. `WALLET` (or absent, on an older
+     * event): the credit is where the money stays. `DELIVERED`: the credit paid, in the same
+     * transaction, for the order's service (`deliveredOrderId`, the order that settled — the
+     * original one, or a fulfilment order tied to this payment when the original had expired).
+     * `DELIVERY_FALLBACK`: a delivery was asked for and `fallbackReason` stopped it; the money
+     * stays in the wallet. Optional, so an older consumer ignores all three.
+     */
+    disposition: z.enum(['WALLET', 'DELIVERED', 'DELIVERY_FALLBACK']).optional(),
+    deliveredOrderId: z.string().optional(),
+    fallbackReason: z.enum(LATE_DELIVERY_FALLBACK_REASONS).optional(),
+    /** Who chose: the route's policy (absent), or an operator on the late-completion queue. */
+    decidedBy: z.enum(['POLICY', 'OPERATOR']).optional(),
   }),
   /*
    * R9 C1. Ids and closed vocabularies only — never an amount the provider reported, a card

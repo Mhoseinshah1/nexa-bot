@@ -164,6 +164,13 @@ export const PAYMENT_OPERATOR_ACTIONS = [
   'MANUAL_WALLET_ADJUSTMENT',
   'ISSUE_REFUND',
   'SETTLE_REFUND',
+  /*
+   * NEXA-OWNER-BATCH-1 PR-5: the two decisions on a late completion of a route with a
+   * late-payment policy — «تحویل سرویس» (the DELIVER path, its checks and its wallet fallback)
+   * and «به کیف پول» (the WALLET path). Both under `payments.reconcile`, both once per payment.
+   */
+  'LATE_DELIVER',
+  'LATE_TO_WALLET',
 ] as const;
 export type PaymentOperatorAction = (typeof PAYMENT_OPERATOR_ACTIONS)[number];
 
@@ -185,6 +192,13 @@ export interface PaymentSituationFacts {
   readonly invoiceCreation: GatewayInvoiceCreationState | null;
   /** R5A item 4: the invoice's outcome is `LATE_CREDITED` — a late approval went to the wallet. */
   readonly lateCredited: boolean;
+  /**
+   * NEXA-OWNER-BATCH-1 PR-5: a person may still decide this late completion — a gateway
+   * payment on a route with a late-payment policy that has ended (`EXPIRED`), not
+   * yet credited or delivered. Advisory: the server decides again under the payment's lock.
+   * Absent is false.
+   */
+  readonly lateDecisionOpen?: boolean;
   /**
    * The Payment Operations Center queues the payment is in, from the SAME SQL predicates
    * the queue list and counts use — so the MISMATCH, PARTIAL and LATE_COMPLETION facts here
@@ -372,8 +386,14 @@ function actionsFor(
       return reconcilable
         ? ['VERIFY_AT_PROVIDER', 'ASK_PROVIDER_AGAIN', 'RECONCILE']
         : ['VERIFY_AT_PROVIDER'];
-    case 'PARTIAL':
     case 'LATE_COMPLETION':
+      if (!reconcilable && facts.lateDecisionOpen === true && !facts.lateCredited) {
+        return ['LATE_DELIVER', 'LATE_TO_WALLET', 'VERIFY_AT_PROVIDER'];
+      }
+      return reconcilable
+        ? ['VERIFY_AT_PROVIDER', 'ASK_PROVIDER_AGAIN', 'RECONCILE']
+        : ['VERIFY_AT_PROVIDER', 'MANUAL_WALLET_ADJUSTMENT'];
+    case 'PARTIAL':
       return reconcilable
         ? ['VERIFY_AT_PROVIDER', 'ASK_PROVIDER_AGAIN', 'RECONCILE']
         : ['VERIFY_AT_PROVIDER', 'MANUAL_WALLET_ADJUSTMENT'];
