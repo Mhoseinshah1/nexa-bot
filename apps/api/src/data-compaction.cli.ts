@@ -115,7 +115,7 @@ export function reportText(outcome: DataCompactionOutcome): { text: string; exit
 
 async function main(): Promise<void> {
   const args = parseCompactionArgs(process.argv.slice(2));
-  const container = createContainer(loadConfig(), 'worker');
+  const container = createContainer(loadConfig(), 'worker', { connection: 'owner' });
   try {
     const tenant =
       args.tenantSlug === null

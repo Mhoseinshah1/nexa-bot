@@ -10,6 +10,7 @@ import type {
   LegacyTrialEligibilityRepository,
   LegacyTrialRecord,
 } from '../application/legacy-trial-eligibility.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Legacy trial decisions, in PostgreSQL. Every query leads with the tenant. */
 /** Records per INSERT: 9 parameters a row, far under PostgreSQL's 65 535. */
@@ -17,6 +18,7 @@ const INSERT_CHUNK = 5000;
 /** Keys per `IN (…)` read. */
 const READ_CHUNK = 10_000;
 
+@ScopeBound()
 export class DrizzleLegacyTrialEligibilityRepository implements LegacyTrialEligibilityRepository {
   constructor(private readonly db: Database) {}
 

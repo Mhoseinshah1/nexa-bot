@@ -13,6 +13,7 @@ import type { Database } from '../../../../infrastructure/persistence/database.j
 import { requestIdempotency } from '../../../../infrastructure/persistence/schema.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { scopeRef, scopeTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Durable idempotency.
@@ -45,6 +46,7 @@ const IDEMPOTENCY_INSERT_CHUNK = 5000;
 /** Keys per `IN (…)` read. */
 const IDEMPOTENCY_READ_CHUNK = 10_000;
 
+@ScopeBound()
 export class DrizzleIdempotencyStore implements IdempotencyStore {
   constructor(
     private readonly db: Database,

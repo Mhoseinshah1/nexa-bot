@@ -77,6 +77,7 @@ import type {
   PaymentResolution,
   PaymentSearch,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Payments, in PostgreSQL.
@@ -88,6 +89,7 @@ import type {
  * administrator or state, leaving only `external_reference` mutable for a gateway that
  * does not ship. A general update method would be a capability the database refuses.
  */
+@ScopeBound()
 export class DrizzlePaymentRepository implements PaymentRepository {
   constructor(private readonly db: Database) {}
 

@@ -24,11 +24,12 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import type { Container } from '../../apps/api/src/container';
 import { frozenLayoutSchema } from '../support/frozen-main-menu-schema';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

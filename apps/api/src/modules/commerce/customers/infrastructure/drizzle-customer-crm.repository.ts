@@ -18,6 +18,7 @@ import type {
   CustomerNoteRecord,
   CustomerTagRecord,
 } from '../application/customer-crm-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The advisory-lock class for a tenant's tag CATALOGUE writes ("TG"). One class per purpose,
@@ -30,6 +31,7 @@ export const CUSTOMER_TAG_CATALOGUE_LOCK_CLASS = 0x5447;
  * clause, including the primary-key lookups, so another tenant's row never leaves the
  * database (`drizzle-customer.repository.ts` says why that is not redundant).
  */
+@ScopeBound()
 export class DrizzleCustomerCrmRepository implements CustomerCrmRepository {
   constructor(private readonly db: Database) {}
 

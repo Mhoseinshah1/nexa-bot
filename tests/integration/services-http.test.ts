@@ -24,11 +24,12 @@ import {
   type ProductId,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleLegacyAdoptionStore } from '../../apps/api/src/modules/commerce/legacy-adoption/infrastructure/drizzle-legacy-adoption.store';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   makePanelSellable,

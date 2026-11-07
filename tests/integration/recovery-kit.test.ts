@@ -13,7 +13,7 @@ import {
   RECOVERY_KIT_ROUTES,
   SESSION_COOKIE_NAME,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   FAST_KIT_KDF,
@@ -27,6 +27,7 @@ import { sealArchive } from '../../apps/api/src/modules/platform/backup/infrastr
 import { InstallationKeyService } from '../../apps/api/src/modules/platform/recovery/application/installation-key.service';
 import type { InstallationKeyRepository } from '../../apps/api/src/modules/platform/recovery/application/installation-key.ports';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

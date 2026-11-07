@@ -14,7 +14,7 @@ import {
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import {
   CUSTOMER_SEND_FAILED_CODE,
   CUSTOMER_SEND_OK_CODE,
@@ -22,6 +22,7 @@ import {
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { receiptFile } from './receipt-review-fixture';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,
@@ -1140,13 +1141,13 @@ describe('the customer Telegram turn', () => {
     }
   });
 
-  it('does not reply outside a private chat, but still records the customer', async () => {
+  it('does not reply outside a private chat, and records no customer either', async () => {
     const response = await start({ chatType: 'group' });
     expect(response.statusCode).toBe(201);
-    // The customer is a fact — they wrote to this bot — and the reply is not
-    // sent, because a bot answering every `/start` in a group is the legacy
-    // bot's behaviour and an operator cannot switch it off.
-    expect(await customers()).toHaveLength(1);
+    // A group is not a customer's conversation: nothing is sent and no row is made, so a
+    // person joining or typing in a group (the operations log group included) is not a
+    // customer. `telegram-group-updates.test.ts` covers the other group shapes.
+    expect(await customers()).toHaveLength(0);
     expect(sent).toHaveLength(0);
   });
 

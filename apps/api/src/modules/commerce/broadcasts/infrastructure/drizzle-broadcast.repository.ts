@@ -41,6 +41,7 @@ import type {
   RecipientOutcome,
   RecipientPageRow,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 interface BroadcastRow {
   id: string;
@@ -302,6 +303,7 @@ export function claimDueQuery(input: {
  * The broadcast tables (round N). Every query carries the tenant; every state change is a
  * conditional UPDATE naming its `from` states; nothing here talks to Telegram.
  */
+@ScopeBound()
 export class DrizzleBroadcastRepository implements BroadcastRepository {
   constructor(private readonly db: Database) {}
 

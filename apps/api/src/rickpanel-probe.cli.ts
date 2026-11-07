@@ -136,7 +136,7 @@ export function probeSummaryLine(report: G6ProbeReport): string {
 async function main(): Promise<number> {
   const args = parseProbeArgs(process.argv.slice(2));
   const config = loadConfig();
-  const container = createContainer(config, 'worker');
+  const container = createContainer(config, 'worker', { connection: 'owner' });
   try {
     const tenant =
       args.tenantSlug === null

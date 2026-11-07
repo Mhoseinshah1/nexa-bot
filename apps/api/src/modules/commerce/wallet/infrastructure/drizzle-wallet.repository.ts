@@ -31,6 +31,7 @@ import type {
   WalletImportedPage,
   WalletRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Ledger rows per INSERT: 14 parameters a row, so 4 000 rows stay under PostgreSQL's 65 535. */
 const WALLET_INSERT_CHUNK = 4000;
@@ -55,6 +56,7 @@ const WALLET_READ_CHUNK = 10_000;
  * something it should never have seen. For money that is not a leak, it is a way to
  * spend somebody else's balance.
  */
+@ScopeBound()
 export class DrizzleWalletRepository implements WalletRepository {
   constructor(private readonly db: Database) {}
 

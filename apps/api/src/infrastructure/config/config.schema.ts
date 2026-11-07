@@ -71,7 +71,18 @@ export const configSchema = z
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: port.default(3000),
 
+    /**
+     * The table OWNER's connection: migrations, `pg_dump` and restore, the CLIs. ADR-0037.
+     */
     DATABASE_URL: z.string().min(1).startsWith('postgres'),
+    /**
+     * The APPLICATION's connection, as `nexa_app` (no BYPASSRLS), which every process's
+     * request and job pool uses when it is set (ADR-0037). Row-level security binds only
+     * through it: the owner bypasses the policies. Optional so that an installation that
+     * has not yet been given the credential keeps working, on the owner, exactly as before
+     * — `botctl update` and the installer generate it.
+     */
+    DATABASE_APP_URL: z.string().min(1).startsWith('postgres').optional(),
     DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
 
     REDIS_URL: z.string().min(1).startsWith('redis'),
@@ -772,6 +783,51 @@ export const configSchema = z
     BACKUP_SEVEN_ZIP_MEMORY_MB: z.coerce.number().int().min(64).max(32_768).default(600),
     /** Memory the rest of the host keeps free beside 7-Zip, MiB. */
     BACKUP_SEVEN_ZIP_HEADROOM_MB: z.coerce.number().int().min(0).max(8_192).default(256),
+    /**
+     * Phase 6A D0: the write-only OFF-SITE copy of every verified archive, in S3-compatible
+     * object storage (`docs/backup.md` § Off-site copy). OFF until the owner sets the
+     * endpoint, region, bucket and both halves of the key — all five or none, refused at boot
+     * otherwise. The key needs PutObject (and PutObjectRetention) only; the bucket policy the
+     * document gives denies every delete, so a compromised server cannot remove history.
+     * `BACKUP_OFFSITE_RETENTION_DAYS` > 0 sends every object under COMPLIANCE object lock until
+     * that many days after its upload (the bucket must have object lock enabled); 0 sends no
+     * lock headers. A failed upload alerts the owner and never removes the local archive.
+     */
+    BACKUP_OFFSITE_ENDPOINT: z
+      .string()
+      .trim()
+      .refine((value) => value === '' || isOffsiteEndpoint(value), {
+        message:
+          'BACKUP_OFFSITE_ENDPOINT must be an http(s) origin with no path, query or credentials, ' +
+          'such as https://s3.eu-central-1.amazonaws.com, or empty.',
+      })
+      .default(''),
+    BACKUP_OFFSITE_REGION: z.string().trim().max(64).default(''),
+    BACKUP_OFFSITE_BUCKET: z
+      .string()
+      .trim()
+      .regex(/^$|^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, 'BACKUP_OFFSITE_BUCKET is not a bucket name.')
+      .default(''),
+    BACKUP_OFFSITE_ACCESS_KEY_ID: z.string().trim().max(256).default(''),
+    BACKUP_OFFSITE_SECRET_ACCESS_KEY: z.string().trim().max(512).default(''),
+    BACKUP_OFFSITE_PREFIX: z
+      .string()
+      .trim()
+      .regex(
+        /^[A-Za-z0-9!_.*'()/-]{0,200}$/,
+        "BACKUP_OFFSITE_PREFIX may use letters, digits and !_.*'()/- only.",
+      )
+      .default('nexa/'),
+    BACKUP_OFFSITE_RETENTION_DAYS: z.coerce.number().int().min(0).max(36_500).default(0),
+    /** Path-style requests (`endpoint/bucket/key`): MinIO, R2, B2 and AWS all accept them. */
+    BACKUP_OFFSITE_PATH_STYLE: booleanish.default(true),
+    /** One object's upload; a part is at most 45 MiB. */
+    BACKUP_OFFSITE_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(10_000)
+      .max(3_600_000)
+      .default(10 * 60_000),
 
     /**
      * Disaster recovery.
@@ -1501,6 +1557,28 @@ export const configSchema = z
     // NOT_ATTEMPTED — but one set without the other is somebody who believes
     // their backups are being delivered and will find out otherwise during a
     // disaster.
+    // Phase 6A D0: the off-site copy is all five values or none. A partial set is an owner
+    // who believes the archives leave the host and they do not.
+    const offsite = [
+      'BACKUP_OFFSITE_ENDPOINT',
+      'BACKUP_OFFSITE_REGION',
+      'BACKUP_OFFSITE_BUCKET',
+      'BACKUP_OFFSITE_ACCESS_KEY_ID',
+      'BACKUP_OFFSITE_SECRET_ACCESS_KEY',
+    ] as const;
+    const offsiteSet = offsite.filter((key) => config[key] !== '');
+    if (offsiteSet.length > 0 && offsiteSet.length < offsite.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [offsite.find((key) => config[key] === '') ?? offsite[0]],
+        message:
+          'The off-site backup needs BACKUP_OFFSITE_ENDPOINT, BACKUP_OFFSITE_REGION, ' +
+          'BACKUP_OFFSITE_BUCKET, BACKUP_OFFSITE_ACCESS_KEY_ID and BACKUP_OFFSITE_SECRET_ACCESS_KEY ' +
+          'together: set all five to copy archives off-site, or none to keep it off. (No value ' +
+          'is shown.)',
+      });
+    }
+
     const chat = config.BACKUP_TELEGRAM_CHAT_ID !== '';
     const token = config.BACKUP_TELEGRAM_BOT_TOKEN !== '';
     if (chat !== token) {
@@ -1516,6 +1594,24 @@ export const configSchema = z
   });
 
 export type AppConfig = z.infer<typeof configSchema>;
+
+/** An http(s) origin: no path beyond `/`, no query, fragment or embedded credentials. */
+function isOffsiteEndpoint(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    (url.protocol === 'https:' || url.protocol === 'http:') &&
+    url.username === '' &&
+    url.password === '' &&
+    url.pathname === '/' &&
+    url.search === '' &&
+    url.hash === ''
+  );
+}
 
 /**
  * Whether this installation reads v1 ciphertext — the one place that decides.

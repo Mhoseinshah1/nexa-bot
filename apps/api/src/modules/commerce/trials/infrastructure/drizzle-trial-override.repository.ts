@@ -12,6 +12,7 @@ import type {
   TrialOverrideRecord,
   TrialOverrideRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Custom trial limits, in PostgreSQL. Every query leads with the tenant. */
 /** Overrides per INSERT: 4 parameters a row. */
@@ -19,6 +20,7 @@ const OVERRIDE_INSERT_CHUNK = 10_000;
 /** Keys per `IN (…)` read. */
 const OVERRIDE_READ_CHUNK = 10_000;
 
+@ScopeBound()
 export class DrizzleTrialOverrideRepository implements TrialOverrideRepository {
   constructor(private readonly db: Database) {}
 

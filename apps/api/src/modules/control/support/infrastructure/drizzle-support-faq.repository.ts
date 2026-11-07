@@ -7,6 +7,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { supportFaqSeeds, supportFaqs } from '../../../../infrastructure/persistence/schema.js';
 import type { SupportFaqRecord, SupportFaqRepository } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The columns the record is built from. Selected explicitly, in one place. */
 const COLUMNS = {
@@ -53,6 +54,7 @@ function toRecord(row: Row): SupportFaqRecord {
  * a UUID and would find another tenant's row without it, and the service answers that
  * case as "no such entry" only because this predicate makes it so.
  */
+@ScopeBound()
 export class DrizzleSupportFaqRepository implements SupportFaqRepository {
   constructor(private readonly db: Database) {}
 

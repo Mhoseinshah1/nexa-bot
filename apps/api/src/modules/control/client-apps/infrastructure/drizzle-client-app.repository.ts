@@ -22,6 +22,7 @@ import type {
   ClientAppRecord,
   ClientAppRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The columns the record is built from. Selected explicitly, in one place — and never
@@ -148,6 +149,7 @@ const PLATFORM_RANK = new Map<string, number>(
  * Every query carries `eq(clientApps.tenantId, …)`. The service answers another tenant's
  * id as "no such entry" only because this predicate makes it so.
  */
+@ScopeBound()
 export class DrizzleClientAppRepository implements ClientAppRepository {
   constructor(private readonly db: Database) {}
 

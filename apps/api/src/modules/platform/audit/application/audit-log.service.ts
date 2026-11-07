@@ -1,3 +1,4 @@
+import type { OwnerExportAlerts } from '../../owner-alerts/application/ports.js';
 import {
   AUDIT_LOG_EXPORT_ROW_MAX,
   AUDIT_LOG_PAGE_DEFAULT,
@@ -73,6 +74,8 @@ export interface AuditLogFile {
 }
 
 export interface AuditLogServiceDeps {
+  /** Phase 6A D0: announces every export to the installation owner before it leaves. */
+  readonly ownerAlerts?: OwnerExportAlerts;
   readonly guard: PermissionGuard;
   readonly reader: AuditLogReader;
   readonly audit: AuditWriter;
@@ -174,6 +177,11 @@ export class AuditLogService {
       before: null,
       after: { format: 'csv', rows: rows.length, filter: filterRecord(query) },
       result: 'SUCCESS',
+    });
+    await this.deps.ownerAlerts?.dataExported(scope, actor, {
+      kind: 'AUDIT_LOG',
+      rows: rows.length,
+      format: 'csv',
     });
     return {
       // Built from the clock alone — digits and dashes — so it is safe inside the header.

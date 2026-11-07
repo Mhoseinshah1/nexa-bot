@@ -8,10 +8,11 @@ import {
   SESSION_COOKIE_NAME,
   paymentGatewayListResponseSchema,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { sortDeep } from '../../apps/api/src/modules/commerce/payments/infrastructure/nowpayments-signature';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

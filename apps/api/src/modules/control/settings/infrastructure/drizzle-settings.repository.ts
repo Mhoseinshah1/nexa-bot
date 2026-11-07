@@ -7,6 +7,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SettingRepository, StoredSetting } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The `jsonb` value column, encoded and decoded explicitly.
@@ -70,6 +71,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
 
+@ScopeBound()
 export class DrizzleSettingRepository implements SettingRepository {
   constructor(private readonly db: Database) {}
 

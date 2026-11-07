@@ -13,6 +13,7 @@ import type {
   AccountTransferRecord,
   CustomerAccountTransferRepository,
 } from '../application/customer-account-transfer.service.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The account transfer's reads and its one write (`docs/customer-account-transfer-audit.md`).
@@ -22,6 +23,7 @@ import type {
  * locks it sees what the move will act on. Each count is a sub-select through that table's
  * own customer index.
  */
+@ScopeBound()
 export class DrizzleCustomerAccountTransferRepository implements CustomerAccountTransferRepository {
   constructor(private readonly db: Database) {}
 

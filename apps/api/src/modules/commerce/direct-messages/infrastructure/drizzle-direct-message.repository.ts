@@ -26,6 +26,7 @@ import type {
   DirectMessageRepository,
   DirectMessageTarget,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The advisory lock class of a tenant's direct messages ('DM'). Taken first by every send;
@@ -99,6 +100,7 @@ function toRecord(row: RecordRow): DirectMessageRecord {
  * history JOINS the lane row by its subject key — `(tenant, kind, subject_id)` — rather than
  * copying its state, so what the operator reads is exactly where the lane is.
  */
+@ScopeBound()
 export class DrizzleDirectMessageRepository implements DirectMessageRepository {
   constructor(private readonly db: Database) {}
 

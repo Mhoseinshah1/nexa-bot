@@ -26,7 +26,7 @@ import {
   type ProviderUserRef,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { encodeIdPair } from '../../apps/api/src/surfaces/telegram/bot-runtime';
 import { MarzbanAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/marzban.adapter';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -34,6 +34,7 @@ import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/pr
 import type { ServiceLocationInput } from '../../apps/api/src/modules/commerce/locations/application/service-location-admin.service';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

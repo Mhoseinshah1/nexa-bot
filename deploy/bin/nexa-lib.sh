@@ -158,8 +158,16 @@ nexa_env_value() {
 # non-secret interpolation values; the per-service `env_file:` entries inside
 # the compose file supply the application configuration, and the Docker daemon
 # reads those as root so no container needs permission to.
+#
+# NEXA_COMPOSE_TIMEOUT (seconds), when set, bounds THIS call. A `compose ps` or `up -d`
+# against a wedged daemon never returns on its own, and every wait built on it then
+# hangs with it: the operator sees a command that does nothing and has no way to tell
+# "slow" from "stuck". Unset means unbounded, which is what a pull or a migration run
+# needs; the callers that must never hang set it for the one call (`NEXA_COMPOSE_TIMEOUT=20
+# nexa_compose ps`, which bash scopes to that call). `--kill-after` because a client that
+# ignores TERM would otherwise outlive the deadline it was given.
 nexa_compose() {
-  docker compose \
+  ${NEXA_COMPOSE_TIMEOUT:+timeout --kill-after=5 "$NEXA_COMPOSE_TIMEOUT"} docker compose \
     --env-file "${NEXA_CONFIG_DIR}/deploy.env" \
     -f "${NEXA_DEPLOY_DIR}/compose.yml" \
     "$@"
@@ -524,14 +532,28 @@ nexa_wait_ready() {
   # So: `status` passes 5 and always gets 5; `update` and `rollback` pass
   # nothing and take the variable, which is what the smoke test lowers so a
   # failure case does not take three minutes to prove.
-  local timeout="${1:-${NEXA_READY_TIMEOUT:-180}}" waited=0 state required
+  local timeout="${1:-${NEXA_READY_TIMEOUT:-180}}" state required out
+  # A WALL-CLOCK deadline. The loop used to add 3 per poll, which counts the sleep and
+  # nothing else: each `compose ps` takes its own time (seconds on a loaded host, for ever
+  # on a wedged daemon), so a "180 second" wait took however long it took. Elapsed time is
+  # measured against the clock, and each poll is itself bounded by what is left.
+  local deadline now remaining poll_limit
+  deadline=$(($(date +%s) + timeout))
+  # Which required service last held the wait back, and in what state; read by
+  # `nexa_report_unready` when the wait gives up. Reset per wait.
+  NEXA_UNREADY_SERVICE=""
+  NEXA_UNREADY_STATE=""
   # Resolved once per wait, not once per poll: the compose file does not change
   # underneath a single wait, and re-reading it every two seconds would put a
   # `compose config` between every poll of a release that is trying to start.
   required="$(nexa_required_services)"
   [ -n "$required" ] ||
     nexa_die "the active compose file defines none of the services readiness requires (${NEXA_READY_SERVICES}). Refusing to call this installation ready."
-  while [ "$waited" -lt "$timeout" ]; do
+  while now="$(date +%s)" && [ "$now" -lt "$deadline" ]; do
+    remaining=$((deadline - now))
+    # At most 20 s per poll (a healthy `ps` answers in well under one), and never past the
+    # deadline. A poll that times out yields no output, which reads as "not ready yet".
+    poll_limit=$((remaining < 20 ? remaining : 20))
     # SC2016: the single quotes are the point. This is Python source, and the
     # shell must not expand anything inside it — an interpolated value here
     # would be code, not data.
@@ -543,8 +565,8 @@ nexa_wait_ready() {
     # between a failed release being backed out in seconds and in six minutes
     # (this wait, then the back-out's own).
     # shellcheck disable=SC2086
-    state="$(nexa_compose ps --all --format json $required 2>/dev/null |
-      NEXA_REQUIRED_SERVICES="$required" python3 -c '
+    out="$(NEXA_COMPOSE_TIMEOUT="$poll_limit" nexa_compose ps --all --format json $required 2>/dev/null |
+      NEXA_VERDICT_WITH_SERVICE=1 NEXA_REQUIRED_SERVICES="$required" python3 -c '
 import json, sys
 raw = sys.stdin.read().strip()
 if not raw:
@@ -649,23 +671,53 @@ def verdict(service):
 import os
 required = os.environ.get("NEXA_REQUIRED_SERVICES", "").split()
 verdicts = [verdict(service) for service in required]
-if any(v in ("exited", "dead") for v in verdicts):
-    print(next(v for v in verdicts if v in ("exited", "dead")))
-elif all(v == "healthy" for v in verdicts):
-    print("healthy")
+# The answer is one word, as every caller reads it. With NEXA_VERDICT_WITH_SERVICE set
+# (the readiness wait does) it is "<word><TAB><service>", so a timeout can say WHICH role
+# held it back rather than only that something did.
+pairs = list(zip(required, verdicts))
+chosen = next(((s, v) for s, v in pairs if v in ("exited", "dead")), None)
+if chosen is None and not all(v == "healthy" for v in verdicts):
+    chosen = next(((s, v) for s, v in pairs if v != "healthy"), None)
+word = chosen[1] if chosen else "healthy"
+if os.environ.get("NEXA_VERDICT_WITH_SERVICE") and chosen:
+    print(word + "\t" + chosen[0])
 else:
-    print(next((v for v in verdicts if v != "healthy"), ""))
+    print(word)
 ' 2>/dev/null || true)"
+    state="${out%%$'\t'*}"
+    if [ "$state" != "$out" ]; then
+      NEXA_UNREADY_SERVICE="${out#*$'\t'}"
+      NEXA_UNREADY_STATE="$state"
+    fi
 
     case "$state" in
       healthy) return 0 ;;
       # `exited` and `dead` will not become healthy by waiting.
       exited | dead) return 1 ;;
     esac
-    sleep 3
-    waited=$((waited + 3))
+    # Never sleep past the deadline either.
+    now="$(date +%s)"
+    remaining=$((deadline - now))
+    [ "$remaining" -gt 0 ] || break
+    sleep $((remaining < 3 ? remaining : 3))
   done
   return 1
+}
+
+# Said when a readiness wait gave up, in Persian, for the operator who is looking at a
+# terminal: WHICH role is not ready, its state, and the tail of its log — the line that
+# says why is almost always in the last few. Every docker call here is bounded, so the
+# report cannot hang the command that is already reporting a failure. Reads the
+# NEXA_UNREADY_* variables the wait left; with none (nothing was listed) it says so.
+nexa_report_unready() {
+  local service="${NEXA_UNREADY_SERVICE:-}" state="${NEXA_UNREADY_STATE:-}"
+  if [ -z "$service" ]; then
+    nexa_warn "سرویسی آماده نشد، اما نتوانستم تشخیص دهم کدام. «botctl status» را اجرا کنید."
+    return 0
+  fi
+  nexa_warn "سرویس «${service}» آماده نشد (وضعیت: ${state:-نامشخص}). آخرین خطوط لاگ آن:"
+  NEXA_COMPOSE_TIMEOUT=20 nexa_compose logs --no-color --tail 20 "$service" 2>&1 | tail -n 20 >&2 || true
+  nexa_warn "برای دیدن لاگ کامل: botctl logs ${service}"
 }
 
 # --- The update lock ---------------------------------------------------------
@@ -1155,6 +1207,121 @@ nexa_backup_cpu_percent_setting() {
     '' | *[!0-9]*) return 1 ;;
   esac
   printf '%s\n' "$value"
+}
+
+# --- The application's database role (ADR-0037) ------------------------------
+#
+# Row-level security binds only a role that does not own the tables, so the
+# application connects as `nexa_app` through DATABASE_APP_URL; DATABASE_URL stays the
+# owner's, for migrations, dumps and restores. Migration 0318 creates the roles with no
+# login. This gives `nexa_app` its login and its password — generated here once, then
+# read back on every later run and RE-ASSERTED, so a cluster that lost the role (a
+# fresh volume, a restore) agrees with the file again — and only then writes the URL,
+# so no process is ever pointed at a role that cannot log in. Until the file exists
+# the processes keep connecting as the owner, where the policies are inert, which is
+# what makes a failure here safe to leave.
+#
+# Its OWN file, `app-database.env` (0600), which compose reads after nexa.env: nexa.env
+# is the operator's and an update never rewrites it. The password never reaches an
+# argv or an environment: it travels to psql on STDIN, written by the `printf`
+# builtin, and into the file by a rename.
+NEXA_APP_DB_ENV_NAME=app-database.env
+
+# The alphabet `random_password` in install.sh uses: base64 without `+/=`.
+nexa_app_db_password_valid() { [[ "$1" =~ ^[A-Za-z0-9]{24,64}$ ]]; }
+
+nexa_ensure_app_db_role() {
+  local app_env="${NEXA_CONFIG_DIR}/nexa.env" pg_env="${NEXA_CONFIG_DIR}/postgres.env"
+  local role_env="${NEXA_CONFIG_DIR}/${NEXA_APP_DB_ENV_NAME}"
+  local pg_user pg_db owner_url app_url password='' adding=0
+  pg_user="$(nexa_env_value "$pg_env" POSTGRES_USER 2>/dev/null)" || {
+    nexa_warn "no POSTGRES_USER in ${pg_env}; the application keeps connecting as the owner."
+    return 1
+  }
+  pg_db="$(nexa_env_value "$pg_env" POSTGRES_DB 2>/dev/null)" || pg_db="$pg_user"
+  owner_url="$(nexa_env_value "$app_env" DATABASE_URL 2>/dev/null)" || {
+    nexa_warn "no DATABASE_URL in ${app_env}; the application role was not configured."
+    return 1
+  }
+  app_url="$(nexa_env_value "$role_env" DATABASE_APP_URL 2>/dev/null || true)"
+  if [ -n "$app_url" ]; then
+    # postgres://nexa_app:<password>@host:port/db — parameter expansion, no subprocess.
+    password="${app_url#postgres://nexa_app:}"
+    password="${password%%@*}"
+    nexa_app_db_password_valid "$password" || {
+      nexa_warn "DATABASE_APP_URL in ${role_env} is not the form this installer writes; it was left as it is."
+      return 1
+    }
+  else
+    adding=1
+    password="$(head -c 24 /dev/urandom | base64 -w0 | tr -d '=+/' | cut -c1-32)"
+    nexa_app_db_password_valid "$password" || {
+      nexa_warn "could not generate a password for the application role."
+      return 1
+    }
+  fi
+
+  nexa_step "configuring the application's database role (row-level security)"
+  # Idempotent, and refuses a role that could bypass the policies rather than
+  # repairing it silently: somebody granted that, and an operator should know.
+  #
+  # The session first stops the server recording the statement that carries the password:
+  # not in the log (log_statement, the duration and error logs) and not in
+  # pg_stat_statements, which compose preloads. Superuser settings, which a Docker
+  # install's owner holds; an owner that cannot set them is refused rather than logged.
+  if ! printf '%s\n' \
+    "SET log_statement = 'none';" \
+    "SET log_min_duration_statement = -1;" \
+    "SET log_min_error_statement = 'panic';" \
+    "SET pg_stat_statements.track_utility = off;" \
+    "DO \$\$ BEGIN" \
+    "  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexa_system') THEN" \
+    "    CREATE ROLE nexa_system NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF;" \
+    "  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexa_app') THEN" \
+    "    CREATE ROLE nexa_app NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT; END IF;" \
+    "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname IN ('nexa_app', 'nexa_system') AND (rolsuper OR rolbypassrls)) THEN" \
+    "    RAISE EXCEPTION 'nexa_app or nexa_system is SUPERUSER or BYPASSRLS'; END IF;" \
+    "  IF NOT EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid" \
+    "                 JOIN pg_roles u ON u.oid = m.member" \
+    "                 WHERE g.rolname = 'nexa_system' AND u.rolname = 'nexa_app') THEN" \
+    "    GRANT nexa_system TO nexa_app WITH INHERIT FALSE, SET TRUE; END IF;" \
+    "  ALTER ROLE nexa_system NOLOGIN;" \
+    "  ALTER ROLE nexa_app LOGIN PASSWORD '${password}';" \
+    "END \$\$;" |
+    nexa_compose exec -T postgres psql -U "$pg_user" -d "$pg_db" -XAtq -v ON_ERROR_STOP=1 \
+      >/dev/null 2>&1; then
+    nexa_warn "the application role could not be configured; the application keeps connecting as the owner, where row-level security is inert. Nothing else changed."
+    return 1
+  fi
+
+  [ "$adding" -eq 1 ] || {
+    nexa_ok "the application connects as nexa_app (the password was not printed)"
+    return 0
+  }
+  # The owner's URL with the application's credential: same host, port and database.
+  local rest="${owner_url#*@}" tmp
+  tmp="$(mktemp "${role_env}.XXXXXX")" || {
+    nexa_warn "cannot write ${role_env}; the application keeps connecting as the owner."
+    return 1
+  }
+  chmod 0600 "$tmp"
+  {
+    printf '# The application role (ADR-0037), written by the installer and botctl.\n'
+    printf '# The processes connect as nexa_app, which row-level security binds; the\n'
+    printf "# owner's DATABASE_URL in nexa.env stays for migrations and backups.\n"
+    printf 'DATABASE_APP_URL=postgres://nexa_app:%s@%s\n' "$password" "$rest"
+  } >"$tmp" || {
+    rm -f "$tmp"
+    nexa_warn "cannot write ${role_env} (is /var full?); the application keeps connecting as the owner."
+    return 1
+  }
+  sync "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$role_env" || {
+    rm -f "$tmp"
+    nexa_warn "cannot install ${role_env}; the application keeps connecting as the owner."
+    return 1
+  }
+  nexa_ok "the application now connects as nexa_app (the password was not printed)"
 }
 
 # The limits for a percent (empty: the default) and a host memory in MB (empty: not printed).

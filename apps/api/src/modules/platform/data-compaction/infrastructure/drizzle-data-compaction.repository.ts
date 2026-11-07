@@ -22,6 +22,7 @@ import type {
   DataCompactionRunRow,
   TableCounts,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The data compaction's SQL (Round 9 C3).
@@ -120,6 +121,7 @@ function nonZero(counts: Record<string, number>): TableCounts {
   return out as TableCounts;
 }
 
+@ScopeBound({ installation: true })
 export class DrizzleDataCompactionRepository implements DataCompactionRepository {
   constructor(private readonly db: Database) {}
 

@@ -11,6 +11,7 @@ import type {
   NotificationCentrePosition,
   NotificationCentreRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The notification centre over `customer_notifications` (Round 11, B1): the lane's own
@@ -18,6 +19,7 @@ import type {
  * `rendered_text` (so only a DELIVERED one, by the table's CHECK), and every query names the
  * tenant, the customer and the bot.
  */
+@ScopeBound()
 export class DrizzleNotificationCentreRepository implements NotificationCentreRepository {
   constructor(private readonly db: Database) {}
 

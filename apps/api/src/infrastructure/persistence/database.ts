@@ -1,5 +1,6 @@
 import { Pool, type PoolClient } from 'pg';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { bindCheckoutsToScope, type ScopeEnforcement } from './database-scope.js';
 import { applyPgTypeParsers } from './pg-type-parsers.js';
 import { schema } from './schema.js';
 
@@ -65,6 +66,11 @@ export interface DatabaseHandle {
    * the probe; the statement lives here.
    */
   appliedMigrations(deadlineAt: number): Promise<readonly { hash: string; createdAt: number }[]>;
+  /**
+   * Whether row-level security binds this handle's connections (ADR-0037): `enforcing`
+   * as nexa_app, `owner` as the table owner or a superuser, which bypass it.
+   */
+  scopeEnforcement(): Promise<ScopeEnforcement>;
   close(): Promise<void>;
 }
 
@@ -223,6 +229,9 @@ export function createDatabase(
   pool.on('connect', (client) => {
     client.on('error', reportOnce);
   });
+  // Every checkout — a transaction's, a bare-pool statement's, `withClient`'s — is bound
+  // to the scope in force when it is asked for (`database-scope.ts`, ADR-0037).
+  const scoped = bindCheckoutsToScope(pool);
   const db = drizzle(pool, { schema });
 
   return {
@@ -280,6 +289,9 @@ export function createDatabase(
         { deadlineAt },
       );
       return result.rows.map((row) => ({ hash: row.hash, createdAt: Number(row.created_at) }));
+    },
+    scopeEnforcement() {
+      return scoped.enforcement();
     },
     async close() {
       await pool.end();

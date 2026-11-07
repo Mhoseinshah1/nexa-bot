@@ -1,3 +1,4 @@
+import type { OwnerExportAlerts } from '../../owner-alerts/application/ports.js';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   errors,
@@ -72,6 +73,8 @@ export const KEY_REMOVE: PermissionKey = 'recovery.key.remove';
 const BACKUP_VIEW: PermissionKey = 'backup.view';
 
 export interface InstallationKeyServiceDeps {
+  /** Phase 6A D0: announces every export to the installation owner before it leaves. */
+  readonly ownerAlerts?: OwnerExportAlerts;
   readonly keyring: InstallationKeyring;
   readonly loader: { refresh(): Promise<unknown> };
   readonly keys: InstallationKeyRepository;
@@ -313,6 +316,10 @@ export class InstallationKeyService {
       result: 'SUCCESS',
     });
 
+    await this.deps.ownerAlerts?.dataExported(scope, actor, {
+      kind: 'RECOVERY_KIT',
+      rows: held.length,
+    });
     const stamp = now.toISOString().slice(0, 10).replace(/-/g, '');
     return {
       bytes,

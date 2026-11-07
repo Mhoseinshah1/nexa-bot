@@ -17,7 +17,9 @@ import type {
   AudienceSummary,
 } from '../application/ports.js';
 import { audienceCustomersQuery, fingerprintOf } from './audience-sql.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
+@ScopeBound()
 export class DrizzleAudienceReader implements AudienceReader {
   constructor(private readonly db: Database) {}
 

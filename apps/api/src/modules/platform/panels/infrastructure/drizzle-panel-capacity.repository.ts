@@ -14,6 +14,7 @@ import type {
   PanelCapacityRepository,
   ReserveCapacityInput,
 } from '../application/capacity-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 function executorOf(db: Database, tx?: TransactionScope): Executor {
   return tx?.tx ?? db;
@@ -35,6 +36,7 @@ const OCCUPYING_STATES = SERVICE_CAPACITY_STATES;
  * Two counts and a cap, and the ONLY interesting thing in the file is the order
  * of the statements in `reserve`. Everything else is bookkeeping.
  */
+@ScopeBound()
 export class DrizzlePanelCapacityRepository implements PanelCapacityRepository {
   constructor(private readonly db: Database) {}
 

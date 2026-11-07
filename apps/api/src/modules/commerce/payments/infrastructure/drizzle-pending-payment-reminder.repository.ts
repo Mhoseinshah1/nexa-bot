@@ -9,6 +9,7 @@ import type {
   PendingPaymentReminderRepository,
   PendingReminderCandidate,
 } from '../application/pending-payment-reminder.service.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 interface Row {
   readonly id: string;
@@ -40,6 +41,7 @@ function toCandidate(row: Row): PendingReminderCandidate {
  * enqueues nothing for them, and without this filter they would come back on every pass
  * until the attempt lapsed.
  */
+@ScopeBound()
 export class DrizzlePendingPaymentReminderRepository implements PendingPaymentReminderRepository {
   constructor(private readonly db: Database) {}
 

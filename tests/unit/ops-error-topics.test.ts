@@ -99,6 +99,9 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'settings.stored_value_valid': 'SYSTEM',
   'access.permission_denied': 'SECURITY',
   'auth.login_locked_out': 'SECURITY',
+  'auth.login_new_ip': 'SECURITY',
+  'access.data_exported': 'SECURITY',
+  'access.bulk_read': 'SECURITY',
   'admin.': 'SECURITY',
   'customer_notices.paused': 'SYSTEM',
   'customer_notices.resumed': 'SYSTEM',
@@ -125,6 +128,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'backup.disk_threshold_ok': 'BACKUPS',
   'backup.interval_exceeded': 'BACKUPS',
   'backup.interval_ok': 'BACKUPS',
+  'backup.offsite_failed': 'BACKUPS',
+  'backup.offsite_ok': 'BACKUPS',
   'recovery.run_failed': 'BACKUPS',
   'recovery.run_ok': 'BACKUPS',
   'incident.': 'SYSTEM',
@@ -147,6 +152,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'capacity.worker_lag_ok': 'SYSTEM',
   // Phase 6A PR-3: the creator panel's expiry sweep, beside them.
   'hosting.bot_expired': 'SYSTEM',
+  // PR #411: a vanished non-primary cached tenant, the owner's group only.
+  'tenancy.cached_tenant_vanished': 'SYSTEM',
 };
 
 /** A family code is routed by its members; the family prefix itself is not a code. */

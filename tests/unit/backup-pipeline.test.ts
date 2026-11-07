@@ -23,6 +23,8 @@ import type {
   BackupRunRow,
   BackupWorkspace,
   DeliveryAttempt,
+  OffsiteBackupUploader,
+  OffsiteUploadOutcome,
   StartOutcome,
   VerifyOutcome,
 } from '../../apps/api/src/modules/platform/backup/application/ports';
@@ -361,6 +363,7 @@ function harness(
     heartbeat?: ConstructorParameters<typeof BackupService>[0]['heartbeat'];
     logger?: ConstructorParameters<typeof BackupService>[0]['logger'];
     orphanSweep?: ConstructorParameters<typeof BackupService>[0]['orphanSweep'];
+    offsite?: ConstructorParameters<typeof BackupService>[0]['offsite'];
   } = {},
 ): Harness {
   const clock = new FakeClock();
@@ -557,6 +560,7 @@ function harness(
     logger: options.logger ?? { info() {}, warn() {}, error() {} },
     ...(options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat }),
     ...(options.orphanSweep === undefined ? {} : { orphanSweep: options.orphanSweep }),
+    ...(options.offsite === undefined ? {} : { offsite: options.offsite }),
     leaseOwner: 'worker:1:aaaa',
     diskPreflight: async () => state.disk,
     afterSuccess: async () => {
@@ -2223,5 +2227,122 @@ describe('Round 8 B1: a run always cleans up after itself', () => {
     const busy = await h.service.run('SCHEDULED');
     expect(busy.kind).toBe('BUSY');
     expect(swept).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Phase 6A D0: the write-only off-site copy, after DELIVER
+// ---------------------------------------------------------------------------------------
+
+describe('the off-site copy of a verified archive (Phase 6A D0)', () => {
+  type Upload = Parameters<OffsiteBackupUploader['upload']>[0];
+  function offsite(
+    outcome: OffsiteUploadOutcome | (() => never),
+    configured = true,
+  ): OffsiteBackupUploader & { calls: Upload[] } {
+    const calls: Upload[] = [];
+    return {
+      calls,
+      configured,
+      async upload(input) {
+        calls.push(input);
+        return typeof outcome === 'function' ? outcome() : outcome;
+      },
+      async testUpload() {
+        throw new Error('not used by the pipeline');
+      },
+    };
+  }
+  const uploaded: OffsiteUploadOutcome = {
+    kind: 'UPLOADED',
+    objects: 2,
+    bytes: 5100,
+    lockedUntil: null,
+  };
+
+  it('uploads every part of the VERIFIED archive, after Telegram, with an index of digests', async () => {
+    const uploader = offsite(uploaded);
+    const h = harness({ offsite: uploader });
+    h.state.archiveBytes = 100;
+    h.state.partBytes = 60;
+    const run = await completed(h);
+    expect(run.state).toBe('SUCCEEDED');
+    expect(uploader.calls).toHaveLength(1);
+    const call = uploader.calls[0]!;
+    expect(call.backupId).toBe(run.id);
+    expect(call.archivePath).toBe('/w/archive');
+    expect(call.parts.map((part) => part.partNumber)).toEqual([1, 2]);
+    expect(call.index).toMatchObject({
+      backupId: run.id,
+      parts: [{ partNumber: 1 }, { partNumber: 2 }],
+    });
+    // Telegram first: the off-site copy never delays the canonical delivery.
+    expect(h.state.documents.length).toBeGreaterThan(0);
+    // A healthy installation is not told it is healthy.
+    expect(h.state.recorded.map((event) => event.code)).not.toContain('backup.offsite_ok');
+  });
+
+  it('opens backup.offsite_failed for the owner, keeps the run SUCCEEDED and the archive on disk', async () => {
+    const uploader = offsite({
+      kind: 'FAILED',
+      uploaded: 1,
+      expected: 3,
+      detail: 'HTTP 403 AccessDenied',
+    });
+    const h = harness({ offsite: uploader });
+    const run = await completed(h);
+    expect(run.state).toBe('SUCCEEDED');
+    expect(run.deliveryState).toBe('SUCCEEDED');
+    const failed = h.state.recorded.find((event) => event.code === 'backup.offsite_failed');
+    expect(failed?.severity).toBe('WARN');
+    expect(failed?.dedupeKey).toBe('backup.offsite');
+    expect(failed?.message).toContain('نگه داشته شد');
+    // Never the archive: a failed copy removes nothing.
+    expect(h.state.everythingRemoved).toBe(false);
+    expect(h.state.pruneCalls).toBe(1);
+  });
+
+  it('treats a throwing uploader as a failed copy, never a failed run', async () => {
+    const h = harness({
+      offsite: offsite(() => {
+        throw new Error('socket hang up');
+      }),
+    });
+    const run = await completed(h);
+    expect(run.state).toBe('SUCCEEDED');
+    expect(h.state.recorded.map((event) => event.code)).toContain('backup.offsite_failed');
+  });
+
+  it('closes an open off-site condition when a copy lands', async () => {
+    const h = harness({ offsite: offsite(uploaded) });
+    h.state.open.add('backup.offsite_failed');
+    await completed(h);
+    const ok = h.state.recorded.find((event) => event.code === 'backup.offsite_ok');
+    expect(ok?.recoversCode).toBe('backup.offsite_failed');
+  });
+
+  it('sends nothing when it is not configured (the default) or the run must stay on the server', async () => {
+    const off = offsite(uploaded, false);
+    await completed(harness({ offsite: off }));
+    expect(off.calls).toEqual([]);
+
+    const on = offsite(uploaded);
+    const local = harness({ offsite: on });
+    const outcome = await local.service.run('PRE_RESTORE', { deliver: false });
+    expect(outcome.kind).toBe('COMPLETED');
+    expect(on.calls).toEqual([]);
+  });
+
+  it('never uploads an archive whose verification failed', async () => {
+    const uploader = offsite(uploaded);
+    const h = harness({ offsite: uploader });
+    h.state.verify = {
+      ok: false,
+      scratchDatabase: 'nexa_verify_x',
+      tableCount: 0,
+      detail: 'no tables',
+    };
+    await h.service.run('MANUAL');
+    expect(uploader.calls).toEqual([]);
   });
 });

@@ -96,11 +96,13 @@ import type {
   PaymentGatewayProvider,
   ProductId,
   TenantContext,
+  TenantKind,
   Translator,
   // Round N: the audience's balance range is written in the selling currency.
   SalesCurrencyCode,
 } from '@nexa/contracts';
 
+import { InstallationTenantGuard } from './infrastructure/lifecycle/installation-tenant-guard.js';
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { readFileSync } from 'node:fs';
 import { rename, stat } from 'node:fs/promises';
@@ -317,6 +319,9 @@ import { LegacyCleanupScheduler } from './modules/platform/legacy-compaction/app
 import { DrizzleLegacyCompactionRepository } from './modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
+import { S3OffsiteUploader } from './modules/platform/backup/infrastructure/s3-offsite-uploader.js';
+import { OwnerSecurityAlerts } from './modules/platform/owner-alerts/application/owner-security-alerts.js';
+import { DrizzleOwnerAlertStore } from './modules/platform/owner-alerts/infrastructure/drizzle-owner-alert.store.js';
 import { RoutedBackupDelivery } from './modules/platform/backup/application/routed-backup-delivery.js';
 import { BackupSchedulePolicy } from './modules/platform/backup/application/backup-schedule.js';
 import { OpsGroupBackupTopicAdapter } from './modules/control/ops-group/application/backup-topic.js';
@@ -493,6 +498,8 @@ import { WalletService } from './modules/commerce/wallet/application/wallet.serv
 import { MigrationOpeningBalanceService } from './modules/commerce/wallet/application/migration-opening-balance.service.js';
 import { CustomerBotLinkService } from './modules/commerce/customers/application/customer-bot-link.service.js';
 import { DrizzleCustomerBotLinkRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-bot-link.repository.js';
+import { CustomerPruneService } from './modules/commerce/customers/application/customer-prune.service.js';
+import { DrizzleCustomerPruneRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-prune.repository.js';
 import { LegacyReviewQueueService } from './modules/platform/legacy-import/application/legacy-review-queue.service.js';
 import { LegacyAdoptionService } from './modules/commerce/legacy-adoption/application/legacy-adoption.service.js';
 // legacy-materialize: ended services
@@ -1271,6 +1278,12 @@ export interface Container {
   readonly sessions: DrizzleSessionRepository;
   readonly loginThrottle: DrizzleLoginThrottleRepository;
   readonly auth: AuthenticationService;
+  /**
+   * Phase 6A D0: the installation owner's security alerts (`auth.login_new_ip`,
+   * `access.data_exported`, `access.bulk_read`), recorded only in the installation tenant's
+   * scope so they reach the owner's operations group and never a hosted tenant's.
+   */
+  readonly ownerAlerts: OwnerSecurityAlerts;
   readonly adminManagement: AdminManagementService;
   /** Phase D2: an administrator's own second factor, sessions and history; owner recovery. */
   readonly accountSecurity: AccountSecurityService;
@@ -1312,7 +1325,12 @@ export interface Container {
   readonly hostingSection: HostingSectionService;
   readonly hosting: HostingService;
   readonly hostedBotExpiry: HostedBotExpiryService;
-  setInstallationTenant(tenantId: TenantId | null): void;
+  /**
+   * Sets the role's installation tenant and records its kind with the tenant guard, at the
+   * moment the scope is set (PR #411). `kind` is the resolved tenant's own kind; omitted, it
+   * is recorded as UNKNOWN, and a tenant of unknown kind that vanishes fails closed.
+   */
+  setInstallationTenant(tenantId: TenantId | null, kind?: TenantKind | null): void;
   readonly recordPing: RecordPingService;
   /**
    * Phase 4 — the customer-facing commerce lane.
@@ -1499,6 +1517,8 @@ export interface Container {
   readonly legacyReviewQueue: LegacyReviewQueueService;
   /** OI-1: the cutover command that links imported customers to a bot (`customers-link-bot.cli.ts`). */
   readonly customerBotLink: CustomerBotLinkService;
+  /** `botctl customers prune-empty` (`customers-prune.cli.ts`): never reachable from a surface. */
+  readonly customerPrune: CustomerPruneService;
   /** The one-time Mirza import's MATERIALIZE and BOT_LINK phases, as the executor uses them. */
   readonly legacyMaterializePort: LegacyMaterializePort;
   readonly legacyBotLinkPort: LegacyBotLinkPort;
@@ -1774,6 +1794,11 @@ export interface Container {
    * event loop would be a two-hour subprocess beside the webhook.
    */
   readonly backup: BackupService;
+  /**
+   * Phase 6A D0: the write-only off-site copy of verified archives (`docs/backup.md` § Off-site
+   * copy). Unconfigured — the default — it sends nothing; `botctl backup offsite test` uses it.
+   */
+  readonly backupOffsite: S3OffsiteUploader;
   readonly backupScheduler: BackupScheduler;
   /**
    * Whether a recovery holds the installation quiesced right now.
@@ -1831,6 +1856,11 @@ export interface Container {
    */
   readonly keyring: InstallationKeyring;
   readonly installationKeyLoader: InstallationKeyLoader;
+  /**
+   * Keeps this role's cached installation tenant true after the database under it is
+   * replaced by a restore. Started by `resolveInstallationTenant`, stopped by `shutdown`.
+   */
+  readonly installationTenantGuard: InstallationTenantGuard;
   /** R12 F2: the owner's outbound allow-list the URL policy consults (refreshed per role). */
   readonly outboundAllowList: OutboundAllowList;
   readonly installationKeyRepository: DrizzleInstallationKeyRepository;
@@ -1954,6 +1984,15 @@ export interface ContainerOptions {
    * and one log line in it makes the document unreadable). Never "off": the lines are kept.
    */
   readonly logTo?: 'stdout' | 'stderr';
+  /**
+   * Which role the process's pool connects as (ADR-0037). `application` — the default, and
+   * what every serving process (`main*.ts`, the API) uses — is `DATABASE_APP_URL`, as
+   * nexa_app, bound by row-level security. `owner` is `DATABASE_URL`, for the OPERATOR's
+   * CLIs (`*.cli.ts`): run by root through `botctl`, installation-wide by design (a rewrap
+   * of every secret column, a bootstrap, a backup), and holding the owner's credential for
+   * their dumps and restores anyway. Named at each call, never inferred.
+   */
+  readonly connection?: 'application' | 'owner';
 }
 
 export function createContainer(
@@ -1992,8 +2031,15 @@ export function createContainer(
   // The request path's bounds for every role but the two that run the Mirza import, whose
   // one long import gets bounds sized for it (`database-profile.ts`).
   const databaseProfile = databaseProfileFor(role, config);
+  // As nexa_app when the installation has been given its credential, so row-level
+  // security binds every statement this process makes (ADR-0037); on the owner until
+  // then, where the policies are inert and nothing behaves differently.
+  const applicationDatabaseUrl =
+    options.connection === 'owner'
+      ? config.DATABASE_URL
+      : (config.DATABASE_APP_URL ?? config.DATABASE_URL);
   const database = createDatabase(
-    config.DATABASE_URL,
+    applicationDatabaseUrl,
     config.DATABASE_POOL_MAX,
     databaseProfile.timeouts,
     onPoolError,
@@ -2009,7 +2055,7 @@ export function createContainer(
     ? (() => {
         const profile = leaseDatabaseProfile(config);
         return createDatabase(
-          config.DATABASE_URL,
+          applicationDatabaseUrl,
           LEASE_POOL_MAX,
           profile.timeouts,
           onPoolError,
@@ -2131,6 +2177,22 @@ export function createContainer(
     uow,
   );
 
+  const ownerAlertStore = new DrizzleOwnerAlertStore(database.db);
+  const ownerAlerts = new OwnerSecurityAlerts({
+    opsLog,
+    knownIps: ownerAlertStore,
+    readWindows: ownerAlertStore,
+    // Lazily: the resolver is built further down, and is only asked at request time.
+    settings: { valueOf: (scope, key, tx) => settingsResolver.valueOf(scope, key, tx) },
+    uow,
+    installationScope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    clock,
+    logger,
+  });
+
   const auth = new AuthenticationService(
     admins,
     roles,
@@ -2147,6 +2209,7 @@ export function createContainer(
     tenants,
     guard,
     { factors: secondFactors, challenges: loginChallenges, cipher },
+    ownerAlerts,
   );
 
   const adminManagement = new AdminManagementService(
@@ -3165,6 +3228,16 @@ export function createContainer(
     clock,
     scopeActivity: tenants,
   });
+  const customerPrune = new CustomerPruneService({
+    repository: new DrizzleCustomerPruneRepository(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    clock,
+    scopeActivity: tenants,
+  });
 
   // ---------------------------------------------------------------------------
   // Control plane
@@ -3869,6 +3942,7 @@ export function createContainer(
    */
   const giftCardRepository = new DrizzleGiftCardRepository(database.db);
   const giftCardAdminService = new GiftCardAdminService({
+    ownerAlerts,
     repository: giftCardRepository,
     sealer: new SecretCipherGiftCardSealer(cipher),
     csv: new PresentationGiftCardCsvRenderer(new CachedTenantPresentationReader(tenants, clock)),
@@ -5407,6 +5481,7 @@ export function createContainer(
   });
 
   const reportingService = new ReportingService({
+    ownerAlerts,
     access: new ReportAccess(guard, admins, opsLog),
     repository: new DrizzleReportingRepository(database.db),
     periods: new IntlReportPeriodResolver(),
@@ -7915,6 +7990,7 @@ export function createContainer(
     clock,
   });
   const auditLogService = new AuditLogService({
+    ownerAlerts,
     guard,
     reader: new DrizzleAuditLogReader(database.db),
     audit,
@@ -8261,7 +8337,20 @@ export function createContainer(
     protectedByRecovery: () => recoveryRequests.backupIdsInUse(),
     logger,
   });
+  const backupOffsite = new S3OffsiteUploader({
+    endpoint: config.BACKUP_OFFSITE_ENDPOINT,
+    region: config.BACKUP_OFFSITE_REGION,
+    bucket: config.BACKUP_OFFSITE_BUCKET,
+    accessKeyId: config.BACKUP_OFFSITE_ACCESS_KEY_ID,
+    secretAccessKey: config.BACKUP_OFFSITE_SECRET_ACCESS_KEY,
+    prefix: config.BACKUP_OFFSITE_PREFIX,
+    retentionDays: config.BACKUP_OFFSITE_RETENTION_DAYS,
+    pathStyle: config.BACKUP_OFFSITE_PATH_STYLE,
+    timeoutMs: config.BACKUP_OFFSITE_TIMEOUT_MS,
+    clock,
+  });
   const backup = new BackupService({
+    offsite: backupOffsite,
     diskPreflight: async () => {
       const state = await backupDiskState();
       return state === null
@@ -8380,6 +8469,7 @@ export function createContainer(
     new PgCandidateKeyStore(config.DATABASE_URL, backupTools.liveDatabase),
   );
   const installationKeys = new InstallationKeyService({
+    ownerAlerts,
     keyring,
     loader: installationKeyLoader,
     keys: installationKeyRepository,
@@ -8547,6 +8637,7 @@ export function createContainer(
     logger,
   });
   const backupAdmin = new BackupAdminService({
+    ownerAlerts,
     runs: backupRuns,
     archivePassword: (scope) => backupPasswords.status(scope),
     recoveries: recoveryRequests,
@@ -8559,6 +8650,52 @@ export function createContainer(
     schedule: () => backupSchedule.effective(),
     disk: backupDiskState,
   });
+
+  /*
+   * The installation tenant is cached once at startup, so a restore whose tenant id differs
+   * from the running one leaves every role writing tenant-owned rows under an id that no
+   * longer exists. The guard re-resolves it, or exits so the role restarts.
+   */
+  const applyInstallationTenant = (tenantId: TenantId | null): void => {
+    installationTenantId = tenantId;
+    // The dispatcher runs for the installation but the rate ceiling is a
+    // tenant setting. One install serves one customer (ADR-0001), so the
+    // primary tenant's ceiling is the installation's — stated here rather
+    // than assumed somewhere further down.
+    notificationDispatcher.setRateLimitScope(
+      tenantId === null ? null : { tenantId, botInstanceId: null },
+    );
+  };
+  const installationTenantGuard = new InstallationTenantGuard({
+    getCurrent: () => installationTenantId,
+    setCurrent: applyInstallationTenant,
+    // Fail closed (PR #411): a vanished tenant not known to be the PRIMARY is never swapped
+    // for the owner's. The scope stops: every `scope()` above answers null, so the loops skip
+    // and the Web Admin's login scope is refused, rather than writing under anyone's tenant.
+    stopScope: () => applyInstallationTenant(null),
+    tenantKind: async (tenantId) => (await tenants.findById(tenantId))?.kind ?? null,
+    findPrimary: async () => (await tenants.findPrimary())?.id ?? null,
+    // The owner's operations log, the PR-2 mechanism, addressed to the PRIMARY tenant: the
+    // cached (vanished) tenant can no longer carry the event, and a hosted tenant's group
+    // must never receive it. Reading the primary here only ADDRESSES the alert.
+    alertOwner: async (event) => {
+      const owner = (await tenants.findPrimary())?.id ?? null;
+      if (owner === null) return false;
+      await new InstallationOwnerOpsLog({
+        recorder: opsLog,
+        installationTenantId: () => owner,
+        conditionIsOpen: (tenantId, code) =>
+          capacityConditions.tenantConditionIsOpen(tenantId, code),
+      }).record(event);
+      return true;
+    },
+    exit: (code) => process.exit(code),
+    logger,
+  });
+  const setInstallationTenant = (tenantId: TenantId | null, kind?: TenantKind | null): void => {
+    applyInstallationTenant(tenantId);
+    installationTenantGuard.record(tenantId, kind);
+  };
 
   const recoveryExecutor = new RecoveryExecutor({
     requests: recoveryRequests,
@@ -8612,6 +8749,7 @@ export function createContainer(
         : { tenantId: installationTenantId, botInstanceId: null },
     leaseOwner,
     tickIntervalMs: config.RECOVERY_TICK_MS,
+    tenantGuard: installationTenantGuard,
     logger,
   });
 
@@ -9168,6 +9306,7 @@ export function createContainer(
     sessions,
     loginThrottle,
     auth,
+    ownerAlerts,
     adminManagement,
     accountSecurity,
     secondFactors,
@@ -9186,16 +9325,8 @@ export function createContainer(
     botTurnGuard,
     heavyJobs,
     capacityMonitorLoop,
-    setInstallationTenant(tenantId: TenantId | null) {
-      installationTenantId = tenantId;
-      // The dispatcher runs for the installation but the rate ceiling is a
-      // tenant setting. One install serves one customer (ADR-0001), so the
-      // primary tenant's ceiling is the installation's — stated here rather
-      // than assumed somewhere further down.
-      notificationDispatcher.setRateLimitScope(
-        tenantId === null ? null : { tenantId, botInstanceId: null },
-      );
-    },
+    setInstallationTenant,
+    installationTenantGuard,
     recordPing,
     customers: customerService,
     customerControls: customerControlService,
@@ -9270,6 +9401,7 @@ export function createContainer(
     legacyCutover,
     legacyReviewQueue,
     customerBotLink,
+    customerPrune,
     legacyMaterializePort,
     legacyBotLinkPort,
     legacyAdoption,
@@ -9672,6 +9804,7 @@ export function createContainer(
     diagnostics,
     panelMonitor,
     backup,
+    backupOffsite,
     backupScheduler,
     backupHousekeeping,
     backupOrphanSweep,
@@ -9767,6 +9900,7 @@ export function createContainer(
       });
     },
     async shutdown() {
+      installationTenantGuard.stop();
       installationKeyLoader.stop();
       outboundAllowList.stop();
       // Round 8 (B1): the in-flight backup dies with this process; its plaintext goes now

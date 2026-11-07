@@ -23,6 +23,7 @@ import type {
   AutoRenewRepository,
   AutoRenewRun,
 } from '../application/service-auto-renew.ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = Record<string, unknown>;
 
@@ -70,6 +71,7 @@ const TERMINAL_OPERATION_STATES = sql.raw(
  * `from` state and the attempt the caller holds, so a pass can never move a run another pass
  * has moved since.
  */
+@ScopeBound()
 export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
   constructor(private readonly db: Database) {}
 

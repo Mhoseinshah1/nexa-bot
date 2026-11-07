@@ -17,7 +17,7 @@ import {
   type BotInstanceId,
   type CorrelationId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   auditLogs,
@@ -29,6 +29,7 @@ import {
 import { OutboxRelay } from '../../apps/api/src/modules/platform/eventing/infrastructure/outbox-relay';
 import { DrizzleHeavyJobQueueRepository } from '../../apps/api/src/modules/platform/capacity/infrastructure/drizzle-capacity.repository';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   migrateOnce,

@@ -11,6 +11,7 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import { scopeTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { redactRecord } from '../../../../infrastructure/redaction.js';
 import type { BulkAuditWriter } from '../application/record-audit-many.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The audit log.
@@ -30,6 +31,7 @@ import type { BulkAuditWriter } from '../application/record-audit-many.js';
 /** Audit rows per INSERT: 18 parameters a row, so 3 000 rows stay under PostgreSQL's 65 535. */
 const AUDIT_INSERT_CHUNK = 3000;
 
+@ScopeBound()
 export class DrizzleAuditWriter implements BulkAuditWriter {
   constructor(
     private readonly db: Database,

@@ -9,6 +9,7 @@ import {
 import { balanceInCommitOrder } from '../../wallet/infrastructure/balance-in-commit-order.js';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * R2 (v0.3.5 real-test item 11): what the renewal result (`SERVICE_RENEWED`) renders, read at
@@ -28,6 +29,7 @@ import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-
  * silence. The optional values are simply omitted when there is none, and their line is
  * dropped by the renderer.
  */
+@ScopeBound()
 export class DrizzleRenewalFactsReader {
   constructor(private readonly db: Database) {}
 

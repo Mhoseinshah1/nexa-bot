@@ -1065,6 +1065,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.tetrapay_amount_out_of_range',
       'bot.payment.tetrapay_daily_limit',
       'bot.payment.tetrapay_review_unresolved',
+      'bot.payment.tonpays_bot_pay_button',
       'bot.payment.transfer_instructions',
       'bot.payment.transfer_under_review',
       'bot.payment.unconfigured',

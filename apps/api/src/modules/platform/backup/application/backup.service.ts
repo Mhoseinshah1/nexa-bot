@@ -2,6 +2,8 @@ import {
   toPersianDigits,
   BACKUP_LEASE_HEARTBEAT_MS,
   BACKUP_LEASE_STALE_AFTER_MS,
+  BACKUP_OFFSITE_FAILED_CODE,
+  BACKUP_OFFSITE_OK_CODE,
   BACKUP_SEVEN_ZIP_RESTORE_INSTRUCTION,
   NexaError,
   PLATFORM_ERROR_CODES,
@@ -28,6 +30,8 @@ import {
   type BackupWorkspace,
   type BackupWorkspaceFactory,
   type DatabaseTools,
+  type OffsiteBackupUploader,
+  type OffsiteUploadOutcome,
 } from './ports.js';
 import { diskInsufficientReason } from './backup-disk.js';
 import { backupPartCaption, backupSummaryMessage } from './backup-caption.js';
@@ -184,6 +188,13 @@ export interface BackupServiceDeps {
   readonly orphanSweep?: {
     sweep(input: { readonly exceptId: string }): Promise<BackupOrphanSweepResult>;
   };
+  /**
+   * Phase 6A D0: the write-only off-site copy (S3-compatible, object-locked). Asked after
+   * DELIVER on every run that may leave the host; absent or unconfigured, nothing is sent and
+   * nothing is reported. Its failure is a `backup.offsite_failed` condition for the owner and
+   * never changes the run's outcome, and nothing here ever removes the local archive.
+   */
+  readonly offsite?: OffsiteBackupUploader;
 }
 
 /**
@@ -208,6 +219,9 @@ const BACKUP_CAPTION_MAX_CHARS = 1024;
  * and one recovery when it is fixed.
  */
 const BACKUP_CONDITION_KEY = 'backup.run';
+/** The off-site copy's condition key: one for the installation. */
+const OFFSITE_CONDITION_KEY = 'backup.offsite';
+
 /** The delivery condition's key: one for the installation, like the run's. */
 const DELIVERY_CONDITION_KEY = 'backup.delivery';
 /** The cleanup condition's key, shared with the debris sweep that also opens it. */
@@ -584,6 +598,18 @@ export class BackupService {
       deliveryDetail = delivered.detail;
       deliveryAttemptedAt = delivered.attemptedAt;
       summaryDeliveryState = delivered.summaryState;
+      // Phase 6A D0: the off-site copy, after Telegram and inside the DELIVER stage. A run
+      // asked not to leave the host (`deliver: false`) sends nothing off-site either.
+      if (!quiet) {
+        await this.copyOffsite({
+          id,
+          archivePath,
+          parts,
+          manifest,
+          archiveFormat,
+          archiveBytes: sealed.archiveBytes,
+        });
+      }
       lap('DELIVER');
 
       // ---- CLEANUP ---------------------------------------------------------
@@ -1137,6 +1163,103 @@ export class BackupService {
         context: { backupId: id, delivery: state },
         recoversCode: 'backup.delivery_failed',
         recoversDedupeKey: DELIVERY_CONDITION_KEY,
+      });
+    }
+  }
+
+  /**
+   * Phase 6A D0: the verified archive's off-site copy. Never throws and never fails the run;
+   * never removes the local archive. A failure opens the installation's one
+   * `backup.offsite_failed` condition (WARN, the owner's BACKUPS topic); the next run whose
+   * copy lands closes it. The message names counts and the provider's status, never a key,
+   * an endpoint or a credential.
+   */
+  private async copyOffsite(input: {
+    readonly id: string;
+    readonly archivePath: string;
+    readonly parts: readonly BackupArchivePart[];
+    readonly manifest: BackupManifest;
+    readonly archiveFormat: BackupArchiveFormat;
+    readonly archiveBytes: number;
+  }): Promise<void> {
+    const uploader = this.deps.offsite;
+    if (uploader === undefined || !uploader.configured) return;
+    const { id, parts } = input;
+    let outcome: OffsiteUploadOutcome;
+    try {
+      outcome = await uploader.upload({
+        backupId: id,
+        archivePath: input.archivePath,
+        parts,
+        index: {
+          backupId: id,
+          createdAt: input.manifest.createdAt,
+          archiveFormat: input.archiveFormat,
+          archiveBytes: input.archiveBytes,
+          dumpChecksumAlgorithm: input.manifest.checksumAlgorithm,
+          dumpChecksum: input.manifest.checksum,
+          parts: parts.map((part) => ({
+            partNumber: part.partNumber,
+            filename: part.filename,
+            bytes: part.bytes,
+            sha256: part.sha256,
+          })),
+        },
+        now: this.deps.clock.now(),
+      });
+    } catch (error) {
+      outcome = {
+        kind: 'FAILED',
+        uploaded: 0,
+        expected: parts.length + 1,
+        detail: messageOf(error),
+      };
+    }
+    if (outcome.kind === 'NOT_CONFIGURED') return;
+    if (outcome.kind === 'FAILED') {
+      this.deps.logger.warn(
+        {
+          backupId: id,
+          uploaded: outcome.uploaded,
+          expected: outcome.expected,
+          detail: outcome.detail,
+        },
+        'the off-site copy of a verified backup did not complete; the local archive is kept',
+      );
+      await this.report({
+        code: BACKUP_OFFSITE_FAILED_CODE,
+        severity: 'WARN',
+        message:
+          `نسخهٔ بیرون از سرور بکاپ ${id} کامل بارگذاری نشد ` +
+          `(${toPersianDigits(String(outcome.uploaded))} از ${toPersianDigits(String(outcome.expected))} شیء). ` +
+          'آرشیو روی سرور نگه داشته شد.',
+        context: {
+          backupId: id,
+          uploaded: outcome.uploaded,
+          expected: outcome.expected,
+          reason: outcome.detail,
+        },
+        dedupeKey: OFFSITE_CONDITION_KEY,
+      });
+      return;
+    }
+    this.deps.logger.info(
+      {
+        backupId: id,
+        objects: outcome.objects,
+        bytes: outcome.bytes,
+        lockedUntil: outcome.lockedUntil?.toISOString() ?? null,
+      },
+      'the verified backup was copied off-site',
+    );
+    if (await this.isOpen(BACKUP_OFFSITE_FAILED_CODE)) {
+      await this.report({
+        code: BACKUP_OFFSITE_OK_CODE,
+        severity: 'INFO',
+        message: `نسخهٔ بیرون از سرور بکاپ ${id} کامل بارگذاری شد.`,
+        context: { backupId: id, objects: outcome.objects },
+        recoversCode: BACKUP_OFFSITE_FAILED_CODE,
+        recoversDedupeKey: OFFSITE_CONDITION_KEY,
       });
     }
   }

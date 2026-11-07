@@ -38,6 +38,7 @@ import {
   type ServiceAddonRepository,
   type ServiceAddonSearch,
 } from '../application/addon-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Service add-ons, in PostgreSQL.
@@ -47,6 +48,7 @@ import {
  * the tenant returns another tenant's row and leaves the caller holding something it
  * should never have seen.
  */
+@ScopeBound()
 export class DrizzleServiceAddonRepository implements ServiceAddonRepository {
   constructor(private readonly db: Database) {}
 

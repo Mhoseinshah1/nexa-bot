@@ -13,8 +13,10 @@ import {
   type ReferralWrite,
 } from '../application/referral-history.step.js';
 import type { MaterializeContext } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** `referrals` rows of source MIRZA: an attribution, with no reward and no entry. */
+@ScopeBound()
 export class DrizzleReferralHistoryRepository implements ReferralHistoryRepository {
   constructor(
     private readonly db: Database,

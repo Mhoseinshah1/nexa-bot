@@ -14,6 +14,7 @@ import type {
   PaymentAttentionRow,
 } from '../application/payment-operations.service.js';
 import { paymentOpsCandidateIds, paymentOpsQueueCondition } from './payment-ops-queue-sql.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The attention counts in ONE statement: the tenant's payments in the window, grouped by
@@ -38,6 +39,7 @@ import { paymentOpsCandidateIds, paymentOpsQueueCondition } from './payment-ops-
  *   compile was most of the latency the operator saw, and it is paid again on every request.
  *   `SET LOCAL` confines the setting to this read's own transaction.
  */
+@ScopeBound()
 export class DrizzlePaymentAttentionReader implements PaymentAttentionReader {
   constructor(private readonly db: Database) {}
 

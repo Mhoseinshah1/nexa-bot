@@ -640,7 +640,7 @@ describe('TonPays, through the one settlement path', () => {
       expect((await paymentOf(paymentId)).external_reference).toBe(invoice.provider_invoice_id);
     });
 
-    it('tells the customer it is preparing, then shows the invoice with the web link, and never says paid', async () => {
+    it('tells the customer it is preparing, then shows the invoice with the TonPays bot link (the default «لینک پرداخت»), and never says paid', async () => {
       await enableTonPays();
       const orderId = await draftOrder();
       const { paymentId } = await payWithGateway(orderId);
@@ -649,8 +649,8 @@ describe('TonPays, through the one settlement path', () => {
       await pass();
       await tap(`gc:${paymentId}`);
       const invoice = await invoiceOf(paymentId);
-      expect(lastMarkup()).toContain(`"url":"${invoice.web_invoice_url!}"`);
-      expect(lastMarkup()).not.toContain(invoice.invoice_url!);
+      expect(lastMarkup()).toContain(`"url":"${invoice.invoice_url!}"`);
+      expect(lastMarkup()).not.toContain(invoice.web_invoice_url!);
       expect(lastText()).toContain('250,000');
       expect(lastText()).not.toContain('تأیید و ثبت شد');
     });
@@ -677,7 +677,7 @@ describe('TonPays, through the one settlement path', () => {
       expect(ready?.['text']).toContain('250,000');
       expect(ready?.['text']).toContain('مهلت پرداخت');
       const markup = JSON.stringify(ready?.['reply_markup'] ?? {});
-      expect(markup).toContain(`"url":"${invoice.web_invoice_url!}"`);
+      expect(markup).toContain(`"url":"${invoice.invoice_url!}"`);
       expect(markup).toContain(`gc:${paymentId}`);
       expect(markup).toContain('"callback_data":"mm:"');
       // Nobody tapped «بررسی وضعیت پرداخت»: the worker created it and edited the message.
@@ -939,7 +939,7 @@ describe('TonPays, through the one settlement path', () => {
         expect(String(ready?.['text'])).toContain('250,000');
         expect(String(ready?.['text'])).toContain('مهلت پرداخت');
         const markup = JSON.stringify(ready?.['reply_markup'] ?? {});
-        expect(markup).toContain(`"url":"${invoice.web_invoice_url!}"`);
+        expect(markup).toContain(`"url":"${invoice.invoice_url!}"`);
         expect(markup).toContain(`gc:${paymentId}`);
         expect(markup).toContain('"callback_data":"mm:"');
         expect(await wizardStep(paymentId)).toEqual(['INVOICE']);
@@ -977,7 +977,7 @@ describe('TonPays, through the one settlement path', () => {
         expect(String(ready?.['text'])).toContain('75,000');
         expect(String(ready?.['text'])).toContain('مهلت پرداخت');
         const markup = JSON.stringify(ready?.['reply_markup'] ?? {});
-        expect(markup).toContain(`"url":"${invoice.web_invoice_url!}"`);
+        expect(markup).toContain(`"url":"${invoice.invoice_url!}"`);
         expect(markup).toContain(`gc:${paymentId}`);
         expect(markup).toContain('"callback_data":"mm:"');
         expect(await wizardStep(paymentId)).toEqual(['INVOICE']);
@@ -1003,7 +1003,7 @@ describe('TonPays, through the one settlement path', () => {
         expect((await paymentOf(paymentId)).external_reference).toBe(invoice.provider_invoice_id);
         const ready = sent.filter((body) => body['message_id'] === message).at(-1);
         expect(JSON.stringify(ready?.['reply_markup'] ?? {})).toContain(
-          `"url":"${invoice.web_invoice_url!}"`,
+          `"url":"${invoice.invoice_url!}"`,
         );
 
         // And the inquiry reads the same numeric id back and settles on completed + paid.
@@ -1056,7 +1056,7 @@ describe('TonPays, through the one settlement path', () => {
           JSON.stringify(
             sent.filter((body) => body['message_id'] === message).at(-1)?.['reply_markup'] ?? {},
           ),
-        ).toContain(`"url":"${second.web_invoice_url!}"`);
+        ).toContain(`"url":"${second.invoice_url!}"`);
       });
     });
 
@@ -1097,7 +1097,7 @@ describe('TonPays, through the one settlement path', () => {
       });
     });
 
-    it('offers web_invoice_url first and falls back to invoice_url, never inventing one', async () => {
+    it('keeps both links and shows invoice_url when web_invoice_url is missing, never inventing one', async () => {
       const { paymentId, invoice } = await createdAttempt();
       const view = await ctx.container.gatewayPayments.attemptFor(tenantA, maryam, paymentId);
       expect(view?.invoice.webInvoiceUrl).toBe(invoice.web_invoice_url);

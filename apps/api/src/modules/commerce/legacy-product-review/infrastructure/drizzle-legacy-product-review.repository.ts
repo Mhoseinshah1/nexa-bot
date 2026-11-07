@@ -20,6 +20,7 @@ import type {
   LegacyProductReviewRecord,
   LegacyProductReviewRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof legacyProductReviews.$inferSelect;
 
@@ -73,6 +74,7 @@ function likeLiteral(text: string): string {
   return `%${text.replace(/[\\%_]/gu, (c) => `\\${c}`)}%`;
 }
 
+@ScopeBound()
 export class DrizzleLegacyProductReviewRepository implements LegacyProductReviewRepository {
   constructor(private readonly db: Database) {}
 

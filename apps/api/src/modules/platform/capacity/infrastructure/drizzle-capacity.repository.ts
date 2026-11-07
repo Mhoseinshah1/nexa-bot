@@ -1,6 +1,10 @@
 import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm';
 import type { CapacityLimit, CapacityResource, HeavyJobKind, TenantStatus } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
+import {
+  ScopeBound,
+  withSystemScopeIn,
+} from '../../../../infrastructure/persistence/database-scope.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   heavyJobTickets,
@@ -19,12 +23,24 @@ function exec(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
 
+/**
+ * The installation's limits for EVERY tenant (ADR-0037): the owner reads and sets other
+ * tenants' rows. On the system path — by `installation: true` when called on the pool,
+ * and by `withSystemScopeIn` on the owner's own transaction when given one, where row-
+ * level security would otherwise confine the statement to the owner's tenant.
+ */
+async function acrossTenants<T>(tx: unknown, reason: string, fn: () => Promise<T>): Promise<T> {
+  const open = (tx as TransactionScope | undefined)?.tx;
+  return open === undefined ? fn() : withSystemScopeIn(open, reason, fn);
+}
+
 function limitOf(row: { mode: string; value: number | null }): CapacityLimit {
   return row.mode === 'UNLIMITED'
     ? { mode: 'UNLIMITED' }
     : { mode: 'LIMITED', value: row.value ?? 0 };
 }
 
+@ScopeBound({ installation: true })
 export class DrizzleCapacityLimitRepository
   implements CapacityLimitRepository, CapacityTenantDirectory
 {
@@ -34,17 +50,21 @@ export class DrizzleCapacityLimitRepository
     tenantId: string,
     tx?: unknown,
   ): Promise<ReadonlyMap<CapacityResource, CapacityLimit>> {
-    const rows = await exec(this.db, tx)
-      .select()
-      .from(tenantCapacityLimits)
-      .where(eq(tenantCapacityLimits.tenantId, tenantId));
+    const rows = await acrossTenants(tx, 'capacity limits: one tenant', () =>
+      exec(this.db, tx)
+        .select()
+        .from(tenantCapacityLimits)
+        .where(eq(tenantCapacityLimits.tenantId, tenantId)),
+    );
     return new Map(rows.map((row) => [row.resource as CapacityResource, limitOf(row)]));
   }
 
   async storedForAll(
     tx?: unknown,
   ): Promise<ReadonlyMap<string, ReadonlyMap<CapacityResource, CapacityLimit>>> {
-    const rows = await exec(this.db, tx).select().from(tenantCapacityLimits);
+    const rows = await acrossTenants(tx, 'capacity limits: every tenant', () =>
+      exec(this.db, tx).select().from(tenantCapacityLimits),
+    );
     const byTenant = new Map<string, Map<CapacityResource, CapacityLimit>>();
     for (const row of rows) {
       const map = byTenant.get(row.tenantId) ?? new Map<CapacityResource, CapacityLimit>();
@@ -64,7 +84,21 @@ export class DrizzleCapacityLimitRepository
     },
     tx: unknown,
   ): Promise<CapacityLimit | null> {
-    const executor = exec(this.db, tx);
+    return acrossTenants(tx, 'capacity limits: the owner sets a tenant', () =>
+      this.putIn(input, exec(this.db, tx)),
+    );
+  }
+
+  private async putIn(
+    input: {
+      readonly tenantId: string;
+      readonly resource: CapacityResource;
+      readonly limit: CapacityLimit | null;
+      readonly now: Date;
+      readonly adminId: string | null;
+    },
+    executor: Executor,
+  ): Promise<CapacityLimit | null> {
     const where = and(
       eq(tenantCapacityLimits.tenantId, input.tenantId),
       eq(tenantCapacityLimits.resource, input.resource),
@@ -115,6 +149,8 @@ export class DrizzleCapacityLimitRepository
  */
 export const HEAVY_JOB_QUEUE_LOCK_KEY = 0x6e_65_78_61_68_6a; // 'nexahj'
 
+/** The installation's one queue of heavy jobs, across tenants by design (ADR-0037). */
+@ScopeBound({ installation: true })
 export class DrizzleHeavyJobQueueRepository implements HeavyJobQueueRepository {
   constructor(private readonly db: Database) {}
 

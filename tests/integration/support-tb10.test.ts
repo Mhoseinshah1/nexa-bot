@@ -23,7 +23,7 @@ import {
   type BusinessBotRight,
   type CorrelationId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   DrizzleBusinessConversationRepository,
@@ -36,6 +36,7 @@ import type { ParsedBusinessMessage } from '../../apps/api/src/modules/commerce/
 import { DrizzleSupportAnalyticsReader } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-analytics.reader';
 import { SUPPORT_AI_UNAVAILABLE_DEDUPE_KEY } from '../../apps/api/src/modules/control/support-ai/application/support-ai-chain';
 import {
+  createApiApp,
   SEED_IDS,
   adminActorFor,
   createAdmin,

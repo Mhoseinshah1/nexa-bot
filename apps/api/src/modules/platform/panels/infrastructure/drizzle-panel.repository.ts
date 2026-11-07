@@ -47,6 +47,7 @@ import type {
   PanelCursor,
   PanelArchiveScope,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Panels, in PostgreSQL.
@@ -115,6 +116,7 @@ function idIsOneOf(ids: readonly string[]): SQL {
   return sql`${panels.id} = ANY(${sql.param([...ids])}::uuid[])`;
 }
 
+@ScopeBound()
 export class DrizzlePanelRepository implements PanelRepository {
   constructor(private readonly db: Database) {}
 
@@ -1094,6 +1096,7 @@ export function dueForTenantsQuery(
  * a hundred thousand rows ranked and sorted every thirty seconds to probe
  * fifty of them.
  */
+@ScopeBound()
 export class DrizzlePanelMonitorRepository implements PanelMonitorRepository {
   constructor(private readonly db: Database) {}
 

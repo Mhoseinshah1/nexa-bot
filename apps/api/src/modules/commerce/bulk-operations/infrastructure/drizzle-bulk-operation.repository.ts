@@ -33,6 +33,7 @@ import type {
   GrantEligibility,
   LockedItem,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Instant = Date | string;
 const date = (value: Instant): Date => (value instanceof Date ? value : new Date(value));
@@ -170,6 +171,7 @@ function notRetriedYet(tenantId: string, operationId: string): SQL {
  * The mass-operation tables (round N, B2). Tenant-bound everywhere; every item transition is
  * a conditional UPDATE out of the state it names.
  */
+@ScopeBound()
 export class DrizzleBulkOperationRepository implements BulkOperationRepository {
   constructor(private readonly db: Database) {}
 

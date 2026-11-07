@@ -11,6 +11,7 @@ import type {
   TenantMediaRecord,
   TenantMediaRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The columns every metadata read selects. `content` is deliberately absent. */
 const METADATA = {
@@ -44,6 +45,7 @@ function toRecord(row: MetadataRow): TenantMediaRecord {
  * so no response builder above it can acquire the bytes by accident — the same one-way
  * shape the panel credential projection has (ADR-0023), for a lesser secret.
  */
+@ScopeBound()
 export class DrizzleTenantMediaRepository implements TenantMediaRepository {
   constructor(private readonly db: Database) {}
 

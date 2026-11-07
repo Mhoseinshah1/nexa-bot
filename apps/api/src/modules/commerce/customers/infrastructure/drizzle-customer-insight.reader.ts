@@ -19,12 +19,14 @@ import type {
   WorkspaceOrderRow,
   WorkspacePaymentRow,
 } from '../application/customer-insight.service.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Customer 360's aggregates (§11.7), each a GROUP BY over one table's own rows for one
  * customer, through the `(customer_id, created_at, id)` index each of those tables has.
  * Sums are `numeric` in SQL and text on the way out, so a total past 2^53 survives.
  */
+@ScopeBound()
 export class DrizzleCustomerInsightReader
   implements CustomerInsightReader, CustomerWorkspaceReader
 {

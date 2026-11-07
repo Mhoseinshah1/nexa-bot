@@ -28,7 +28,7 @@ describe('database connections wait under a bound', () => {
   });
 
   it('applies the configured timeouts to every pooled connection', async () => {
-    const rows = (await ctx.container.database.db.execute(
+    const rows = (await ctx.applicationDatabase.db.execute(
       sql`SELECT current_setting('statement_timeout') AS statement,
                  current_setting('lock_timeout') AS lock,
                  current_setting('idle_in_transaction_session_timeout') AS idle`,
@@ -48,7 +48,7 @@ describe('database connections wait under a bound', () => {
     // another. Without `lock_timeout` the second waits for as long as the first
     // holds it, which is unbounded when the holder is stalled application code.
     const tenantId = ctx.container.installationTenantId ?? null;
-    const holder = ctx.container.database.pool;
+    const holder = ctx.applicationDatabase.pool;
 
     const client = await holder.connect();
     try {
@@ -60,7 +60,7 @@ describe('database connections wait under a bound', () => {
       expect(held.rowCount).toBe(1);
 
       const started = Date.now();
-      const outcome = await ctx.container.database.db
+      const outcome = await ctx.applicationDatabase.db
         .execute(sql`SELECT id FROM tenants ORDER BY id LIMIT 1 FOR UPDATE`)
         .then(
           () => null,

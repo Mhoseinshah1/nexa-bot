@@ -3,7 +3,7 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createContainer, type Container } from '../../apps/api/src/container';
+import { type Container } from '../../apps/api/src/container';
 import { isUniqueViolation } from '../../apps/api/src/infrastructure/persistence/sqlstate';
 import {
   MigrationRig,
@@ -14,6 +14,7 @@ import {
   type MigrationPackage,
 } from '../support/legacy-migration-rig';
 import {
+  createTestContainer,
   adminActorFor,
   createAdmin,
   createTestContext,
@@ -72,7 +73,7 @@ describe('legacy migration: the restore page source, executed by the recovery ro
     ctx = await createTestContext(env);
     // The `recovery` process role's container, over the same database and work directory —
     // what `main.recovery.ts` builds.
-    recovery = createContainer(testConfig(env), 'recovery');
+    recovery = createTestContainer(testConfig(env), 'recovery');
     rig = new MigrationRig(ctx, migrationRoot);
     generated = generateDataset({ users: USERS, invoices: INVOICES });
     pkg = await writeMigrationPackage(join(work, 'page.nxpkg'), {

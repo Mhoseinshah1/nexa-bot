@@ -18,9 +18,17 @@ import {
   runBackupResponseSchema,
   SESSION_COOKIE_NAME,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  tenantB,
+  testConfig,
+} from './harness';
 import { manifestExclusions } from '../../apps/api/src/modules/platform/backup/infrastructure/backup-exclusions';
 
 /**

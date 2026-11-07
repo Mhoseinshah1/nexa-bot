@@ -18,6 +18,7 @@ import type {
   StoredCustomMenuButton,
   StoredCustomMenuMedia,
 } from '../application/custom-menu-button.ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
@@ -109,6 +110,7 @@ function toButton(row: ButtonRow, botInstanceIds: readonly string[]): StoredCust
  * Every row is tenant-scoped through `requireTenantId`. Every change is a conditional UPDATE
  * naming the version it read; a button is ARCHIVED (and its file deleted), never deleted.
  */
+@ScopeBound()
 export class DrizzleCustomMenuButtonRepository implements CustomMenuButtonRepository {
   constructor(private readonly db: Database) {}
 

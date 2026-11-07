@@ -24,6 +24,7 @@ import type {
   RecoveryRequestRepository,
   RecoveryRequestRow,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The recovery request table.
@@ -116,6 +117,7 @@ function patchColumns(patch: RecoveryPatch): Record<string, unknown> {
   return set;
 }
 
+@ScopeBound({ installation: true })
 export class DrizzleRecoveryRequestRepository implements RecoveryRequestRepository {
   constructor(private readonly db: Database) {}
 
@@ -487,11 +489,17 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
      * `executor.select is not a function` on every write in the suite.
      */
     const executor: Executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
-    const [row] = await executor
-      .select({ id: recoveryRequests.id, state: recoveryRequests.state })
-      .from(recoveryRequests)
-      .where(inArray(recoveryRequests.state, [...RECOVERY_ACTIVE_DESTRUCTIVE_STATES]))
-      .limit(1);
+    /*
+     * Through `nexa_installation_recovery` (0317), not a SELECT on the table. The gate
+     * asks this inside EVERY unit of work's transaction, and the recovery belongs to the
+     * installation's tenant: under row-level security a hosted tenant's transaction
+     * would not see it, and its writes would go through a restore. The function answers
+     * this one question as the owner, on the caller's transaction (ADR-0037).
+     */
+    const result = await executor.execute<{ id: string; state: string }>(
+      sql`SELECT id, state FROM nexa_installation_recovery(${sql.param([...RECOVERY_ACTIVE_DESTRUCTIVE_STATES])}::text[])`,
+    );
+    const row = result.rows[0];
     if (row === undefined) return null;
     const state = row.state as RecoveryState;
     return {

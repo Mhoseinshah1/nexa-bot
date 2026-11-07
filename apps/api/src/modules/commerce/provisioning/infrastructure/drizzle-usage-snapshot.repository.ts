@@ -6,10 +6,12 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { UsageSnapshotRow, UsageSnapshotStore } from '../application/usage-snapshots.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * R11 B2: `service_usage_snapshots`. Never a panel call -- it only stores what a caller holds.
  */
+@ScopeBound()
 export class DrizzleUsageSnapshotRepository implements UsageSnapshotStore {
   constructor(private readonly db: Database) {}
 

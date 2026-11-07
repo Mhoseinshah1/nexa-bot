@@ -12,6 +12,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { FrozenAudienceRecord, FrozenAudienceRepository } from '../application/ports.js';
 import { audienceCustomersQuery, fingerprintOf, type AudienceEvaluation } from './audience-sql.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Instant = Date | string;
 const date = (value: Instant): Date => (value instanceof Date ? value : new Date(value));
@@ -41,6 +42,7 @@ interface HeaderRow {
  * record names and stamps `released_at`, and every reference to the header is `ON DELETE
  * RESTRICT`, so a header outlives everything that ever pointed at it.
  */
+@ScopeBound()
 export class DrizzleFrozenAudienceRepository implements FrozenAudienceRepository {
   constructor(private readonly db: Database) {}
 

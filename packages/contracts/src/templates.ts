@@ -10500,6 +10500,13 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.payment.tonpays_bot_pay_button',
+    description:
+      'TonPays (website route): the URL button that opens the invoice in TonPays’ own Telegram bot, drawn when the route’s «لینک پرداخت» is set to the bot. The web link keeps the generic pay button (`bot.payment.gateway_pay_button`).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.payment.gateway_check_button',
     description:
       'Asks this installation to check the attempt again. It reads the stored state and ' +

@@ -22,6 +22,7 @@ import {
   type PaymentGatewayView,
   type SalesCurrencyCode,
   type TenantContext,
+  DEFAULT_TONPAYS_PAYMENT_LINK,
   takesFixedRate,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
@@ -140,6 +141,7 @@ export class PaymentGatewaysController {
       allowServicePurchase: input.allowServicePurchase,
       allowWalletTopup: input.allowWalletTopup,
       requiresVerifiedPhone: input.requiresVerifiedPhone,
+      tonpaysPaymentLink: input.tonpaysPaymentLink,
     });
     const gateway = await this.container.paymentGateways.configure(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -350,6 +352,7 @@ function toView(
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
     requiresVerifiedPhone: gateway.requiresVerifiedPhone ?? false,
+    tonpaysPaymentLink: gateway.tonpaysPaymentLink ?? DEFAULT_TONPAYS_PAYMENT_LINK,
     credential: {
       required: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].requiresCredentials,
       setAt: facts.credentialSetAt?.toISOString() ?? null,

@@ -17,7 +17,7 @@ import {
   type CorrelationId,
   type LegacyMigrationDryRunReport,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { runAsLegacyMigration } from '../../apps/api/src/infrastructure/persistence/write-gate';
 import { LegacyMigrationExecutor } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration-executor';
@@ -26,7 +26,14 @@ import {
   type MigrationRunner,
 } from '../../apps/api/src/modules/platform/legacy-migration/application/ports';
 import { reportDigest } from '../../apps/api/src/modules/platform/legacy-migration/domain/import-lifecycle';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  createApiApp,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * Mirza `.nxpkg` importer — the `legacy-migration` module against a real PostgreSQL and the

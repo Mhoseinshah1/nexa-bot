@@ -19,6 +19,7 @@ import type {
   PaymentDestinationSwitchRecord,
   PaymentSwitchHistory,
 } from '../application/account-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** The columns the record is built from. Selected explicitly, in one place. */
 const COLUMNS = {
@@ -84,6 +85,7 @@ export const PAYMENT_ACCOUNT_LOCK_CLASS = 0x5041;
  * the tenant returns another tenant's row and leaves the caller holding something it
  * should never have seen. Here that something is a card number.
  */
+@ScopeBound()
 export class DrizzlePaymentAccountRepository implements PaymentAccountRepository {
   constructor(private readonly db: Database) {}
 
@@ -336,6 +338,7 @@ export class DrizzlePaymentAccountRepository implements PaymentAccountRepository
  * (migration 0063), so there is no method here to add later without first removing a
  * guard that says in the database what this class says in TypeScript.
  */
+@ScopeBound()
 export class DrizzlePaymentDestinationRepository implements PaymentDestinationRepository {
   constructor(private readonly db: Database) {}
 

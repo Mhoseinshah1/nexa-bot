@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { Database, Executor } from './database.js';
+import { withSystemScope } from './database-scope.js';
 import type { TransactionScope } from './unit-of-work.js';
 
 /**
@@ -34,12 +35,16 @@ export function withRestoreExclusion<T>(
   db: Database,
   fn: (tx: TransactionScope) => Promise<T>,
 ): Promise<T> {
-  return db.transaction(async (tx: Executor) => {
-    const scope = {
-      tx,
-      scope: { kind: 'SYSTEM', reason: 'restore-exclusion' },
-    } as TransactionScope;
-    await takeRestoreExclusionLock(scope);
-    return fn(scope);
-  });
+  // The system scope this transaction claims is also the one its connection is bound to
+  // (ADR-0037): the restore exclusion is an installation-wide lock, not a tenant's.
+  return withSystemScope('restore-exclusion', () =>
+    db.transaction(async (tx: Executor) => {
+      const scope = {
+        tx,
+        scope: { kind: 'SYSTEM', reason: 'restore-exclusion' },
+      } as TransactionScope;
+      await takeRestoreExclusionLock(scope);
+      return fn(scope);
+    }),
+  );
 }

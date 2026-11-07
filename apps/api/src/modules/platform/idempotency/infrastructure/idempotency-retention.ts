@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { IDEMPOTENCY_EXPIRING_NAMESPACES } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requestIdempotency } from '../../../../infrastructure/persistence/schema.js';
+import { withSystemScope } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Retention for the idempotency store (Round 4 PR-E, E3).
@@ -18,6 +19,8 @@ import { requestIdempotency } from '../../../../infrastructure/persistence/schem
  *
  * `scope_ref` is `<tenant or SYSTEM>|<namespace>` (`scopeRef`), so the namespace is its
  * suffix after the one `|`.
+ *
+ * Cross-tenant by nature, so on the system path under a named reason (ADR-0037).
  */
 export async function purgeExpiredIdempotencyBefore(
   db: Database,
@@ -28,7 +31,8 @@ export async function purgeExpiredIdempotencyBefore(
     IDEMPOTENCY_EXPIRING_NAMESPACES.map((namespace) => sql`${`%|${namespace}`}`),
     sql`, `,
   );
-  const result = await db.execute(sql`
+  const result = await withSystemScope('idempotency retention: interactive keys', () =>
+    db.execute(sql`
     DELETE FROM ${requestIdempotency}
      WHERE id IN (
        SELECT candidate.id FROM ${requestIdempotency} AS candidate
@@ -36,6 +40,7 @@ export async function purgeExpiredIdempotencyBefore(
           AND candidate.scope_ref LIKE ANY (ARRAY[${namespaces}])
         LIMIT ${limit}
      )
-  `);
+  `),
+  );
   return result.rowCount ?? 0;
 }

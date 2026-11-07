@@ -20,12 +20,14 @@ import {
 } from '../application/discount-usage-history.step.js';
 import { MIRZA_SOURCE } from '../application/materialize-support.js';
 import type { MaterializeContext } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * `discount_redemptions` for imported usage. The table has no `source` column of its own: a
  * redemption is Mirza's because its order is (`orders.source = 'MIRZA'`, origin
  * `LEGACY_HISTORY`), and its identity is the table's own `(order, discount)` unique key.
  */
+@ScopeBound()
 export class DrizzleDiscountUsageHistoryRepository implements DiscountUsageHistoryRepository {
   constructor(
     private readonly db: Database,

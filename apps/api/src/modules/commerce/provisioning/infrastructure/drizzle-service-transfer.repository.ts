@@ -23,6 +23,7 @@ import type {
   ServiceTransferRecord,
   ServiceTransferRepository,
 } from '../application/service-transfer-ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof serviceOwnershipTransfers.$inferSelect;
 
@@ -46,6 +47,7 @@ function toRecord(row: Row): ServiceTransferRecord {
  * Package F — the append-only record of a service's changes of owner, and the three reads
  * a transfer re-decides under its locks.
  */
+@ScopeBound()
 export class DrizzleServiceTransferRepository implements ServiceTransferRepository {
   constructor(private readonly db: Database) {}
 

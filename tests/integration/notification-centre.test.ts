@@ -18,7 +18,7 @@ import {
   type CorrelationId,
   type UserId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { miniAppActor } from '../../apps/api/src/modules/commerce/miniapp/application/miniapp-session.service';
 import { clearExpiredNotificationText } from '../../apps/api/src/modules/commerce/messaging/infrastructure/customer-notification-text-retention';
 import { DrizzleNotificationCentreRepository } from '../../apps/api/src/modules/commerce/miniapp/infrastructure/drizzle-notification-centre.repository';
@@ -31,6 +31,7 @@ import type { CustomerSendResult } from '../../apps/api/src/modules/commerce/mes
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
 import { DrizzleServiceReminderSnapshotReader } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository';
 import {
+  createApiApp,
   adminActorFor,
   createAdmin,
   createTestContext,

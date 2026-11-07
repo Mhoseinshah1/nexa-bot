@@ -148,6 +148,11 @@ export class PaymentsController {
       { range: page.range, from: page.from, to: page.to },
     );
     // Who paid, as Telegram knows them — one read for the page (D7).
+    // Phase 6A D0: counted toward the owner's bulk-read alert; never fails the read.
+    await this.container.ownerAlerts.rowsRead(scope, actor, {
+      resource: 'payments',
+      rows: result.items.length,
+    });
     const identities = await this.container.payments.customerIdentities(scope, actor, result.items);
     // How each receipt left review (WP10 follow-up §5): a credited FAILED is not a rejection.
     const dispositions = await this.container.payments.receiptDispositions(

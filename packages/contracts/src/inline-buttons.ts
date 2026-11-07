@@ -116,6 +116,7 @@ const INLINE_BUTTON_SUGGESTED_STYLES: Readonly<
   'payment.sent': 'success',
   'payment.gateway_pay': 'success',
   'payment.nowpayments_open': 'success',
+  'payment.tonpays_bot_open': 'success',
   'payment.centralpay_open': 'success',
   'service.renew_option': 'success',
   'service.rotate_confirm': 'success',
@@ -219,6 +220,8 @@ export const INLINE_BUTTONS = [
   // A provider whose pay button reads differently (spec §16): its own key, so the label and
   // style are the operator's to set without touching the generic gateway button.
   button('payment.nowpayments_open', 'PAYMENT', 'bot.payment.nowpayments_pay_button', 'URL'),
+  // TonPays (website route) with «لینک پرداخت» set to its Telegram bot: its own label.
+  button('payment.tonpays_bot_open', 'PAYMENT', 'bot.payment.tonpays_bot_pay_button', 'URL'),
   // CentralPay's «💳 پرداخت با CentralPay» link (spec §17), isolated the same way.
   button('payment.centralpay_open', 'PAYMENT', 'bot.payment.centralpay_pay_button', 'URL'),
   button('payment.gateway_check', 'PAYMENT', 'bot.payment.gateway_check_button'),

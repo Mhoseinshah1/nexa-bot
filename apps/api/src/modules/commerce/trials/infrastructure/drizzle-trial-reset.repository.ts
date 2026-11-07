@@ -12,8 +12,10 @@ import type {
   TrialResetRecord,
   TrialResetRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** Global trial resets, in PostgreSQL. Every query leads with the tenant. */
+@ScopeBound()
 export class DrizzleTrialResetRepository implements TrialResetRepository {
   constructor(private readonly db: Database) {}
 

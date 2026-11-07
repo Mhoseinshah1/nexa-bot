@@ -25,6 +25,7 @@ import type {
   LegacyInactivePanelRow,
   LegacyRecordsRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Tenant-wide reads of `legacy_history_records` (SELECT only; the table is append-only).
@@ -34,6 +35,7 @@ import type {
  * cancellation requests, `payload->>'invoice_key'` for ownership), so the planner can use
  * them; without the indexes it is a scan of the tenant's records.
  */
+@ScopeBound()
 export class DrizzleLegacyRecordsRepository implements LegacyRecordsRepository {
   constructor(private readonly db: Database) {}
 

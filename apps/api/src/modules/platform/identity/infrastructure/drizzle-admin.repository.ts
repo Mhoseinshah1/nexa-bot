@@ -19,6 +19,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { AdminCredentials, AdminRepository } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type AdminRow = typeof admins.$inferSelect;
 
@@ -46,6 +47,7 @@ function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
 
+@ScopeBound()
 export class DrizzleAdminRepository implements AdminRepository {
   constructor(private readonly db: Database) {}
 

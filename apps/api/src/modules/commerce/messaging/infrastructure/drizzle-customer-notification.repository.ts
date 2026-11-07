@@ -18,6 +18,7 @@ import type {
   CustomerNotificationRecord,
   CustomerNotificationRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 type Row = typeof customerNotifications.$inferSelect;
 
@@ -54,6 +55,7 @@ function toRecord(row: Row): CustomerNotificationRecord {
  * two dispatcher replicas all safe, and a convenience setter would quietly remove it
  * from all three.
  */
+@ScopeBound()
 export class DrizzleCustomerNotificationRepository implements CustomerNotificationRepository {
   constructor(private readonly db: Database) {}
 

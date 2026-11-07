@@ -34,6 +34,7 @@ import {
   PAYMENT_ROUTE_UNOFFERABLE_REASONS,
   paymentGatewayProviderSchema,
   paymentGatewayStatusSchema,
+  tonPaysPaymentLinkSchema,
   topupCashbackPercentSchema,
   customerFeeBasisPointsSchema,
 } from './payment-gateways.js';
@@ -5682,6 +5683,8 @@ export const paymentGatewaySchema = z.object({
    * the previous release.
    */
   requiresVerifiedPhone: z.boolean().default(false),
+  /** The TONPAYS route's payment link (bot or web); `TELEGRAM_BOT` on every other route and on a response from the previous release. */
+  tonpaysPaymentLink: tonPaysPaymentLinkSchema.default('TELEGRAM_BOT'),
   /**
    * The route's credential STATE (WP11A), never its value.
    *
@@ -5878,6 +5881,8 @@ export const updatePaymentGatewayRequestSchema = z.object({
   allowWalletTopup: z.boolean().optional(),
   /** R11 B7: the route's verified-phone requirement. Absent keeps the stored switch. */
   requiresVerifiedPhone: z.boolean().optional(),
+  /** The TONPAYS route's payment link. Absent keeps the stored choice. */
+  tonpaysPaymentLink: tonPaysPaymentLinkSchema.optional(),
   /**
    * A `FIXED_RATE` route's rate (Package A): sales-currency minor units per provider unit,
    * a positive whole number as a decimal string, or null to clear. Absent keeps the

@@ -55,6 +55,7 @@ import type {
   TicketReplyFileRecord,
   TicketRepository,
 } from '../application/ports.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 
 /** One customer's ticket openings, serialised (`lockCustomer`). 'TK'. */
 export const TICKET_CUSTOMER_LOCK_CLASS = 0x544b;
@@ -181,6 +182,7 @@ function toMessage(row: MessageRow): TicketMessageRecord {
 /**
  * Tickets and their messages, in PostgreSQL. Every query carries the tenant.
  */
+@ScopeBound()
 export class DrizzleTicketRepository implements TicketRepository {
   constructor(private readonly db: Database) {}
 

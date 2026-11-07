@@ -248,8 +248,18 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
   ): Promise<Date> {
     const now = ctx.container.clock.now();
     const local = localMinute(now, timezone);
-    expect(await setSetting('reminders.quiet_hours_start', hhmm(local + startOffset))).toBeNull();
-    expect(await setSetting('reminders.quiet_hours_end', hhmm(local + endOffset))).toBeNull();
+    const start = hhmm(local + startOffset);
+    const end = hhmm(local + endOffset);
+    // The two may never be equal, and each write is checked against the OTHER's stored
+    // value: at 09:00 Tehran the new start (08:00) equals the default end, and writing the
+    // start first was refused — every case in this file failed for that one minute a day
+    // (CI, PR #411). So the end goes first when the start would collide with it.
+    if ((await setSetting('reminders.quiet_hours_start', start)) !== null) {
+      expect(await setSetting('reminders.quiet_hours_end', end)).toBeNull();
+      expect(await setSetting('reminders.quiet_hours_start', start)).toBeNull();
+    } else {
+      expect(await setSetting('reminders.quiet_hours_end', end)).toBeNull();
+    }
     await setFlag('reminder_quiet_hours', true);
     const minuteStart = Math.floor(now.getTime() / MINUTE_MS) * MINUTE_MS;
     const ahead = ((((local + endOffset) % 1440) + 1440) % 1440) - local;
