@@ -1936,7 +1936,10 @@ describe('WP-A7 — support tickets', () => {
     // The waiting file's delivery now finds nothing to send, and fails rather than guess.
     sent = [];
     await deliver();
-    expect(uploads()).toHaveLength(0);
+    // Phase 6A PR-6: the worker serves tenant B too, so B's own fresh file may go out in the
+    // same pass; what must not is A's purged one, and nothing but B's file is uploaded.
+    expect(uploads().filter((one) => one.raw.includes('wait.pdf'))).toHaveLength(0);
+    expect(uploads().every((one) => one.raw.includes('screen.png'))).toBe(true);
     expect((await laneOf(waiting.message.id)).map((one) => [one.kind, one.state])).toEqual([
       ['TICKET_REPLY', 'DELIVERED'],
       ['TICKET_REPLY_ATTACHMENT', 'FAILED'],
