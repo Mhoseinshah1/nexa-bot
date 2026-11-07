@@ -470,6 +470,36 @@ describe('the code prompt on a sensitive action', () => {
       expiresAt: null,
     });
   });
+
+  it('a DELETED bot whose date passed can change its expiry, so it can be restored', async () => {
+    // ACTIVATE refuses a passed date (EXPIRY_PASSED): without the expiry action the restore
+    // would be impossible. The date changes; the bot stays deleted until activated.
+    const deleted = bot({
+      state: 'DELETED',
+      tenantStatus: 'DISABLED',
+      expiresAt: '2020-01-01T00:00:00.000Z',
+      deletedAt: '2020-02-01T00:00:00.000Z',
+    });
+    const api = stubApi([
+      ...panelRoutes({ bots: [deleted] }),
+      {
+        url: ROUTE_OF(HOSTING_ROUTES.expiry),
+        method: 'POST',
+        body: { bot: { ...deleted, expiresAt: null }, replayed: false },
+      },
+    ]);
+    renderPage(<HostingPage denied={false} />);
+    const card = await screen.findByRole('article', { name: 'آکمه' });
+    expect(
+      within(card).getByRole('button', { name: t('web.hosting_action_activate') }),
+    ).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: t('web.hosting_action_expiry') }));
+    const dialog = await screen.findByRole('dialog');
+    typeCode('555555');
+    fireEvent.click(within(dialog).getByRole('button', { name: t('web.hosting_expiry_submit') }));
+    await waitFor(() => expect(posts(api, '/expiry')).toHaveLength(1));
+    expect(posts(api, '/expiry')[0]?.body).toMatchObject({ proof: { code: '555555' } });
+  });
 });
 
 describe('the limits editor', () => {

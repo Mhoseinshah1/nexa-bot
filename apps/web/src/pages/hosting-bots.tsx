@@ -238,11 +238,11 @@ function BotCard({
               {t('web.hosting_action_activate')}
             </Button>
           )}
-          {bot.state !== 'DELETED' && (
-            <Button size="sm" icon="calendar" onClick={() => onAction('expiry')}>
-              {t('web.hosting_action_expiry')}
-            </Button>
-          )}
+          {/* Also for a DELETED bot: a passed date blocks its restore (EXPIRY_PASSED) until it
+              is changed, and changing it leaves the bot deleted. */}
+          <Button size="sm" icon="calendar" onClick={() => onAction('expiry')}>
+            {t('web.hosting_action_expiry')}
+          </Button>
           {mayDo(bot, 'DELETE') && (
             <Button size="sm" variant="danger" icon="trash" onClick={() => onAction('delete')}>
               {t('web.hosting_action_delete')}
