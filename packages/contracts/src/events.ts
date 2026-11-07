@@ -311,6 +311,8 @@ export const AGGREGATE_TYPES = [
   'LegacyImportMapRow',
   // R10 D4: one batch of gift cards.
   'GiftCardBatch',
+  // PR-2: one customer's reseller request, and its conversation.
+  'ResellerRequest',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
