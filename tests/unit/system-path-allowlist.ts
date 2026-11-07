@@ -149,6 +149,7 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleSessionRepository.purgeExpiredBefore',
   'DrizzleSessionRepository.revoke',
   'DrizzleSessionRepository.touch',
+  'DrizzleTenantRepository.activeTenantIds',
   'DrizzleTenantRepository.findById',
   'DrizzleTenantRepository.findBySlug',
   'DrizzleTenantRepository.findPrimary',
