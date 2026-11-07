@@ -428,6 +428,8 @@ export interface CustomerNotificationDeps {
     subject: {
       readonly serviceId?: string;
       readonly ticketId?: string;
+      /** PR-2: the PENDING reseller request an operator's message is about. */
+      readonly resellerRequestId?: string;
       /** R11 A11: where an ended order's «🔁 سفارش دوباره» leads. */
       readonly reorder?: OrderReorderTarget;
       /** R12 F3 item 1: the order a pending-order reminder is about. */
@@ -630,6 +632,23 @@ export interface CustomerNotificationDeps {
       at: Date,
       tx: TransactionScope,
     ): Promise<boolean>;
+  };
+  /**
+   * PR-2: what `RESELLER_REQUEST_MESSAGE` and `RESELLER_REQUEST_DECISION` render — the
+   * operator's words, or the decision — read at send time from the row the notification names,
+   * as `tickets` reads a reply. A reader, not a payload (ADR 0030 §1). Null when the row does
+   * not state the fact (a decision that is not one yet), which sends nothing.
+   */
+  readonly resellerRequests?: {
+    notificationFacts(
+      scope: TenantContext,
+      kind: 'RESELLER_REQUEST_MESSAGE' | 'RESELLER_REQUEST_DECISION',
+      subjectId: string,
+    ): Promise<{
+      readonly values: TemplateValues;
+      readonly templateKey?: TemplateKey;
+      readonly replyRequestId: string | null;
+    } | null>;
   };
   /**
    * Phase E3: what `INCIDENT_NOTICE` renders — the operator's message, read at send time
@@ -1071,6 +1090,23 @@ export class CustomerNotificationService {
                 tx: TransactionScope,
               ) => direct.fileDelivered(scope, row.subjectId, file, at, tx),
             }),
+      };
+    }
+    if (row.kind === 'RESELLER_REQUEST_MESSAGE' || row.kind === 'RESELLER_REQUEST_DECISION') {
+      if (this.deps.resellerRequests === undefined) return null;
+      const facts = await this.deps.resellerRequests.notificationFacts(
+        scope,
+        row.kind,
+        row.subjectId,
+      );
+      if (facts === null) return null;
+      return {
+        values: facts.values,
+        ...(facts.templateKey === undefined ? {} : { templateKey: facts.templateKey }),
+        buttons:
+          facts.replyRequestId === null
+            ? []
+            : (this.deps.buttonsFor?.(row.kind, { resellerRequestId: facts.replyRequestId }) ?? []),
       };
     }
     if (row.kind === 'INCIDENT_NOTICE') {

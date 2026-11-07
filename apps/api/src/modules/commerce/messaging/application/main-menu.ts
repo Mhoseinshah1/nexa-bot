@@ -308,10 +308,14 @@ export class MainMenuLayout {
     }
     const buttons = described.filter((one) => one.shown).map((one) => one.button);
     const labelled = await Promise.all(
-      buttons.map(async (button) => ({ wide: button.wide, text: await label(button) })),
+      buttons.map(async (button) => ({
+        wide: button.wide,
+        text: await label(button),
+        style: button.defaultStyle ?? ('default' as const),
+      })),
     );
     return packMainMenuRows(labelled).map((row) =>
-      row.map((button) => ({ text: button.text, style: 'default' as const, iconSlot: null })),
+      row.map((button) => ({ text: button.text, style: button.style, iconSlot: null })),
     );
   }
 

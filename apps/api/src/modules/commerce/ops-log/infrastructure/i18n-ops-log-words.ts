@@ -67,6 +67,10 @@ export const i18nOpsLogWords: OpsLogWords = {
   refundFailure: (cause) => pick(W.refundFailure, cause, W.refundFailure.OPERATOR_FAILED),
   refundRequestOutcome: (outcome) =>
     pick(W.refundRequestOutcomes, outcome, W.refundRequestOutcomes.FAILED),
+  resellerRequestOutcome: (outcome) =>
+    outcome === 'APPROVED'
+      ? W.resellerRequestOutcomes.APPROVED
+      : W.resellerRequestOutcomes.REJECTED,
   cryptoKindTitle: (topup) => (topup ? W.cryptoKinds.topup : W.cryptoKinds.order),
   walletAdjustHeading: (direction) => W.walletAdjust[direction],
   badges({ firstPurchase, reseller }) {
