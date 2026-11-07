@@ -297,12 +297,11 @@ export const RESELLER_REQUEST_TEMPLATES = [
   ),
   tpl(
     'bot.reseller_request.question',
-    'PR-2: one of the owner’s questions, edited in place; hint says whether it may be skipped. current is the answer already given when the customer came back to it.',
+    'PR-2: one of the owner’s REQUIRED questions, edited in place. current is the answer already given when the customer came back to it.',
     [
       ph('index', 'NUMBER', 'This question’s position, from one.'),
       ph('total', 'NUMBER', 'How many questions there are.'),
       ph('question', 'STRING', 'The question, exactly as the owner wrote it.'),
-      ph('hint', 'STRING', 'Whether the answer is required or optional, in Persian.'),
       ph('current', 'STRING', 'The answer given before, when the customer came back.', {
         required: false,
         untrusted: true,
@@ -310,10 +309,18 @@ export const RESELLER_REQUEST_TEMPLATES = [
     ],
   ),
   tpl(
-    'bot.reseller_request.hint_required',
-    'PR-2: the hint under a question that must be answered.',
+    'bot.reseller_request.question_optional',
+    'PR-2: one of the owner’s OPTIONAL questions, edited in place; the screen carries «رد کردن».',
+    [
+      ph('index', 'NUMBER', 'This question’s position, from one.'),
+      ph('total', 'NUMBER', 'How many questions there are.'),
+      ph('question', 'STRING', 'The question, exactly as the owner wrote it.'),
+      ph('current', 'STRING', 'The answer given before, when the customer came back.', {
+        required: false,
+        untrusted: true,
+      }),
+    ],
   ),
-  tpl('bot.reseller_request.hint_optional', 'PR-2: the hint under a question that may be skipped.'),
   tpl(
     'bot.reseller_request.summary',
     'PR-2: every question with its answer, before sending. «ارسال» files the request; «ویرایش» goes back to the first question.',

@@ -1770,9 +1770,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.menu.reseller_request': '👨‍💻 درخواست نمایندگی',
   'bot.reseller_request.intro':
     '👨‍💻 درخواست نمایندگی\n\nبرای نماینده شدن چند سؤال کوتاه را پاسخ بدهید. پاسخ‌های شما همراه درخواست برای مدیریت فرستاده می‌شود و نتیجه همین‌جا به شما اطلاع داده می‌شود.',
-  'bot.reseller_request.question': 'سؤال {index} از {total}\n\n{question}\n\n{hint}\n{current}',
-  'bot.reseller_request.hint_required': 'پاسخ این سؤال لازم است؛ آن را بنویسید و بفرستید.',
-  'bot.reseller_request.hint_optional': 'پاسخ این سؤال اختیاری است؛ بنویسید یا «رد کردن» را بزنید.',
+  'bot.reseller_request.question':
+    'سؤال {index} از {total}\n\n{question}\n\nپاسخ این سؤال لازم است؛ آن را بنویسید و بفرستید.\n✍️ پاسخ قبلی شما: {current}',
+  'bot.reseller_request.question_optional':
+    'سؤال {index} از {total}\n\n{question}\n\nپاسخ این سؤال اختیاری است؛ بنویسید یا «رد کردن» را بزنید.\n✍️ پاسخ قبلی شما: {current}',
   'bot.reseller_request.summary':
     '📋 خلاصهٔ درخواست شما\n\n{answers}\n\nاگر درست است «ارسال» را بزنید، وگرنه «ویرایش».',
   'bot.reseller_request.submitted':
