@@ -37,6 +37,14 @@ import type { TenantContext, TenantId } from '@nexa/contracts';
  *   the owner's worker unhealthy.
  */
 
+/**
+ * How many tenants' whole bodies one pass may run even after its budget is spent: the owner's
+ * bot and the one other bot every pass serves so the rotation advances. A loop whose
+ * freshness is sized from ONE tenant's pass bound must allow this many of them (Codex P2 on
+ * #418): two slow, backlogged tenants are a pass of twice the bound, still making progress.
+ */
+export const TENANT_PASS_MANDATORY_BODIES = 2;
+
 export interface TenantPassReport {
   /** Tenants whose body ran (whether it succeeded or not). */
   readonly served: number;

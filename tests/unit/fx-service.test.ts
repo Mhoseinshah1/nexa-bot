@@ -692,9 +692,10 @@ describe('the refresh loop', () => {
     loop.start();
     await loop.tick();
     expect(loop.isFresh(now)).toBe(true);
-    // Four intervals of failing passes: stale, even though the loop is alive.
+    // Failing passes past the slack (two tenants' pass bounds plus three intervals, Phase 6A
+    // PR-6): stale, even though the loop is alive.
     fail = true;
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 6; i += 1) {
       now += FX_REFRESH_INTERVAL_MS;
       await loop.tick();
     }

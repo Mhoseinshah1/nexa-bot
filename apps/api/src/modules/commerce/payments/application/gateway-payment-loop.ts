@@ -2,6 +2,7 @@ import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress
 import type { GatewayPaymentService } from './gateway-payment.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 import {
+  TENANT_PASS_MANDATORY_BODIES,
   forEachLoopTenant,
   type LoopTenantScope,
 } from '../../../../infrastructure/lifecycle/tenant-pass.js';
@@ -28,7 +29,9 @@ export const GATEWAY_PAYMENT_INTERVAL_MS = 3_000;
  * rollout; measured from the pass bound, it still catches a pass that never returns.
  */
 export function gatewayLoopSlackIntervals(intervalMs: number, passBoundMs: number): number {
-  return Math.ceil(passBoundMs / intervalMs) + 3;
+  // Phase 6A PR-6: `passBoundMs` is ONE tenant's bound, and a pass may run the owner's and
+  // one other bot's whole bodies (`TENANT_PASS_MANDATORY_BODIES`) before its budget stops it.
+  return Math.ceil((TENANT_PASS_MANDATORY_BODIES * passBoundMs) / intervalMs) + 3;
 }
 
 /**
@@ -59,8 +62,9 @@ export class GatewayPaymentLoop {
       /**
        * The longest one bounded pass may take: its calls times their timeout. With a
        * `TenantFanOut` pass it is ONE tenant's bound: the fan-out stops starting tenants
-       * after its budget (one interval), so a pass is at most budget + this bound, inside
-       * the `gatewayLoopSlackIntervals` tolerance (bound + three intervals).
+       * after its budget (one interval) but always serves the owner's and one other bot, so a
+       * pass is at most two of this bound (or budget + one), inside
+       * the `gatewayLoopSlackIntervals` tolerance (two bounds + three intervals).
        */
       readonly passBoundMs: number;
       readonly now: () => number;

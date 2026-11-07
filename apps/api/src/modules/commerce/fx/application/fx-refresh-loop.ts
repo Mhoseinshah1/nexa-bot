@@ -3,6 +3,7 @@ import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress
 import type { FxService } from './fx.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 import {
+  TENANT_PASS_MANDATORY_BODIES,
   forEachLoopTenant,
   isReportedTenantFailure,
   reportedTenantFailure,
@@ -48,7 +49,9 @@ export const FX_REFRESH_BACKOFF_MS: readonly number[] = [
 
 /** Slack: the longest a pass may take (both sources, each its whole timeout) plus three intervals. */
 export function fxLoopSlackIntervals(intervalMs: number, passBoundMs: number): number {
-  return Math.ceil(passBoundMs / intervalMs) + 3;
+  // Phase 6A PR-6: `passBoundMs` is ONE tenant's bound, and a pass may run the owner's and
+  // one other bot's whole bodies (`TENANT_PASS_MANDATORY_BODIES`) before its budget stops it.
+  return Math.ceil((TENANT_PASS_MANDATORY_BODIES * passBoundMs) / intervalMs) + 3;
 }
 
 /**
