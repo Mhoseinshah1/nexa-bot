@@ -532,6 +532,32 @@ export const FEATURE_FLAGS = [
     configuredBy: [],
   },
   {
+    key: 'services_search_label_button',
+    description:
+      'NEXA-OWNER-BATCH-1 PR-1: draw the label button of the search row on the customer\u2019s ' +
+      'services list (`bot.service.search_label_button`, \u00ABجستجوی نام کاربری\u00BB). Off by ' +
+      'default: the button is not drawn. With `services_search_button` also off the whole ' +
+      'search row is gone; with that one on, only its button is drawn. With both off a tap on ' +
+      'a search button drawn earlier is answered as no longer active and the list is redrawn ' +
+      'in place; the search capture is not opened. Nothing is deleted.',
+    defaultEnabled: false,
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
+    key: 'services_search_button',
+    description:
+      'NEXA-OWNER-BATCH-1 PR-1: draw the search button of the search row on the customer\u2019s ' +
+      'services list (`bot.service.search_button`, \u00AB🔎 جستجو\u00BB). Off by default: the ' +
+      'button is not drawn. With `services_search_label_button` also off the whole search row ' +
+      'is gone; with that one on, only its button is drawn. With both off a tap on a search ' +
+      'button drawn earlier is answered as no longer active and the list is redrawn in place; ' +
+      'the search capture is not opened. Nothing is deleted.',
+    defaultEnabled: false,
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
     key: 'mini_app',
     description:
       'Round 9, C5: the customer Telegram Mini App. On, every ACTIVE bot of the tenant gets a ' +

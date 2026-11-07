@@ -224,13 +224,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // acceptance. These four are ROUTES as well as labels: `intentOf` matches the
   // text a tap sends against exactly these strings, so an edit here changes what
   // the bot answers and not merely what it shows.
-  'bot.menu.catalog': '🛒 خرید اشتراک',
-  'bot.menu.services': '📱 سرویس‌های من',
-  'bot.menu.wallet': '💰 کیف پول',
-  'bot.menu.help': '💬 پشتیبانی',
+  'bot.menu.catalog': '🔐 خرید اشتراک',
+  'bot.menu.services': '🛍 سرویس های من',
+  'bot.menu.wallet': '🏦 کیف پول + شارژ',
+  'bot.menu.help': '☎️ پشتیبانی',
   // R1: each behind its feature flag, and arranged on the bot-buttons page.
-  'bot.menu.trial': '🧪 دریافت سرویس تست',
-  'bot.menu.referral': '👥 زیرمجموعه‌گیری',
+  'bot.menu.trial': 'اشتراک رایگان {تست}',
+  'bot.menu.referral': '👥 زیر مجموعه گیری',
 
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
   'bot.catalog.heading': 'سرویس‌های قابل خرید:',
@@ -1241,7 +1241,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // WP-A10: app downloads and connection guides. No app, store or link is named: the
   // entries are the operator's, and the defaults below say only what is true of all.
   'bot.command.apps': 'دانلود برنامه و آموزش اتصال',
-  'bot.menu.apps': '📱 دانلود برنامه و آموزش اتصال',
+  'bot.menu.apps': '📚 آموزش',
   'bot.tutorial.other_button': '🧩 سایر',
   'bot.apps.platform':
     '📲 برنامه‌های پیشنهادی برای این سیستم عامل:\n\nبرای دیدن لینک دانلود و آموزش اتصال، یکی از برنامه‌های زیر را انتخاب کنید.',
