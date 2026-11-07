@@ -298,6 +298,12 @@ describe('C-2 the compatibility projection parses under the PREVIOUS release’s
       { button: 'referral', enabled: false, target: 'referral', appearanceSlot: null },
       { button: 'apps', enabled: false, target: 'apps', appearanceSlot: null },
       { button: 'tickets', enabled: false, target: 'tickets', appearanceSlot: null },
+      {
+        button: 'reseller_request',
+        enabled: false,
+        target: 'reseller_request',
+        appearanceSlot: null,
+      },
     ]);
   });
 });
