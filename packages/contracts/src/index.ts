@@ -97,6 +97,8 @@ export * from './service-transfer.js';
 export * from './auto-renew.js';
 // WP-A7: the support ticket system.
 export * from './tickets.js';
+// Owner batch 1, PR-2: «درخواست نمایندگی».
+export * from './reseller-requests.js';
 export * from './miniapp.js';
 // Round N, C1: campaigns composing the pricing rules, the audience and the mass actions.
 export * from './campaigns.js';

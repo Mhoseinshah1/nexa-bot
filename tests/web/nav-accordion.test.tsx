@@ -146,6 +146,14 @@ const BEFORE: readonly [
     false,
   ],
   [
+    'reseller-requests',
+    '/reseller-requests',
+    'web.nav_reseller_requests',
+    'resellers',
+    'resellers.view',
+    false,
+  ],
+  [
     'reseller-tiers',
     '/reseller-tiers',
     'web.nav_reseller_tiers',
@@ -235,7 +243,10 @@ const GROUPS: readonly [string, readonly string[]][] = [
     'web.navgroup_marketing',
     ['discounts', 'campaigns', 'broadcasts', 'reminders', 'referrals', 'gift-cards'],
   ],
-  ['web.navgroup_resellers', ['resellers', 'reseller-tiers', 'reseller-plans']],
+  [
+    'web.navgroup_resellers',
+    ['resellers', 'reseller-tiers', 'reseller-plans', 'reseller-requests'],
+  ],
   ['web.navgroup_bot', ['bots', 'bot-buttons', 'appearance', 'content', 'terms', 'client-apps']],
   ['web.navgroup_infra', ['panels', 'panel-health', 'providers']],
   [
@@ -307,11 +318,11 @@ const drawnHrefs = () =>
 const head = (group: string) => navGroupHeader(group) as HTMLButtonElement;
 
 describe('the navigation’s information architecture', () => {
-  it('keeps all 52 entries exactly once, each with its path, label, icon and permission', () => {
+  it('keeps all 53 entries exactly once, each with its path, label, icon and permission', () => {
     // 50 after the redesign, R10 D4's «کارت‌های هدیه», and phase 6A's «میزبانی‌ها».
-    expect(NAV).toHaveLength(52);
-    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(52);
-    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(52);
+    expect(NAV).toHaveLength(53);
+    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(53);
+    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(53);
     const now = [...NAV]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((entry) => [
@@ -512,7 +523,7 @@ describe('the single-open accordion', () => {
   it('keeps every icon in the collapsed rail, where a header has no room for its label', () => {
     sidebar('/', ALL, OWNER, { collapsed: true });
     expect(document.querySelectorAll('.nav-group-head')).toHaveLength(0);
-    expect(drawnHrefs()).toHaveLength(52);
+    expect(drawnHrefs()).toHaveLength(53);
   });
 });
 

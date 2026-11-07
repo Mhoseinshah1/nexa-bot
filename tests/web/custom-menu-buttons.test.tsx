@@ -164,6 +164,7 @@ describe('custom buttons in the builder', () => {
       ['trial', 'referral'],
       ['apps'],
       ['tickets'],
+      ['reseller_request'],
       [REF_LINK],
     ]);
     expect(sent.layout['customButtons']).toEqual([

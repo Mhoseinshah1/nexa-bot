@@ -119,6 +119,14 @@ export const OPS_LOG_BODIES_FA = {
   'ops.support.customer_replied':
     '💬 پیام تازهٔ کاربر — تیکت #{ticketNumber} · {category}\n\n👤 {displayName} · {username} · {telegramId}\n💬 «{snippet}»\n📲 منبع: {source}\n🕒 {at}',
 
+  // --- PR-2: reseller requests (USERS topic) ----------------------------------------------
+  'ops.reseller_request.new':
+    '👨‍💻 درخواست نمایندگی #{requestNumber}\n\n👤 {displayName} · {username} · {telegramId}\n🔑 تعداد سرویس: {servicesCount}\n💰 مجموع پرداختی: {totalPaid}\n\n{qa}\n\n🕒 {at}',
+  'ops.reseller_request.reply':
+    '💬 پاسخ متقاضی — درخواست نمایندگی #{requestNumber}\n\n👤 {displayName} · {username} · {telegramId}\n💬 «{snippet}»\n🕒 {at}',
+  'ops.reseller_request.decided':
+    '👨‍💻 درخواست نمایندگی #{requestNumber} — {outcome}\n\n👤 {displayName} · {username} · {telegramId}\n🧑‍💼 سطح: {tierName}\n🙋 توسط: {adminName}\n📝 دلیل: {reason}\n🕒 {at}',
+
   // --- The nightly reports (REPORTS topic) and the backup caption -------------------------
   'ops.log.report_summary':
     '📊 گزارش روز — {day}\n\n💰 فروش: {sales} {salesChange}\n🛒 خرید جدید: {newPurchases} (🥇 خرید اول: {firstPurchases})\n🔄 تمدید: {renewals}\n👥 کاربر جدید: {newCustomers}\n👤 کاربر فعال: {activeCustomers}\n🟢 مشتری دارای سرویس فعال: {customersWithService}\n⚪️ مشتری بدون سرویس فعال: {customersWithoutService}\n🧪 تست: {trials}\n📶 سرویس فعال: {activeServices}\n⏰ بهترین ساعت: {bestHour}\n⚠️ خطاها: {errors}\n❌ پرداخت ناموفق: {failedPayments}\n🎫 تیکت باز: {openTickets}\n{cleanup}',
@@ -279,6 +287,7 @@ export const OPS_LOG_WORDS_FA = {
     REJECTED: 'رد شد؛ چیزی تغییر نکرد',
     FAILED: 'اجرا نشد؛ سرویس حذف نشد و مبلغی برنگشت',
   },
+  resellerRequestOutcomes: { APPROVED: 'تأیید شد؛ مشتری نماینده شد', REJECTED: 'رد شد' },
   cryptoKinds: { topup: 'شارژ کیف پول', order: 'پرداخت سفارش' },
 
   walletAdjust: { CREDIT: '➕ افزایش دستی موجودی', DEBIT: '➖ کاهش دستی موجودی' },
@@ -498,4 +507,8 @@ export const OPS_LOG_BUTTON_LABELS_FA: Readonly<Record<OpsLogButtonKind, string>
   BULK_OPERATION: '📋 عملیات گروهی',
   DASHBOARD: '📈 داشبورد',
   NOTIFICATIONS: '📋 فهرست کامل در پنل',
+  RESELLER_REQUEST: '👨‍💻 درخواست در پنل',
+  RESELLER_REQUEST_APPROVE: '✅ تأیید',
+  RESELLER_REQUEST_REJECT: '❌ رد',
+  RESELLER_REQUEST_MESSAGE: '💬 پیام به متقاضی',
 };

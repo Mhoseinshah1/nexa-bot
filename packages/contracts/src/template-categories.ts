@@ -118,6 +118,8 @@ export const TEMPLATE_CATEGORY_PREFIXES: Readonly<Record<TemplateCategory, reado
     'bot.payment.pending_reminder',
     'bot.order.pending_reminder',
     'bot.reseller.',
+    // PR-2: the reseller request's screens and the operator's messages to the applicant.
+    'bot.reseller_request.',
     'bot.incident.',
     'bot.broadcast.',
     'bot.marketing.',

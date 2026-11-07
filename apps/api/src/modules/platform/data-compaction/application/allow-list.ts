@@ -298,6 +298,14 @@ export const CUSTOMER_NOTIFICATION_COMPACTION: Readonly<
     compact: 'NEVER',
     reason: 'Rare, and the only record that the reseller was told why their prices changed.',
   },
+  RESELLER_REQUEST_MESSAGE: {
+    compact: 'NEVER',
+    reason: 'The only delivery record of what an operator wrote to an applicant; rare.',
+  },
+  RESELLER_REQUEST_DECISION: {
+    compact: 'NEVER',
+    reason: 'The only delivery record of the answer to a reseller request; one per request.',
+  },
 };
 
 /** The resolved states a row may be removed in. PENDING and UNCONFIRMED never. */

@@ -66,6 +66,7 @@ import type { ServiceAdminService } from '../../../modules/commerce/provisioning
 import type { InvoiceScreensPort, MessageStatePort } from '../wizard-state.js';
 import type { PanelService } from '../../../modules/platform/panels/application/panel.service.js';
 import type { ReferralProgram } from '../../../modules/commerce/referrals/application/referral-program.js';
+import type { ResellerRequestService } from '../../../modules/commerce/reseller-requests/application/reseller-request.service.js';
 import type { TicketService } from '../../../modules/commerce/tickets/application/ticket.service.js';
 import type { TicketCategoryService } from '../../../modules/commerce/tickets/application/ticket-category.service.js';
 import type { TicketScreenComposer } from '../../../modules/commerce/tickets/application/ticket-screens.js';
@@ -582,6 +583,8 @@ export interface BotRuntimeDeps {
   readonly customMenuButtons?: {
     forTap(scope: TenantContext, id: string, botInstanceId: string): Promise<CustomMenuTap>;
   };
+  /** PR-2: the reseller request. Absent, the main-menu button answers «not available». */
+  readonly resellerRequests?: ResellerRequestService;
   /** WP-A7: the customer's support tickets. Absent, the desk is not offered. */
   readonly tickets?: TicketDeskPort;
   /**

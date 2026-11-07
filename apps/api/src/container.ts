@@ -629,6 +629,9 @@ import { TicketService } from './modules/commerce/tickets/application/ticket.ser
 import { TicketCategoryService } from './modules/commerce/tickets/application/ticket-category.service.js';
 import { TicketScreenComposer } from './modules/commerce/tickets/application/ticket-screens.js';
 import { TicketSupportNotifyConsumer } from './modules/commerce/tickets/application/ticket-support-notify.consumer.js';
+import { ResellerRequestService } from './modules/commerce/reseller-requests/application/reseller-request.service.js';
+import { ResellerRequestLogConsumer } from './modules/commerce/reseller-requests/application/reseller-request-log.consumer.js';
+import { DrizzleResellerRequestRepository } from './modules/commerce/reseller-requests/infrastructure/drizzle-reseller-request.repository.js';
 import { DrizzleTicketRepository } from './modules/commerce/tickets/infrastructure/drizzle-ticket.repository.js';
 import { DrizzleTicketCategoryRepository } from './modules/commerce/tickets/infrastructure/drizzle-ticket-category.repository.js';
 import { DrizzleTicketContextReader } from './modules/commerce/tickets/infrastructure/drizzle-ticket-context.reader.js';
@@ -1447,6 +1450,8 @@ export interface Container {
   readonly usageSnapshots: UsageSnapshotService;
   /** WP-A7: support tickets, for the bot and the Web Admin alike. */
   readonly tickets: TicketService;
+  /** PR-2: «درخواست نمایندگی» — the questions, the applicant's flow, the thread, the decision. */
+  readonly resellerRequests: ResellerRequestService;
   /** WP-A7: the categories a customer files a ticket under. */
   readonly ticketCategories: TicketCategoryService;
   /** The operator's price preview and an order's pricing detail (WP8). */
@@ -2674,6 +2679,19 @@ export function createContainer(
       new ServiceLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new AdminLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new FailureLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      /*
+       * PR-2: «درخواست نمایندگی» — a request filed, the applicant's reply and the decision →
+       * the operations log group, with the approve / reject / message buttons.
+       */
+      new ResellerRequestLogConsumer({
+        lane: { queue: (scope, input, tx) => notifications.queue(scope, input, tx) },
+        requests: new DrizzleResellerRequestRepository(database.db),
+        tierName: async (scope, tierId, tx) =>
+          (await new DrizzleResellerRepository(database.db).findTier(scope, tierId, tx))?.name ??
+          null,
+        facts: opsLogFacts,
+        words: i18nOpsLogWords,
+      }),
       new TicketSupportNotifyConsumer({
         lane: { queue: (scope, input, tx) => notifications.queue(scope, input, tx) },
         tickets: new DrizzleTicketRepository(database.db),
@@ -5932,6 +5950,25 @@ export function createContainer(
     ids,
   });
   const ticketScreens = new TicketScreenComposer(templateResolver);
+  const resellerRequestService = new ResellerRequestService({
+    requests: new DrizzleResellerRequestRepository(database.db),
+    resellers: resellerRepository,
+    registrar: resellerAdminService,
+    customers: customerRepository,
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    notifier: customerNotifier,
+    outbox,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
   /**
    * Phase A2 (`docs/direct-message-audit.md`): a direct message from Customer 360. Its own
    * row and permission; delivered by the customer notification lane below, as
@@ -6490,6 +6527,8 @@ export function createContainer(
       autoRenew: serviceAutoRenewService,
       // WP-A7: support's reply, read from the ticket message the notification names.
       tickets: ticketService,
+      // PR-2: an operator's message to an applicant, and the decision, read from their rows.
+      resellerRequests: resellerRequestService,
       // Phase A2: an operator's direct message, read from the message row it names.
       directMessages: customerDirectMessageService,
       // Phase E3: an incident notice's words, read from its communication row.
@@ -9386,6 +9425,7 @@ export function createContainer(
     serviceAutoRenew: serviceAutoRenewService,
     usageSnapshots: usageSnapshotService,
     tickets: ticketService,
+    resellerRequests: resellerRequestService,
     ticketCategories: ticketCategoryService,
     pricingRead: pricingReadService,
     cashback: cashbackService,
@@ -9704,6 +9744,8 @@ export function createContainer(
               );
         return open?.orderId ?? null;
       },
+      // PR-2: «درخواست نمایندگی» — the applicant's flow and the operator's group actions.
+      resellerRequests: resellerRequestService,
       tickets: {
         service: ticketService,
         categories: ticketCategoryService,

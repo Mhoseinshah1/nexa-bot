@@ -1,6 +1,6 @@
 // Inline buttons shared by more than one flow.
 // Moved verbatim out of bot-runtime.ts, which still re-exports every name it exported.
-import type { CustomerNotificationKind } from '@nexa/contracts';
+import { RESELLER_REQUEST_CALLBACKS, type CustomerNotificationKind } from '@nexa/contracts';
 import type { CustomerButton } from '../../../modules/commerce/messaging/application/ports.js';
 import { SUPPORT_CALLBACK_DATA } from '../../../modules/commerce/provisioning/application/delivery.service.js';
 import { inlineLabel } from '../../../modules/commerce/messaging/application/inline-buttons.js';
@@ -78,6 +78,8 @@ export function notificationButtons(
   subject: {
     readonly serviceId?: string;
     readonly ticketId?: string;
+    /** PR-2: the PENDING reseller request an operator's message is about (its reply button). */
+    readonly resellerRequestId?: string;
     readonly reorder?: OrderReorderTarget;
     /** R12 F3 item 1: the order a pending-order reminder is about. */
     readonly orderId?: string;
@@ -157,6 +159,15 @@ export function notificationButtons(
   }
   if (kind === 'SERVICE_ACTION_FAILED' || kind === 'SERVICE_PROVISION_DELAYED') {
     return [{ ...inlineLabel('service.support'), data: SUPPORT_CALLBACK_DATA }];
+  }
+  // PR-2: an operator's message about a reseller request offers the reply window.
+  if (kind === 'RESELLER_REQUEST_MESSAGE' && subject.resellerRequestId !== undefined) {
+    return [
+      {
+        ...inlineLabel('reseller_request.reply'),
+        data: `${RESELLER_REQUEST_CALLBACKS.reply}${subject.resellerRequestId}`,
+      },
+    ];
   }
   // WP-A7: support's reply opens the ticket, or its reply window, for whoever taps it.
   if (kind === 'TICKET_REPLY' && subject.ticketId !== undefined) {

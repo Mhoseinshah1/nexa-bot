@@ -56,6 +56,7 @@ import { TermsController } from './surfaces/web/terms.controller.js';
 import { ClientAppController } from './surfaces/web/client-app.controller.js';
 import { DeliveryTutorialController } from './surfaces/web/delivery-tutorial.controller.js';
 import { TicketsController } from './surfaces/web/tickets.controller.js';
+import { ResellerRequestsController } from './surfaces/web/reseller-requests.controller.js';
 import { BusinessChatsController } from './surfaces/web/business-chats.controller.js';
 import { SupportAiController } from './surfaces/web/support-ai.controller.js';
 import { SupportKnowledgeController } from './surfaces/web/support-knowledge.controller.js';
@@ -181,6 +182,7 @@ export class AppModule implements NestModule {
         DeliveryTutorialController as never,
         // WP-A7: support tickets.
         TicketsController as never,
+        ResellerRequestsController as never,
         BusinessChatsController as never,
         SupportAiController as never,
         // TB8: support knowledge and the learning queue.

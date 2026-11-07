@@ -21,7 +21,7 @@
  *   The payment screens of any order (a renewal's too) are this kind.
  * - `TOPUP` — funding the wallet: amount, method, invoice.
  */
-export const TELEGRAM_WIZARD_KINDS = ['ORDER', 'TOPUP'] as const;
+export const TELEGRAM_WIZARD_KINDS = ['ORDER', 'TOPUP', 'RESELLER_REQUEST'] as const;
 export type TelegramWizardKind = (typeof TELEGRAM_WIZARD_KINDS)[number];
 
 /**
@@ -69,6 +69,13 @@ export const TELEGRAM_WIZARD_STEPS = [
    */
   'RECEIPT_WAIT',
   'RECEIPT_REVIEW',
+  /*
+   * PR-2, the reseller request: the intro, one of the owner's questions, and the summary
+   * (also the screen after «ویرایش» returns to a question).
+   */
+  'RR_INTRO',
+  'RR_QUESTION',
+  'RR_SUMMARY',
 ] as const;
 export type TelegramWizardStep = (typeof TELEGRAM_WIZARD_STEPS)[number];
 

@@ -127,7 +127,13 @@ export class TelegramNotificationTransport implements NotificationTransport {
       html: message.html,
       ...(buttons === undefined || buttons.length === 0
         ? {}
-        : { buttons: buttons.map(({ text, url, row }) => ({ text, url, row })) }),
+        : {
+            buttons: buttons.map((button) =>
+              button.data !== undefined
+                ? { text: button.text, data: button.data, row: button.row }
+                : { text: button.text, url: button.url, row: button.row },
+            ),
+          }),
     });
     if (message.destination.topicId !== null) {
       body.message_thread_id = message.destination.topicId;
@@ -150,7 +156,22 @@ export class TelegramNotificationTransport implements NotificationTransport {
       result.outcome === 'FAILED_PERMANENT' &&
       /BUTTON_URL_INVALID/i.test(result.errorMessage)
     ) {
-      const plain = textMessageBody({ chatId, text: message.text, html: message.html });
+      // Only the link buttons were the courtesy: the actions (PR-2) stay.
+      const actions = buttons.filter((button) => button.data !== undefined);
+      const plain = textMessageBody({
+        chatId,
+        text: message.text,
+        html: message.html,
+        ...(actions.length === 0
+          ? {}
+          : {
+              buttons: actions.map((button, row) => ({
+                text: button.text,
+                data: button.data as string,
+                row,
+              })),
+            }),
+      });
       if (message.destination.topicId !== null) {
         plain.message_thread_id = message.destination.topicId;
       }

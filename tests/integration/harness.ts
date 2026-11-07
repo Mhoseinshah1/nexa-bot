@@ -231,6 +231,10 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- WP-A6: the change requests, then the locations they and the commercial actions name.
        service_location_changes, service_locations,
        -- Customer UX completion. Named before the tables they reference.
+       -- PR-2: the reseller requests, their thread and drafts, before the customers, admins,
+       -- bots and tiers they name.
+       reseller_request_messages, reseller_requests, reseller_request_drafts,
+       reseller_request_questions,
        customer_text_captures, referral_signup_gifts, support_faqs, support_faq_seeds,
        -- R10 D5: the /start captcha rows, before the customers they name.
        customer_captchas,

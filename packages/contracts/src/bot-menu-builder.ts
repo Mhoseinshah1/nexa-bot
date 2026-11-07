@@ -344,7 +344,13 @@ export function defaultCustomMenuButtonConfig(ref: CustomMenuRef): CustomMenuBut
 
 /** The configuration a button has before anybody chose one. */
 export function defaultMainMenuButtonConfig(id: MainMenuButtonId): MainMenuButtonConfig {
-  return { button: id, enabled: true, style: 'default', iconSlot: null, appearanceSlot: null };
+  return {
+    button: id,
+    enabled: true,
+    style: mainMenuButton(id).defaultStyle ?? 'default',
+    iconSlot: null,
+    appearanceSlot: null,
+  };
 }
 
 /**
@@ -518,13 +524,15 @@ const DEFAULT_MAIN_MENU_STYLES: Readonly<Record<MainMenuButtonId, MainMenuButton
   referral: 'success',
   apps: 'success',
   tickets: 'default',
+  reseller_request: 'danger',
 };
 
 /**
  * The default keyboard where nothing is saved (NEXA-OWNER-BATCH-1, PR-1): Mirza's order, two
  * to a row, with the styles the owner chose. One purchase button on top, wallet beside
  * services, the trial alone, the guide beside the referral program, support alone; the ticket
- * desk keeps its place after it. Right-to-left, the first of a row is the right-hand button.
+ * desk keeps its place after it, then the reseller request (PR-2, danger style, drawn only while
+ * the `reseller_requests` flag is on). Right-to-left, the first of a row is the right-hand button.
  *
  * It is a DEFAULT and nothing else: the runtime draws it only while the tenant has neither a
  * published layout nor a saved `bot.main_menu`, so an arrangement, style or label an owner
@@ -540,6 +548,7 @@ export const DEFAULT_EXPLICIT_MAIN_MENU: ExplicitMainMenu = normalizeExplicitMai
     ['apps', 'referral'],
     ['help'],
     ['tickets'],
+    ['reseller_request'],
   ],
   buttons: MAIN_MENU_BUTTON_IDS.map((id) => ({
     ...defaultMainMenuButtonConfig(id),

@@ -2255,6 +2255,13 @@
       "when": 1794029480276,
       "tag": "0321_hosted_bot_activation",
       "breakpoints": true
+    },
+    {
+      "idx": 322,
+      "version": "7",
+      "when": 1794056223943,
+      "tag": "0322_reseller_requests",
+      "breakpoints": true
     }
   ]
 }

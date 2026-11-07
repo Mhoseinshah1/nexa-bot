@@ -72,6 +72,16 @@ export const WAY_ON: Readonly<Partial<Record<TemplateKey, WayOn>>> = {
   'bot.username.mode_unavailable': 'BUY',
   'bot.username.stale': 'BUY',
   'bot.username.unavailable': 'BUY',
+  // PR-2: «درخواست نمایندگی» — a status, a wait, a refusal or an acknowledgement.
+  'bot.reseller_request.unavailable': 'MAIN',
+  'bot.reseller_request.already_reseller': 'MAIN',
+  'bot.reseller_request.cooldown': 'MAIN',
+  'bot.reseller_request.submitted': 'MAIN',
+  'bot.reseller_request.thread_closed': 'MAIN',
+  'bot.reseller_request.reply_sent': 'MAIN',
+  // A refused typed answer or an open reply prompt: the window stays open; type, or leave.
+  'bot.reseller_request.answer_invalid': 'CANCEL_ENTRY',
+  'bot.reseller_request.reply_prompt': 'CANCEL_ENTRY',
   // Payments.
   'bot.payment.cancelled': 'MAIN',
   'bot.payment.checkout_in_progress': 'MAIN',
