@@ -184,6 +184,8 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'capacity.memory_ok': 'حافظهٔ آزاد سرور دوباره کافی است',
   'capacity.worker_lag_growing': 'صف کارهای پس‌زمینه عقب افتاده است',
   'capacity.worker_lag_ok': 'صف کارهای پس‌زمینه دوباره به‌روز است',
+  // PR #411: the owner's operations group only.
+  'tenancy.cached_tenant_vanished': 'مستأجرِ در حال کار ناپدید شد و کارش متوقف شد',
 };
 
 /**

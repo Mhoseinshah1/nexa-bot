@@ -345,6 +345,16 @@ export const OWNER_ALERT_BULK_READ_CODE = 'access.bulk_read';
 export const BACKUP_OFFSITE_FAILED_CODE = 'backup.offsite_failed';
 export const BACKUP_OFFSITE_OK_CODE = 'backup.offsite_ok';
 
+/**
+ * PR #411: a long-running role's cached tenant no longer exists and was not known to be the
+ * installation's PRIMARY tenant (a hosted or reseller tenant, or one whose kind was never
+ * recorded). The role is never moved onto the owner's tenant: it stops that scope and tells the
+ * OWNER, on the PRIMARY tenant only, so it reaches the installation operator's group and never a
+ * hosted tenant's. One condition per vanished tenant (dedupe key `<code>:<tenant id>`); there is
+ * no recovery code, because a tenant that vanished does not come back to this process.
+ */
+export const INSTALLATION_TENANT_VANISHED_CODE = 'tenancy.cached_tenant_vanished';
+
 // ---------------------------------------------------------------------------
 // The catalogue
 // ---------------------------------------------------------------------------
@@ -610,6 +620,8 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   failure(CAPACITY_WORKER_LAG_CODE, 'JOBS', 'CONDITION'),
   recovery(CAPACITY_WORKER_LAG_OK_CODE, 'JOBS', CAPACITY_WORKER_LAG_CODE),
   // --- END phase 6A PR-2
+  // PR #411: a cached tenant that vanished and was not the installation's PRIMARY (owner only).
+  failure(INSTALLATION_TENANT_VANISHED_CODE, 'SYSTEM', 'CONDITION'),
 ];
 
 /** The entry for a code: its exact entry first, then the longest family prefix. */

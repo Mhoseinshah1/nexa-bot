@@ -150,6 +150,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'capacity.memory_ok': 'SYSTEM',
   'capacity.worker_lag_growing': 'SYSTEM',
   'capacity.worker_lag_ok': 'SYSTEM',
+  // PR #411: a vanished non-primary cached tenant, the owner's group only.
+  'tenancy.cached_tenant_vanished': 'SYSTEM',
 };
 
 /** A family code is routed by its members; the family prefix itself is not a code. */
