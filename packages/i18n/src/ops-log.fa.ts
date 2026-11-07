@@ -287,6 +287,7 @@ export const OPS_LOG_WORDS_FA = {
     REJECTED: 'رد شد؛ چیزی تغییر نکرد',
     FAILED: 'اجرا نشد؛ سرویس حذف نشد و مبلغی برنگشت',
   },
+  resellerRequestOutcomes: { APPROVED: 'تأیید شد؛ مشتری نماینده شد', REJECTED: 'رد شد' },
   cryptoKinds: { topup: 'شارژ کیف پول', order: 'پرداخت سفارش' },
 
   walletAdjust: { CREDIT: '➕ افزایش دستی موجودی', DEBIT: '➖ کاهش دستی موجودی' },
