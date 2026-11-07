@@ -1,6 +1,7 @@
 import { and, desc, eq, gt, isNull, ne } from 'drizzle-orm';
 import type { HostedActivationStep, ScopeContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 import {
   hostedBotActivationLinks,
   hostedBotActivations,
@@ -58,6 +59,7 @@ function toLink(row: LinkRecord): HostedActivationLinkRow {
  * read and written in the owner's scope (`HostedActivationRepository`). Every method names
  * the tenant through `requireTenantId(scope)`.
  */
+@ScopeBound()
 export class DrizzleHostedActivationRepository implements HostedActivationRepository {
   constructor(private readonly db: Database) {}
 

@@ -17,16 +17,18 @@ import type { DnsObservation } from '../domain/hosted-domain.js';
  *
  * - `HostedBotRegistrar`: what the creator's steps do INSIDE the hosted tenant — bind its bot
  *   instance, register its webhook. Every method takes an explicit `SystemContext`
- *   (`hosting.activation_*`) AND the hosted scope, so at the merge with RLS the lead routes
- *   exactly these through the system path and nothing else.
+ *   (`hosting.activation_*`) AND the hosted scope. Under RLS (ADR-0037) only the identity
+ *   read across tenants and the bind inside the creator's transaction use the system path.
  *
  * - `HostedDomainDirectory`: THE ONE place that reads across tenants before the tenant is
  *   known — a request's Host header and an activation token are both resolved to a tenant HERE
  *   and nowhere else. Unscoped by nature (the caller has no tenant yet); everything it returns
- *   is a tenant id, a word, or a hash, never a credential. Route it through the system path.
+ *   is a tenant id, a word, or a hash, never a credential. It runs on the system path, reads only.
  *
  * - `HostedOwnerActivationSystemPath`: the redemption's writes (burn the link, set the hosted
- *   owner's credentials, mark the activation), `SystemContext` each.
+ *   owner's credentials, mark the activation), `SystemContext` each. The credentials stay under
+ *   the HOSTED tenant's own binding; the link and the activation record are the installation's,
+ *   so those two single-row writes use the system path.
  *
  * Two more are the network: `HostedDnsResolver` and `HostedTlsProbe`, injectable for tests.
  */

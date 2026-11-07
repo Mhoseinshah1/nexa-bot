@@ -1,6 +1,7 @@
 import { and, eq, gt, isNull, ne } from 'drizzle-orm';
 import { errors, type SystemContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 import {
   adminSessions,
   admins,
@@ -9,6 +10,7 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { HostedOwnerActivationSystemPath } from '../application/activation-ports.js';
+import { acrossTenants } from './hosting-system-path.js';
 
 function executorOf(db: Database, tx: unknown): Executor {
   return (tx as TransactionScope).tx ?? db;
@@ -29,7 +31,15 @@ function assertSystem(context: SystemContext): void {
  * owner's credentials in the HOSTED tenant, and marking the installation's activation record.
  * All three run in the caller's one transaction, so a redemption either does all of them or
  * none (a username another admin holds rolls the spent link back with it).
+ *
+ * The transaction is bound to the HOSTED tenant (ADR-0037), so the one write that belongs to
+ * the hosted tenant — its owner's credentials and sessions — runs under that binding with no
+ * system path at all: row-level security itself keeps it from touching any other tenant,
+ * the installation's PRIMARY tenant included. The two writes to the INSTALLATION's rows (the
+ * link, the activation record) are the cross-tenant ones, each a single UPDATE on the system
+ * path under its own literal reason and a predicate naming exactly the row.
  */
+@ScopeBound()
 export class DrizzleHostedOwnerActivation implements HostedOwnerActivationSystemPath {
   constructor(private readonly db: Database) {}
 
@@ -37,18 +47,20 @@ export class DrizzleHostedOwnerActivation implements HostedOwnerActivationSystem
     assertSystem(context);
     // THE single-use guarantee: one conditional UPDATE. Two concurrent redemptions meet at the
     // row lock; the second re-evaluates `used_at IS NULL` and matches nothing.
-    const spent = await executorOf(this.db, tx)
-      .update(hostedBotActivationLinks)
-      .set({ usedAt: now })
-      .where(
-        and(
-          eq(hostedBotActivationLinks.id, linkId),
-          isNull(hostedBotActivationLinks.usedAt),
-          isNull(hostedBotActivationLinks.revokedAt),
-          gt(hostedBotActivationLinks.expiresAt, now),
-        ),
-      )
-      .returning({ id: hostedBotActivationLinks.id });
+    const spent = await acrossTenants(tx, 'hosting: spend an activation link', () =>
+      executorOf(this.db, tx)
+        .update(hostedBotActivationLinks)
+        .set({ usedAt: now })
+        .where(
+          and(
+            eq(hostedBotActivationLinks.id, linkId),
+            isNull(hostedBotActivationLinks.usedAt),
+            isNull(hostedBotActivationLinks.revokedAt),
+            gt(hostedBotActivationLinks.expiresAt, now),
+          ),
+        )
+        .returning({ id: hostedBotActivationLinks.id }),
+    );
     return spent.length === 1;
   }
 
@@ -115,14 +127,16 @@ export class DrizzleHostedOwnerActivation implements HostedOwnerActivationSystem
     tx: unknown,
   ): Promise<void> {
     assertSystem(context);
-    await executorOf(this.db, tx)
-      .update(hostedBotActivations)
-      .set({ ownerActivatedAt: input.now, updatedAt: input.now })
-      .where(
-        and(
-          eq(hostedBotActivations.tenantId, input.tenantId),
-          eq(hostedBotActivations.hostedTenantId, input.hostedTenantId),
+    await acrossTenants(tx, 'hosting: mark the hosted owner activated', () =>
+      executorOf(this.db, tx)
+        .update(hostedBotActivations)
+        .set({ ownerActivatedAt: input.now, updatedAt: input.now })
+        .where(
+          and(
+            eq(hostedBotActivations.tenantId, input.tenantId),
+            eq(hostedBotActivations.hostedTenantId, input.hostedTenantId),
+          ),
         ),
-      );
+    );
   }
 }

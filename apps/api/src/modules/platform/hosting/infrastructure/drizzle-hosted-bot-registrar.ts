@@ -6,6 +6,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
+import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 import { botInstances } from '../../../../infrastructure/persistence/schema.js';
 import type {
   BotBootstrapRepository,
@@ -17,6 +18,7 @@ import type {
   HostedBotRegistrar,
   HostedWebhookOutcome,
 } from '../application/activation-ports.js';
+import { acrossTenants } from './hosting-system-path.js';
 
 function assertSystem(context: SystemContext): void {
   if (context.kind !== 'SYSTEM' || !context.reason.startsWith('hosting.')) {
@@ -43,9 +45,19 @@ const hostedScope = (hostedTenantId: string): TenantContext => ({
  *   - the stored token is read by `resolveToken`.
  *
  * Every method takes an explicit `SystemContext` (`hosting.activation_*`) and names the HOSTED
- * tenant in its scope: these are the statements that run in another tenant's rows, so at the
- * merge with RLS (ADR-0037) they are the ones the lead routes through the system path.
+ * tenant in its scope. Under RLS (ADR-0037):
+ *
+ *   - `identityHeldElsewhere` is a cross-tenant READ (every other tenant's bot instances), on
+ *     the system path under a literal reason; it returns a boolean;
+ *   - `bind` runs inside the CREATOR's transaction (bound to the installation tenant) but
+ *     writes the hosted tenant's bot row, so it is the one cross-tenant WRITE: the bot
+ *     repository's own statements, each naming the hosted tenant in its predicate, on the
+ *     system path for exactly that call;
+ *   - `currentBot`, `tokenOf` and `registerWebhook` run OUTSIDE any transaction and hand the
+ *     hosted scope to the bot repository and the bootstrap, which bind it themselves: they
+ *     run under the hosted tenant's own binding and need no system path.
  */
+@ScopeBound()
 export class DrizzleHostedBotRegistrar implements HostedBotRegistrar {
   constructor(
     private readonly db: Database,
@@ -58,19 +70,24 @@ export class DrizzleHostedBotRegistrar implements HostedBotRegistrar {
     input: { telegramBotId: string; username: string; hostedTenantId: string },
   ): Promise<boolean> {
     assertSystem(context);
-    const [row] = await this.db
-      .select({ id: botInstances.id })
-      .from(botInstances)
-      .where(
-        and(
-          ne(botInstances.tenantId, input.hostedTenantId),
-          or(
-            eq(botInstances.telegramBotId, input.telegramBotId),
-            eq(botInstances.username, input.username),
-          ),
-        ),
-      )
-      .limit(1);
+    const [row] = await acrossTenants(
+      undefined,
+      'hosting: bot identity held by another tenant',
+      () =>
+        this.db
+          .select({ id: botInstances.id })
+          .from(botInstances)
+          .where(
+            and(
+              ne(botInstances.tenantId, input.hostedTenantId),
+              or(
+                eq(botInstances.telegramBotId, input.telegramBotId),
+                eq(botInstances.username, input.username),
+              ),
+            ),
+          )
+          .limit(1),
+    );
     return row !== undefined;
   }
 
@@ -102,43 +119,45 @@ export class DrizzleHostedBotRegistrar implements HostedBotRegistrar {
   ) {
     assertSystem(context);
     const scope = hostedScope(input.hostedTenantId);
-    // Serialises bot creation in the hosted tenant (the tenant row), like the installer.
-    await this.bots.lockTenantForBotChange(scope, tx);
-    const existing = await this.bots.findBootstrapTarget(scope, tx);
-    if (existing !== null) {
-      // Never repoints (ADR-0029): another Telegram bot — or a row that never recorded its
-      // identity — is answered, not overwritten; the same bot is left exactly as it is.
-      if (existing.telegramBotId !== input.telegramBotId) {
-        return { outcome: 'OTHER_BOT' as const };
+    return acrossTenants(tx, 'hosting: bind the bot of a hosted tenant', async () => {
+      // Serialises bot creation in the hosted tenant (the tenant row), like the installer.
+      await this.bots.lockTenantForBotChange(scope, tx);
+      const existing = await this.bots.findBootstrapTarget(scope, tx);
+      if (existing !== null) {
+        // Never repoints (ADR-0029): another Telegram bot — or a row that never recorded its
+        // identity — is answered, not overwritten; the same bot is left exactly as it is.
+        if (existing.telegramBotId !== input.telegramBotId) {
+          return { outcome: 'OTHER_BOT' as const };
+        }
+        return {
+          outcome: 'EXISTING' as const,
+          binding: {
+            botInstanceId: existing.id,
+            username: existing.username,
+            telegramBotId: input.telegramBotId,
+          },
+        };
       }
+      await this.bots.createFromBootstrap(
+        scope,
+        {
+          id: input.botInstanceId as BotInstanceId,
+          username: input.username,
+          telegramBotId: input.telegramBotId,
+          token: input.token,
+          now: input.now,
+        },
+        tx,
+      );
       return {
-        outcome: 'EXISTING' as const,
+        outcome: 'CREATED' as const,
         binding: {
-          botInstanceId: existing.id,
-          username: existing.username,
+          botInstanceId: input.botInstanceId,
+          username: input.username,
           telegramBotId: input.telegramBotId,
         },
       };
-    }
-    await this.bots.createFromBootstrap(
-      scope,
-      {
-        id: input.botInstanceId as BotInstanceId,
-        username: input.username,
-        telegramBotId: input.telegramBotId,
-        token: input.token,
-        now: input.now,
-      },
-      tx,
-    );
-    return {
-      outcome: 'CREATED' as const,
-      binding: {
-        botInstanceId: input.botInstanceId,
-        username: input.username,
-        telegramBotId: input.telegramBotId,
-      },
-    };
+    });
   }
 
   async tokenOf(

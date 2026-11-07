@@ -13,9 +13,12 @@ import {
   type HostedActivationView,
   type TenantContext,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
+  adminPermissionOverrides,
+  adminRoles,
+  adminSessions,
   admins,
   auditLogs,
   botInstances,
@@ -23,6 +26,8 @@ import {
   hostedBotActivations,
   hostedBots,
   outboxMessages,
+  rolePermissions,
+  roles,
   tenants,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
@@ -38,7 +43,15 @@ import type { DnsObservation } from '../../apps/api/src/modules/platform/hosting
 import { DrizzleHostedOwnerActivation } from '../../apps/api/src/modules/platform/hosting/infrastructure/drizzle-hosted-owner-activation';
 import { perBotWebhookSecret } from '../../apps/api/src/modules/platform/tenancy/application/webhook-secret';
 import { startFakeTelegramBotApi, type FakeTelegramBotApi } from '../support/fake-telegram-bot-api';
-import { createAdmin, migrateOnce, resetDatabase, SEED_IDS, tenantA, testConfig } from './harness';
+import {
+  createAdmin,
+  createApiApp,
+  migrateOnce,
+  resetDatabase,
+  SEED_IDS,
+  tenantA,
+  testConfig,
+} from './harness';
 
 const ORIGIN = 'https://admin.hosting.test';
 const SERVER_IP = '203.0.113.10';
@@ -975,6 +988,224 @@ describe('hosted bot activation (phase 6A PR-4)', () => {
         fs.readFileSync('deploy/caddy/routes.caddy', 'utf8'),
       );
       expect(routes).not.toContain('/internal');
+    });
+  });
+
+  /**
+   * ADR-0037: the activation's three adapters reach other tenants' rows only on the system
+   * path, and only where that is the point. These are the rules that routing must not weaken:
+   * the hosted owner's activation and sign-in are the HOSTED tenant's, never the PRIMARY
+   * (installation) tenant's, and they never carry the creator panel's permission.
+   */
+  describe('under row-level security — what the system path must not widen', () => {
+    const NEW_PASSWORD = 'a-brand-new-long-password';
+    const hostedLogin = (username: string, password: string, host = DOMAIN) =>
+      inject({
+        method: 'POST',
+        url: `${API_PREFIX}/auth/login`,
+        headers: { host, origin: host === DOMAIN ? `https://${DOMAIN}` : ORIGIN },
+        payload: { username, password },
+      });
+
+    const betaToken = () => telegram.createBot({ id: TELEGRAM_ID + 1, username: 'beta_store_bot' });
+
+    async function readyLink(slug = 'alpha', domain = DOMAIN, token = botToken) {
+      const id = await createHosted(slug);
+      await configure(id, { domain, botToken: token });
+      dnsNow.set(domain, { cname: ['admin.hosting.test'], addresses: [SERVER_IP] });
+      await run(id, 'domain');
+      tlsReady.add(domain);
+      await run(id, 'ssl');
+      await run(id, 'webhook');
+      return { id, token: tokenOf((await issueLink(id)).activationUrl) };
+    }
+
+    /** Everything that decides what a person may do, in every tenant. */
+    async function permissionState() {
+      const [roleKeys, grants, assignments, overrides] = await Promise.all([
+        db().select().from(roles),
+        db().select().from(rolePermissions),
+        db().select().from(adminRoles),
+        db().select().from(adminPermissionOverrides),
+      ]);
+      const order = (rows: object[]) => rows.map((row) => JSON.stringify(row)).sort();
+      return {
+        roles: order(roleKeys),
+        grants: order(grants),
+        assignments: order(assignments),
+        overrides: order(overrides),
+      };
+    }
+
+    async function primaryState() {
+      const [people, sessions, trail] = await Promise.all([
+        db().select().from(admins).where(eq(admins.tenantId, tenantA.tenantId)),
+        db().select().from(adminSessions).where(eq(adminSessions.tenantId, tenantA.tenantId)),
+        db().select().from(auditLogs).where(eq(auditLogs.tenantId, tenantA.tenantId)),
+      ]);
+      const order = (rows: object[]) => rows.map((row) => JSON.stringify(row)).sort();
+      return {
+        admins: order(people),
+        sessions: order(sessions),
+        audit: trail.map((row) => row.action).sort(),
+      };
+    }
+
+    it('the app runs as nexa_app: the policies bind it, so a missed system path would raise', async () => {
+      const who = await api.container.uow.run(
+        tenantA,
+        async (tx) => (await tx.tx.execute(sql`SELECT session_user AS who`)).rows[0],
+      );
+      expect((who as { who: string }).who).toBe('nexa_app');
+    });
+
+    it('a redemption writes the hosted owner and two named installation rows — nothing of the PRIMARY tenant', async () => {
+      const { id, token } = await readyLink();
+      const before = await primaryState();
+      await redeem(DOMAIN, token);
+      expect(await primaryState()).toEqual(before);
+      const [owner] = await db()
+        .select()
+        .from(admins)
+        .where(and(eq(admins.tenantId, id), eq(admins.username, 'alpha-owner')));
+      expect(owner).toBeDefined();
+      // Its audit row and its event belong to the hosted tenant.
+      const trail = await db()
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, 'hosting.owner_activated'));
+      expect(trail.map((row) => row.tenantId)).toEqual([id]);
+      const events = await db()
+        .select()
+        .from(outboxMessages)
+        .where(eq(outboxMessages.eventType, 'HostedBotOwnerActivated'));
+      expect(events.map((row) => row.tenantId)).toEqual([id]);
+    });
+
+    it('the credential write runs under the hosted tenant’s own binding: another tenant’s admin is not found, PRIMARY’s included', async () => {
+      const alpha = await readyLink('alpha');
+      const beta = await readyLink('beta', 'bots.beta-store.com', betaToken());
+      const [primaryOwner] = await db()
+        .select()
+        .from(admins)
+        .where(and(eq(admins.tenantId, tenantA.tenantId), eq(admins.username, 'panel-owner')));
+      const [alphaOwner] = await db().select().from(admins).where(eq(admins.tenantId, alpha.id));
+      const before = await primaryState();
+      const hashes = async () =>
+        (await db().select({ id: admins.id, hash: admins.passwordHash }).from(admins))
+          .map((row) => `${row.id}:${row.hash}`)
+          .sort();
+      const hashesBefore = await hashes();
+      const attempt = (hostedTenantId: string, ownerAdminId: string) =>
+        api.container.uow.run({ tenantId: beta.id as never, botInstanceId: null }, (tx) =>
+          new DrizzleHostedOwnerActivation(db()).setOwnerCredentials(
+            systemContext('hosting.activate_owner'),
+            {
+              hostedTenantId,
+              ownerAdminId,
+              username: 'taken-over',
+              passwordHash: 'x'.repeat(32),
+              now: now(),
+            },
+            tx,
+          ),
+        );
+      // Bound to beta, handed alpha's owner, PRIMARY's owner — under either tenant's id.
+      expect(await attempt(beta.id, alphaOwner?.id as string)).toBe('NOT_FOUND');
+      expect(await attempt(beta.id, primaryOwner?.id as string)).toBe('NOT_FOUND');
+      expect(await attempt(alpha.id, alphaOwner?.id as string)).toBe('NOT_FOUND');
+      expect(await attempt(tenantA.tenantId as string, primaryOwner?.id as string)).toBe(
+        'NOT_FOUND',
+      );
+      expect(await primaryState()).toEqual(before);
+      expect(await hashes()).toEqual(hashesBefore);
+    });
+
+    it('sign-in on a hosted domain is the HOSTED tenant’s, even for a username PRIMARY also has', async () => {
+      const { id, token } = await readyLink();
+      // `panel-owner` is the installation owner's own username in PRIMARY.
+      await redeem(DOMAIN, token, { username: 'panel-owner', password: NEW_PASSWORD });
+      const before = (
+        await db().select().from(adminSessions).where(eq(adminSessions.tenantId, tenantA.tenantId))
+      ).length;
+
+      const hosted = await hostedLogin('panel-owner', NEW_PASSWORD);
+      expect(hosted.statusCode).toBe(201);
+      const [session] = await db()
+        .select()
+        .from(adminSessions)
+        .where(eq(adminSessions.tenantId, id));
+      expect(session).toBeDefined();
+      expect(
+        (
+          await db()
+            .select()
+            .from(adminSessions)
+            .where(eq(adminSessions.tenantId, tenantA.tenantId))
+        ).length,
+      ).toBe(before);
+      // PRIMARY's password is not accepted on the hosted domain, nor the hosted one on PRIMARY's.
+      expect((await hostedLogin('panel-owner', OWNER_PASSWORD)).statusCode).toBe(401);
+      expect(
+        (await hostedLogin('panel-owner', NEW_PASSWORD, 'admin.hosting.test')).statusCode,
+      ).toBe(401);
+      expect(
+        (await hostedLogin('panel-owner', OWNER_PASSWORD, 'admin.hosting.test')).statusCode,
+      ).toBe(201);
+    });
+
+    it('activation never gives the hosted owner hosting.manage: nothing is granted, the chrome list and the panel refuse', async () => {
+      const { token } = await readyLink();
+      const before = await permissionState();
+      await redeem(DOMAIN, token);
+      expect(await permissionState()).toEqual(before);
+
+      const response = await hostedLogin('alpha-owner', NEW_PASSWORD);
+      expect(response.statusCode).toBe(201);
+      const cookie = /nexa_admin_session=([^;]+)/.exec(String(response.headers['set-cookie']))?.[1];
+      const headers = { host: DOMAIN, cookie: `nexa_admin_session=${cookie as string}` };
+      const listed = (response.json() as { permissions: string[] }).permissions;
+      const session = await inject({ method: 'GET', url: `${API_PREFIX}/auth/session`, headers });
+      const afterwards = (session.json() as { permissions: string[] }).permissions;
+      // They do hold their own tenant's keys (the list is not empty)…
+      expect(listed.length).toBeGreaterThan(5);
+      expect(afterwards.length).toBeGreaterThan(5);
+      // …but never the creator panel's, and the panel itself says no.
+      expect(listed).not.toContain('hosting.manage');
+      expect(afterwards).not.toContain('hosting.manage');
+      expect(
+        (await inject({ method: 'GET', url: `${API_PREFIX}/hosting/status`, headers })).statusCode,
+      ).toBe(403);
+      expect(
+        (
+          await inject({
+            method: 'POST',
+            url: `${API_PREFIX}/hosting/bots`,
+            headers: { ...headers, origin: `https://${DOMAIN}` },
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(403);
+    });
+
+    it('an activation token is refused when reused, when expired and when carried to another hosted domain', async () => {
+      const alpha = await readyLink('alpha');
+      const beta = await readyLink('beta', 'bots.beta-store.com', betaToken());
+      // Another hosted bot's verified domain, with a perfectly good link of its own.
+      expect(await codeOf(redeem('bots.beta-store.com', alpha.token))).toBe(CODES.LINK_INVALID);
+      expect(
+        (await db().select().from(hostedBotActivationLinks)).filter((row) => row.usedAt !== null),
+      ).toHaveLength(0);
+      await redeem(DOMAIN, alpha.token);
+      expect(await codeOf(redeem(DOMAIN, alpha.token))).toBe(CODES.LINK_USED);
+      // Beta's own link lapses after its 24 hours, by the Clock.
+      offsetMs += HOSTED_ACTIVATION_LINK_TTL_SECONDS * 1000;
+      expect(await codeOf(redeem('bots.beta-store.com', beta.token))).toBe(CODES.LINK_EXPIRED);
+      expect(
+        (await db().select().from(admins).where(eq(admins.tenantId, beta.id))).map(
+          (row) => row.username,
+        ),
+      ).not.toContain('alpha-owner');
     });
   });
 });
