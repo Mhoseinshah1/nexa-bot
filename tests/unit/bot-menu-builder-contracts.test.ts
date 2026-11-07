@@ -192,6 +192,7 @@ describe('C-1 legacy → explicit: identical keyboard with every gate open', () 
       ['apps', 'referral'],
       ['help'],
       ['tickets'],
+      ['reseller_request'],
     ]);
     expect(explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT).rows).toEqual([
       ['catalog', 'services'],
