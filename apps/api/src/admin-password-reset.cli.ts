@@ -1,6 +1,6 @@
 import { IDENTITY_ERROR_CODES, isNexaError, type TenantContext } from '@nexa/contracts';
 import { ZodError } from 'zod';
-import { createContainer } from './container.js';
+import { createContainer, type Container } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { ServerPasswordRecovery } from './modules/platform/identity/application/server-password-recovery.js';
 
@@ -71,6 +71,29 @@ export async function readPasswordFromStdin(
   return password;
 }
 
+/**
+ * The tenant the reset is for: `--tenant <slug>` when given, the installation's primary
+ * tenant otherwise — never a guess. One install hosts many tenants (ADR-0037), and two of
+ * them can each have an administrator called `owner`; the scope this returns is the one
+ * the reset's unit of work binds, so row-level security confines it to that tenant. The
+ * directory reads run on the system path (`DrizzleTenantRepository.findPrimary`/`findBySlug`).
+ */
+export async function resolveResetScope(
+  tenants: Pick<Container['tenants'], 'findPrimary' | 'findBySlug'>,
+  tenantSlug: string | null,
+): Promise<TenantContext> {
+  const tenant =
+    tenantSlug === null ? await tenants.findPrimary() : await tenants.findBySlug(tenantSlug);
+  if (tenant === null) {
+    throw new PasswordResetArgsError(
+      tenantSlug === null
+        ? 'هیچ tenant اصلی‌ای وجود ندارد.'
+        : `tenantی با slug «${tenantSlug}» وجود ندارد.`,
+    );
+  }
+  return { tenantId: tenant.id, botInstanceId: null };
+}
+
 async function main(): Promise<void> {
   const args = parsePasswordResetArgs(process.argv.slice(2));
   // Read BEFORE the container exists, so an empty or missing password never opens a
@@ -79,18 +102,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const container = createContainer(config, 'worker');
   try {
-    const tenant =
-      args.tenantSlug === null
-        ? await container.tenants.findPrimary()
-        : await container.tenants.findBySlug(args.tenantSlug);
-    if (tenant === null) {
-      throw new PasswordResetArgsError(
-        args.tenantSlug === null
-          ? 'هیچ tenant اصلی‌ای وجود ندارد.'
-          : `tenantی با slug «${args.tenantSlug}» وجود ندارد.`,
-      );
-    }
-    const scope: TenantContext = { tenantId: tenant.id, botInstanceId: null };
+    const scope = await resolveResetScope(container.tenants, args.tenantSlug);
     const recovery = new ServerPasswordRecovery({
       uow: container.uow,
       admins: container.admins,
