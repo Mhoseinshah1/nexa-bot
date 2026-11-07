@@ -55,8 +55,14 @@ function layoutWith(options: {
   readonly offerReads?: { count: number };
   /** Round T: the published-layout source; absent is the legacy path. */
   readonly source?: MainMenuSourceAnswer;
+  /** PR-1: `bot.main_menu` has no stored row (the registry default is in force). */
+  readonly legacyIsDefault?: boolean;
 }): MainMenuLayout {
-  const answer = options.source;
+  const answer =
+    options.source ??
+    (options.legacyIsDefault === true
+      ? ({ kind: 'LEGACY', superseded: false, publishedUnreadable: false } as const)
+      : undefined);
   return new MainMenuLayout({
     ...(answer === undefined
       ? {}
@@ -66,6 +72,9 @@ function layoutWith(options: {
               Promise.resolve({
                 source: answer,
                 legacy: options.stored ?? DEFAULT_MAIN_MENU_LAYOUT,
+                ...(options.legacyIsDefault === undefined
+                  ? {}
+                  : { legacyIsDefault: options.legacyIsDefault }),
               }),
           },
         }),
@@ -548,8 +557,9 @@ describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
     }
   });
 
-  it('the converted default is the default keyboard', async () => {
-    expect(DEFAULT_EXPLICIT_MAIN_MENU).toEqual(explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT));
+  it('the default explicit layout is the keyboard drawn where nothing is saved', async () => {
+    // NEXA-OWNER-BATCH-1 PR-1: the default is Mirza's arrangement, not the legacy conversion.
+    expect(DEFAULT_EXPLICIT_MAIN_MENU).not.toEqual(explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT));
     const flags = { referrals: true };
     expect(
       await layoutWith({
@@ -557,7 +567,9 @@ describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
         flags,
         trialOffered: true,
       }).rowsFor(scope),
-    ).toEqual(await layoutWith({ flags, trialOffered: true }).rowsFor(scope));
+    ).toEqual(
+      await layoutWith({ flags, trialOffered: true, legacyIsDefault: true }).rowsFor(scope),
+    );
   });
 });
 

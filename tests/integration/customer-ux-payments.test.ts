@@ -756,7 +756,7 @@ describe('a customer pays through the approved screens', () => {
 
       const menu = await handle(tap('mm:'));
       expect(menu.replyKey).toBe('bot.start.welcome_back');
-      expect(JSON.stringify(last()?.body)).toContain('💬 پشتیبانی');
+      expect(JSON.stringify(last()?.body)).toContain('☎️ پشتیبانی');
     });
 
     it('draws no contact button when no support account is configured', async () => {

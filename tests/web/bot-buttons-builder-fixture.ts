@@ -1,7 +1,8 @@
 import {
   BOT_COMMANDS,
   CUSTOM_MENU_STORAGE_MAX_BYTES,
-  DEFAULT_EXPLICIT_MAIN_MENU,
+  DEFAULT_MAIN_MENU_LAYOUT,
+  explicitFromLegacy,
   MAIN_MENU_BUTTONS,
   botMenuBuilderResponseSchema,
   mainMenuButton,
@@ -19,6 +20,13 @@ import {
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { vi } from 'vitest';
 import { stubApi, type Api, type Route } from './harness';
+
+/**
+ * The plain starting layout these tests were written against: the registry packed two to a row,
+ * every style `default`. The shipped default (`DEFAULT_EXPLICIT_MAIN_MENU`) is Mirza's arrangement
+ * since NEXA-OWNER-BATCH-1 PR-1; the drag, style and inspector mechanics are layout-independent.
+ */
+const DEFAULT_EXPLICIT_MAIN_MENU = explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT);
 
 /**
  * Round T (T3) — the builder's read and write answers, shaped by the contract's own

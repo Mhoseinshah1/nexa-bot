@@ -121,6 +121,44 @@ describe('the Features page', () => {
     );
   });
 
+  it('describes the two services-search switches in full, each off by default, in the customer category', async () => {
+    for (const key of ['services_search_label_button', 'services_search_button'] as const) {
+      const p = FEATURE_PRESENTATION[key];
+      expect(p.category, key).toBe('customer');
+      expect(p.where, key).toEqual(['bot']);
+      // What it does, where it is seen, and the effect when off: three full sentences, not stubs.
+      expect(t(p.summary).length, key).toBeGreaterThan(120);
+      expect(t(p.summary), key).toContain('سرویس‌های من');
+      expect(t(p.offEffect).length, key).toBeGreaterThan(60);
+    }
+    stubApi([
+      {
+        url: '/features',
+        body: {
+          flags: [
+            flag('services_search_label_button', false),
+            flag('services_search_button', false),
+          ],
+        },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+    fireEvent.click(
+      await screen.findByRole('tab', { name: new RegExp(t(FEATURE_CATEGORY_TITLE.customer)) }),
+    );
+    const labelRow = (
+      await screen.findByText(t(FEATURE_PRESENTATION.services_search_label_button.title))
+    ).closest('.feature-row') as HTMLElement;
+    expect(within(labelRow).getByRole('switch')).not.toBeChecked();
+    expect(
+      within(labelRow).getByText(t(FEATURE_PRESENTATION.services_search_label_button.offEffect)),
+    ).toBeInTheDocument();
+    const searchRow = screen
+      .getByText(t(FEATURE_PRESENTATION.services_search_button.title))
+      .closest('.feature-row') as HTMLElement;
+    expect(within(searchRow).getByRole('switch')).not.toBeChecked();
+  });
+
   it('searches names and descriptions across all categories, grouped by category', async () => {
     stubApi([{ url: '/features', body: { flags: all() } }]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
