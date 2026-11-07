@@ -255,6 +255,14 @@ import {
   // WP-A7: support tickets.
   TICKET_ATTACHMENT_FILE_NAME_MAX_LENGTH,
   TICKET_ATTACHMENT_KINDS,
+  RESELLER_REQUEST_ANSWER_CEILING,
+  RESELLER_REQUEST_ANSWER_DEFAULT_MAX,
+  RESELLER_REQUEST_ATTACHMENT_KINDS,
+  RESELLER_REQUEST_MESSAGE_MAX,
+  RESELLER_REQUEST_QUESTION_TEXT_MAX,
+  RESELLER_REQUEST_REASON_MAX,
+  RESELLER_REQUEST_MESSAGE_SENDERS,
+  RESELLER_REQUEST_STATUSES,
   TICKET_ATTACHMENT_MAX_BYTES,
   TICKET_REPLY_FILE_TYPES,
   DIRECT_MESSAGE_CONTENT_KINDS,
@@ -11119,7 +11127,7 @@ export const customerTextCaptures = pgTable(
      */
     check(
       'customer_text_captures_subject_check',
-      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD')) = (subject_id IS NOT NULL)`,
+      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD', 'RESELLER_REQUEST_ANSWER', 'RESELLER_REQUEST_REPLY', 'RESELLER_REQUEST_ADMIN_MESSAGE', 'RESELLER_REQUEST_ADMIN_REASON')) = (subject_id IS NOT NULL)`,
     ),
     /** Only the days window carries a volume, and it always does (Package D). */
     check(
@@ -18675,5 +18683,245 @@ export const hostedBotActivationLinks = pgTable(
       columns: [table.tenantId, table.createdByAdminId],
       foreignColumns: [admins.tenantId, admins.id],
     }),
+  ],
+);
+
+// --- Owner batch 1, PR-2: «درخواست نمایندگی» --------------------------------------------------
+
+/**
+ * The questions the owner asks an applicant, in order. Edited as a whole list from the Web
+ * Admin; a question the list drops is made `active = false` rather than deleted, so the row
+ * stays as the record of what was once asked. Changing a question NEVER changes a request
+ * already filed: a request stores the questions as they were asked (`reseller_requests.answers`).
+ */
+export const resellerRequestQuestions = pgTable(
+  'reseller_request_questions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    position: integer('position').notNull(),
+    text: text('text').notNull(),
+    required: boolean('required').notNull(),
+    maxLength: integer('max_length').notNull().default(RESELLER_REQUEST_ANSWER_DEFAULT_MAX),
+    active: boolean('active').notNull().default(true),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('reseller_request_questions_tenant_id_key').on(table.tenantId, table.id),
+    index('reseller_request_questions_order_idx').on(table.tenantId, table.position, table.id),
+    check('reseller_request_questions_position_check', sql`position >= 0`),
+    check(
+      'reseller_request_questions_text_check',
+      sql`length(btrim(text)) BETWEEN 1 AND ${sql.raw(String(RESELLER_REQUEST_QUESTION_TEXT_MAX))}`,
+    ),
+    check(
+      'reseller_request_questions_max_length_check',
+      sql`max_length BETWEEN 1 AND ${sql.raw(String(RESELLER_REQUEST_ANSWER_CEILING))}`,
+    ),
+  ],
+);
+
+/**
+ * One customer's request to become a reseller.
+ *
+ * `answers` is the snapshot taken at submit: every question as it was asked (text, required,
+ * bound) with the answer, so a later edit of the question list changes nothing here. The
+ * status moves only by a conditional UPDATE from PENDING; `decided_at` is stamped exactly when
+ * it does, and an APPROVED row names the tier and the administrator. A PENDING row keeps
+ * its place in the conversation: the thread is open while the status is PENDING and closed
+ * for replies the moment it is not.
+ *
+ * ONE PENDING REQUEST PER CUSTOMER is the partial unique index below, not a convention: two
+ * taps, two bots or two replicas cannot file twice.
+ */
+export const resellerRequests = pgTable(
+  'reseller_requests',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** The number the customer and an operator quote. An identity: unique and increasing. */
+    number: bigint('number', { mode: 'bigint' }).generatedAlwaysAsIdentity().notNull(),
+    customerId: uuid('customer_id').notNull(),
+    /** The bot the customer filed through; the conversation continues through it. */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    answers: jsonb('answers').notNull(),
+    status: text('status').notNull().default('PENDING'),
+    decidedByAdminId: uuid('decided_by_admin_id'),
+    tierId: uuid('tier_id'),
+    reason: text('reason'),
+    /** The key of the submit, unique for ever: a redelivered update answers with this row. */
+    openingKey: text('opening_key').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    decidedAt: timestamptz('decided_at'),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    lastMessageAt: timestamptz('last_message_at'),
+  },
+  (table) => [
+    unique('reseller_requests_tenant_id_key').on(table.tenantId, table.id),
+    unique('reseller_requests_opening_key').on(table.tenantId, table.openingKey),
+    uniqueIndex('reseller_requests_one_pending_key')
+      .on(table.tenantId, table.customerId)
+      .where(sql`status = 'PENDING'`),
+    index('reseller_requests_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    index('reseller_requests_tenant_status_idx').on(table.tenantId, table.status, table.createdAt),
+    /** The cooldown: a customer's latest decision. */
+    index('reseller_requests_customer_decided_idx').on(
+      table.tenantId,
+      table.customerId,
+      table.decidedAt,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'reseller_requests_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.decidedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'reseller_requests_decided_by_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.tierId],
+      foreignColumns: [resellerTiers.tenantId, resellerTiers.id],
+      name: 'reseller_requests_tier_fk',
+    }),
+    check('reseller_requests_status_check', enumCheck('status', RESELLER_REQUEST_STATUSES)),
+    check('reseller_requests_decided_check', sql`(status = 'PENDING') = (decided_at IS NULL)`),
+    check(
+      'reseller_requests_approved_check',
+      sql`status <> 'APPROVED' OR (tier_id IS NOT NULL AND decided_by_admin_id IS NOT NULL)`,
+    ),
+    check(
+      'reseller_requests_tier_only_approved_check',
+      sql`status = 'APPROVED' OR tier_id IS NULL`,
+    ),
+    check(
+      'reseller_requests_reason_check',
+      sql`reason IS NULL OR (status = 'REJECTED' AND length(reason) BETWEEN 1 AND ${sql.raw(String(RESELLER_REQUEST_REASON_MAX))})`,
+    ),
+    check('reseller_requests_answers_check', sql`jsonb_typeof(answers) = 'array'`),
+    check('reseller_requests_opening_key_check', sql`length(opening_key) BETWEEN 1 AND 300`),
+  ],
+);
+
+/**
+ * One message in a request's conversation, from the applicant or from an operator.
+ *
+ * The ticket thread's shape without the ticket (see `reseller-requests.ts` for why a ticket
+ * does not fit): append-only by convention, a sender, a body or a Telegram photo binding, the
+ * command's idempotency key. An operator's message is delivered by a `RESELLER_REQUEST_MESSAGE`
+ * row on the customer notification lane whose subject is THIS row.
+ */
+export const resellerRequestMessages = pgTable(
+  'reseller_request_messages',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    requestId: uuid('request_id').notNull(),
+    seq: bigint('seq', { mode: 'bigint' }).generatedAlwaysAsIdentity().notNull(),
+    senderType: text('sender_type').notNull(),
+    authorAdminId: uuid('author_admin_id'),
+    body: text('body'),
+    attachmentKind: text('attachment_kind'),
+    attachmentBotInstanceId: uuid('attachment_bot_instance_id').references(() => botInstances.id),
+    attachmentFileId: text('attachment_file_id'),
+    attachmentFileUniqueId: text('attachment_file_unique_id'),
+    attachmentMimeType: text('attachment_mime_type'),
+    attachmentFileSize: bigint('attachment_file_size', { mode: 'bigint' }),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('reseller_request_messages_tenant_id_key').on(table.tenantId, table.id),
+    unique('reseller_request_messages_key').on(table.tenantId, table.idempotencyKey),
+    index('reseller_request_messages_request_idx').on(table.tenantId, table.requestId, table.seq),
+    foreignKey({
+      columns: [table.tenantId, table.requestId],
+      foreignColumns: [resellerRequests.tenantId, resellerRequests.id],
+      name: 'reseller_request_messages_request_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.authorAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'reseller_request_messages_author_fk',
+    }),
+    check(
+      'reseller_request_messages_sender_check',
+      enumCheck('sender_type', RESELLER_REQUEST_MESSAGE_SENDERS),
+    ),
+    check(
+      'reseller_request_messages_attachment_kind_check',
+      nullableEnumCheck('attachment_kind', RESELLER_REQUEST_ATTACHMENT_KINDS),
+    ),
+    check(
+      'reseller_request_messages_body_check',
+      sql`body IS NULL OR length(body) BETWEEN 1 AND ${sql.raw(String(RESELLER_REQUEST_MESSAGE_MAX))}`,
+    ),
+    /** An attachment is all of its binding or none of it. */
+    check(
+      'reseller_request_messages_attachment_check',
+      sql`(attachment_kind IS NULL) = (attachment_file_id IS NULL)
+          AND (attachment_kind IS NULL) = (attachment_file_unique_id IS NULL)
+          AND (attachment_kind IS NULL) = (attachment_bot_instance_id IS NULL)`,
+    ),
+    /** An operator writes text, signed; the applicant writes text or a photo. */
+    check(
+      'reseller_request_messages_shape_check',
+      sql`CASE sender_type
+            WHEN 'ADMIN' THEN author_admin_id IS NOT NULL AND body IS NOT NULL AND attachment_kind IS NULL
+            WHEN 'CUSTOMER' THEN author_admin_id IS NULL AND (body IS NOT NULL OR attachment_kind IS NOT NULL)
+            ELSE false
+          END`,
+    ),
+    check('reseller_request_messages_key_check', sql`length(idempotency_key) BETWEEN 1 AND 300`),
+  ],
+);
+
+/**
+ * A customer's half-written application: the questions as they were when it began, the
+ * answers so far and the question being asked. At most one per customer; filing the request
+ * or starting over replaces it. It holds no decision, and the customer's `submit` re-reads
+ * the questions it names, never the live list.
+ */
+export const resellerRequestDrafts = pgTable(
+  'reseller_request_drafts',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    /** The questions as they were asked: `{questionId, text, required, maxLength}[]`. */
+    questions: jsonb('questions').notNull(),
+    /** One entry per question, `null` while unanswered or skipped. */
+    answers: jsonb('answers').notNull(),
+    position: integer('position').notNull().default(0),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('reseller_request_drafts_tenant_id_key').on(table.tenantId, table.id),
+    unique('reseller_request_drafts_customer_key').on(table.tenantId, table.customerId),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'reseller_request_drafts_customer_fk',
+    }),
+    check('reseller_request_drafts_questions_check', sql`jsonb_typeof(questions) = 'array'`),
+    check('reseller_request_drafts_answers_check', sql`jsonb_typeof(answers) = 'array'`),
+    check('reseller_request_drafts_position_check', sql`position >= 0`),
   ],
 );
