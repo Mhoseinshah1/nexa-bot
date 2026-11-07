@@ -47,6 +47,7 @@ import {
 import { ErrorRef } from '../ui/technical-details';
 import { fromLocalInput, toLocalInput } from './incidents';
 import { CodePromptDialog, HOSTING_BOTS_KEY, HOSTING_SERVER_KEY } from './hosting-parts';
+import { ActivationSection } from './hosting-activation';
 
 /**
  * The hosted bots: one card each, and the dialogs behind its actions. Every action asks for a
@@ -260,6 +261,7 @@ function BotCard({
           </span>
         </div>
       )}
+      {bot.state === 'ACTIVE' && <ActivationSection bot={bot} />}
       {!closed && (
         <Disclosure summary={t('web.hosting_action_limits')} size="sm">
           <LimitsEditor bot={bot} onSaved={onLimitSaved} />

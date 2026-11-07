@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import { parseKeyring, type SecretKeyring } from '../crypto/keyring.js';
 import { isValidTrustedEntry } from '../trusted-proxy.js';
@@ -264,6 +265,23 @@ export const configSchema = z
      * isolation is enforced and proven). Deliberately absent from the deployment template.
      */
     HOSTED_BOTS_CREATE_ENABLED: booleanish.default(false),
+    /**
+     * Phase 6A PR-4: what a hosted owner points their domain at — the owner's own hostname.
+     * Empty (the default) means the hostname of the first `WEB_ADMIN_ORIGINS` entry, which is
+     * the installation's public name. A domain is DNS-verified when its CNAME names this host
+     * or every address it resolves to is one of this host's (or `HOSTED_BOTS_SERVER_IPS`).
+     */
+    HOSTED_BOTS_CNAME_TARGET: z.string().trim().toLowerCase().default(''),
+    /** Phase 6A PR-4: extra addresses of this server a hosted domain's A/AAAA may name. */
+    HOSTED_BOTS_SERVER_IPS: z
+      .string()
+      .default('')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((entry) => entry.trim().toLowerCase())
+          .filter((entry) => entry.length > 0),
+      ),
     // Round 9, C5: where the built mini app (`apps/miniapp/dist`) is read from at boot. Empty
     // (the default outside the image) means the API serves no mini-app document; the image
     // sets it to the copy it carries. Read once, as files: nothing under it is executed.
@@ -1408,6 +1426,16 @@ export const configSchema = z
           `Not a valid IP address or CIDR: ${invalidProxies.join(', ')}. ` +
           'Entries look like 127.0.0.1, ::1 or 10.0.0.0/8. A /0 prefix is refused: it would ' +
           'trust every address, which is trustProxy=true spelled differently.',
+      });
+    }
+
+    // Phase 6A PR-4: a malformed server address would silently void the DNS check's basis.
+    const invalidServerIps = config.HOSTED_BOTS_SERVER_IPS.filter((entry) => isIP(entry) === 0);
+    if (invalidServerIps.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['HOSTED_BOTS_SERVER_IPS'],
+        message: `Not an IP address: ${invalidServerIps.join(', ')}.`,
       });
     }
 

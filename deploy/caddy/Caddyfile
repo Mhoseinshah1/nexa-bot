@@ -13,6 +13,16 @@
 	# consumer. It binds 127.0.0.1:2019 by default and is not published, but
 	# "not published" is a compose property and this is the container's own.
 	admin off
+	# Phase 6A PR-4: certificates on demand for the domains hosted owners point at this
+	# server. Caddy asks this URL (`?domain=<name>` is appended) BEFORE it requests any
+	# certificate; a 2xx is permission, anything else is refusal. The API answers 200 only for a
+	# DNS-verified domain of an ACTIVE hosted bot, and only to this container: the path is not
+	# routed by `routes.caddy`, so the internet cannot reach it, and a request that came through
+	# the proxy carries forwarding headers the API refuses. Without the answer no certificate
+	# is ever requested for an unknown name, so a stranger pointing a name here costs nothing.
+	on_demand_tls {
+		ask http://api:3000/internal/hosting/domain-check
+	}
 	# Everything else is Caddy's default and that is deliberate: automatic
 	# HTTPS from Let's Encrypt, HTTP/2 and HTTP/3, OCSP stapling, and an
 	# implicit :80 redirect to HTTPS for the site address below. Restating any
@@ -48,6 +58,21 @@ http://127.0.0.1:8080 {
 	# plain-HTTP test origin would pin `localhost` to HTTPS in the runner's
 	# client for a year. It applies to every response from this site.
 	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	import nexa_routes
+}
+
+# A hosted bot's own domain (phase 6A PR-4). Any other name arriving on 443: the certificate
+# is obtained on the first handshake, and ONLY if the `ask` endpoint above approves the name.
+# The routing is the shared snippet, so the hosted Web Admin is served exactly like the owner's;
+# the API tells the tenants apart by the request's Host. Not the owner's own site (the block
+# above is more specific and keeps its managed certificate). HSTS without includeSubDomains:
+# a hosted domain's subdomains are not ours to pin.
+https:// {
+	tls {
+		on_demand
+	}
+	header Strict-Transport-Security "max-age=31536000"
 
 	import nexa_routes
 }

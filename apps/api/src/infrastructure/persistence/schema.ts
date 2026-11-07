@@ -28,6 +28,7 @@ import {
   CAPACITY_LIMIT_MODES,
   CAPACITY_RESOURCES,
   HEAVY_JOB_KINDS,
+  HOSTED_ACTIVATION_STEPS,
   HOSTED_BOT_STATES,
   HEAVY_JOB_STATES,
   LEGACY_COMPACTION_FAILURE_CODES,
@@ -18547,6 +18548,131 @@ export const hostingSessions = pgTable(
     foreignKey({
       name: 'hosting_sessions_tenant_admin_fk',
       columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Phase 6A PR-4 (D2): the activation of a hosted bot
+// ---------------------------------------------------------------------------
+
+/**
+ * Where one hosted bot's activation stands: the domain the hosted owner pointed at this server,
+ * the bot instance holding the token, and when each setup step last succeeded.
+ *
+ * OWNED BY THE INSTALLATION TENANT, like `hosted_bots` (the owner's own record, read and
+ * written in his scope); `hosted_tenant_id` is the hosted tenant. The bot token itself is NOT
+ * here: it lives encrypted on the hosted tenant's `bot_instances` row, `bot_instance_id`.
+ *
+ * `domain` is unique across the installation (one hosted bot per name) and lowercase. A
+ * domain is TRUSTED (resolves a request's Host to this tenant, and is approved for a
+ * certificate) only while `dns_verified_at` is set; changing the domain clears the DNS, SSL
+ * and webhook marks together, so no mark ever names a domain it was not earned for.
+ * `last_error_*` is the newest failed step's closed code, cleared when that step next succeeds.
+ */
+export const hostedBotActivations = pgTable(
+  'hosted_bot_activations',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    hostedTenantId: uuid('hosted_tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id'),
+    domain: text('domain'),
+    tokenVerifiedAt: timestamptz('token_verified_at'),
+    dnsVerifiedAt: timestamptz('dns_verified_at'),
+    tlsVerifiedAt: timestamptz('tls_verified_at'),
+    webhookRegisteredAt: timestamptz('webhook_registered_at'),
+    lastErrorStep: text('last_error_step'),
+    lastErrorCode: text('last_error_code'),
+    lastErrorAt: timestamptz('last_error_at'),
+    /** The hosted owner redeemed a link and chose their credentials. */
+    ownerActivatedAt: timestamptz('owner_activated_at'),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'hosted_bot_activations_pkey',
+      columns: [table.tenantId, table.hostedTenantId],
+    }),
+    foreignKey({
+      name: 'hosted_bot_activations_hosted_fk',
+      columns: [table.tenantId, table.hostedTenantId],
+      foreignColumns: [hostedBots.tenantId, hostedBots.hostedTenantId],
+    }),
+    uniqueIndex('hosted_bot_activations_domain_key')
+      .on(table.domain)
+      .where(sql`domain IS NOT NULL`),
+    check(
+      'hosted_bot_activations_domain_shape_check',
+      sql`domain IS NULL OR (domain = lower(domain) AND char_length(domain) BETWEEN 4 AND 253)`,
+    ),
+    check(
+      'hosted_bot_activations_error_step_check',
+      sql`last_error_step IS NULL OR last_error_step IN (${sql.raw(
+        HOSTED_ACTIVATION_STEPS.map((step) => `'${step}'`).join(', '),
+      )})`,
+    ),
+    check(
+      'hosted_bot_activations_error_check',
+      sql`(last_error_step IS NULL) = (last_error_code IS NULL) AND (last_error_step IS NULL) = (last_error_at IS NULL)`,
+    ),
+    // A mark a step could not have earned without its predecessor.
+    check(
+      'hosted_bot_activations_order_check',
+      sql`(tls_verified_at IS NULL OR dns_verified_at IS NOT NULL)
+        AND (dns_verified_at IS NULL OR domain IS NOT NULL)
+        AND (webhook_registered_at IS NULL OR (tls_verified_at IS NOT NULL AND token_verified_at IS NOT NULL))`,
+    ),
+  ],
+);
+
+/**
+ * The one-time links a hosted owner activates their Web Admin with.
+ *
+ * Only `token_hash` (SHA-256 of 256 random bits) is stored: a database read cannot be replayed
+ * as a link. A link is good while `used_at` and `revoked_at` are NULL and `expires_at` has not
+ * passed; it is spent by one conditional UPDATE, so two redemptions cannot both succeed, and a
+ * newer link revokes the older unused ones. Owned by the installation tenant (the creator made
+ * it); `hosted_tenant_id` is the tenant it activates.
+ */
+export const hostedBotActivationLinks = pgTable(
+  'hosted_bot_activation_links',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    hostedTenantId: uuid('hosted_tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    tokenHash: text('token_hash').notNull(),
+    createdByAdminId: uuid('created_by_admin_id').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    usedAt: timestamptz('used_at'),
+    revokedAt: timestamptz('revoked_at'),
+  },
+  (table) => [
+    uniqueIndex('hosted_bot_activation_links_token_key').on(table.tokenHash),
+    index('hosted_bot_activation_links_hosted_idx').on(
+      table.tenantId,
+      table.hostedTenantId,
+      table.createdAt,
+    ),
+    check('hosted_bot_activation_links_expiry_check', sql`expires_at > created_at`),
+    foreignKey({
+      name: 'hosted_bot_activation_links_hosted_fk',
+      columns: [table.tenantId, table.hostedTenantId],
+      foreignColumns: [hostedBots.tenantId, hostedBots.hostedTenantId],
+    }),
+    foreignKey({
+      name: 'hosted_bot_activation_links_created_by_fk',
+      columns: [table.tenantId, table.createdByAdminId],
       foreignColumns: [admins.tenantId, admins.id],
     }),
   ],

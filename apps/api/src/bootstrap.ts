@@ -33,7 +33,12 @@ import {
   GATEWAY_WEBHOOK_BODY_LIMIT_BYTES,
   GATEWAY_WEBHOOK_ROUTE_PREFIX,
 } from './surfaces/gateway/webhook.controller.js';
-import { createContainer, type Container, type ProcessRole } from './container.js';
+import {
+  createContainer,
+  type Container,
+  type ContainerOptions,
+  type ProcessRole,
+} from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { developmentExposureWarnings } from './infrastructure/config/exposure.js';
 import { trustProxyOption } from './infrastructure/trusted-proxy.js';
@@ -266,8 +271,11 @@ export interface ApiApp {
  * Builds the API application without listening, so tests can drive it through
  * Fastify's `inject` rather than binding a port.
  */
-export async function createApiApp(config: AppConfig = loadConfig()): Promise<ApiApp> {
-  const container = createContainer(config, 'api');
+export async function createApiApp(
+  config: AppConfig = loadConfig(),
+  options: ContainerOptions = {},
+): Promise<ApiApp> {
+  const container = createContainer(config, 'api', options);
   await resolveInstallationTenant(container);
 
   // FIX-04 (S2): a development process on a configuration that looks public is
