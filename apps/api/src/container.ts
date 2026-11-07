@@ -7392,9 +7392,17 @@ export function createContainer(
      * throw, which the tick catches and records no progress for — so readiness stays false
      * until the installation has a tenant, which is the truth (as before PR-6).
      */
+    /*
+     * EVERY tenant, stopped ones too — as the installation's tenant was always passed here
+     * whether stopped or not. The provisioner's `OperationOutcomeAnnouncer` is the stated
+     * exception to "a stopped scope accepts no work" (`docs/conventions.md`): it tells a
+     * customer what became of work already done. Every other lane of the pass refuses a
+     * stopped scope inside its own transaction, as before.
+     */
     scope: tenantFanOut.pass('provisioner', {
       budgetMs: config.PROVISIONER_TICK_MS,
       noTenant: 'throw',
+      tenants: 'all',
     }),
     tickMs: config.PROVISIONER_TICK_MS,
     /*
