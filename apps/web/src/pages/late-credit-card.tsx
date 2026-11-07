@@ -5,20 +5,25 @@ import {
   LATE_CREDIT_WINDOW_HOURS_MAX,
   LATE_CREDIT_WINDOW_HOURS_MIN,
   LATE_CREDIT_WINDOW_SETTING_KEY,
+  LATE_PAYMENT_POLICIES,
   PAYMENT_GATEWAY_DESCRIPTORS,
+  latePaymentPolicyOf,
+  type LatePaymentPolicy,
   type PaymentGatewayProvider,
   type ResolvedSettingResponse,
 } from '@nexa/contracts';
 import { fetchSettings, saveSetting } from '../api/client';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
-import { Banner, Card, Field, Input, StateSwitch, ToggleRow } from '../ui/kit';
+import { Banner, Card, Field, Input, Radio, StateSwitch } from '../ui/kit';
+import { LATE_PAYMENT_POLICY_LABELS } from '../settings-presentation';
 import { errorText } from '../error-text';
 import { ErrorRef } from '../ui/technical-details';
 
 /**
- * «پرداخت دیرهنگام را خودکار به کیف پول واریز کن» — R5A item 4, on the page of each gateway
- * that supports it (TonPays, TonPays Telegram).
+ * «پرداخت دیرهنگام» — R5A item 4, on the page of each gateway that supports it; NEXA-OWNER-
+ * BATCH-1 PR-5 made the switch a three-way choice: به کیف پول (WALLET), بررسی مدیر (REVIEW),
+ * تحویل سرویس (DELIVER), each with what it does in Persian under it.
  *
  * Two registry values, each saved on its own through the ordinary settings write — the
  * version it was read at, an idempotency key, audit — so this card adds no write path of its
@@ -47,6 +52,7 @@ export function LateCreditCard({
   const switchRow = all.find((row) => row.key === switchKey);
   const windowRow = all.find((row) => row.key === LATE_CREDIT_WINDOW_SETTING_KEY);
   const editable = maySettingsEdit && switchRow !== undefined && windowRow !== undefined;
+  const policyValue = latePaymentPolicyOf(switchRow?.value);
 
   const hours =
     typeof windowRow?.value === 'number' ? windowRow.value : LATE_CREDIT_WINDOW_HOURS_DEFAULT;
@@ -59,7 +65,7 @@ export function LateCreditCard({
   const save = useMutation({
     mutationFn: (command: {
       key: string;
-      value: boolean | number;
+      value: LatePaymentPolicy | number;
       expectedVersion: number | null;
       idempotencyKey: string;
     }) => saveSetting(command),
@@ -76,7 +82,7 @@ export function LateCreditCard({
    * One key per logical attempt (`useSubmissionKey`): a re-press after a lost answer is the
    * same command with the same key, and any other value or version is a new one.
    */
-  const write = (row: ResolvedSettingResponse | undefined, value: boolean | number) => {
+  const write = (row: ResolvedSettingResponse | undefined, value: LatePaymentPolicy | number) => {
     if (row === undefined) return;
     const command = { key: row.key, value, expectedVersion: row.version };
     const submission = row.key === switchKey ? switchSubmission : windowSubmission;
@@ -93,13 +99,27 @@ export function LateCreditCard({
     <Card title={t('web.late_credit_title')} hint={t('web.late_credit_hint')}>
       <StateSwitch query={settings} denied={false}>
         <div className="stack">
-          <ToggleRow
-            title={t('web.late_credit_switch')}
-            description={t('web.late_credit_switch_hint')}
-            checked={switchRow?.value === true}
-            disabled={!editable || save.isPending}
-            onChange={(next) => write(switchRow, next)}
-          />
+          <fieldset className="stack" aria-describedby="late-policy-hint">
+            <legend>{t('web.late_credit_switch')}</legend>
+            <p id="late-policy-hint" className="muted small">
+              {t('web.late_credit_switch_hint')}
+            </p>
+            {LATE_PAYMENT_POLICIES.map((policy) => (
+              <div key={policy} className="stack">
+                <Radio
+                  name={`late-policy-${provider}`}
+                  value={policy}
+                  selected={policyValue}
+                  disabled={!editable || save.isPending}
+                  label={<strong>{t(LATE_PAYMENT_POLICY_LABELS[policy])}</strong>}
+                  onChange={(next) => {
+                    if (next !== policyValue) write(switchRow, next);
+                  }}
+                />
+                <p className="muted small">{t(LATE_POLICY_HINTS[policy])}</p>
+              </div>
+            ))}
+          </fieldset>
           <form
             className="stack"
             onSubmit={(event) => {
@@ -145,3 +165,10 @@ export function LateCreditCard({
     </Card>
   );
 }
+
+/** What each policy does, in Persian, under its choice. */
+const LATE_POLICY_HINTS = {
+  WALLET: 'web.late_policy_wallet_hint',
+  REVIEW: 'web.late_policy_review_hint',
+  DELIVER: 'web.late_policy_deliver_hint',
+} as const satisfies Record<LatePaymentPolicy, string>;

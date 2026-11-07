@@ -2106,6 +2106,24 @@ export function reconcilePayment(input: {
 }
 
 /**
+ * NEXA-OWNER-BATCH-1 PR-5: an operator's decision on a late completion — «تحویل سرویس»
+ * (`DELIVER`) or «به کیف پول» (`WALLET`), under `payments.reconcile`. The server decides again
+ * under the payment's lock and does either at most once per payment.
+ */
+export function decideLatePayment(input: {
+  paymentId: string;
+  idempotencyKey: string;
+  choice: 'DELIVER' | 'WALLET';
+}): Promise<PaymentResponse> {
+  const { paymentId, ...body } = input;
+  return post(
+    PAYMENT_ROUTES.lateDecision(paymentId),
+    { ...body, confirm: true },
+    paymentResponseSchema,
+  );
+}
+
+/**
  * R12 F3 item 8: the three dispositions of a card-to-card receipt — the same application
  * methods the Telegram panel calls, behind `receipts.review` (the credit also
  * `users.wallet.credit`). Each answers the payment as it now stands.

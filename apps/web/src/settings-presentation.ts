@@ -2,6 +2,7 @@ import {
   BACKUP_SCHEDULE_SETTING_KEYS,
   CARD_SWITCH_SETTING_KEYS,
   LATE_CREDIT_SETTING_KEYS,
+  type LatePaymentPolicy,
   LATE_CREDIT_WINDOW_SETTING_KEY,
   PANEL_SETTING_KEYS,
   TONPAYS_PACING_BURST_SETTING_KEY,
@@ -211,6 +212,13 @@ function options(labels: Readonly<Record<string, WebKey>>): readonly SelectOptio
   return Object.entries(labels).map(([value, label]) => ({ value, label }));
 }
 
+/** NEXA-OWNER-BATCH-1 PR-5: the three late-payment policies of an online gateway. */
+export const LATE_PAYMENT_POLICY_LABELS: Readonly<Record<LatePaymentPolicy, WebKey>> = {
+  WALLET: 'web.late_policy_wallet',
+  REVIEW: 'web.late_policy_review',
+  DELIVER: 'web.late_policy_deliver',
+};
+
 /** Package FX: the two sources, and "none" for the fallback only. */
 /** Phase C3: the two ranking strategies of automatic panel balancing. */
 const BALANCING_STRATEGY_OPTIONS: Readonly<Record<PanelBalancingStrategy, WebKey>> = {
@@ -284,31 +292,31 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     title: 'web.late_credit_switch_tonpays',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
-    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+    control: { kind: 'select', options: options(LATE_PAYMENT_POLICY_LABELS) },
   },
   [LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM]: {
     title: 'web.late_credit_switch_tonpays_telegram',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
-    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+    control: { kind: 'select', options: options(LATE_PAYMENT_POLICY_LABELS) },
   },
   [LATE_CREDIT_SETTING_KEYS.TETRAPAY]: {
     title: 'web.late_credit_switch_tetrapay',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
-    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+    control: { kind: 'select', options: options(LATE_PAYMENT_POLICY_LABELS) },
   },
   [LATE_CREDIT_SETTING_KEYS.RIALIT]: {
     title: 'web.late_credit_switch_rialit',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
-    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+    control: { kind: 'select', options: options(LATE_PAYMENT_POLICY_LABELS) },
   },
   [LATE_CREDIT_SETTING_KEYS.CUSTOM]: {
     title: 'web.late_credit_switch_custom',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
-    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+    control: { kind: 'select', options: options(LATE_PAYMENT_POLICY_LABELS) },
   },
   [LATE_CREDIT_WINDOW_SETTING_KEY]: {
     title: 'web.late_credit_window',

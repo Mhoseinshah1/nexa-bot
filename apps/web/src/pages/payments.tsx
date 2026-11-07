@@ -46,6 +46,7 @@ import {
   fetchPaymentReceiptBytes,
   fetchPayments,
   fetchRefunds,
+  decideLatePayment,
   reconcilePayment,
   reinquirePayment,
   requestRefund,
@@ -469,6 +470,8 @@ const OPERATOR_ACTION_LABELS: Readonly<Record<PaymentOperatorAction, WebKey>> = 
   MANUAL_WALLET_ADJUSTMENT: 'web.payment_operator_action_manual_wallet_adjustment',
   ISSUE_REFUND: 'web.payment_operator_action_issue_refund',
   SETTLE_REFUND: 'web.payment_operator_action_settle_refund',
+  LATE_DELIVER: 'web.payment_operator_action_late_deliver',
+  LATE_TO_WALLET: 'web.payment_operator_action_late_to_wallet',
 };
 
 /** The server's situation, as a badge; a dash for a response from before it existed. */
@@ -2179,6 +2182,14 @@ export function PaymentDetailPage({
                     <ReconcileCard payment={row} mayReconcile={mayReconcile} />
                   )}
                   {/*
+              NEXA-OWNER-BATCH-1 PR-5: a late completion on a route with a late-payment
+              policy — deliver the service, or credit the wallet; each once, re-decided on the
+              server under the payment's lock from the provider's recorded approval.
+            */}
+                  {(row.situation?.actions ?? []).includes('LATE_DELIVER') && (
+                    <LateDecisionCard payment={row} mayDecide={mayReconcile} />
+                  )}
+                  {/*
               Card-to-card review (R12 F3 item 8): approve, reject and credit-to-wallet are
               also decided here, through the SAME services as the Telegram panel; the card
               asks first and draws only the controls the viewer's permissions allow.
@@ -2260,6 +2271,7 @@ export function PaymentDetailPage({
               );
               const hasSide =
                 (row.state === 'UNKNOWN' && row.method === 'GATEWAY') ||
+                (row.situation?.actions ?? []).includes('LATE_DELIVER') ||
                 (row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER') ||
                 row.destination !== null ||
                 row.topupCashbackPercent !== null ||
@@ -3091,6 +3103,114 @@ function ReconcileCard({
         </>
       ) : (
         <Banner tone="info">{t('web.payment_reconcile_denied')}</Banner>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * NEXA-OWNER-BATCH-1 PR-5: the two decisions on a late completion. «تحویل سرویس» delivers the
+ * order's service as if it had been paid on time — at the order's own total, when the product
+ * still sells, the payment covers it, the panel has room and the customer is not blocked —
+ * and otherwise credits the wallet; «به کیف پول» credits the payment's own amount. Each asks
+ * first (the ops-group message's buttons open the matching dialog: `?late=deliver|wallet`),
+ * carries one idempotency key per attempt, and is refused by the server if the payment was
+ * already delivered or credited — by another operator, or by a late callback.
+ */
+function LateDecisionCard({ payment, mayDecide }: { payment: PaymentDetail; mayDecide: boolean }) {
+  const notify = useToast();
+  const queries = useQueryClient();
+  const submission = useSubmissionKey();
+  const [deciding, setDeciding] = useState<'DELIVER' | 'WALLET' | null>(() => {
+    if (!mayDecide || typeof window === 'undefined') return null;
+    const asked = new URLSearchParams(window.location.search).get('late');
+    return asked === 'deliver' ? 'DELIVER' : asked === 'wallet' ? 'WALLET' : null;
+  });
+  const decide = useMutation({
+    mutationFn: (choice: 'DELIVER' | 'WALLET') =>
+      decideLatePayment({
+        paymentId: payment.id,
+        idempotencyKey: submission.current({ id: payment.id, choice }),
+        choice,
+      }),
+    onSuccess: () => {
+      submission.settle();
+      notify({ tone: 'ok', message: t('web.payment_late_decision_done') });
+      setDeciding(null);
+      void queries.invalidateQueries({ queryKey: ['payment', payment.id] });
+      void queries.invalidateQueries({ queryKey: ['payments'] });
+      void queries.invalidateQueries({ queryKey: ['payment-timeline', payment.id] });
+      void queries.invalidateQueries({ queryKey: ['wallet'] });
+    },
+    onError: (error) => {
+      submission.settleOn(error);
+      void queries.invalidateQueries({ queryKey: ['payment', payment.id] });
+    },
+  });
+  const title = (choice: 'DELIVER' | 'WALLET') =>
+    t(choice === 'DELIVER' ? 'web.payment_late_deliver' : 'web.payment_late_to_wallet');
+  return (
+    <Card title={t('web.payment_late_decision_title')} hint={t('web.payment_late_decision_hint')}>
+      {mayDecide ? (
+        <>
+          <div className="form-actions">
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={decide.isPending}
+              onClick={() => setDeciding('DELIVER')}
+            >
+              {title('DELIVER')}
+            </Button>
+            <Button size="sm" disabled={decide.isPending} onClick={() => setDeciding('WALLET')}>
+              {title('WALLET')}
+            </Button>
+          </div>
+          {decide.error !== null && deciding === null && (
+            <Banner tone="danger">
+              {messageFor(decide.error)}
+              <ErrorRef error={decide.error} />
+            </Banner>
+          )}
+          <Modal
+            open={deciding !== null}
+            onClose={() => setDeciding(null)}
+            title={deciding === null ? '' : title(deciding)}
+            foot={
+              <>
+                <Button size="sm" onClick={() => setDeciding(null)}>
+                  {t('web.money_cancel')}
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={decide.isPending}
+                  onClick={() => {
+                    if (deciding !== null) decide.mutate(deciding);
+                  }}
+                >
+                  {deciding === null ? '' : title(deciding)}
+                </Button>
+              </>
+            }
+          >
+            <p className="small">
+              {t(
+                deciding === 'WALLET'
+                  ? 'web.payment_late_to_wallet_explain'
+                  : 'web.payment_late_deliver_explain',
+              )}
+            </p>
+            {decide.error !== null && (
+              <Banner tone="danger">
+                {messageFor(decide.error)}
+                <ErrorRef error={decide.error} />
+              </Banner>
+            )}
+          </Modal>
+        </>
+      ) : (
+        <Banner tone="info">{t('web.payment_late_decision_denied')}</Banner>
       )}
     </Card>
   );
