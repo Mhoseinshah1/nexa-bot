@@ -31,7 +31,10 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import type { EventConsumer } from '../application/event-consumer.js';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
-import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
+import {
+  ScopeBound,
+  withTenantScopeIn,
+} from '../../../../infrastructure/persistence/database-scope.js';
 import { groupInOrder, weightedRoundRobin } from '../../capacity/domain/round-robin.js';
 
 export interface OutboxRelayOptions {
@@ -502,7 +505,15 @@ export class OutboxRelay {
       // holds the claim — so the two are one commit. Handing it the scope the
       // event belongs to lets a consumer that records by scope do so without
       // reconstructing it.
-      await consumer.handle(event, { tx, scope: scopeOf(event) });
+      //
+      // Phase 6A PR-6: and CONFINED to that scope by row-level security. The claim
+      // transaction runs on the system path (it spans tenants), so for the consumer's
+      // effect it is switched to `nexa_app` bound to the event's tenant and back again
+      // (`withTenantScopeIn`). A consumer that dropped its tenant predicate now reads and
+      // writes nothing of another tenant's, rather than everything. Platform work (no
+      // tenant) stays on the system path.
+      const scope = scopeOf(event);
+      await withTenantScopeIn(tx, scope, () => consumer.handle(event, { tx, scope }));
     }
   }
 

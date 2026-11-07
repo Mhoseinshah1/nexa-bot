@@ -322,3 +322,43 @@ export async function withSystemScopeIn<T>(
            set_config('app.system_reason', ${previous.reason}, true)`);
   return result;
 }
+
+/**
+ * Phase 6A PR-6: ONE tenant's work inside a transaction on the SYSTEM path.
+ *
+ * The mirror of `withSystemScopeIn`, for the outbox relay: its claim transaction spans
+ * tenants and runs as `nexa_system`, and each message's consumer effect runs inside it.
+ * Without this a consumer's statement was not confined by row-level security, so one that
+ * dropped its tenant predicate would have read or written every tenant's rows. Here the
+ * transaction becomes `nexa_app` bound to `tenantId` for `fn` (`SET LOCAL ROLE NONE`,
+ * `app.current_tenant_id`, the system reason cleared), and any pooled checkout `fn` makes
+ * is bound to the same tenant; then the transaction gets back exactly what it had.
+ *
+ * The switch is transaction-local, so a throw out of `fn` inside a savepoint is undone by
+ * that savepoint's rollback. On a connection the policies do not bind (the owner, a
+ * superuser) the settings change nothing, as everywhere else.
+ */
+export async function withTenantScopeIn<T>(
+  executor: { execute: (query: SQL) => Promise<unknown> },
+  scope: ScopeContext,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (isSystemContext(scope)) return withDatabaseScope(scope, fn);
+  const before = (await executor.execute(sql`
+    SELECT current_setting('role') AS role,
+           coalesce(current_setting('app.current_tenant_id', true), '') AS tenant,
+           coalesce(current_setting('app.system_reason', true), '') AS reason`)) as {
+    rows: { role: string; tenant: string; reason: string }[];
+  };
+  const previous = before.rows[0] ?? { role: 'none', tenant: '', reason: '' };
+  await executor.execute(sql`
+    SELECT set_config('role', 'none', true),
+           set_config('app.current_tenant_id', ${scope.tenantId}, true),
+           set_config('app.system_reason', '', true)`);
+  const result = await withDatabaseScope(scope, fn);
+  await executor.execute(sql`
+    SELECT set_config('role', ${previous.role}, true),
+           set_config('app.current_tenant_id', ${previous.tenant}, true),
+           set_config('app.system_reason', ${previous.reason}, true)`);
+  return result;
+}
