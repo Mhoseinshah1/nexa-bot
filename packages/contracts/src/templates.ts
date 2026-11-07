@@ -1,6 +1,7 @@
 import { APPEARANCE_SLOTS, appearanceMarkersIn, isAppearanceSlot } from './appearance.js';
 import { CURRENCY_CODES, currencyCodeSchema, money, type Money } from './money.js';
 import { OPS_LOG_TEMPLATES } from './ops-log-types.js';
+import { RESELLER_REQUEST_TEMPLATES } from './reseller-requests.js';
 import { TERMS_BODY_MAX_LENGTH, TERMS_TITLE_MAX_LENGTH } from './terms.js';
 
 /**
@@ -7150,6 +7151,36 @@ export const TEMPLATES = [
         token: 'expiresAt',
         type: 'DATETIME',
         description: 'The deadline the renewal was for.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
+   * NEXA-OWNER-BATCH-1 PR-3: the one warning before an automatic deletion. Its values are read
+   * at send time from the `service_auto_delete_runs` row the notification names (ADR 0030 §1).
+   */
+  {
+    key: 'bot.service.auto_delete_warning',
+    description:
+      'NEXA-OWNER-BATCH-1 PR-3: sent at most once per service per due cycle, ' +
+      'service.auto_delete.warn_hours before an EXPIRED or SUSPENDED service may be deleted ' +
+      'automatically. Carries the renew button of the existing renewal flow. Superseded unsent ' +
+      'if the service was renewed or resumed meanwhile, was terminated, or the feature was ' +
+      'switched off.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'deleteAt',
+        type: 'DATETIME',
+        description: 'The earliest moment the service may be deleted.',
         required: false,
         repeatable: false,
       },
@@ -14883,6 +14914,7 @@ export const TEMPLATES = [
   },
   // Round 4 PR-D: the operations log group's messages, one definition each.
   ...OPS_LOG_TEMPLATES,
+  ...RESELLER_REQUEST_TEMPLATES,
 ] as const satisfies readonly TemplateDefinition[];
 
 export type TemplateKey = (typeof TEMPLATES)[number]['key'];

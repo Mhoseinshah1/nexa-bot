@@ -24,6 +24,10 @@ import {
   AUTO_RENEW_PREFERENCE_SOURCES,
   AUTO_RENEW_REFUSALS,
   AUTO_RENEW_RUN_STATES,
+  AUTO_DELETE_CAUSES,
+  AUTO_DELETE_RUN_STATES,
+  AUTO_DELETE_SERVICE_STATES,
+  SERVICE_EXPIRY_CAUSES,
   BACKUP_ARCHIVE_FORMATS,
   CAPACITY_LIMIT_MODES,
   CAPACITY_RESOURCES,
@@ -255,6 +259,14 @@ import {
   // WP-A7: support tickets.
   TICKET_ATTACHMENT_FILE_NAME_MAX_LENGTH,
   TICKET_ATTACHMENT_KINDS,
+  RESELLER_REQUEST_ANSWER_CEILING,
+  RESELLER_REQUEST_ANSWER_DEFAULT_MAX,
+  RESELLER_REQUEST_ATTACHMENT_KINDS,
+  RESELLER_REQUEST_MESSAGE_MAX,
+  RESELLER_REQUEST_QUESTION_TEXT_MAX,
+  RESELLER_REQUEST_REASON_MAX,
+  RESELLER_REQUEST_MESSAGE_SENDERS,
+  RESELLER_REQUEST_STATUSES,
   TICKET_ATTACHMENT_MAX_BYTES,
   TICKET_REPLY_FILE_TYPES,
   DIRECT_MESSAGE_CONTENT_KINDS,
@@ -7775,6 +7787,20 @@ export const services = pgTable(
      * before. The keyset's indexes are built online (`online-indexes.ts`).
      */
     originalStartedAt: timestamptz('original_started_at'),
+    /**
+     * NEXA-OWNER-BATCH-1 PR-3: when the service entered its CURRENT state, as this installation
+     * knows it — written by the transition that moved it, from the Clock. NULL is "not known":
+     * a row that predates the column, or one an import wrote. The automatic deletion stamps
+     * such an EXPIRED or SUSPENDED row with the moment it first sees it, and never back-dates
+     * it, so nothing is due the instant the column exists.
+     */
+    stateSince: timestamptz('state_since'),
+    /**
+     * PR-3: why an EXPIRED service expired (`SERVICE_EXPIRY_CAUSES`), written by the expiry
+     * that moved it: its traffic used had reached a finite limit → TRAFFIC, otherwise TIME.
+     * Read only while the state is EXPIRED; NULL for a row that expired before the column.
+     */
+    expiryCause: text('expiry_cause'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
@@ -7843,6 +7869,8 @@ export const services = pgTable(
       .on(table.tenantId, table.createdAt)
       .where(sql`state = 'UNRECONCILED'`),
     check('services_state_check', enumCheck('state', SERVICE_STATES)),
+    check('services_expiry_cause_check', nullableEnumCheck('expiry_cause', SERVICE_EXPIRY_CAUSES)),
+
     check('services_traffic_check', sql`traffic_limit_bytes >= 0 AND traffic_used_bytes >= 0`),
     check(
       'services_device_limit_check',
@@ -11119,7 +11147,7 @@ export const customerTextCaptures = pgTable(
      */
     check(
       'customer_text_captures_subject_check',
-      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD')) = (subject_id IS NOT NULL)`,
+      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD', 'RESELLER_REQUEST_ANSWER', 'RESELLER_REQUEST_REPLY', 'RESELLER_REQUEST_ADMIN_MESSAGE', 'RESELLER_REQUEST_ADMIN_REASON')) = (subject_id IS NOT NULL)`,
     ),
     /** Only the days window carries a volume, and it always does (Package D). */
     check(
@@ -18117,6 +18145,93 @@ export const serviceAutoRenewRuns = pgTable(
   ],
 );
 
+/**
+ * NEXA-OWNER-BATCH-1 PR-3: one DUE CYCLE of one service's automatic deletion.
+ *
+ * A cycle is the service's stay in one finished state (`cycle_state`, EXPIRED or SUSPENDED)
+ * since one moment (`cycle_since`, the service's `state_since` when the row was written).
+ * UNIQUE on (tenant, service, `cycle_since`) among the runs not CANCELLED: two worker replicas,
+ * or a pass that overran, both reach the same due service and only one INSERT schedules it — so
+ * a cycle is warned at most once per owner. A renewal or a resume moves `services.state_since`,
+ * so the old row stops matching and the next stay is a new cycle with a new row. A transfer
+ * CANCELS the scheduled run (the warning went to the old owner) without moving the clock; the
+ * new owner's run is scheduled with a full warning window of its own.
+ *
+ * `PLANNED` is written in the transaction that plans the provisioning `TERMINATE`
+ * (`operation_id`), conditional on `SCHEDULED`: a cycle's deletion is planned exactly once,
+ * and every key the TERMINATE takes derives from this row's id. `planned_at` is what the
+ * per-panel rate limit counts. `service_label`, `cause` and `days` are the snapshot the warning
+ * and the operations log render (ADR 0030 §1).
+ */
+export const serviceAutoDeleteRuns = pgTable(
+  'service_auto_delete_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    panelId: uuid('panel_id').notNull(),
+    /** One of `AUTO_DELETE_SERVICE_STATES`. */
+    cycleState: text('cycle_state').notNull(),
+    cycleSince: timestamptz('cycle_since').notNull(),
+    /** One of `AUTO_DELETE_CAUSES`. */
+    cause: text('cause').notNull(),
+    /** The day count the cycle was measured by when it was scheduled. */
+    days: integer('days').notNull(),
+    serviceLabel: text('service_label').notNull(),
+    /** The earliest moment the deletion may be planned: the due moment, and the warning's lead. */
+    deleteAfter: timestamptz('delete_after').notNull(),
+    /** When the one warning was raised; null when none is configured. */
+    warnedAt: timestamptz('warned_at'),
+    /** One of `AUTO_DELETE_RUN_STATES`. */
+    state: text('state').notNull(),
+    operationId: uuid('operation_id'),
+    plannedAt: timestamptz('planned_at'),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    /** One live run per cycle; a CANCELLED one (a transfer) leaves room for the new owner's. */
+    uniqueIndex('service_auto_delete_runs_cycle_key')
+      .on(table.tenantId, table.serviceId, table.cycleSince)
+      .where(sql`state <> 'CANCELLED'`),
+    index('service_auto_delete_runs_due_idx')
+      .on(table.tenantId, table.deleteAfter)
+      .where(sql`state = 'SCHEDULED'`),
+    index('service_auto_delete_runs_panel_planned_idx')
+      .on(table.tenantId, table.panelId, table.plannedAt)
+      .where(sql`state = 'PLANNED'`),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_auto_delete_runs_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_auto_delete_runs_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'service_auto_delete_runs_panel_fk',
+    }),
+    check('service_auto_delete_runs_state_check', enumCheck('state', AUTO_DELETE_RUN_STATES)),
+    check('service_auto_delete_runs_cause_check', enumCheck('cause', AUTO_DELETE_CAUSES)),
+    check(
+      'service_auto_delete_runs_cycle_state_check',
+      enumCheck('cycle_state', AUTO_DELETE_SERVICE_STATES),
+    ),
+    check(
+      'service_auto_delete_runs_planned_check',
+      sql`(state = 'PLANNED') = (operation_id IS NOT NULL AND planned_at IS NOT NULL)`,
+    ),
+    check('service_auto_delete_runs_days_check', sql`days >= 1`),
+  ],
+);
+
 // --- R10 D2: owner-defined main-menu buttons ---------------------------------------------
 
 /**
@@ -18675,5 +18790,247 @@ export const hostedBotActivationLinks = pgTable(
       columns: [table.tenantId, table.createdByAdminId],
       foreignColumns: [admins.tenantId, admins.id],
     }),
+  ],
+);
+
+// --- Owner batch 1, PR-2: «درخواست نمایندگی» --------------------------------------------------
+
+/**
+ * The questions the owner asks an applicant, in order. Edited as a whole list from the Web
+ * Admin; a question the list drops is made `active = false` rather than deleted, so the row
+ * stays as the record of what was once asked. Changing a question NEVER changes a request
+ * already filed: a request stores the questions as they were asked (`reseller_requests.answers`).
+ */
+export const resellerRequestQuestions = pgTable(
+  'reseller_request_questions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    position: integer('position').notNull(),
+    text: text('text').notNull(),
+    required: boolean('required').notNull(),
+    maxLength: integer('max_length').notNull().default(RESELLER_REQUEST_ANSWER_DEFAULT_MAX),
+    active: boolean('active').notNull().default(true),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('reseller_request_questions_tenant_id_key').on(table.tenantId, table.id),
+    index('reseller_request_questions_order_idx').on(table.tenantId, table.position, table.id),
+    check('reseller_request_questions_position_check', sql`position >= 0`),
+    check(
+      'reseller_request_questions_text_check',
+      sql`length(btrim(text)) BETWEEN 1 AND ${sql.raw(String(RESELLER_REQUEST_QUESTION_TEXT_MAX))}`,
+    ),
+    check(
+      'reseller_request_questions_max_length_check',
+      sql`max_length BETWEEN 1 AND ${sql.raw(String(RESELLER_REQUEST_ANSWER_CEILING))}`,
+    ),
+  ],
+);
+
+/**
+ * One customer's request to become a reseller.
+ *
+ * `answers` is the snapshot taken at submit: every question as it was asked (text, required,
+ * bound) with the answer, so a later edit of the question list changes nothing here. The
+ * status moves only by a conditional UPDATE from PENDING; `decided_at` is stamped exactly when
+ * it does, and an APPROVED row names the tier and the administrator. A PENDING row keeps
+ * its place in the conversation: the thread is open while the status is PENDING and closed
+ * for replies the moment it is not.
+ *
+ * ONE PENDING REQUEST PER CUSTOMER is the partial unique index below, not a convention: two
+ * taps, two bots or two replicas cannot file twice.
+ */
+export const resellerRequests = pgTable(
+  'reseller_requests',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** The number the customer and an operator quote. An identity: unique and increasing. */
+    number: bigint('number', { mode: 'bigint' }).generatedAlwaysAsIdentity().notNull(),
+    customerId: uuid('customer_id').notNull(),
+    /** The bot the customer filed through; the conversation continues through it. */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    answers: jsonb('answers').notNull(),
+    status: text('status').notNull().default('PENDING'),
+    decidedByAdminId: uuid('decided_by_admin_id'),
+    tierId: uuid('tier_id'),
+    reason: text('reason'),
+    /** The key of the submit, unique for ever: a redelivered update answers with this row. */
+    openingKey: text('opening_key').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    decidedAt: timestamptz('decided_at'),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    lastMessageAt: timestamptz('last_message_at'),
+  },
+  (table) => [
+    unique('reseller_requests_tenant_id_key').on(table.tenantId, table.id),
+    unique('reseller_requests_opening_key').on(table.tenantId, table.openingKey),
+    uniqueIndex('reseller_requests_one_pending_key')
+      .on(table.tenantId, table.customerId)
+      .where(sql`status = 'PENDING'`),
+    index('reseller_requests_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    index('reseller_requests_tenant_status_idx').on(table.tenantId, table.status, table.createdAt),
+    /** The cooldown: a customer's latest decision. */
+    index('reseller_requests_customer_decided_idx').on(
+      table.tenantId,
+      table.customerId,
+      table.decidedAt,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'reseller_requests_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.decidedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'reseller_requests_decided_by_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.tierId],
+      foreignColumns: [resellerTiers.tenantId, resellerTiers.id],
+      name: 'reseller_requests_tier_fk',
+    }),
+    check('reseller_requests_status_check', enumCheck('status', RESELLER_REQUEST_STATUSES)),
+    check('reseller_requests_decided_check', sql`(status = 'PENDING') = (decided_at IS NULL)`),
+    check(
+      'reseller_requests_approved_check',
+      sql`status <> 'APPROVED' OR (tier_id IS NOT NULL AND decided_by_admin_id IS NOT NULL)`,
+    ),
+    check(
+      'reseller_requests_tier_only_approved_check',
+      sql`status = 'APPROVED' OR tier_id IS NULL`,
+    ),
+    check(
+      'reseller_requests_reason_check',
+      sql`reason IS NULL OR (status = 'REJECTED' AND length(reason) BETWEEN 1 AND ${sql.raw(String(RESELLER_REQUEST_REASON_MAX))})`,
+    ),
+    check('reseller_requests_answers_check', sql`jsonb_typeof(answers) = 'array'`),
+    check('reseller_requests_opening_key_check', sql`length(opening_key) BETWEEN 1 AND 300`),
+  ],
+);
+
+/**
+ * One message in a request's conversation, from the applicant or from an operator.
+ *
+ * The ticket thread's shape without the ticket (see `reseller-requests.ts` for why a ticket
+ * does not fit): append-only by convention, a sender, a body or a Telegram photo binding, the
+ * command's idempotency key. An operator's message is delivered by a `RESELLER_REQUEST_MESSAGE`
+ * row on the customer notification lane whose subject is THIS row.
+ */
+export const resellerRequestMessages = pgTable(
+  'reseller_request_messages',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    requestId: uuid('request_id').notNull(),
+    seq: bigint('seq', { mode: 'bigint' }).generatedAlwaysAsIdentity().notNull(),
+    senderType: text('sender_type').notNull(),
+    authorAdminId: uuid('author_admin_id'),
+    body: text('body'),
+    attachmentKind: text('attachment_kind'),
+    attachmentBotInstanceId: uuid('attachment_bot_instance_id').references(() => botInstances.id),
+    attachmentFileId: text('attachment_file_id'),
+    attachmentFileUniqueId: text('attachment_file_unique_id'),
+    attachmentMimeType: text('attachment_mime_type'),
+    attachmentFileSize: bigint('attachment_file_size', { mode: 'bigint' }),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('reseller_request_messages_tenant_id_key').on(table.tenantId, table.id),
+    unique('reseller_request_messages_key').on(table.tenantId, table.idempotencyKey),
+    index('reseller_request_messages_request_idx').on(table.tenantId, table.requestId, table.seq),
+    foreignKey({
+      columns: [table.tenantId, table.requestId],
+      foreignColumns: [resellerRequests.tenantId, resellerRequests.id],
+      name: 'reseller_request_messages_request_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.authorAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'reseller_request_messages_author_fk',
+    }),
+    check(
+      'reseller_request_messages_sender_check',
+      enumCheck('sender_type', RESELLER_REQUEST_MESSAGE_SENDERS),
+    ),
+    check(
+      'reseller_request_messages_attachment_kind_check',
+      nullableEnumCheck('attachment_kind', RESELLER_REQUEST_ATTACHMENT_KINDS),
+    ),
+    check(
+      'reseller_request_messages_body_check',
+      sql`body IS NULL OR length(body) BETWEEN 1 AND ${sql.raw(String(RESELLER_REQUEST_MESSAGE_MAX))}`,
+    ),
+    /** An attachment is all of its binding or none of it. */
+    check(
+      'reseller_request_messages_attachment_check',
+      sql`(attachment_kind IS NULL) = (attachment_file_id IS NULL)
+          AND (attachment_kind IS NULL) = (attachment_file_unique_id IS NULL)
+          AND (attachment_kind IS NULL) = (attachment_bot_instance_id IS NULL)`,
+    ),
+    /** An operator writes text, signed; the applicant writes text or a photo. */
+    check(
+      'reseller_request_messages_shape_check',
+      sql`CASE sender_type
+            WHEN 'ADMIN' THEN author_admin_id IS NOT NULL AND body IS NOT NULL AND attachment_kind IS NULL
+            WHEN 'CUSTOMER' THEN author_admin_id IS NULL AND (body IS NOT NULL OR attachment_kind IS NOT NULL)
+            ELSE false
+          END`,
+    ),
+    check('reseller_request_messages_key_check', sql`length(idempotency_key) BETWEEN 1 AND 300`),
+  ],
+);
+
+/**
+ * A customer's half-written application: the questions as they were when it began, the
+ * answers so far and the question being asked. At most one per customer; filing the request
+ * or starting over replaces it. It holds no decision, and the customer's `submit` re-reads
+ * the questions it names, never the live list.
+ */
+export const resellerRequestDrafts = pgTable(
+  'reseller_request_drafts',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    /** The questions as they were asked: `{questionId, text, required, maxLength}[]`. */
+    questions: jsonb('questions').notNull(),
+    /** One entry per question, `null` while unanswered or skipped. */
+    answers: jsonb('answers').notNull(),
+    position: integer('position').notNull().default(0),
+    /** The idempotency key of the step that last changed the draft: a redelivery replays. */
+    lastStepKey: text('last_step_key'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('reseller_request_drafts_tenant_id_key').on(table.tenantId, table.id),
+    unique('reseller_request_drafts_customer_key').on(table.tenantId, table.customerId),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'reseller_request_drafts_customer_fk',
+    }),
+    check('reseller_request_drafts_questions_check', sql`jsonb_typeof(questions) = 'array'`),
+    check('reseller_request_drafts_answers_check', sql`jsonb_typeof(answers) = 'array'`),
+    check('reseller_request_drafts_position_check', sql`position >= 0`),
   ],
 );

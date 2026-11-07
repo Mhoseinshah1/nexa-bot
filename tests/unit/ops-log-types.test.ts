@@ -50,7 +50,8 @@ describe('the log types registry', () => {
     expect(new Set(all).size).toBe(all.length);
     // Types added after the owner's Appendix L review name the item that brought them.
     const later = all.filter((item) => !/^L[0-9]+$/u.test(item));
-    expect(later).toEqual(['R10-D4']);
+    // PR-3 and PR-2 (owner batch 1) logs, beside the gift cards'.
+    expect(later).toEqual(['R10-D4', 'PR3-AUTO-DELETE', 'PR2']);
     const items = all.filter((item) => /^L[0-9]+$/u.test(item));
     const wanted = Array.from({ length: 31 }, (_, index) => `L${String(index + 1)}`).filter(
       (item) => item !== 'L30',

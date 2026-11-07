@@ -1,4 +1,5 @@
 import type {
+  AutoDeleteCause,
   Money,
   OpsLogButton,
   OpsLogTypeId,
@@ -338,6 +339,15 @@ export interface OpsLogFacts {
   ): Promise<string | null>;
   operation(scope: TenantContext, id: string, tx: TransactionScope): Promise<OperationFact | null>;
   /**
+   * PR-3: the automatic-deletion cycle whose TERMINATE this operation is — its cause and the
+   * days it waited — or null for any other operation (an operator's terminate among them).
+   */
+  autoDeleteOfOperation(
+    scope: TenantContext,
+    operationId: string,
+    tx: TransactionScope,
+  ): Promise<{ readonly cause: AutoDeleteCause; readonly days: number } | null>;
+  /**
    * The service as it was BEFORE the operation of this order changed it, from the audit row
    * the provisioner wrote in the same transaction as the change. Null when no such row exists
    * (an operation from before it was recorded this way): the log then omits the "before"
@@ -460,6 +470,8 @@ export interface OpsLogWords {
   refundChannel(channel: string): string;
   refundFailure(cause: string): string;
   refundRequestOutcome(outcome: string): string;
+  /** PR-2: the decision of a reseller request, in Persian. */
+  resellerRequestOutcome(outcome: 'APPROVED' | 'REJECTED'): string;
   cryptoKindTitle(topup: boolean): string;
   walletAdjustHeading(direction: 'CREDIT' | 'DEBIT'): string;
   /** `" · 🥇 اولین خرید · 🧑‍💼 نماینده"`, or null when neither applies. */
@@ -529,6 +541,9 @@ export interface OpsLogWords {
   };
   severity(klass: string): string;
   cleanupLine(countText: string): string;
+  /** PR-3: the nightly report's automatic-deletion line, and the cause a deletion names. */
+  autoDeletedLine(countText: string): string;
+  autoDeleteCause(cause: AutoDeleteCause): string;
   /** Round 9 C3: the data compaction's part of the cleanup line; `parts` is already worded. */
   compactionLine(applied: boolean, parts: string): string;
   compactionClass(cls: string): string;

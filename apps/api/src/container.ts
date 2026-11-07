@@ -633,6 +633,9 @@ import { TicketService } from './modules/commerce/tickets/application/ticket.ser
 import { TicketCategoryService } from './modules/commerce/tickets/application/ticket-category.service.js';
 import { TicketScreenComposer } from './modules/commerce/tickets/application/ticket-screens.js';
 import { TicketSupportNotifyConsumer } from './modules/commerce/tickets/application/ticket-support-notify.consumer.js';
+import { ResellerRequestService } from './modules/commerce/reseller-requests/application/reseller-request.service.js';
+import { ResellerRequestLogConsumer } from './modules/commerce/reseller-requests/application/reseller-request-log.consumer.js';
+import { DrizzleResellerRequestRepository } from './modules/commerce/reseller-requests/infrastructure/drizzle-reseller-request.repository.js';
 import { DrizzleTicketRepository } from './modules/commerce/tickets/infrastructure/drizzle-ticket.repository.js';
 import { DrizzleTicketCategoryRepository } from './modules/commerce/tickets/infrastructure/drizzle-ticket-category.repository.js';
 import { DrizzleTicketContextReader } from './modules/commerce/tickets/infrastructure/drizzle-ticket-context.reader.js';
@@ -849,6 +852,8 @@ import { DrizzleOperationCardRepository } from './modules/commerce/provisioning/
 import { ServiceTransferService } from './modules/commerce/provisioning/application/service-transfer.service.js';
 import { ServiceAutoRenewService } from './modules/commerce/provisioning/application/service-auto-renew.service.js';
 import { DrizzleServiceAutoRenewRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-auto-renew.repository.js';
+import { ServiceAutoDeleteService } from './modules/commerce/provisioning/application/service-auto-delete.service.js';
+import { DrizzleServiceAutoDeleteRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-auto-delete.repository.js';
 import { DrizzleUsageSnapshotRepository } from './modules/commerce/provisioning/infrastructure/drizzle-usage-snapshot.repository.js';
 import { UsageSnapshotService } from './modules/commerce/provisioning/application/usage-snapshots.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
@@ -1447,10 +1452,14 @@ export interface Container {
   readonly serviceTransfers: ServiceTransferService;
   /** Round 10, D1: «تمدید خودکار» — the customer's switch and the worker's sweep. */
   readonly serviceAutoRenew: ServiceAutoRenewService;
+  /** NEXA-OWNER-BATCH-1 PR-3: «حذف خودکار سرویس» — the sweep and the Web Admin's preview. */
+  readonly serviceAutoDelete: ServiceAutoDeleteService;
   /** R11 B2: the usage snapshots behind the mini app's chart (`service_usage_chart`). */
   readonly usageSnapshots: UsageSnapshotService;
   /** WP-A7: support tickets, for the bot and the Web Admin alike. */
   readonly tickets: TicketService;
+  /** PR-2: «درخواست نمایندگی» — the questions, the applicant's flow, the thread, the decision. */
+  readonly resellerRequests: ResellerRequestService;
   /** WP-A7: the categories a customer files a ticket under. */
   readonly ticketCategories: TicketCategoryService;
   /** The operator's price preview and an order's pricing detail (WP8). */
@@ -2678,6 +2687,19 @@ export function createContainer(
       new ServiceLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new AdminLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new FailureLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      /*
+       * PR-2: «درخواست نمایندگی» — a request filed, the applicant's reply and the decision →
+       * the operations log group, with the approve / reject / message buttons.
+       */
+      new ResellerRequestLogConsumer({
+        lane: { queue: (scope, input, tx) => notifications.queue(scope, input, tx) },
+        requests: new DrizzleResellerRequestRepository(database.db),
+        tierName: async (scope, tierId, tx) =>
+          (await new DrizzleResellerRepository(database.db).findTier(scope, tierId, tx))?.name ??
+          null,
+        facts: opsLogFacts,
+        words: i18nOpsLogWords,
+      }),
       new TicketSupportNotifyConsumer({
         lane: { queue: (scope, input, tx) => notifications.queue(scope, input, tx) },
         tickets: new DrizzleTicketRepository(database.db),
@@ -5444,6 +5466,26 @@ export function createContainer(
     ids,
     logger,
   });
+  /*
+   * NEXA-OWNER-BATCH-1 PR-3: automatic deletion. Not a new deletion path: the sweep plans the
+   * provisioning TERMINATE an operator's «پایان سرویس» plans (`planAutoDeleteWithin`) as a
+   * SYSTEM_JOB, and the provisioner carries it out with its own claim and backoff.
+   */
+  const serviceAutoDeleteService = new ServiceAutoDeleteService({
+    repository: new DrizzleServiceAutoDeleteRepository(database.db),
+    services: serviceRepository,
+    provisioning: provisioningService,
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    notifier: customerNotifier,
+    guard,
+    outbox,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+    logger,
+  });
   const customerReminderLoop = new CustomerReminderLoop(
     [
       {
@@ -5491,6 +5533,19 @@ export function createContainer(
         runOnce: async (scope) => {
           const report = await serviceAutoRenewService.runOnce(scope);
           return report.renewed + report.short + report.refused;
+        },
+      },
+      {
+        /*
+         * NEXA-OWNER-BATCH-1 PR-3: every pass (each minute), because the per-panel rate limit
+         * is per minute: a backlog drains at `max_per_minute` and never in a burst. The flag
+         * is read inside the pass; with it off only unknown clocks are stamped.
+         */
+        name: 'service-auto-delete',
+        everyMs: 0,
+        runOnce: async (scope) => {
+          const report = await serviceAutoDeleteService.runOnce(scope);
+          return report.scheduled + report.planned;
         },
       },
     ],
@@ -5960,6 +6015,25 @@ export function createContainer(
     ids,
   });
   const ticketScreens = new TicketScreenComposer(templateResolver);
+  const resellerRequestService = new ResellerRequestService({
+    requests: new DrizzleResellerRequestRepository(database.db),
+    resellers: resellerRepository,
+    registrar: resellerAdminService,
+    customers: customerRepository,
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    notifier: customerNotifier,
+    outbox,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
   /**
    * Phase A2 (`docs/direct-message-audit.md`): a direct message from Customer 360. Its own
    * row and permission; delivered by the customer notification lane below, as
@@ -6516,8 +6590,12 @@ export function createContainer(
       serviceTransfers: serviceTransferService,
       // Round 10, D1: the two automatic-renewal notices, read from the run row they name.
       autoRenew: serviceAutoRenewService,
+      // PR-3: the automatic-deletion warning, read from the run row it names.
+      autoDelete: serviceAutoDeleteService,
       // WP-A7: support's reply, read from the ticket message the notification names.
       tickets: ticketService,
+      // PR-2: an operator's message to an applicant, and the decision, read from their rows.
+      resellerRequests: resellerRequestService,
       // Phase A2: an operator's direct message, read from the message row it names.
       directMessages: customerDirectMessageService,
       // Phase E3: an incident notice's words, read from its communication row.
@@ -9412,8 +9490,10 @@ export function createContainer(
     subscriptionFiles: subscriptionFileService,
     serviceTransfers: serviceTransferService,
     serviceAutoRenew: serviceAutoRenewService,
+    serviceAutoDelete: serviceAutoDeleteService,
     usageSnapshots: usageSnapshotService,
     tickets: ticketService,
+    resellerRequests: resellerRequestService,
     ticketCategories: ticketCategoryService,
     pricingRead: pricingReadService,
     cashback: cashbackService,
@@ -9732,6 +9812,8 @@ export function createContainer(
               );
         return open?.orderId ?? null;
       },
+      // PR-2: «درخواست نمایندگی» — the applicant's flow and the operator's group actions.
+      resellerRequests: resellerRequestService,
       tickets: {
         service: ticketService,
         categories: ticketCategoryService,

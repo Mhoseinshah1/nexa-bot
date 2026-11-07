@@ -26,6 +26,9 @@ import {
   type ServiceSummaryResponse,
   type TenantContext,
   type UserId,
+  SERVICE_AUTO_DELETE_PREVIEW_ROUTE,
+  serviceAutoDeletePreviewQuerySchema,
+  type ServiceAutoDeletePreviewResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
@@ -165,6 +168,27 @@ export class ServicesController {
       ),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
     };
+  }
+
+  /**
+   * NEXA-OWNER-BATCH-1 PR-3: the automatic deletion's live preview — «با این تنظیمات، N سرویس در
+   * ۲۴ ساعت آینده حذف می‌شود», per cause — for the day counts being edited (each absent is the
+   * stored setting). A read; `settings.view` is charged by the service.
+   */
+  @Get(SERVICE_AUTO_DELETE_PREVIEW_ROUTE)
+  async autoDeletePreview(
+    @Req() request: FastifyRequest,
+    @Query() raw: Record<string, unknown>,
+  ): Promise<ServiceAutoDeletePreviewResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const query = serviceAutoDeletePreviewQuerySchema.parse(
+      Object.fromEntries(
+        Object.entries(singleValued(raw)).filter(
+          ([, value]) => value !== undefined && value !== '',
+        ),
+      ),
+    );
+    return this.container.serviceAutoDelete.preview(scope, actor, query);
   }
 
   @Get('services/:id')

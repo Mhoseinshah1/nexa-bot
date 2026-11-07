@@ -197,6 +197,7 @@ describe('the default keyboard (nothing saved)', () => {
       ['apps', 'referral'],
       ['help'],
       ['tickets'],
+      ['reseller_request'],
     ]);
     expect(explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT).rows).not.toEqual(
       DEFAULT_EXPLICIT_MAIN_MENU.rows,

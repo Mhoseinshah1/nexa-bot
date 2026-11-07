@@ -5,6 +5,7 @@ import {
   effectiveCooldownMs,
   type PanelCustomerAction,
   SERVICE_NOTE_MAX_LENGTH,
+  SERVICE_TERMINATE_REASON_AUTO_DELETE,
   SERVICES_LIST_PAGE_SIZE,
   extendedAllowance,
   extendedExpiry,
@@ -1417,6 +1418,52 @@ export class ProvisioningService {
     );
   }
 
+  /**
+   * NEXA-OWNER-BATCH-1 PR-3: the automatic deletion's `TERMINATE`, planned INSIDE the sweep's
+   * transaction — the same plan an operator's «پایان سرویس» makes (`requestFromOperator`), not a
+   * second deletion path: the legal state, the panel's operability (in the transaction), the
+   * service's row and lifecycle locks, an open refund request refused, an open TERMINATE
+   * answered rather than duplicated, a replay of the key returned, and the request's audit row
+   * — which carries the reason `AUTO_DELETE`. No order, no refund and no wallet entry: a
+   * TERMINATE has none.
+   *
+   * No permission check here: the sweep charges its `SYSTEM_JOB` through the guard before it
+   * opens the transaction, as `planTerminateWithin`'s caller does.
+   */
+  async planAutoDeleteWithin(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+    input: { readonly idempotencyKey: string },
+    tx: TransactionScope,
+  ): Promise<OperationRecord> {
+    if (!OPERATION_LEGAL_FROM.TERMINATE.includes(service.state)) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'That service is not in a state this action can be taken from.',
+        { state: service.state },
+      );
+    }
+    const operable = await this.deps.panels.operability(scope, service.panelId, 'TERMINATE', tx);
+    if (!operable.ok) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        'The panel this service lives on cannot perform that action.',
+        { reason: operable.reason },
+      );
+    }
+    return this.planWithin(
+      scope,
+      actor,
+      service,
+      'TERMINATE',
+      input,
+      { requestedBy: 'OPERATOR', reason: SERVICE_TERMINATE_REASON_AUTO_DELETE },
+      this.deps.clock.now(),
+      tx,
+    );
+  }
+
   /** The transactional half of planning, shared by both entry points above. */
   private async planWithin(
     scope: TenantContext,
@@ -1437,6 +1484,8 @@ export class ProvisioningService {
        * the request standing active is the reason for it rather than a refusal of it.
        */
       readonly forRefundRequest?: true;
+      /** PR-3: why a TERMINATE was asked for, on its audit row (`AUTO_DELETE` only, for now). */
+      readonly reason?: typeof SERVICE_TERMINATE_REASON_AUTO_DELETE;
     },
     now: Date,
     tx: TransactionScope,
@@ -1625,7 +1674,11 @@ export class ProvisioningService {
     actor: ActorContext,
     service: ServiceRecord,
     type: OperationType,
-    origin: { readonly requestedBy: 'OPERATOR' | UserId; readonly card?: CardMessageRef },
+    origin: {
+      readonly requestedBy: 'OPERATOR' | UserId;
+      readonly card?: CardMessageRef;
+      readonly reason?: typeof SERVICE_TERMINATE_REASON_AUTO_DELETE;
+    },
     operation: OperationRecord,
     now: Date,
     tx: TransactionScope,
@@ -1668,7 +1721,11 @@ export class ProvisioningService {
         entityType: 'Service',
         entityId: service.id,
         before: { state: service.state },
-        after: { requestedBy: origin.requestedBy, operationId: operation.operationId },
+        after: {
+          requestedBy: origin.requestedBy,
+          operationId: operation.operationId,
+          ...(origin.reason === undefined ? {} : { reason: origin.reason }),
+        },
         result: 'SUCCESS',
       },
       tx,

@@ -95,8 +95,11 @@ export * from './service-refund-requests.js';
 export * from './service-transfer.js';
 // Round 10, D1: automatic renewal (تمدید خودکار).
 export * from './auto-renew.js';
+export * from './auto-delete.js';
 // WP-A7: the support ticket system.
 export * from './tickets.js';
+// Owner batch 1, PR-2: «درخواست نمایندگی».
+export * from './reseller-requests.js';
 export * from './miniapp.js';
 // Round N, C1: campaigns composing the pricing rules, the audience and the mass actions.
 export * from './campaigns.js';

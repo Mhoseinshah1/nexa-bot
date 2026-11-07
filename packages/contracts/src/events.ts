@@ -213,6 +213,13 @@ export const EVENT_TYPES = [
   'TicketMessagePosted',
   'TicketStatusChanged',
   'TicketAssigned',
+  // Owner batch 1, PR-2: a reseller request filed, a message posted in its conversation (by
+  // the applicant or by an operator) and its decision. Ids and closed vocabularies only —
+  // never the answers or a message's text, which are on their rows. The operations log is a
+  // consumer of all three.
+  'ResellerRequestSubmitted',
+  'ResellerRequestMessagePosted',
+  'ResellerRequestDecided',
   // Round N: a broadcast and a mass operation changing state. The content, the audience and
   // the recipients are never in the payload: a state change is the fact.
   'BroadcastStateChanged',
@@ -245,6 +252,12 @@ export const EVENT_TYPES = [
   // the SERVICE. Ids, amounts in minor units with their currency, and closed words only.
   'ServiceAutoRenewChanged',
   'ServiceAutoRenewRunSettled',
+  // NEXA-OWNER-BATCH-1 PR-3: automatic deletion. A due cycle of an EXPIRED or SUSPENDED
+  // service was scheduled (and its customer warned, when a warning is configured), and its
+  // deletion was planned as a provisioning TERMINATE with reason AUTO_DELETE. Aggregate is the
+  // SERVICE. Ids, closed words and the configured day count only.
+  'ServiceAutoDeleteScheduled',
+  'ServiceAutoDeletePlanned',
   // Phase 6A PR-3 (D1): the creator panel. A hosted bot's lifecycle state moved (the owner's
   // suspend / activate / delete / purge, or the expiry sweep's EXPIRE), and its expiry date
   // was set or cleared. Aggregate is the hosted TENANT; recorded on the installation tenant,
@@ -305,6 +318,8 @@ export const AGGREGATE_TYPES = [
   'LegacyImportMapRow',
   // R10 D4: one batch of gift cards.
   'GiftCardBatch',
+  // PR-2: one customer's reseller request, and its conversation.
+  'ResellerRequest',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -744,6 +759,18 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     categoryId: z.string(),
     messageId: z.string(),
   }),
+  ResellerRequestSubmitted: z.object({ requestId: z.string(), customerId: z.string() }),
+  ResellerRequestMessagePosted: z.object({
+    requestId: z.string(),
+    messageId: z.string(),
+    senderType: z.enum(['CUSTOMER', 'ADMIN']),
+  }),
+  ResellerRequestDecided: z.object({
+    requestId: z.string(),
+    customerId: z.string(),
+    status: z.enum(['APPROVED', 'REJECTED']),
+    tierId: z.string().nullable(),
+  }),
   TicketMessagePosted: z.object({
     ticketId: z.string(),
     messageId: z.string(),
@@ -863,6 +890,24 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     outcome: z.enum(['RENEWED', 'FUNDS_SHORT', 'REFUSED']),
     refusal: z.enum(['PRICE_ROSE', 'CONSENT_WITHDRAWN', 'NOT_RENEWABLE']).nullable(),
     orderId: z.string().nullable(),
+  }),
+  ServiceAutoDeleteScheduled: z.object({
+    serviceId: z.string(),
+    customerId: z.string(),
+    runId: z.string(),
+    cause: z.enum(['TRAFFIC', 'TIME', 'SUSPENDED']),
+    days: z.number().int(),
+    warned: z.boolean(),
+    deleteAfter: z.string(),
+  }),
+  ServiceAutoDeletePlanned: z.object({
+    serviceId: z.string(),
+    customerId: z.string(),
+    runId: z.string(),
+    cause: z.enum(['TRAFFIC', 'TIME', 'SUSPENDED']),
+    days: z.number().int(),
+    operationId: z.string(),
+    reason: z.literal('AUTO_DELETE'),
   }),
   HostedBotStateChanged: z.object({
     hostedTenantId: z.string(),

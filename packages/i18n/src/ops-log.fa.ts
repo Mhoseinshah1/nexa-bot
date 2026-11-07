@@ -100,6 +100,8 @@ export const OPS_LOG_BODIES_FA = {
     '⏳ زمان اضافه — {addedDays}{badges}\n\n👤 {displayName} · {username} · {telegramId}\n📞 شماره: {phone}\n👤 نام کاربری سرویس: {serviceUsername}\n🖥 پنل: {panelName}\n📅 انقضا: {expiresBefore} ← {expiresAfter}\n💵 مبلغ: {price}\n💠 پرداخت: {method}\n👛 کیف پول: {balanceBefore} ← {balanceAfter}\n🔖 کد سفارش: {orderCode}\n🔖 کد پرداخت: {reference}\n🧩 کد سرویس: {serviceCode}\n📲 منبع: {source}\n🕒 {at}',
   'ops.log.link_changed':
     '🔁 تغییر لینک سرویس\n\n👤 {displayName} · {username} · {telegramId}\n👤 نام کاربری سرویس: {serviceUsername}\n🖥 پنل: {panelName}\n🙋 درخواست از: {byWhom}\n🔢 بار {rotations} در ۳۰ روز گذشته\n🚫 لینک قبلی دیگر کار نمی‌کند.\n🧩 کد سرویس: {serviceCode}\n🕒 {at}',
+  'ops.log.service_auto_deleted':
+    '🗑 حذف خودکار سرویس\n\n👤 {displayName} · {username} · {telegramId}\n👤 نام کاربری سرویس: {serviceUsername}\n🖥 پنل: {panelName}\n📌 علت: {deleteCause}\n⏳ پس از {deleteDays} روز\n🧩 کد سرویس: {serviceCode}\n🕒 {at}',
   'ops.log.trial_created':
     '🧪 اکانت تست\n\n👤 {displayName} · {username} · {telegramId}\n📞 شماره: {phone}\n👤 نام کاربری سرویس: {serviceUsername}\n🖥 پنل: {panelName}\n📊 حجم: {traffic}\n⏳ مدت: {duration}\n🧩 کد سرویس: {serviceCode}\n🕒 {at}',
   'ops.log.service_alert':
@@ -123,6 +125,14 @@ export const OPS_LOG_BODIES_FA = {
     '🎫 تیکت جدید #{ticketNumber} · {category}\n\n👤 {displayName} · {username} · {telegramId}\n💬 «{snippet}»\n📲 منبع: {source}\n🕒 {at}',
   'ops.support.customer_replied':
     '💬 پیام تازهٔ کاربر — تیکت #{ticketNumber} · {category}\n\n👤 {displayName} · {username} · {telegramId}\n💬 «{snippet}»\n📲 منبع: {source}\n🕒 {at}',
+
+  // --- PR-2: reseller requests (USERS topic) ----------------------------------------------
+  'ops.reseller_request.new':
+    '👨‍💻 درخواست نمایندگی #{requestNumber}\n\n👤 {displayName} · {username} · {telegramId}\n🔑 تعداد سرویس: {servicesCount}\n💰 مجموع پرداختی: {totalPaid}\n\n{qa}\n\n🕒 {at}',
+  'ops.reseller_request.reply':
+    '💬 پاسخ متقاضی — درخواست نمایندگی #{requestNumber}\n\n👤 {displayName} · {username} · {telegramId}\n💬 «{snippet}»\n🕒 {at}',
+  'ops.reseller_request.decided':
+    '👨‍💻 درخواست نمایندگی #{requestNumber} — {outcome}\n\n👤 {displayName} · {username} · {telegramId}\n🧑‍💼 سطح: {tierName}\n🙋 توسط: {adminName}\n📝 دلیل: {reason}\n🕒 {at}',
 
   // --- The nightly reports (REPORTS topic) and the backup caption -------------------------
   'ops.log.report_summary':
@@ -284,6 +294,7 @@ export const OPS_LOG_WORDS_FA = {
     REJECTED: 'رد شد؛ چیزی تغییر نکرد',
     FAILED: 'اجرا نشد؛ سرویس حذف نشد و مبلغی برنگشت',
   },
+  resellerRequestOutcomes: { APPROVED: 'تأیید شد؛ مشتری نماینده شد', REJECTED: 'رد شد' },
   cryptoKinds: { topup: 'شارژ کیف پول', order: 'پرداخت سفارش' },
 
   walletAdjust: { CREDIT: '➕ افزایش دستی موجودی', DEBIT: '➖ کاهش دستی موجودی' },
@@ -464,8 +475,16 @@ export const OPS_LOG_WORDS_FA = {
     ordinary: 'کاربر عادی',
   },
   storm: { heading: 'خطاهای تکراری' },
+  // NEXA-OWNER-BATCH-1 PR-3: why a service was deleted automatically.
+  autoDeleteCause: {
+    TRAFFIC: 'پایان حجم',
+    TIME: 'پایان زمان',
+    SUSPENDED: 'غیرفعال (معلق)',
+  },
   report: {
     cleanup: (n: string) => `🧹 پاکسازی: ${n} پرداخت ناتمام منقضی شد`,
+    // NEXA-OWNER-BATCH-1 PR-3: the day's automatic deletions, one line.
+    autoDeleted: (n: string) => `🗑 حذف خودکار: ${n} سرویس پایان‌یافته از پنل حذف شد`,
     compaction: {
       applied: (parts: string) => `🗜 فشرده‌سازی داده — حذف شد: ${parts}`,
       dryRun: (parts: string) => `🗜 فشرده‌سازی داده — فقط شمارش، چیزی حذف نشد: ${parts}`,
@@ -518,4 +537,8 @@ export const OPS_LOG_BUTTON_LABELS_FA: Readonly<Record<OpsLogButtonKind, string>
   // NEXA-OWNER-BATCH-1 PR-5: the two decisions on a late completion, each on the payment's page.
   LATE_DELIVER: '📦 تحویل سرویس',
   LATE_TO_WALLET: '💰 به کیف پول',
+  RESELLER_REQUEST: '👨‍💻 درخواست در پنل',
+  RESELLER_REQUEST_APPROVE: '✅ تأیید',
+  RESELLER_REQUEST_REJECT: '❌ رد',
+  RESELLER_REQUEST_MESSAGE: '💬 پیام به متقاضی',
 };

@@ -606,7 +606,7 @@ describe('the late-payment policy of an online gateway', () => {
     await insert('payments.late_credit.rialit_enabled', '"DELIVER"');
     await insert('payments.late_credit.window_hours', '12');
     const file = readFileSync(
-      join(__dirname, '../../apps/api/drizzle/0322_late_payment_policy.sql'),
+      join(__dirname, '../../apps/api/drizzle/0325_late_payment_policy.sql'),
       'utf8',
     );
     for (const statement of file.split('--> statement-breakpoint')) {

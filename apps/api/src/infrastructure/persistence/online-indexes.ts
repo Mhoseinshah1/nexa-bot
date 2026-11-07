@@ -717,6 +717,17 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     definition:
       'ON "customer_notifications" USING btree ("tenant_id","customer_id","resolved_at") WHERE (rendered_text IS NOT NULL) AND (customer_read_at IS NULL)',
   },
+  {
+    /*
+     * NEXA-OWNER-BATCH-1 PR-3: the automatic deletion's scan — one tenant's EXPIRED and
+     * SUSPENDED services by their clock (`state_since`). Partial, so the years of terminated
+     * and the live accounts are not in it; CONCURRENTLY because `services` is the large table
+     * every operation updates.
+     */
+    name: 'services_tenant_finished_since_idx',
+    definition:
+      'ON "services" USING btree ("tenant_id","state_since") WHERE (state = \'EXPIRED\') OR (state = \'SUSPENDED\')',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

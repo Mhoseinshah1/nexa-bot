@@ -4,6 +4,7 @@ import {
   money,
   paymentTrackingCode,
   toPersianDigits,
+  type AutoDeleteCause,
   type Money,
   type OpsLogButton,
   type OpsLogTypeId,
@@ -616,6 +617,36 @@ export function trialCreated(input: {
   return {
     logType: 'TRIAL_CREATED',
     templateKey: 'ops.log.trial_created' as TemplateKey,
+    values,
+    buttons: [userButton(service.customerId), { kind: 'SERVICE', ref: service.id }],
+  };
+}
+
+/**
+ * NEXA-OWNER-BATCH-1 PR-3: a service the automatic deletion removed from its panel — the panel
+ * account's name, the cause and the days it waited. Posted when its TERMINATE succeeded.
+ */
+export function serviceAutoDeleted(input: {
+  readonly service: ServiceFact;
+  readonly customer: CustomerFact | null;
+  readonly cause: AutoDeleteCause;
+  readonly days: number;
+  readonly at: Date;
+  readonly words: OpsLogWords;
+}): Built {
+  const { service, customer, cause, days, at, words } = input;
+  const values: Mutable = {
+    ...identityValues(customer, words),
+    serviceUsername: serviceUsernameValue(service.providerUsername) ?? words.noUsername,
+    deleteCause: words.autoDeleteCause(cause),
+    deleteDays: days,
+    at,
+  };
+  put(values, 'panelName', service.panelName === '' ? null : service.panelName);
+  put(values, 'serviceCode', service.code);
+  return {
+    logType: 'SERVICE_AUTO_DELETED',
+    templateKey: 'ops.log.service_auto_deleted' as TemplateKey,
     values,
     buttons: [userButton(service.customerId), { kind: 'SERVICE', ref: service.id }],
   };

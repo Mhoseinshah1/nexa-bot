@@ -1,4 +1,9 @@
 import {
+  SERVICE_AUTO_DELETE_PREVIEW_ROUTE,
+  serviceAutoDeletePreviewResponseSchema,
+  type ServiceAutoDeletePreviewResponse,
+} from '@nexa/contracts';
+import {
   // Phase E3: incidents and maintenance windows.
   INCIDENT_ROUTES,
   incidentBannerResponseSchema,
@@ -18,6 +23,17 @@ import {
   type IncidentResponse,
   type PanelQrKind,
   type UpdateIncidentRequest,
+} from '@nexa/contracts';
+import {
+  RESELLER_REQUEST_ROUTES,
+  resellerRequestDetailResponseSchema,
+  resellerRequestListResponseSchema,
+  resellerRequestQuestionsResponseSchema,
+  type ResellerRequestDetailResponse,
+  type ResellerRequestListFilter,
+  type ResellerRequestListResponse,
+  type ResellerRequestQuestionsResponse,
+  type ResellerRequestQuestionsSaveRequest,
 } from '@nexa/contracts';
 import {
   // Phase 6A (D1): the installation owner's creator panel.
@@ -1261,6 +1277,14 @@ export function saveSetting(input: {
 }): Promise<SettingWriteResponse> {
   const { key, ...body } = input;
   return post(CONTROL_ROUTES.setting(key), body, settingWriteResponseSchema);
+}
+
+/**
+ * NEXA-OWNER-BATCH-1 PR-3: how many services the automatic deletion would remove in the next
+ * day, per cause, with the stored settings. A server count; the page never derives it.
+ */
+export function fetchAutoDeletePreview(): Promise<ServiceAutoDeletePreviewResponse> {
+  return authedGet(SERVICE_AUTO_DELETE_PREVIEW_ROUTE, serviceAutoDeletePreviewResponseSchema);
 }
 
 export function fetchFeatureFlags(): Promise<FeatureFlagListResponse> {
@@ -5989,4 +6013,98 @@ export function redeemHostedActivation(
     body,
     hostingShape<HostedActivationRedeemResponse>(),
   );
+}
+
+// ---------------------------------------------------------------------------
+// PR-2 — «درخواست‌های نمایندگی»
+// ---------------------------------------------------------------------------
+
+export interface ResellerRequestFilters {
+  readonly filter?: ResellerRequestListFilter;
+  readonly cursor?: { readonly at: string; readonly id: string };
+  readonly limit?: number;
+}
+
+export function fetchResellerRequests(
+  filters: ResellerRequestFilters = {},
+): Promise<ResellerRequestListResponse> {
+  const params = new URLSearchParams();
+  if (filters.filter !== undefined) params.set('filter', filters.filter);
+  if (filters.limit !== undefined) params.set('limit', String(filters.limit));
+  if (filters.cursor !== undefined) {
+    params.set('before', filters.cursor.at);
+    params.set('beforeId', filters.cursor.id);
+  }
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${RESELLER_REQUEST_ROUTES.list}?${suffix}` : RESELLER_REQUEST_ROUTES.list,
+    resellerRequestListResponseSchema,
+  );
+}
+
+export function fetchResellerRequest(id: string): Promise<ResellerRequestDetailResponse> {
+  return authedGet(RESELLER_REQUEST_ROUTES.detail(id), resellerRequestDetailResponseSchema);
+}
+
+/** The operator's message to the applicant. The key is minted per submission. */
+export function messageResellerRequest(input: {
+  id: string;
+  idempotencyKey: string;
+  text: string;
+}): Promise<ResellerRequestDetailResponse> {
+  return post(
+    RESELLER_REQUEST_ROUTES.message(input.id),
+    { idempotencyKey: input.idempotencyKey, text: input.text },
+    resellerRequestDetailResponseSchema,
+  );
+}
+
+export function approveResellerRequest(input: {
+  id: string;
+  idempotencyKey: string;
+  tierId: string;
+}): Promise<ResellerRequestDetailResponse> {
+  return post(
+    RESELLER_REQUEST_ROUTES.approve(input.id),
+    { idempotencyKey: input.idempotencyKey, tierId: input.tierId },
+    resellerRequestDetailResponseSchema,
+  );
+}
+
+export function rejectResellerRequest(input: {
+  id: string;
+  idempotencyKey: string;
+  reason?: string;
+}): Promise<ResellerRequestDetailResponse> {
+  return post(
+    RESELLER_REQUEST_ROUTES.reject(input.id),
+    {
+      idempotencyKey: input.idempotencyKey,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+    },
+    resellerRequestDetailResponseSchema,
+  );
+}
+
+/** An applicant's photo as a Blob this tab owns (served as an octet-stream attachment). */
+export async function fetchResellerRequestAttachment(messageId: string): Promise<Blob> {
+  const response = await fetch(`${API_PREFIX}${RESELLER_REQUEST_ROUTES.attachment(messageId)}`, {
+    credentials: 'same-origin',
+    headers: { accept: 'application/octet-stream' },
+  });
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw toApiError(response.status, payload);
+  }
+  return response.blob();
+}
+
+export function fetchResellerRequestQuestions(): Promise<ResellerRequestQuestionsResponse> {
+  return authedGet(RESELLER_REQUEST_ROUTES.questions, resellerRequestQuestionsResponseSchema);
+}
+
+export function saveResellerRequestQuestions(
+  input: ResellerRequestQuestionsSaveRequest,
+): Promise<ResellerRequestQuestionsResponse> {
+  return post(RESELLER_REQUEST_ROUTES.questions, input, resellerRequestQuestionsResponseSchema);
 }

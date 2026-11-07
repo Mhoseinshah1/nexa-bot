@@ -90,6 +90,8 @@ export interface NightlyReportData {
   readonly openTickets: number;
   /** Unfinished payments that expired in the day: the automatic cleanup's one line (L30). */
   readonly expiredPayments: number;
+  /** PR-3: services the automatic deletion removed in the day; a line of the same cleanup. */
+  readonly autoDeleted?: number;
   /**
    * Round 9 C3: the data compaction's passes of the day, summed per class — part of the same
    * cleanup line (L30), never a message of its own. Absent or null: nothing to say.
@@ -295,6 +297,9 @@ export function nightlyReports(data: NightlyReportData, words: OpsLogWords): rea
   // payments and (Round 9 C3) the data compaction, each on its own row of the one value.
   const cleanup = [
     data.expiredPayments > 0 ? words.cleanupLine(formatPersianInteger(data.expiredPayments)) : null,
+    (data.autoDeleted ?? 0) > 0
+      ? words.autoDeletedLine(formatPersianInteger(data.autoDeleted ?? 0))
+      : null,
     compactionLine(data.compaction, words),
   ].filter((line): line is string => line !== null);
   if (cleanup.length > 0) summary['cleanup'] = cleanup.join('\n');

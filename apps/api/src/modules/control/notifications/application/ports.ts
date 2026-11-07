@@ -367,12 +367,17 @@ export interface OutboundMessage {
    * Round 4 PR-D: inline URL buttons under the message, each already labelled and addressed.
    * Absent when the message carries none or the Web Admin address is unknown.
    */
-  readonly buttons?: readonly {
-    readonly text: string;
-    readonly url: string;
-    readonly row: number;
-  }[];
+  readonly buttons?: readonly OutboundButton[];
 }
+
+/** An inline button of an operations log message: a link, or an action (PR-2) with callback data. */
+export type OutboundButton = {
+  readonly text: string;
+  readonly row: number;
+} & (
+  | { readonly url: string; readonly data?: undefined }
+  | { readonly data: string; readonly url?: undefined }
+);
 
 /**
  * Round 4 PR-D: turns the buttons a log message names (what to open, and which record) into
@@ -383,7 +388,7 @@ export interface OpsButtonResolver {
   resolve(
     scope: ScopeContext,
     buttons: readonly OpsLogButton[],
-  ): Promise<readonly { readonly text: string; readonly url: string; readonly row: number }[]>;
+  ): Promise<readonly OutboundButton[]>;
 }
 
 // ---------------------------------------------------------------------------

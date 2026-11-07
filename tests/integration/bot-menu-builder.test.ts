@@ -933,7 +933,7 @@ describe('the button builder (round T, T1)', () => {
   describe('H-2 permissions, audit and scope', () => {
     it('lets settings.view read and refuses every write without settings.edit, auditing each denial', async () => {
       const view = await builder().view(tenantA, observer);
-      expect(view.items.map((item) => item.id)).toHaveLength(8);
+      expect(view.items.map((item) => item.id)).toHaveLength(9);
       await builder().revisions(tenantA, observer, {});
       // Thunks, run one at a time: the order of the DENIED rows is asserted below.
       const refusals = [

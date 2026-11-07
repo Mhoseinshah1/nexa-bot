@@ -53,6 +53,7 @@ import {
   useReportDirty,
 } from './ops-b-layout';
 import { ApiErrorReport, ErrorRef, TechnicalDetails } from '../ui/technical-details';
+import { AutoDeletePreview } from './auto-delete-preview';
 
 /**
  * The settings registry's values, built in ONE place for this page and for the sidebar's
@@ -146,6 +147,11 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
                   <h2 id={`settings-${group}-title`}>{t(title)}</h2>
                 </div>
               </header>
+              {/* PR-3: the automatic deletion's preview sits above its own settings. */}
+              {group === 'services' &&
+                members.some((member) => member.key.startsWith('service.auto_delete.')) && (
+                  <AutoDeletePreview enabled={!denied} />
+                )}
               <div className="settings-rows">
                 {members.map((setting, index) => (
                   <SettingFold

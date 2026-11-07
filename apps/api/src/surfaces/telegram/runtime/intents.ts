@@ -314,6 +314,13 @@ export const BOT_INTENTS = [
   'TICKET_CLOSE_ASK',
   'TICKET_CLOSE',
   /*
+   * PR-2, «درخواست نمایندگی» (customer side): the main-menu button, a step of the application
+   * (`targetId` is the draft, `secondaryId` the action), and the applicant's «پاسخ».
+   */
+  'RESELLER_REQUEST',
+  'RESELLER_REQUEST_STEP',
+  'RESELLER_REQUEST_REPLY',
+  /*
    * Phase 5T — the management panel.
    *
    * These are intents like any other, and that is the point: they are parsed from the
@@ -361,6 +368,19 @@ export const BOT_INTENTS = [
    * capture and REJECT the reason capture — neither decides anything; CONFIRM names the
    * amount CAPTURE and is the only callback that approves; CANCEL abandons either prompt.
    */
+  /*
+   * PR-2, «درخواست نمایندگی»: the three buttons under a request in the operations log group
+   * (approve, reject, message the applicant), the tier chosen, the confirmation, the plain
+   * rejection and a prompt's cancel. Each names the request (the pair, the request and the
+   * tier); `adminTurn` admits them for an administrator who holds `resellers.edit`.
+   */
+  'ADMIN_RESELLER_REQUEST_APPROVE',
+  'ADMIN_RESELLER_REQUEST_REJECT',
+  'ADMIN_RESELLER_REQUEST_MESSAGE',
+  'ADMIN_RESELLER_REQUEST_TIER',
+  'ADMIN_RESELLER_REQUEST_CONFIRM',
+  'ADMIN_RESELLER_REQUEST_REJECT_PLAIN',
+  'ADMIN_RESELLER_REQUEST_CANCEL',
   'ADMIN_REFUND_REQUEST_APPROVE',
   'ADMIN_REFUND_REQUEST_REJECT',
   'ADMIN_REFUND_REQUEST_CONFIRM',
