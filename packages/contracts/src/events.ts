@@ -244,6 +244,12 @@ export const EVENT_TYPES = [
   // the SERVICE. Ids, amounts in minor units with their currency, and closed words only.
   'ServiceAutoRenewChanged',
   'ServiceAutoRenewRunSettled',
+  // Phase 6A PR-3 (D1): the creator panel. A hosted bot's lifecycle state moved (the owner's
+  // suspend / activate / delete / purge, or the expiry sweep's EXPIRE), and its expiry date
+  // was set or cleared. Aggregate is the hosted TENANT; recorded on the installation tenant,
+  // whose owner made the change. A creation is the existing `TenantCreated`.
+  'HostedBotStateChanged',
+  'HostedBotExpiryChanged',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -836,6 +842,20 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     outcome: z.enum(['RENEWED', 'FUNDS_SHORT', 'REFUSED']),
     refusal: z.enum(['PRICE_ROSE', 'CONSENT_WITHDRAWN', 'NOT_RENEWABLE']).nullable(),
     orderId: z.string().nullable(),
+  }),
+  HostedBotStateChanged: z.object({
+    hostedTenantId: z.string(),
+    action: z.enum(['SUSPEND', 'ACTIVATE', 'DELETE', 'PURGE', 'EXPIRE']),
+    from: z.string(),
+    to: z.string(),
+    /** The tenant row's status before and after: what actually stops the bot. */
+    tenantStatusFrom: z.string(),
+    tenantStatusTo: z.string(),
+  }),
+  HostedBotExpiryChanged: z.object({
+    hostedTenantId: z.string(),
+    from: z.string().nullable(),
+    to: z.string().nullable(),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 

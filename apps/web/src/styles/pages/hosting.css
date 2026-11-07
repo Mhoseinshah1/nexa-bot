@@ -1,0 +1,159 @@
+/*
+ * hosting — «میزبانی‌ها», the installation owner's creator panel (phase 6A, D1).
+ *
+ * Page-scoped classes only; every colour and size is a token. One column on a phone: the bot
+ * cards stack, the limit rows wrap, and nothing is wider than the 360px viewport.
+ */
+.hosting-page {
+  min-width: 0;
+}
+.hosting-narrow {
+  max-width: 440px;
+}
+.hosting-inline {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.hosting-qr {
+  width: min(220px, 100%);
+  height: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+  image-rendering: pixelated;
+}
+.hosting-codes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.hosting-codes code {
+  display: block;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  overflow-wrap: anywhere;
+}
+
+/* The bot list */
+.hosting-section {
+  display: grid;
+  gap: var(--gap);
+  min-width: 0;
+}
+.hosting-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.hosting-section-head h2 {
+  margin: 0;
+}
+.hosting-subhead {
+  margin: 0 0 6px;
+  font-size: 1em;
+}
+.hosting-bots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+  gap: var(--gap);
+}
+.hosting-bot {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  padding: 16px;
+}
+.hosting-bot-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.hosting-bot-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.hosting-bot-title h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.hosting-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The limits editor */
+.hosting-limits {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.hosting-limit {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
+}
+.hosting-limit p {
+  margin: 0;
+}
+.hosting-limit-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.hosting-limit-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+.hosting-limit-edit .field {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+/* The server capacity card */
+.hosting-estimate p {
+  margin: 0;
+}
+.hosting-meters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: var(--gap);
+}
+.hosting-formula-text {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Touch: the bare text controls are 44px targets (tokens.css). */
+@media (pointer: coarse) and (hover: none) {
+  .hosting-page .link {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--ctl-h);
+  }
+}

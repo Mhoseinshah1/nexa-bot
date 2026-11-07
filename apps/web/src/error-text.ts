@@ -5,6 +5,7 @@ import type {
   BOT_ERROR_CODES,
   BROADCAST_ERROR_CODES,
   CAPACITY_ERROR_CODES,
+  HOSTING_ERROR_CODES,
   BULK_ERROR_CODES,
   CAMPAIGN_ERROR_CODES,
   COMMERCE_ERROR_CODES,
@@ -61,6 +62,7 @@ export type ContractErrorCode =
   | CodesOf<typeof BOT_ERROR_CODES>
   | CodesOf<typeof BROADCAST_ERROR_CODES>
   | CodesOf<typeof CAPACITY_ERROR_CODES>
+  | CodesOf<typeof HOSTING_ERROR_CODES>
   | CodesOf<typeof BULK_ERROR_CODES>
   | CodesOf<typeof CAMPAIGN_ERROR_CODES>
   | CodesOf<typeof COMMERCE_ERROR_CODES>
@@ -177,6 +179,21 @@ export const ERROR_TEXT = {
   'capacity.new_customer_rate': 'web.err_capacity_new_customer_rate',
   'capacity.limit_invalid': 'web.err_capacity_limit_invalid',
   'capacity.owner_only': 'web.err_capacity_owner_only',
+  // Phase 6A PR-3: the creator panel «میزبانی‌ها».
+  'hosting.owner_only': 'web.err_hosting_owner_only',
+  'hosting.second_factor_required': 'web.err_hosting_second_factor_required',
+  'hosting.second_factor_active': 'web.err_hosting_second_factor_active',
+  'hosting.enrolment_expired': 'web.err_hosting_enrolment_expired',
+  'hosting.section_session_required': 'web.err_hosting_section_session_required',
+  'hosting.code_rejected': 'web.err_hosting_code_rejected',
+  'hosting.code_attempts_locked': 'web.err_hosting_code_attempts_locked',
+  'hosting.bot_not_found': 'web.err_hosting_bot_not_found',
+  'hosting.state_conflict': 'web.err_hosting_state_conflict',
+  'hosting.expiry_passed': 'web.err_hosting_expiry_passed',
+  'hosting.slug_taken': 'web.err_hosting_slug_taken',
+  'hosting.create_disabled': 'web.err_hosting_create_disabled',
+  'hosting.purge_confirmation_mismatch': 'web.err_hosting_purge_confirmation_mismatch',
+  'hosting.enter_not_implemented': 'web.err_hosting_enter_not_implemented',
   'bot.webhook_origin_unknown': 'web.err_bot_webhook_origin_unknown',
   'bot.webhook_refused': 'web.err_bot_webhook_refused',
   'bot.webhook_route_unavailable': 'web.err_bot_webhook_route_unavailable',

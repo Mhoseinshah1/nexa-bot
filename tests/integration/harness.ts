@@ -279,6 +279,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        business_conversation_escalations, support_ai_image_outcomes, support_ai_jobs, support_ai_ticket_jobs, support_ai_ticket_holds, support_ai_runs, support_ai_provider_credentials, support_ai_configs,
        business_outbound_messages, business_messages, business_conversations,
        telegram_business_connections,
+       -- Phase 6A PR-3: the creator panel's register, factor, codes and sessions.
+       hosted_bots, hosting_totp_factors, hosting_recovery_codes, hosting_sessions,
        customers
      RESTART IDENTITY CASCADE` as never,
   );

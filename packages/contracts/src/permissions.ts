@@ -351,6 +351,15 @@ export const PERMISSIONS = [
    */
   p('settings.destructive', 'Run destructive maintenance settings', 'CRITICAL'),
 
+  /*
+   * Phase 6A PR-3 (D1): the creator panel, «میزبانی‌ها» — create, suspend, activate, delete,
+   * purge and expire the installation's hosted bots, and edit their capacity limits. CRITICAL
+   * and seeded to `owner` only (every tenant's owner holds ALL keys, a hosted bot's owner
+   * included): the service ALSO requires the installation tenant's scope and the system
+   * owner role, so a hosted bot's own owner holding this key in their tenant reaches nothing.
+   */
+  p('hosting.manage', 'Manage the installation’s hosted bots (creator panel)', 'CRITICAL'),
+
   // Customer-facing text
   //
   // Separate from `settings.*` because the blast radii are not comparable: a

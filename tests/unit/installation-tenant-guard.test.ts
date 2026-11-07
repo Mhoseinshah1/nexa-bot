@@ -20,7 +20,7 @@ const NEW = 'tenant-new' as never;
 /** A hosted (reseller) tenant: one install hosts many (ADR-0037). */
 const HOSTED = 'tenant-hosted';
 
-type Kind = 'PRIMARY' | 'RESELLER_BOT';
+type Kind = 'PRIMARY' | 'RESELLER_BOT' | 'HOSTED';
 
 function world(opts: {
   cached: string | null;
@@ -170,6 +170,22 @@ describe('InstallationTenantGuard.verify', () => {
     state.exists.delete(HOSTED);
     await expect(guard.verify()).resolves.toBeNull();
     expectFailedClosed(state, HOSTED, 'RESELLER_BOT');
+    expect(state.exits).toEqual([]);
+  });
+
+  it('a tenant recorded as kind HOSTED (phase 6A PR-3) fails closed the same way', async () => {
+    // The creator panel's own kind: never PRIMARY, so its disappearance never re-resolves.
+    const { guard, state } = world({
+      cached: HOSTED,
+      existing: [HOSTED, NEW],
+      primary: NEW,
+      kinds: { [HOSTED]: 'HOSTED' },
+      recorded: 'HOSTED',
+    });
+    await expect(guard.verify()).resolves.toBe(HOSTED);
+    state.exists.delete(HOSTED);
+    await expect(guard.verify()).resolves.toBeNull();
+    expectFailedClosed(state, HOSTED, 'HOSTED');
     expect(state.exits).toEqual([]);
   });
 

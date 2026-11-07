@@ -1,6 +1,8 @@
 import type { FastifyRequest } from 'fastify';
 import {
   errors,
+  HOSTING_SESSION_COOKIE_NAME,
+  HOSTING_SESSION_COOKIE_NAME_SECURE,
   IDENTITY_ERROR_CODES,
   SECOND_FACTOR_COOKIE_NAME,
   SECOND_FACTOR_COOKIE_NAME_SECURE,
@@ -75,6 +77,26 @@ export function readChallengeToken(request: FastifyRequest, isProduction: boolea
   const accepted = isProduction
     ? [SECOND_FACTOR_COOKIE_NAME_SECURE]
     : [SECOND_FACTOR_COOKIE_NAME_SECURE, SECOND_FACTOR_COOKIE_NAME];
+  for (const name of accepted) {
+    const token = cookies.get(name);
+    if (token !== undefined) return token;
+  }
+  return null;
+}
+
+/**
+ * The creator panel's section session (phase 6A PR-3), by the same rule as the session:
+ * in production only the `__Host-` spelling. A token alone opens nothing — the service
+ * binds it to the Web Admin session and the owner presenting it.
+ */
+export function readHostingSectionToken(
+  request: FastifyRequest,
+  isProduction: boolean,
+): string | null {
+  const cookies = parseCookies(request.headers.cookie);
+  const accepted = isProduction
+    ? [HOSTING_SESSION_COOKIE_NAME_SECURE]
+    : [HOSTING_SESSION_COOKIE_NAME_SECURE, HOSTING_SESSION_COOKIE_NAME];
   for (const name of accepted) {
     const token = cookies.get(name);
     if (token !== undefined) return token;

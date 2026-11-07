@@ -28,6 +28,7 @@ import {
   CAPACITY_LIMIT_MODES,
   CAPACITY_RESOURCES,
   HEAVY_JOB_KINDS,
+  HOSTED_BOT_STATES,
   HEAVY_JOB_STATES,
   LEGACY_COMPACTION_FAILURE_CODES,
   LEGACY_COMPACTION_STATES,
@@ -18379,5 +18380,174 @@ export const heavyJobTickets = pgTable(
       'heavy_job_tickets_started_check',
       sql`(state = 'QUEUED') = (started_at IS NULL) OR state = 'ABANDONED'`,
     ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Phase 6A PR-3 (D1): the creator panel, «میزبانی‌ها»
+// ---------------------------------------------------------------------------
+
+/**
+ * The installation owner's register of hosted bots: one row per hosted tenant.
+ *
+ * OWNED BY THE INSTALLATION TENANT (`tenant_id`), not by the hosted one: it is the owner's
+ * record of what he hosts, written and read in his scope, and a hosted bot's own operators
+ * never see it. `hosted_tenant_id` is the hosted tenant (kind `HOSTED`).
+ *
+ * `state` says WHY the hosted tenant is (or is not) running; the hosted TENANT row's `status`
+ * is what actually stops it (`HOSTED_BOT_TENANT_STATUS`), and the two are written in one
+ * transaction by `HostingService` alone.
+ */
+export const hostedBots = pgTable(
+  'hosted_bots',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    hostedTenantId: uuid('hosted_tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    state: text('state').notNull(),
+    /** NULL = no expiry. */
+    expiresAt: timestamptz('expires_at'),
+    /** The hosted bot's first Web Admin owner, created with it. */
+    ownerAdminId: uuid('owner_admin_id').notNull(),
+    createdByAdminId: uuid('created_by_admin_id').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+    stateChangedAt: timestamptz('state_changed_at').notNull(),
+    deletedAt: timestamptz('deleted_at'),
+    purgedAt: timestamptz('purged_at'),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ name: 'hosted_bots_pkey', columns: [table.tenantId, table.hostedTenantId] }),
+    // A tenant is hosted by one installation, once.
+    uniqueIndex('hosted_bots_hosted_tenant_key').on(table.hostedTenantId),
+    index('hosted_bots_tenant_state_idx').on(table.tenantId, table.state),
+    // The expiry sweep's read: live rows whose date has passed.
+    index('hosted_bots_tenant_expiry_idx')
+      .on(table.tenantId, table.expiresAt)
+      .where(sql`state = 'ACTIVE' AND expires_at IS NOT NULL`),
+    check('hosted_bots_state_check', enumCheck('state', HOSTED_BOT_STATES)),
+    check('hosted_bots_not_self_check', sql`tenant_id <> hosted_tenant_id`),
+    check(
+      'hosted_bots_deleted_check',
+      sql`(state IN ('DELETED', 'PURGED')) = (deleted_at IS NOT NULL)`,
+    ),
+    check('hosted_bots_purged_check', sql`(state = 'PURGED') = (purged_at IS NOT NULL)`),
+    foreignKey({
+      name: 'hosted_bots_owner_admin_fk',
+      columns: [table.hostedTenantId, table.ownerAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    foreignKey({
+      name: 'hosted_bots_created_by_fk',
+      columns: [table.tenantId, table.createdByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+  ],
+);
+
+/**
+ * The creator panel's OWN second factor: one RFC 6238 secret per installation owner,
+ * separate from the Web Admin sign-in factor (`admin_totp_factors`) so neither can open the
+ * other. The secret is sealed under `hosting.totp_secret`, the entity being this row's id.
+ *
+ * `failed_attempts` / `locked_until` are the section's code throttle: every code attempt —
+ * activation, opening the section, a sensitive action, a recovery code — reserves one under
+ * this row's lock and commits BEFORE the code is checked; a success resets it.
+ */
+export const hostingTotpFactors = pgTable(
+  'hosting_totp_factors',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id').notNull(),
+    state: text('state').notNull(),
+    totpSecretCiphertext: text('totp_secret_ciphertext').notNull(),
+    totpSecretKeyId: text('totp_secret_key_id').notNull(),
+    lastUsedStep: integer('last_used_step'),
+    failedAttempts: integer('failed_attempts').notNull().default(0),
+    lockedUntil: timestamptz('locked_until'),
+    /** The Web Admin session the pending secret was shown to: activation must come from it. */
+    enrolledSessionId: uuid('enrolled_session_id'),
+    createdAt: timestamptz('created_at').notNull(),
+    activatedAt: timestamptz('activated_at'),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('hosting_totp_factors_admin_key').on(table.tenantId, table.adminId),
+    check('hosting_totp_factors_state_check', enumCheck('state', ['PENDING', 'ACTIVE'])),
+    check(
+      'hosting_totp_factors_activated_check',
+      sql`(state = 'ACTIVE') = (activated_at IS NOT NULL)`,
+    ),
+    check('hosting_totp_factors_step_check', sql`last_used_step IS NULL OR last_used_step >= 0`),
+    check('hosting_totp_factors_attempts_check', sql`failed_attempts >= 0`),
+    foreignKey({
+      name: 'hosting_totp_factors_tenant_admin_fk',
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+  ],
+);
+
+/** The section's one-time recovery codes: hashes only, spent by a conditional update. */
+export const hostingRecoveryCodes = pgTable(
+  'hosting_recovery_codes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id').notNull(),
+    codeHash: text('code_hash').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+    usedAt: timestamptz('used_at'),
+  },
+  (table) => [
+    uniqueIndex('hosting_recovery_codes_hash_key').on(
+      table.tenantId,
+      table.adminId,
+      table.codeHash,
+    ),
+    foreignKey({
+      name: 'hosting_recovery_codes_tenant_admin_fk',
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+  ],
+);
+
+/**
+ * An opened creator-panel section: 12 hours, bound to the Web Admin session it was opened
+ * from (a sign-out or another browser does not inherit it). The token is a cookie of its
+ * own; only its SHA-256 is stored.
+ */
+export const hostingSessions = pgTable(
+  'hosting_sessions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id').notNull(),
+    adminSessionId: uuid('admin_session_id').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    revokedAt: timestamptz('revoked_at'),
+  },
+  (table) => [
+    uniqueIndex('hosting_sessions_token_key').on(table.tokenHash),
+    index('hosting_sessions_tenant_admin_idx').on(table.tenantId, table.adminId, table.expiresAt),
+    check('hosting_sessions_expiry_check', sql`expires_at > created_at`),
+    foreignKey({
+      name: 'hosting_sessions_tenant_admin_fk',
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
   ],
 );

@@ -2234,6 +2234,20 @@
       "when": 1794015954333,
       "tag": "0318_rls_roles_and_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 319,
+      "version": "7",
+      "when": 1794026791784,
+      "tag": "0319_hosted_bots",
+      "breakpoints": true
+    },
+    {
+      "idx": 320,
+      "version": "7",
+      "when": 1794026791858,
+      "tag": "0320_hosting_permission_grant",
+      "breakpoints": true
     }
   ]
 }

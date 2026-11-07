@@ -14,6 +14,7 @@ import {
   type LoginOutcomeResponse,
   type LoginResponse,
   type LogoutResponse,
+  type PermissionKey,
   type SessionResponse,
   type TenantContext,
 } from '@nexa/contracts';
@@ -28,6 +29,7 @@ import {
   requireSessionToken,
 } from './authenticated-request.js';
 import type { LoginResult } from '../../modules/platform/identity/application/authentication.service.js';
+import { withoutForeignHostingPermission } from '../../modules/platform/hosting/application/hosting-owner-guard.js';
 
 /**
  * The Web Admin authentication surface.
@@ -123,6 +125,19 @@ export class AuthController {
     };
   }
 
+  /** The chrome list: `hosting.manage` only for the installation owner (phase 6A PR-3). */
+  private shownPermissions(described: {
+    readonly admin: { readonly tenantId: string };
+    readonly roleKeys: readonly string[];
+    readonly permissions: readonly PermissionKey[];
+  }): string[] {
+    return withoutForeignHostingPermission(described.permissions, {
+      tenantId: described.admin.tenantId,
+      roleKeys: described.roleKeys,
+      installationTenantId: this.container.installationTenantId,
+    });
+  }
+
   private signedIn(reply: FastifyReply, result: LoginResult): LoginResponse {
     // The token leaves this method in exactly one place: the Set-Cookie header.
     // It is deliberately absent from the body — see loginResponseSchema.
@@ -132,7 +147,7 @@ export class AuthController {
     return {
       expiresAt: result.session.expiresAt.toISOString(),
       admin: toSummary(result.admin, result.roleKeys),
-      permissions: [...result.permissions],
+      permissions: this.shownPermissions(result),
     };
   }
 
@@ -145,7 +160,7 @@ export class AuthController {
       admin: toSummary(described.admin, described.roleKeys),
       // Sent so the UI can hide chrome it cannot use. It is never the basis of
       // an authorization decision: every endpoint re-checks server-side.
-      permissions: [...described.permissions],
+      permissions: this.shownPermissions(described),
       expiresAt: described.session.expiresAt.toISOString(),
     };
   }

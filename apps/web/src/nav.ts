@@ -659,6 +659,20 @@ export const NAV: readonly NavEntry[] = [
     permission: ['backup.view', 'legacy.migration.view', 'legacy.services.view'],
     group: 'web.navgroup_system',
   },
+  {
+    /*
+     * Phase 6A (D1): «میزبانی‌ها», the installation owner's creator panel. `hosting.manage` is
+     * the installation owner's alone (a CRITICAL permission); the server also checks the
+     * owner and a second-factor section session on every route, so this only decides whether
+     * a link is drawn.
+     */
+    id: 'hosting',
+    path: '/hosting',
+    label: 'web.nav_hosting',
+    icon: 'layers',
+    permission: 'hosting.manage',
+    group: 'web.navgroup_system',
+  },
 ];
 
 /**

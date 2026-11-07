@@ -13,6 +13,9 @@ import {
   CAPACITY_WORKER_LAG_OK_CODE,
 } from './capacity.js';
 // END phase 6A PR-2
+// BEGIN phase 6A PR-3: the creator panel
+import { HOSTING_BOT_EXPIRED_CODE } from './hosting.js';
+// END phase 6A PR-3
 import {
   CUSTOMER_NOTICES_PAUSED_CODE,
   CUSTOMER_NOTICES_RESUMED_CODE,
@@ -620,6 +623,10 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   failure(CAPACITY_WORKER_LAG_CODE, 'JOBS', 'CONDITION'),
   recovery(CAPACITY_WORKER_LAG_OK_CODE, 'JOBS', CAPACITY_WORKER_LAG_CODE),
   // --- END phase 6A PR-2
+
+  // --- BEGIN phase 6A PR-3: the creator panel (owner only; recorded on the installation tenant)
+  fact(HOSTING_BOT_EXPIRED_CODE, 'SYSTEM', 'PER_SUBJECT'),
+  // --- END phase 6A PR-3
   // PR #411: a cached tenant that vanished and was not the installation's PRIMARY (owner only).
   failure(INSTALLATION_TENANT_VANISHED_CODE, 'SYSTEM', 'CONDITION'),
 ];
