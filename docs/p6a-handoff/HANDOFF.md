@@ -1,4 +1,4 @@
-# Handoff — NEXA phase 6A (hosted bots part 1) — stopped at the context budget, 2026-11-07
+# Handoff — NEXA phase 6A (hosted bots part 1) — PHASE COMPLETE, 2026-11-07
 
 Lives on `claude/elegant-noether-g9v8x9` only; never merged to main. Binding prompts:
 `docs/p6a-handoff/NEXA-PHASE6A.md` (the phase brief; merge permission per PR on green + one Codex
@@ -8,36 +8,37 @@ refresh this handoff after every merge; build beside existing code, no rewrites;
 every merge and say so in the PR text.
 
 ## Merged (main)
-- PR-0 #409 load harness — `eaf41d1e8`.  PR-2 #410 capacity guards — `6e2ac88f1`.
+
+- PR-0 #409 load harness — `eaf41d1e8`. PR-2 #410 capacity guards — `6e2ac88f1`.
 - PR-1 https://github.com/Mhoseinshah1/nexa-bot/pull/411 — RLS, off-site backups, owner alerts, harden check — `8d578033c`. Migrations 0317/0318.
 - PR-3 https://github.com/Mhoseinshah1/nexa-bot/pull/415 — creator panel «میزبانی‌ها» — `6cce12807`. Migrations 0319/0320.
 - PR-4 https://github.com/Mhoseinshah1/nexa-bot/pull/416 — activation (token, DNS, SSL, webhook, one-time link) — `ac695dffa`. Migration 0321.
 
-- PR-5 https://github.com/Mhoseinshah1/nexa-bot/pull/417 — isolation proof (tests only) — `be9c1ab73`. Create gate still CLOSED.
-- main @ `be9c1ab73`; newest migration 0321_hosted_bot_activation.
+- PR-5 https://github.com/Mhoseinshah1/nexa-bot/pull/417 — isolation proof (tests only) — `be9c1ab73`.
+- PR-6 https://github.com/Mhoseinshah1/nexa-bot/pull/418 — worker serves every active tenant (`TenantFanOut`),
+  outbox consumers under their event's tenant's RLS, PR-5's placeholders made real, **create gate released** — `6e43b80c1`.
+- main @ `6e43b80c1`; newest migration still 0321_hosted_bot_activation (PR-6 added none).
 
 ## Open
-- Nothing open. PR-6 not started.
+
+- Nothing. Phase 6A is finished; the session STOPPED after the report, the #358 comment and cleanup.
 
 ## Next step (exact)
-1. (done: #417 merged)
-2. PR-6 `fix/p6a-hardening-followups` (money tier), from the latest main:
-   a. **The worker must serve every active tenant**, not only `installationTenantId`: notifications,
-      reminders, payment expiry, gateway inquiry, broadcasts, provisioning and the other per-tenant
-      loops. Use the PR-2 round-robin/fair share, take each tenant's scope in its own transaction,
-      read ScopeActivityReader, and never fall back to PRIMARY. This is the `it.fails` case in
-      `tests/integration/isolation-proof/worker-jobs.test.ts`; turn it into a passing `it`.
-   b. Bind each outbox consumer's transaction to its event's tenant (RLS), not the system role.
-      This is the second `it.fails`.
-   c. Enable the `describe.skip` PR-4 activation/Host-sign-in block in the isolation suite.
-   d. ONLY then flip the create gate's release marker. Revert commit 4a80bdca1 on the PR-5 branch is
-      the reference; the gate lives in `apps/api/src/modules/platform/hosting/domain/create-gate.ts`.
-   e. Re-run the PR-0 load test only if PR-6 changes the worker loops materially, and note it in the report.
-3. End of phase (brief §4): `docs/round-reports/phase-6a.md` (≤150 lines, with load numbers before
-   and after from docs/capacity/*.md); the #358 comment «فاز 6A — میزبانی‌ها، بخش ۱» with the owner's
-   test steps, ending `sudo botctl roles disable provisioner monitor`; this handoff; cleanup; STOP.
+
+Phase 6B in a NEW session (brief §4.5): D4 limits UI polish, D5 owner access without audit, D6 server
+move, D7 per-bot backups through the shared heavy-job queue. Read `docs/round-reports/phase-6a.md`
+(on this branch) first. Open threads for 6B: a second API process is the throughput ceiling
+(after-guards.md); per-bot backups replace the installation-only backup loops PR-6 left alone.
 
 ## Decisions taken
+
+- PR-6 (this session): loops reused unchanged, only their `scope` input became a `TenantFanOut` pass.
+  Owner's bot first every pass, others rotate, one-interval budget, owner + at least one other bot always
+  served; one hosted bot's failure never fails the pass. ACTIVE tenants only, no fallback, except
+  `tenants: 'all'` for the gift-card plaintext purge and the provisioner (announcer exception).
+- PR-6 needed three CI-fix commits after the single Codex fix (citations, provisioner/stopped, a test
+  window): recorded in the report, no force-push.
+- The phase report lives on this session branch (beside the handoff), not on main.
 - `feat/p6a-d0-hardening-ops` is fully contained in #411; left unused. Delete it with the other merged branches.
 - Installation tenant guard FAILS CLOSED (owner, 2026-11-07): each role records the cached tenant's kind
   when it sets it (boot, backup CLI, restore re-resolve). Only a vanished tenant recorded as PRIMARY may
@@ -60,7 +61,9 @@ every merge and say so in the PR text.
 - `gh pr`/GraphQL are blocked. `gh api` REST and the GitHub MCP tools work, for PRs, merges and `@codex review`.
 
 ## Local state
-No worktrees left, and the private test databases are dropped.
+
+No agent worktrees left; nexa_test was recreated this session (stale migration 0296), nexa_load holds
+the PR-6 load fixture (safe to drop).
 Known flaky unit test, not phase work: `tests/unit/rickpanel-load-protection.test.ts` "two reads of the same panel at once
 never overlap". It compares real 15 ms timer pacing with only 1 ms of slack, and failed once on CI for #417.
 Candidate for a small fix: use a fake clock.
