@@ -9,19 +9,17 @@ don't stop to ask; order PR-1/PR-4 → PR-2 → PR-3 → PR-5). Worktrees under 
 - PR-4 https://github.com/Mhoseinshah1/nexa-bot/pull/419 — SecretInput, one Save, value formatter — `6de9bd557`.
 - PR-1 https://github.com/Mhoseinshah1/nexa-bot/pull/420 — Mirza menu defaults, search switches — `1f1d5545d`.
 - PR-2 https://github.com/Mhoseinshah1/nexa-bot/pull/421 — reseller requests — `795cfa85c`. Migrations 0322/0323.
+- PR-3 https://github.com/Mhoseinshah1/nexa-bot/pull/422 — automatic deletion — `5d0c286c1`. Migration 0324.
 
 ## Open
 
 - PR-5 `feat/late-payment-policy` — built, `pnpm verify` green, lead-reviewed; branch pushed, NO PR yet. Migration
   0322_late_payment_policy (data only, hand-registered) must become 0325 after PR-3 merges. Body draft:
   `docs/ob1-handoff/pr5-body-draft.md`.
-- PR-3 https://github.com/Mhoseinshah1/nexa-bot/pull/422 — migration 0324 (renumbered from 0322, NOT byte-identical:
-  the kind CHECK also lists #421's two reseller kinds). Codex findings P1/P2 being fixed in one commit; deploy-smoke
-  reds on 58045405 died in the image build (apt.postgresql.org), re-check on the fix head.
 
 ## Next step (exact)
 
-Merge PR-3 on green. Then PR-5: merge main, renumber its hand-registered migration to 0325 (journal `when` =
+PR-5 (merge-main agent running): merge main, renumber its hand-registered migration to 0325 (journal `when` =
 Date.now()), db:check, migration suites, push, open PR with the draft body, `@codex review`, one fix commit, merge.
 
 ## Decisions taken

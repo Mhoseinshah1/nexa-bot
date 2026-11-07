@@ -12,3 +12,8 @@ PR-1 needed three CI-fix commits after a clean Codex review: two cited test titl
 
 PR-2: one Codex fix commit (c4e4afc1, added migration 0323 for the draft step key) and two CI-fix
 commits (cfd3d9a0, e4382d8a: stale menu counts in two integration tests). Migrations 0322, 0323.
+| PR-3 automatic deletion of finished accounts | https://github.com/Mhoseinshah1/nexa-bot/pull/422 | `5d0c286c1` |
+
+PR-3: migration 0324 (renumbered from 0322; not byte-identical — the kind CHECK also lists #421's two kinds,
+hand edits unchanged). One Codex fix commit (0ae59175: lifecycle lock before blockers; blocked runs excluded
+before the batch limit). Deployment smoke died twice in the image build at apt.postgresql.org; one re-run, green.
