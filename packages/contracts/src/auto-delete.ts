@@ -21,8 +21,9 @@ import { z } from 'zod';
  *   traffic used had reached a finite limit → `TRAFFIC`, otherwise `TIME`. A row expired
  *   before the column existed derives it the same way from the same columns.
  * - One due cycle per (service, `state_since`): a renewal or a resume moves the state and so
- *   starts a new cycle; the warning and the deletion are each made at most once per cycle,
- *   and every key the deletion takes derives from the cycle's run row.
+ *   starts a new cycle; the warning and the deletion are each made at most once per cycle and
+ *   owner (a transfer cancels the scheduled run and the new owner is warned anew), and every
+ *   key the deletion takes derives from the cycle's run row.
  * - Never deleted: a service no longer in the cycle's state (renewed, resumed), one with an
  *   open order, a payment not yet decided (a receipt under review is one) or an open
  *   operation, and any service of a tenant that has stopped accepting work. Trials and
@@ -70,11 +71,16 @@ export const autoDeleteCauseSchema = z.enum(AUTO_DELETE_CAUSES);
  *   raised with this row, and `delete_after` is the earliest moment it may be deleted.
  * - `PLANNED` — the deletion was planned as a provisioning `TERMINATE` (`operation_id`). Final:
  *   a cycle is never planned twice, whatever the operation's outcome.
+ * - `CANCELLED` — the service changed owner while the cycle was SCHEDULED: the warning went to
+ *   somebody who no longer holds it. Final; the cycle is scheduled again for the new owner, who
+ *   is warned in their turn and never deleted sooner than `warn_hours` after that warning. The
+ *   clock (`state_since`) is NOT moved, so a transfer never postpones the deletion beyond
+ *   max(its due moment, the last warning + `warn_hours`).
  *
  * A cycle the service left (renewed, resumed) is simply never selected again: its row stays
  * as the record of the warning that was sent.
  */
-export const AUTO_DELETE_RUN_STATES = ['SCHEDULED', 'PLANNED'] as const;
+export const AUTO_DELETE_RUN_STATES = ['SCHEDULED', 'PLANNED', 'CANCELLED'] as const;
 export type AutoDeleteRunState = (typeof AUTO_DELETE_RUN_STATES)[number];
 
 /** The states a due cycle is measured in. */
