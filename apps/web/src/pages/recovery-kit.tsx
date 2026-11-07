@@ -27,6 +27,7 @@ import {
   Num,
   StateSwitch,
   type Column,
+  SecretInput,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { errorText } from '../error-text';
@@ -210,10 +211,7 @@ function ExportForm({ onDirty }: { onDirty: (dirty: boolean) => void }) {
       <p className="muted small">{t('web.kit_export_hint')}</p>
       <label className="field">
         <span className="field-label">{t('web.kit_account_password')}</span>
-        <input
-          type="password"
-          className="input"
-          autoComplete="current-password"
+        <SecretInput
           value={accountPassword}
           onChange={(event) => setAccountPassword(event.currentTarget.value)}
         />
@@ -221,23 +219,14 @@ function ExportForm({ onDirty }: { onDirty: (dirty: boolean) => void }) {
       <StepUpCodeField value={code} onChange={setCode} />
       <label className="field">
         <span className="field-label">{t('web.kit_passphrase')}</span>
-        <input
-          type="password"
-          className="input"
-          autoComplete="new-password"
+        <SecretInput
           value={passphrase}
           onChange={(event) => setPassphrase(event.currentTarget.value)}
         />
       </label>
       <label className="field">
         <span className="field-label">{t('web.kit_passphrase_again')}</span>
-        <input
-          type="password"
-          className="input"
-          autoComplete="new-password"
-          value={again}
-          onChange={(event) => setAgain(event.currentTarget.value)}
-        />
+        <SecretInput value={again} onChange={(event) => setAgain(event.currentTarget.value)} />
       </label>
       {short && <Banner tone="warn">{t('web.kit_passphrase_short')}</Banner>}
       {mismatch && <Banner tone="warn">{t('web.kit_passphrase_mismatch')}</Banner>}
@@ -347,20 +336,14 @@ function ImportForm({
       </div>
       <label className="field">
         <span className="field-label">{t('web.kit_import_passphrase')}</span>
-        <input
-          type="password"
-          className="input"
-          autoComplete="off"
+        <SecretInput
           value={passphrase}
           onChange={(event) => setPassphrase(event.currentTarget.value)}
         />
       </label>
       <label className="field">
         <span className="field-label">{t('web.kit_account_password')}</span>
-        <input
-          type="password"
-          className="input"
-          autoComplete="current-password"
+        <SecretInput
           value={accountPassword}
           onChange={(event) => setAccountPassword(event.currentTarget.value)}
         />

@@ -5,7 +5,7 @@ import { activateHostingFactor, enrolHostingFactor, openHostingSession } from '.
 import { errorText } from '../error-text';
 import { formatTimestamp } from '../format';
 import { t } from '../i18n/web.fa';
-import { Banner, Card, CopyButton, KV, Ltr } from '../ui/kit';
+import { Banner, Card, CopyButton, KV, Ltr, SecretInput } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { ErrorRef } from '../ui/technical-details';
 import {
@@ -87,11 +87,8 @@ function EnrolCard({
         <form className="stack hosting-narrow" onSubmit={submitPassword} autoComplete="off">
           <div className="field">
             <label htmlFor={`${id}-password`}>{t('web.hosting_enrol_password')}</label>
-            <input
+            <SecretInput
               id={`${id}-password`}
-              type="password"
-              className="input"
-              autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.currentTarget.value)}
             />

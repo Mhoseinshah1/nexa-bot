@@ -208,3 +208,56 @@ describe('the Features page', () => {
     expect(screen.getByText(t('web.feature_unknown_summary'))).toBeInTheDocument();
   });
 });
+
+describe('a feature’s related settings read as words, never as JSON', () => {
+  it('shows the referral gift total as money, a percent with its unit, and absent as «تعیین نشده»', async () => {
+    const configured = (key: string, value: unknown) => ({
+      key,
+      value,
+      source: 'TENANT',
+      version: 1,
+      updatedAt: '2026-09-01T00:00:00.000Z',
+      updatedByAdminId: 'a1',
+      description: key,
+      zeroMeaning: 'DISABLES',
+      mutability: 'RUNTIME',
+      classification: 'PUBLIC',
+      configures: null,
+      consumer: 'ACTIVE',
+      inert: false,
+      storedValueInvalid: false,
+    });
+    stubApi([
+      {
+        url: '/features',
+        body: {
+          flags: FEATURE_FLAGS.map((d) =>
+            d.key === 'referral_signup_gift'
+              ? featureFlagSchema.parse({
+                  ...flag(d.key, true),
+                  configuration: [
+                    configured('referral.signup_gift.total', {
+                      amountMinor: '20000',
+                      currency: 'IRT',
+                    }),
+                    configured('referral.signup_gift.referrer_percent', 60),
+                    configured('referral.signup_gift.referred_percent', null),
+                  ],
+                })
+              : flag(d.key),
+          ),
+        },
+      },
+    ]);
+    const view = renderPage(<FeaturesPage mayEdit denied={false} />);
+    await screen.findByRole('tablist');
+    fireEvent.click(tabFor('referral'));
+    await waitFor(() => expect(view.container.textContent).toContain('20,000'));
+    const text = view.container.textContent ?? '';
+    expect(text).toContain('20,000 تومان');
+    expect(text).toContain(`60 ${t('web.unit_percent')}`);
+    expect(text).toContain(t('web.feature_setting_unset'));
+    expect(text).not.toContain('amountMinor');
+    expect(text).not.toContain('{"');
+  });
+});

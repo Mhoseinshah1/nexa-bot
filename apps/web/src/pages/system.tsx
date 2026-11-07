@@ -56,6 +56,7 @@ import {
   useConfirmedClose,
   useToast,
   Quantity,
+  SecretInput,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { formatNumber } from '../format';
@@ -899,12 +900,8 @@ function CreateAdmin() {
             required
             {...errorProp('password')}
           >
-            <input
+            <SecretInput
               id="admin-new-password"
-              className="input"
-              type="password"
-              dir="ltr"
-              autoComplete="new-password"
               aria-required
               aria-invalid={reasonFor('password') !== undefined}
               value={password}
@@ -1370,12 +1367,8 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
                 {t('web.admin_step_up_hint')}
               </Banner>
               <Field label={t('web.admin_step_up_password')} htmlFor={`admin-stepup-${row.id}`}>
-                <input
+                <SecretInput
                   id={`admin-stepup-${row.id}`}
-                  className="input"
-                  type="password"
-                  dir="ltr"
-                  autoComplete="current-password"
                   value={myPassword}
                   onChange={(event) => setMyPassword(event.target.value)}
                 />
@@ -1401,12 +1394,8 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
                 {t('web.admin_password_reset_hint')}
               </Banner>
               <Field label={t('web.admin_new_password_label')} htmlFor={`admin-password-${row.id}`}>
-                <input
+                <SecretInput
                   id={`admin-password-${row.id}`}
-                  className="input"
-                  type="password"
-                  dir="ltr"
-                  autoComplete="new-password"
                   value={newPassword}
                   onChange={(event) => setNewPassword(event.target.value)}
                 />

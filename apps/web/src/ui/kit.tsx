@@ -22,6 +22,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { formatMoney, formatMoneyText, formatNumber, splitDuration } from '../format';
 import { navigate, useLinkHandler, type Route } from '../router';
 import { errorReference } from '../error-text';
+import { isEmptyValue, valueLines, type ValueHint } from './value-format';
 
 /**
  * The production component kit.
@@ -1423,7 +1424,87 @@ export function Input({
   InputHTMLAttributes<HTMLInputElement>,
   'className' | 'size'
 >) {
-  return <input className={cx('input', size === 'sm' && 'sm', className)} {...rest} />;
+  // `autoComplete="off"` by default: a search box or a filter is not a login, and a browser
+  // that offers saved entries under it is noise. A page that wants otherwise passes it.
+  return (
+    <input className={cx('input', size === 'sm' && 'sm', className)} autoComplete="off" {...rest} />
+  );
+}
+
+/**
+ * A secret value (API key, bot token, webhook secret, panel or backup password, recovery key).
+ *
+ * It is a TEXT input masked by CSS, never a password-type input: the browser treats a password
+ * field as a site login, suggests saved logins under it and offers «Update password?» after a
+ * save. The attributes ask password managers (Chrome, LastPass, 1Password, Bitwarden) to leave
+ * it alone, and its `name` is deliberately not a login word. The eye button shows the value
+ * while the owner checks what was pasted. A real login (the sign-in, a person's own password)
+ * keeps the password type with its proper `autocomplete`; the allowlist is a test.
+ */
+export function SecretInput({
+  className,
+  name,
+  ...rest
+}: { className?: string } & Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  'className' | 'type' | 'autoComplete'
+>) {
+  const [shown, setShown] = useState(false);
+  const generated = `nx-secret-${useId().replace(/[^a-zA-Z0-9]/gu, '')}`;
+  return (
+    <span className="input-group secret-input">
+      <input
+        dir="ltr"
+        spellCheck={false}
+        autoCapitalize="none"
+        autoCorrect="off"
+        {...rest}
+        // A masked value must not leave through the clipboard; shown, it may.
+        onCopy={(event) => {
+          if (!shown) event.preventDefault();
+          rest.onCopy?.(event);
+        }}
+        onCut={(event) => {
+          if (!shown) event.preventDefault();
+          rest.onCut?.(event);
+        }}
+        type="text"
+        name={name ?? generated}
+        autoComplete="off"
+        data-lpignore="true"
+        data-1p-ignore
+        data-bwignore="true"
+        data-form-type="other"
+        className={cx('input', 'ltr', 'mono', !shown && 'secret-masked', className)}
+      />
+      <button
+        type="button"
+        className="btn icon"
+        aria-pressed={shown}
+        aria-label={shown ? t('web.secret_hide') : t('web.secret_show')}
+        title={shown ? t('web.secret_hide') : t('web.secret_show')}
+        onClick={() => setShown(!shown)}
+      >
+        <Icon name="eye" />
+      </button>
+    </span>
+  );
+}
+
+/** A stored value as an operator reads it (`formatValueText`); a plain string stays left-to-right. */
+export function Value({ value, hint }: { value: unknown; hint?: ValueHint }) {
+  if (typeof value === 'string' && value !== '') return <Ltr>{value}</Ltr>;
+  const lines = valueLines(value, hint);
+  if (isEmptyValue(value)) return <span className="muted">{lines[0]}</span>;
+  if (lines.length === 1) return <>{lines[0]}</>;
+  return (
+    <span className="value-lines">
+      {lines.map((line, index) => (
+        // Position is the identity: the lines of one stored value, in order.
+        <span key={index}>{line}</span>
+      ))}
+    </span>
+  );
 }
 
 export function Textarea({
