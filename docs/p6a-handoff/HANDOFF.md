@@ -9,11 +9,13 @@ diff-check (no deletions / wholesale rewrites) before every merge and say so in 
 (2026-11-05) PAUSE: agents finished their step, all work committed and pushed, then STOP.
 
 ## Facts
+- (2026-11-07 later) main @ `6cce12807` (Merge #415). PR-4 open as #416 @ `ca3aabe6a` (migration 0321), Codex requested once (comment 6703175224). NEXT: CI+Codex on #416, one fix commit, merge; then PR-5 (`test/p6a-d3-isolation-proof`, must flip the create-gate release marker).
 - (2026-11-07) main @ `8d578033c` (Merge #411). Newest migration: 0318_rls_roles_and_grants. NEXT: PR-3.
 - main @ `6e2ac88f1` (Merge #410). Newest migration on main: 0315_capacity_guards.
 - No uncommitted work anywhere; every branch below equals its origin copy.
 
 ## Merged
+- PR-3 https://github.com/Mhoseinshah1/nexa-bot/pull/415 — D1 creator panel, merge `6cce12807` (2026-11-07). Migrations 0319/0320.
 - PR-1 https://github.com/Mhoseinshah1/nexa-bot/pull/411 — D0 RLS + ops, merge `8d578033c` (2026-11-07). Migrations now 0317/0318.
 - PR-0 https://github.com/Mhoseinshah1/nexa-bot/pull/409 — load harness + baseline, merge `eaf41d1e8`.
 - PR-2 https://github.com/Mhoseinshah1/nexa-bot/pull/410 — capacity guards, merge `6e2ac88f1`.
