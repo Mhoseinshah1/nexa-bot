@@ -1818,6 +1818,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '✅ پیام شما برای متقاضیِ درخواست {number} فرستاده شد.',
   'bot.admin.reseller_request.closed':
     'دربارهٔ این درخواست قبلاً تصمیم گرفته شده یا سطح انتخابی دیگر وجود ندارد؛ چیزی تغییر نکرد.',
+  'bot.admin.reseller_request.start_bot':
+    'برای ادامه، ربات را یک بار در چت خصوصی باز کنید (/start) و دوباره دکمه را بزنید.',
   'bot.admin.reseller_request.not_implemented': 'تأیید درخواست هنوز در دسترس نیست.',
   'bot.admin.reseller_request.button_confirm': '✅ تأیید نهایی',
   'bot.admin.reseller_request.button_cancel': '✖️ انصراف',

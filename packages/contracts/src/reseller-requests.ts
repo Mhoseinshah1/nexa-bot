@@ -116,6 +116,8 @@ export const RESELLER_REQUEST_CALLBACKS = {
   confirm: 'rqc:',
   /** `rqx:<requestId>` — an operator's cancel of a prompt. */
   cancel: 'rqx:',
+  /** `rqp:<requestId>` — «رد بدون دلیل». */
+  rejectPlain: 'rqp:',
 } as const;
 
 export const RESELLER_REQUEST_STEP_ACTIONS = ['b', 's', 'x', 'e'] as const;
@@ -428,6 +430,10 @@ export const RESELLER_REQUEST_TEMPLATES = [
   tpl(
     'bot.admin.reseller_request.closed',
     'PR-2: the request is already decided, or the tier is gone; nothing was changed.',
+  ),
+  tpl(
+    'bot.admin.reseller_request.start_bot',
+    'PR-2: a tap in the group by an administrator who has never opened the bot in a private chat, where the bot can write to them only after /start.',
   ),
   tpl('bot.admin.reseller_request.not_implemented', 'PR-2: approval is not available yet.'),
   tpl('bot.admin.reseller_request.button_confirm', 'PR-2: the operator’s «تأیید نهایی».'),
