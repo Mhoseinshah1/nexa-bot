@@ -126,3 +126,6 @@ export const serviceAutoDeletePreviewResponseSchema = z.object({
 export type ServiceAutoDeletePreviewResponse = z.infer<
   typeof serviceAutoDeletePreviewResponseSchema
 >;
+
+/** The Web Admin's preview route (under the admin API base), served by the services controller. */
+export const SERVICE_AUTO_DELETE_PREVIEW_ROUTE = '/services/auto-delete/preview' as const;
