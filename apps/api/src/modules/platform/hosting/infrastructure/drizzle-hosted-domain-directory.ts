@@ -115,6 +115,10 @@ export class DrizzleHostedDomainDirectory implements HostedDomainDirectory {
           revokedAt: hostedBotActivationLinks.revokedAt,
           ownerAdminId: hostedBots.ownerAdminId,
           state: hostedBots.state,
+          activationDomain: hostedBotActivations.domain,
+          dnsVerifiedAt: hostedBotActivations.dnsVerifiedAt,
+          tlsVerifiedAt: hostedBotActivations.tlsVerifiedAt,
+          webhookRegisteredAt: hostedBotActivations.webhookRegisteredAt,
         })
         .from(hostedBotActivationLinks)
         .innerJoin(
@@ -122,6 +126,13 @@ export class DrizzleHostedDomainDirectory implements HostedDomainDirectory {
           and(
             eq(hostedBots.tenantId, hostedBotActivationLinks.tenantId),
             eq(hostedBots.hostedTenantId, hostedBotActivationLinks.hostedTenantId),
+          ),
+        )
+        .innerJoin(
+          hostedBotActivations,
+          and(
+            eq(hostedBotActivations.tenantId, hostedBotActivationLinks.tenantId),
+            eq(hostedBotActivations.hostedTenantId, hostedBotActivationLinks.hostedTenantId),
           ),
         )
         .where(eq(hostedBotActivationLinks.tokenHash, tokenHash))
@@ -139,6 +150,11 @@ export class DrizzleHostedDomainDirectory implements HostedDomainDirectory {
       revokedAt: row.revokedAt,
       ownerAdminId: row.ownerAdminId,
       botState: row.state as HostedBotState,
+      activationDomain: row.activationDomain,
+      stepsComplete:
+        row.dnsVerifiedAt !== null &&
+        row.tlsVerifiedAt !== null &&
+        row.webhookRegisteredAt !== null,
     };
   }
 }

@@ -82,7 +82,12 @@ export class HostedOwnerActivationService {
       link === null ||
       !digestsEqual(link.tokenHash, tokenHash) ||
       // Valid only on the domain it was made for: a link carried to any other host is dead.
-      link.hostedTenantId !== resolution.hostedTenantId
+      link.hostedTenantId !== resolution.hostedTenantId ||
+      // The link is good only for the name the activation holds NOW, once that name has earned
+      // its DNS, SSL and webhook marks: a link made for another domain, or for one that is not
+      // set up yet, is dead (defence in depth beside the revoke on a domain change).
+      link.activationDomain !== normaliseHost(rawHost) ||
+      !link.stepsComplete
     ) {
       throw activationError(CODES.LINK_INVALID, 'This activation link is not valid.');
     }

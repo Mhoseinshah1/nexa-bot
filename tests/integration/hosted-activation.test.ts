@@ -336,6 +336,27 @@ describe('hosted bot activation (phase 6A PR-4)', () => {
       ).toHaveLength(0);
     });
 
+    it('a revoked token replaced by a new valid one for the same bot is refused, never marked verified over the old credential', async () => {
+      const id = await createHosted();
+      await configure(id);
+      const replacement = telegram.revoke(TELEGRAM_ID, { keepWebhook: true });
+      expect(await codeOf(configure(id, { botToken: replacement }))).toBe(CODES.TOKEN_DIFFERS);
+      // The stored credential is still the first one, and the mark and the audit say so.
+      expect(
+        await api.container.hostedActivation
+          .status(tenantA, ownerActor, panel.token, id)
+          .then((view) => stepOf(view, 'TOKEN').state),
+      ).toBe('DONE');
+      expect(
+        (
+          await db()
+            .select()
+            .from(auditLogs)
+            .where(eq(auditLogs.action, 'hosting.activation_configure'))
+        ).length,
+      ).toBe(1);
+    });
+
     it('never repoints: a different bot for the same hosted bot is refused', async () => {
       const id = await createHosted();
       await configure(id);
@@ -1186,6 +1207,42 @@ describe('hosted bot activation (phase 6A PR-4)', () => {
           })
         ).statusCode,
       ).toBe(403);
+    });
+
+    it('a link made for domain A dies when the creator changes the domain to B, and B needs its own steps', async () => {
+      const { id, token } = await readyLink();
+      const openLinks = async () =>
+        (await db().select().from(hostedBotActivationLinks)).filter(
+          (row) => row.revokedAt === null,
+        );
+      expect(await openLinks()).toHaveLength(1);
+      // B verified by DNS (resolves) but no SSL, no webhook yet.
+      await configure(id, { domain: 'bots.new-name.com' });
+      dnsNow.set('bots.new-name.com', { cname: ['admin.hosting.test'], addresses: [SERVER_IP] });
+      await run(id, 'domain');
+      expect(await openLinks()).toHaveLength(0);
+      expect(await codeOf(redeem('bots.new-name.com', token))).toBe(CODES.LINK_INVALID);
+      expect(await codeOf(redeem(DOMAIN, token))).toBe(CODES.LINK_INVALID);
+      expect(
+        (await db().select().from(admins).where(eq(admins.tenantId, id))).map(
+          (row) => row.username,
+        ),
+      ).not.toContain('alpha-owner');
+    });
+
+    it('defence in depth: an open link is still refused on a domain that has not finished its steps', async () => {
+      const { id, token } = await readyLink();
+      // Un-finish the steps behind the service's back, leaving the link open.
+      await db()
+        .update(hostedBotActivations)
+        .set({ webhookRegisteredAt: null })
+        .where(eq(hostedBotActivations.hostedTenantId, id));
+      expect(await codeOf(redeem(DOMAIN, token))).toBe(CODES.LINK_INVALID);
+      await db()
+        .update(hostedBotActivations)
+        .set({ webhookRegisteredAt: new Date(), domain: 'bots.elsewhere.com' })
+        .where(eq(hostedBotActivations.hostedTenantId, id));
+      expect(await codeOf(redeem(DOMAIN, token))).toBe(CODES.LINK_INVALID);
     });
 
     it('an activation token is refused when reused, when expired and when carried to another hosted domain', async () => {

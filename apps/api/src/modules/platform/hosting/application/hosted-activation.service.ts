@@ -233,7 +233,17 @@ export class HostedActivationService {
             'This hosted bot is already bound to a different Telegram bot.',
           );
         }
+        if (bound.outcome === 'TOKEN_DIFFERS') {
+          throw activationError(
+            CODES.TOKEN_DIFFERS,
+            'This hosted bot already stores a different token for that Telegram bot; it is not replaced here.',
+          );
+        }
         const domainChanged = locked.domain !== domain;
+        if (domainChanged) {
+          // A link was issued for the OLD name: it dies with it, in this same transaction.
+          await this.deps.repository.revokeOpenLinks(installation, hostedTenantId, now, tx);
+        }
         await this.deps.repository.patch(
           installation,
           hostedTenantId,

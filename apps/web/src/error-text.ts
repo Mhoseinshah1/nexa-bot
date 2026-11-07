@@ -205,6 +205,7 @@ export const ERROR_TEXT = {
   'hosting.activation_token_unreachable': 'web.err_hosting_act_token_unreachable',
   'hosting.activation_token_in_use': 'web.err_hosting_act_token_in_use',
   'hosting.activation_token_other_bot': 'web.err_hosting_act_token_other_bot',
+  'hosting.activation_token_differs': 'web.err_hosting_act_token_differs',
   'hosting.activation_domain_invalid': 'web.err_hosting_act_domain_invalid',
   'hosting.activation_domain_reserved': 'web.err_hosting_act_domain_reserved',
   'hosting.activation_domain_taken': 'web.err_hosting_act_domain_taken',

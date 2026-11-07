@@ -129,6 +129,11 @@ export class DrizzleHostedBotRegistrar implements HostedBotRegistrar {
         if (existing.telegramBotId !== input.telegramBotId) {
           return { outcome: 'OTHER_BOT' as const };
         }
+        // The same bot, but never "verified" unless the STORED credential is the verified one:
+        // a different valid token (the stored one was revoked) is refused, not dropped.
+        if ((await this.bots.resolveToken(scope, existing.id)) !== input.token) {
+          return { outcome: 'TOKEN_DIFFERS' as const };
+        }
         return {
           outcome: 'EXISTING' as const,
           binding: {

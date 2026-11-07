@@ -170,6 +170,7 @@ export interface HostedBotRegistrar {
   ): Promise<
     | { readonly outcome: 'CREATED' | 'EXISTING'; readonly binding: HostedBotBinding }
     | { readonly outcome: 'OTHER_BOT' }
+    | { readonly outcome: 'TOKEN_DIFFERS' }
   >;
   /** The stored token, decrypted, for a re-verification. Never returned to a surface. */
   tokenOf(context: SystemContext, hostedTenantId: string, botInstanceId: string): Promise<string>;
@@ -201,6 +202,9 @@ export interface HostedActivationLinkLookup extends HostedActivationLinkRow {
   readonly ownerAdminId: string;
   readonly tokenHash: string;
   readonly botState: HostedBotState;
+  /** The domain the activation record holds now, and whether its DNS, SSL and webhook marks are all set. */
+  readonly activationDomain: string | null;
+  readonly stepsComplete: boolean;
 }
 
 export interface HostedDomainDirectory {
