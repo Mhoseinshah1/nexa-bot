@@ -388,6 +388,22 @@ describe('report exports and paging (WP12 review)', () => {
     expect(await screen.findByRole('link', { name: 'خروجی CSV' })).toBeTruthy();
   });
 
+  it('opens an order from its product title and the range is a set of quick-filter chips (PR-2)', async () => {
+    stubApi([...BUSINESS_ROUTES, ORDERS_ROUTE]);
+    renderPage(
+      resolve(reportsRoute('range=TODAY'), ['reports.view'], [OWNER_ROLE_KEY])
+        .element as ReactElement,
+    );
+    const title = await screen.findByRole('link', { name: 'Plan A' });
+    expect(title).toHaveAttribute('href', '/orders/019210ab-cdef-7012-8345-6789abcdef02');
+    // The customer link stays; the separate order link («سفارش») does not.
+    expect(screen.queryByRole('link', { name: 'سفارش' })).toBeNull();
+    const range = screen.getByRole('group', { name: t('web.period_label') });
+    expect(
+      within(range).getByRole('button', { name: t('web.report_range_today') }),
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('starts the orders drill-down over when the range changes, never paging the new range with an old cursor', async () => {
     const api = stubApi([...BUSINESS_ROUTES, ORDERS_ROUTE]);
     const page = renderPage(

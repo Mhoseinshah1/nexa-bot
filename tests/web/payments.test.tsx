@@ -2028,3 +2028,98 @@ describe('rows imported from Mirza', () => {
     expect(sourceFilterAbsent()).toBe(true);
   });
 });
+
+/**
+ * Redesign PR-2: the list's quick filters and selection bar, and the detail's header card with
+ * its grouped quick-action bar. The bar only JUMPS to the card holding an action; the card's own
+ * permission and confirm stay where they were.
+ */
+describe('the redesigned payments list (PR-2)', () => {
+  it('draws the queue as quick-filter chips, and no per-row open button', async () => {
+    stubApi(list([payment()]));
+    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('a1b2c3d4e5f60718');
+    const chips = screen.getByRole('group', { name: t('web.payment_ops_queue') });
+    expect(
+      within(chips).getByRole('button', { name: t('web.payment_ops_queue_all') }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(within(chips).getAllByRole('button').length).toBeGreaterThan(1);
+    // The row opens from its tracking-code link — there is no «باز کردن» control.
+    const table = screen.getByRole('table');
+    expect(within(table).getByRole('link', { name: /a1b2c3d4e5f60718/u })).toHaveAttribute(
+      'href',
+      `/payments/${ROW_ID}`,
+    );
+    expect(screen.queryByText('باز کردن')).toBeNull();
+  });
+
+  it('draws the selection bar only while rows are ticked', async () => {
+    stubApi(list([payment()]));
+    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('a1b2c3d4e5f60718');
+    expect(screen.queryByRole('region', { name: t('web.kit_selection_bar') })).toBeNull();
+    fireEvent.click(screen.getByLabelText(t('web.export_select_row')));
+    const bar = screen.getByRole('region', { name: t('web.kit_selection_bar') });
+    expect(within(bar).getByRole('button', { name: t('web.export_csv') })).toBeEnabled();
+    fireEvent.click(within(bar).getByRole('button', { name: t('web.kit_selection_clear') }));
+    expect(screen.queryByRole('region', { name: t('web.kit_selection_bar') })).toBeNull();
+  });
+});
+
+describe('the redesigned payment detail (PR-2)', () => {
+  const renderWith = (overrides: Record<string, unknown>, props: Record<string, boolean> = {}) => {
+    stubApi(detail(overrides));
+    return renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+        {...props}
+      />,
+    );
+  };
+
+  it('puts the state, the route and the meta links in a header card and the amount in a KPI row', async () => {
+    const view = renderWith({ state: 'CONFIRMED', amount: '250000' });
+    await screen.findByText('تأیید شده');
+    const head = view.container.querySelector('.pay-head') as HTMLElement;
+    expect(within(head).getByText('تأیید شده')).toBeInTheDocument();
+    expect(within(head).getByText(t('web.payment_order'))).toBeInTheDocument();
+    const kpi = view.container.querySelector('.kpi-row') as HTMLElement;
+    expect(within(kpi).getByText(t('web.payment_amount'))).toBeInTheDocument();
+    expect(kpi.textContent).toMatch(/۲۵۰٬۰۰۰|250,000/u);
+  });
+
+  it('offers the receipt-review jump only to a reviewer, and jumps to the review card', async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    renderWith(
+      { state: 'PENDING', method: 'MANUAL_TRANSFER' },
+      { mayReviewReceipts: true, mayViewRefunds: true, mayIssueRefunds: true },
+    );
+    const jump = await screen.findByRole('button', { name: t('web.pay_qa_review') });
+    fireEvent.click(jump);
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect((scroll.mock.contexts[0] as HTMLElement).id).toBe('pay-card-review');
+    // The refund jump is a dangerous action: red, and it ends in «…».
+    const refund = screen.getByRole('button', { name: `${t('web.pay_qa_refund')}…` });
+    expect(refund.className).toContain('danger');
+    cleanup();
+    renderWith({ state: 'PENDING', method: 'MANUAL_TRANSFER' }, { mayViewRefunds: true });
+    await screen.findByText(t('web.payment_detail'));
+    expect(screen.queryByRole('button', { name: t('web.pay_qa_review') })).toBeNull();
+    expect(screen.queryByRole('button', { name: `${t('web.pay_qa_refund')}…` })).toBeNull();
+  });
+
+  it('draws the yellow attention strip for an UNKNOWN payment, and none for a confirmed one', async () => {
+    const unknown = renderWith({ state: 'UNKNOWN', method: 'GATEWAY' });
+    await screen.findByText(t('web.payment_unknown_banner'));
+    expect(unknown.container.querySelector('.attention-strip')).not.toBeNull();
+    cleanup();
+    const done = renderWith({ state: 'CONFIRMED' });
+    await screen.findByText('تأیید شده');
+    expect(done.container.querySelector('.attention-strip')).toBeNull();
+  });
+});
