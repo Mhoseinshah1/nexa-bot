@@ -423,7 +423,7 @@ export function BulkOperationNewPage({
 
   return (
     <>
-      <PageHead title={t('web.bulk_new')} subtitle={t('web.bulk_page_intro')} />
+      <PageHead title={t('web.bulk_new')} />
       <Card title={t('web.bulk_what')}>
         <div className="form-grid">
           <Field label={t('web.bulk_kind')} htmlFor="bulk-kind">

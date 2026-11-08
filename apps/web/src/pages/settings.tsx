@@ -140,7 +140,10 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
 
   return (
     <>
-      <PageHead title={t('web.settings_title')} subtitle={t('web.settings_intro')} />
+      <PageHead title={t('web.settings_title')} />
+      <Disclosure size="sm" summary={t('web.settings_about_fold')}>
+        <p className="muted small">{t('web.settings_intro')}</p>
+      </Disclosure>
 
       <StateSwitch query={settings} denied={denied} isEmpty={rows.length === 0}>
         <DirtyScope report={report}>

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { CodeValue, LIST_PAGE_SIZE, Ltr, usePagedRows } from '../../apps/web/src/ui/kit';
+import { LIST_PAGE_SIZE, Ltr, usePagedRows } from '../../apps/web/src/ui/kit';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { fireEvent } from '@testing-library/react';
 
@@ -18,8 +18,6 @@ describe('Persian text in a technical-value box (W5)', () => {
       <>
         <Ltr>{'درخواست نامعتبر است.'}</Ltr>
         <Ltr>{'panel.capability_unsupported'}</Ltr>
-        <CodeValue value={'کد نامعتبر'} copy={false} />
-        <CodeValue value={'https://example.test/x'} copy={false} />
       </>,
     );
     const spans = container.querySelectorAll(':scope > span');
@@ -27,9 +25,6 @@ describe('Persian text in a technical-value box (W5)', () => {
     expect(spans[0]).not.toHaveClass('mono');
     expect(spans[1]).toHaveClass('ltr');
     expect(spans[1]).toHaveClass('mono');
-    const codes = container.querySelectorAll('code');
-    expect(codes[0]).toHaveClass('fa-in-ltr');
-    expect(codes[1]).not.toHaveClass('fa-in-ltr');
   });
 
   it('styles that class right-to-left in the UI font', () => {

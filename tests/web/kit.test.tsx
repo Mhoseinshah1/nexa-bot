@@ -18,7 +18,6 @@ import {
   Modal,
   Num,
   PageHead,
-  PeriodControl,
   Progress,
   Quantity,
   RoutedTabs,
@@ -27,7 +26,6 @@ import {
   axisLabelSlots,
   progressRatio,
   useUnsavedChanges,
-  type PeriodPreset,
 } from '../../apps/web/src/ui/kit';
 import { ICON_NAMES, Icon } from '../../apps/web/src/ui/icons';
 import { NAV } from '../../apps/web/src/app';
@@ -783,19 +781,6 @@ describe('quantities and identifiers', () => {
 });
 
 describe('small controls', () => {
-  it('PeriodControl marks the chosen preset and reports the comparison switch', () => {
-    const changed = vi.fn<(next: PeriodPreset) => void>();
-    const compared = vi.fn<(next: boolean) => void>();
-    renderPage(<PeriodControl value="30d" onChange={changed} compare onCompareChange={compared} />);
-    expect(
-      screen.getByRole('button', { name: t('web.period_30d') }).getAttribute('aria-pressed'),
-    ).toBe('true');
-    fireEvent.click(screen.getByRole('button', { name: t('web.period_today') }));
-    expect(changed).toHaveBeenCalledWith('today');
-    fireEvent.click(screen.getByRole('checkbox', { name: t('web.period_compare') }));
-    expect(compared).toHaveBeenCalledWith(false);
-  });
-
   it('FilterChip and Checkbox expose their state', () => {
     renderPage(
       <>

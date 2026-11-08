@@ -406,6 +406,7 @@ export const WEB_FA_BOT_1 = {
   'web.bot_read_only': 'برای این ربات فقط دسترسی مشاهده دارید.',
   'web.bot_check_card': 'آخرین بررسی زنده',
   'web.bot_buttons_title': 'دکمه‌های ربات',
+  'web.bot_buttons_about_fold': 'دربارهٔ این صفحه',
   'web.bot_buttons_intro':
     'دکمه‌های منوی اصلی ربات، یعنی کیبوردی که زیر چت مشتری نمایش داده می‌شود: ردیف‌ها، نمایش، رنگ، آیکون و متن هر دکمه، و منوی دستورهای تلگرام.',
   'web.bot_buttons_needs_trial_offer':
