@@ -436,6 +436,9 @@ import {
   backupStatusResponseSchema,
   recoveryCapabilitiesResponseSchema,
   recoveryDetailResponseSchema,
+  secretReentryListResponseSchema,
+  type SecretReentryListResponse,
+  type SecretPurpose,
   recoveryListResponseSchema,
   runBackupResponseSchema,
   setBackupArchivePasswordResponseSchema,
@@ -3187,6 +3190,42 @@ export function confirmRecovery(input: {
     },
     recoveryDetailResponseSchema,
   );
+}
+
+/** §2.3 choice 1: the restore test again on the same request (after the old kit was imported). */
+export function retestRecovery(input: {
+  id: string;
+  idempotencyKey: string;
+  archivePassword?: string;
+}): Promise<RecoveryDetailResponse> {
+  return post(
+    RECOVERY_ROUTES.retest(input.id),
+    {
+      idempotencyKey: input.idempotencyKey,
+      ...(input.archivePassword === undefined || input.archivePassword === ''
+        ? {}
+        : { archivePassword: input.archivePassword }),
+    },
+    recoveryDetailResponseSchema,
+  );
+}
+
+/** §2.3 choice 2: the exact list of unreadable secrets the operator accepts to re-enter. */
+export function acknowledgeUnreadableSecrets(input: {
+  id: string;
+  idempotencyKey: string;
+  unreadable: readonly { purpose: SecretPurpose; count: number }[];
+}): Promise<RecoveryDetailResponse> {
+  return post(
+    RECOVERY_ROUTES.acknowledgeUnreadable(input.id),
+    { idempotencyKey: input.idempotencyKey, unreadable: input.unreadable },
+    recoveryDetailResponseSchema,
+  );
+}
+
+/** The attention strip: secrets a restore cleared that are still to be re-entered. */
+export function fetchSecretReentry(): Promise<SecretReentryListResponse> {
+  return authedGet(RECOVERY_ROUTES.secretReentry, secretReentryListResponseSchema);
 }
 
 /**

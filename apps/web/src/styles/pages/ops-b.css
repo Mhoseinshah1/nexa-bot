@@ -1576,3 +1576,12 @@ form.set-row > * + * {
     min-height: var(--ctl-h);
   }
 }
+
+/* NEXA-FIX-RESTORE-SECRETS: the unreadable-secrets list and the re-entry strip's rows. */
+.secret-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

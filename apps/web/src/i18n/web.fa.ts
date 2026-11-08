@@ -1525,6 +1525,53 @@ export const WEB_FA = {
   'web.recovery_confirm_button': 'تأیید و شروع بازیابی',
   'web.recovery_confirm_wrong': 'عبارت تأیید مطابقت ندارد.',
   'web.recovery_confirmed': 'بازیابی تأیید شد و در صف اجراست.',
+  // NEXA-FIX-RESTORE-SECRETS §2.3: a restore refused because some stored secrets cannot be
+  // read with this server's keys, and the strip that follows a restore that cleared some.
+  'web.secret_purpose_bot_instance_token': 'توکن ربات',
+  'web.secret_purpose_panel_username': 'نام کاربری پنل',
+  'web.secret_purpose_panel_password': 'رمز پنل',
+  'web.secret_purpose_panel_api_token': 'توکن API پنل',
+  'web.secret_purpose_gateway_api_key': 'کلید API درگاه پرداخت',
+  'web.secret_purpose_gateway_webhook_secret': 'رمز وب‌هوک درگاه پرداخت',
+  'web.secret_purpose_gateway_verify_key': 'کلید تأیید درگاه پرداخت',
+  'web.secret_purpose_gateway_refund_card': 'کارت بازپرداخت درگاه',
+  'web.secret_purpose_admin_totp': 'رمز ورود دومرحله‌ای مدیر',
+  'web.secret_purpose_support_ai_key': 'کلید پشتیبانی هوشمند',
+  'web.secret_purpose_legacy_package_key': 'کلید بستهٔ انتقال از ربات قبلی',
+  'web.secret_purpose_backup_password': 'رمز بکاپ',
+  'web.secret_purpose_gift_card_export': 'کلید خروجی کارت هدیه',
+  'web.secret_purpose_hosting_totp': 'رمز ورود دومرحله‌ای پنل سازندگان',
+  'web.secret_unreadable_title':
+    'بخشی از اطلاعات محرمانهٔ این بکاپ با کلیدهای این سرور خوانده نمی‌شود',
+  'web.secret_unreadable_intro':
+    'بازیابی هنوز انجام نشده و هیچ تغییری در این سرور داده نشده است. موارد زیر خوانده نشدند (تعداد هر مورد کنارش آمده). یکی از دو راه را انتخاب کنید.',
+  'web.secret_unreadable_count': 'تعداد',
+  'web.secret_unreadable_kit_choice': 'بارگذاری کیت بازیابی سرور قبلی',
+  'web.secret_unreadable_kit_hint':
+    'کیت بازیابی همان سرور را در بخش «کیت بازیابی» بالای همین صفحه وارد کنید، سپس دکمهٔ زیر را بزنید تا همین فایل دوباره آزموده شود. نیازی به بارگذاری دوبارهٔ بکاپ نیست.',
+  'web.secret_unreadable_retest': 'آزمون دوباره با کیت وارد‌شده',
+  'web.secret_unreadable_retesting': 'در حال آزمون…',
+  'web.secret_unreadable_continue': 'ادامه؛ این‌ها را دوباره وارد می‌کنم',
+  'web.secret_unreadable_continue_hint':
+    'بازیابی بدون این مقدارها انجام می‌شود و بعد از آن باید خودتان آن‌ها را دوباره وارد کنید.',
+  'web.secret_unreadable_dialog_title': 'ادامه بدون این مقدارها؟',
+  'web.secret_unreadable_dialog_question':
+    'این مقدارها پس از بازیابی پاک می‌شوند و باید دوباره وارد شوند. تا آن زمان کارهایی که به آن‌ها نیاز دارند کار نمی‌کنند.',
+  'web.secret_unreadable_dialog_bots':
+    'رباتی که توکنش خوانده نمی‌شود تا وارد کردن دوبارهٔ توکن متوقف می‌ماند.',
+  'web.secret_unreadable_dialog_confirm': 'می‌پذیرم، ادامه بده',
+  'web.secret_unreadable_dialog_cancel': 'انصراف',
+  'web.secret_unreadable_acknowledged':
+    'فهرست پذیرفته شد. برای شروع بازیابی عبارت تأیید را بنویسید.',
+  'web.secret_unreadable_refund_card':
+    'کارت بازپرداخت درگاه با این بازیابی پاک نمی‌شود، چون پاک کردنش بازپرداخت‌ها را تغییر می‌دهد. برای این بکاپ باید کیت بازیابی سرور قبلی را وارد کنید.',
+  'web.secret_unreadable_password_label': 'رمز فایل 7-Zip',
+  'web.secret_unreadable_no_permission': 'شما اجازهٔ بازگرداندن این نصب را ندارید.',
+  'web.secret_summary_rewrapped': 'رمز زیر کلید این سرور دوباره رمزگذاری شد',
+  'web.secret_summary_cleared': 'رمز پاک شد و باید دوباره وارد شود',
+  'web.secret_reentry_label': 'اطلاعات محرمانه‌ای که باید دوباره وارد شود',
+  'web.secret_reentry_title': 'این مقدارها هنگام بازیابی پاک شدند و هنوز دوباره وارد نشده‌اند',
+  'web.secret_reentry_open': 'وارد کردن',
   'web.recovery_confirm_expires': 'اعتبار تأیید',
   'web.recovery_no_permission_restore':
     'شما اجازه‌ی بازگرداندن این نصب را ندارید. راستی‌آزمایی آرشیو همچنان ممکن است.',
