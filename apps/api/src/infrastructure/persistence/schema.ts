@@ -408,6 +408,8 @@ import {
   GIFT_CARD_REJECTIONS,
   // R11 A4: «نوع بارکد».
   PANEL_QR_KINDS,
+  // NEXA-FIX-RESTORE-SECRETS §2.3: a cleared secret's purpose.
+  SECRET_PURPOSES,
 } from '@nexa/contracts';
 
 /**
@@ -3588,6 +3590,50 @@ export const recoveryRequests = pgTable(
      * ordering and the `ROW(created_at, id) < ROW(...)` continuation.
      */
     index('recovery_requests_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+  ],
+);
+
+/**
+ * NEXA-FIX-RESTORE-SECRETS §2.3, choice 2 («ادامه؛ این‌ها را دوباره وارد می‌کنم»): one
+ * row per secret a restore CLEARED because this installation could not read it.
+ *
+ * Written by the recovery executor INTO THE CANDIDATE, before the renames, in the same
+ * transaction as the clearing — so it arrives with the database that is served, and a
+ * clearing that rolled back left no item. Append-only in practice: nothing updates or
+ * deletes it. Whether an item still needs attention is NOT stored: the Web Admin strip
+ * asks the entity's column at read time, so re-entering the value through its ordinary
+ * page removes the item without any write path knowing this table exists.
+ *
+ * `entity_table`/`entity_id` name what the owner re-enters it on: the bot, the panel,
+ * the gateway credential row, the support-AI credential row, the backup password row —
+ * and for a two-factor secret the ADMIN, because its factor row is deleted and a new
+ * enrolment mints a new id. Never a value, a ciphertext or a key id.
+ */
+export const secretReentryItems = pgTable(
+  'secret_reentry_items',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    purpose: text('purpose').notNull(),
+    entityTable: text('entity_table').notNull(),
+    entityId: uuid('entity_id').notNull(),
+    /** The recovery that cleared it. Not a foreign key: that row is the outgoing install's. */
+    recoveryRequestId: uuid('recovery_request_id').notNull(),
+    clearedAt: timestamptz('cleared_at').notNull(),
+  },
+  (table) => [
+    index('secret_reentry_items_tenant_cleared_idx').on(
+      table.tenantId,
+      table.clearedAt,
+      table.id,
+    ),
+    check('secret_reentry_items_purpose_check', enumCheck('purpose', SECRET_PURPOSES)),
+    check(
+      'secret_reentry_items_entity_table_check',
+      sql`entity_table ~ '^[a-z_]{1,63}$'`,
+    ),
   ],
 );
 
