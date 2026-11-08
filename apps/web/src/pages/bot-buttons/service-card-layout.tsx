@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   INLINE_BUTTONS,
   SERVICE_CARD_BUTTONS,
+  SERVICE_CARD_ROW_MAX,
   serviceCardLayoutSchema,
   type ServiceCardButton,
   type TemplateViewResponse,
@@ -10,30 +11,19 @@ import {
 import { fetchSettings, saveSetting } from '../../api/client';
 import { t } from '../../i18n/web.fa';
 import { useSubmissionKey } from '../../submission-key';
-import {
-  Badge,
-  Banner,
-  Button,
-  Card,
-  StateSwitch,
-  Switch,
-  useToast,
-  useUnsavedChanges,
-} from '../../ui/kit';
+import { Banner, Button, Card, StateSwitch, useToast, useUnsavedChanges } from '../../ui/kit';
 import { TemplateCard } from '../content';
 import { KeptSheet } from '../editor-layout';
+import { LayoutDnd } from '../../ui/layout-dnd';
 import { useReportDirty } from '../ops-b-layout';
 import { ErrorReport } from '../settings';
 import { INLINE_BUTTON_NAME } from './inline-buttons';
 import {
   defaultServiceCardRows,
   effectiveServiceCardRows,
-  moveServiceCardAcrossRows,
-  moveServiceCardRow,
-  moveServiceCardWithinRow,
-  setServiceCardEnabled,
-  splitServiceCardButton,
+  fromDndLayout,
   storedServiceCardRows,
+  toDndLayout,
   type ServiceCardRows,
 } from './service-card-model';
 
@@ -161,114 +151,37 @@ export function ServiceCardLayoutSection({
             </Button>
           </Banner>
         )}
-        <div data-testid="service-card-layout">
-          {rows.map((row, rowIndex) => (
-            <div
-              key={row.map((entry) => entry.button).join('|')}
-              role="group"
-              aria-label={`${t('web.scl_row')} ${String(rowIndex + 1)}`}
-              className="scl-row"
-              data-row={rowIndex + 1}
-            >
-              <div className="scl-row-head">
-                <b>{`${t('web.scl_row')} ${String(rowIndex + 1)}`}</b>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={locked || rowIndex === 0}
-                  aria-label={`${t('web.scl_move_row_up')} ${String(rowIndex + 1)}`}
-                  onClick={() => edit(moveServiceCardRow(rows, rowIndex, -1))}
-                >
-                  ↑
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={locked || rowIndex === rows.length - 1}
-                  aria-label={`${t('web.scl_move_row_down')} ${String(rowIndex + 1)}`}
-                  onClick={() => edit(moveServiceCardRow(rows, rowIndex, 1))}
-                >
-                  ↓
-                </Button>
-              </div>
-              {row.map((entry, column) => {
-                const name = nameOf(entry.button);
-                return (
-                  <div
-                    key={entry.button}
-                    className="scl-entry"
-                    data-button={entry.button}
-                    data-enabled={entry.enabled ? 'true' : 'false'}
-                  >
-                    <span className="scl-name">{name}</span>
-                    {!entry.enabled && <Badge tone="neutral">{t('web.scl_hidden')}</Badge>}
-                    <Switch
-                      checked={entry.enabled}
-                      label={`${t('web.scl_show')} ${name}`}
-                      disabled={locked}
-                      onChange={(next) => edit(setServiceCardEnabled(rows, entry.button, next))}
-                    />
+        <div data-testid="service-card-layout" className="scl-dnd">
+          <LayoutDnd
+            label={t('web.scl_title')}
+            layout={toDndLayout(rows)}
+            rules={{ maxPerRow: SERVICE_CARD_ROW_MAX }}
+            disabled={locked}
+            nameOf={(id) => nameOf(id as ServiceCardButton)}
+            onChange={(next) => edit(fromDndLayout(next))}
+            renderItem={(id) => {
+              const button = id as ServiceCardButton;
+              const name = nameOf(button);
+              return (
+                <span className="scl-entry" data-button={button}>
+                  <span className="scl-name">{name}</span>
+                  {mayViewTemplates && labelKeysOf(button).length > 0 && (
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={locked || column === 0}
-                      aria-label={`${t('web.scl_earlier')}: ${name}`}
-                      onClick={() => edit(moveServiceCardWithinRow(rows, entry.button, -1))}
+                      aria-haspopup="dialog"
+                      aria-label={`${t('web.scl_edit_label')}: ${name}`}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => event.stopPropagation()}
+                      onClick={() => setOpen(button)}
                     >
-                      →
+                      {t('web.scl_edit_label')}
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={locked || column === row.length - 1}
-                      aria-label={`${t('web.scl_later')}: ${name}`}
-                      onClick={() => edit(moveServiceCardWithinRow(rows, entry.button, 1))}
-                    >
-                      ←
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={locked}
-                      aria-label={`${t('web.scl_row_up')}: ${name}`}
-                      onClick={() => edit(moveServiceCardAcrossRows(rows, entry.button, -1))}
-                    >
-                      ⇡
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={locked}
-                      aria-label={`${t('web.scl_row_down')}: ${name}`}
-                      onClick={() => edit(moveServiceCardAcrossRows(rows, entry.button, 1))}
-                    >
-                      ⇣
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={locked || row.length === 1}
-                      aria-label={`${t('web.scl_split')}: ${name}`}
-                      onClick={() => edit(splitServiceCardButton(rows, entry.button))}
-                    >
-                      ⊟
-                    </Button>
-                    {mayViewTemplates && labelKeysOf(entry.button).length > 0 && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-haspopup="dialog"
-                        aria-label={`${t('web.scl_edit_label')}: ${name}`}
-                        onClick={() => setOpen(entry.button)}
-                      >
-                        {t('web.scl_edit_label')}
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+                  )}
+                </span>
+              );
+            }}
+          />
           <p className="muted small" data-testid="scl-back-fixed">
             {`${t('web.ib_button_service_back_to_list')} — ${t('web.scl_back_fixed')}`}
           </p>

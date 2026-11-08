@@ -311,11 +311,10 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
 
   return (
     <>
-      <PageHead
-        title={t('web.templates_title')}
-        subtitle={t('web.templates_intro')}
-        badge={<UnsavedCount count={dirty.size} />}
-      />
+      <PageHead title={t('web.templates_title')} badge={<UnsavedCount count={dirty.size} />} />
+      <Disclosure size="sm" summary={t('web.templates_about_fold')}>
+        <p className="muted small">{t('web.templates_intro')}</p>
+      </Disclosure>
       <StateSwitch query={templates} denied={denied} isEmpty={rows.length === 0}>
         <DirtyScope report={report}>
           <nav className="card tcat-bar" aria-label={t('web.templates_categories')}>

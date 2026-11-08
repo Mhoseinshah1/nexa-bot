@@ -12,6 +12,7 @@ export const WEB_FA_PRODUCTS = {
   'web.client_apps_delete_title': 'حذف برنامه',
   'web.client_apps_delete_yes': 'بله، حذف شود',
   'web.client_apps_title': 'برنامه‌ها و آموزش اتصال',
+  'web.client_apps_about_fold': 'دربارهٔ این صفحه',
   'web.client_apps_subtitle':
     'برنامه‌هایی که ربات در بخش «📱 دانلود برنامه و آموزش اتصال» به مشتری پیشنهاد می‌دهد، با لینک دانلود و آموزش هر کدام. هر تغییر از همان لحظه در ربات دیده می‌شود.',
   'web.client_apps_hint':

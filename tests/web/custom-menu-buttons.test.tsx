@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   CUSTOM_MENU_BUTTON_ERROR_CODES,
@@ -65,13 +65,21 @@ function custom(
 
 const page = () => <BotButtonsPage mayEdit denied={false} mayViewTemplates mayEditTemplates />;
 const chip = (id: string) => document.querySelector(`[data-chip="${id}"]`) as HTMLElement | null;
-const chipButton = (id: string) =>
-  document.querySelector(`[data-chip-button="${id}"]`) as HTMLButtonElement;
-const pool = () => screen.getByTestId('bb-pool');
+const chipButton = (id: string) => document.querySelector(`[data-dnd-item="${id}"]`) as HTMLElement;
+const pool = () => document.querySelector('[data-dnd-free]') as HTMLElement;
+/** A pointer drag of an item onto `target`, past the drag threshold. */
+function drag(id: string, target: Element | null): void {
+  const from = chipButton(id);
+  fireEvent.pointerDown(from, { pointerId: 1, clientX: 1, clientY: 1 });
+  document.elementFromPoint = vi.fn(() => target);
+  fireEvent.pointerMove(from, { pointerId: 1, clientX: 30, clientY: 30 });
+  fireEvent.pointerUp(from, { pointerId: 1, clientX: 30, clientY: 30 });
+}
+const newRowZone = () => document.querySelector('[data-dnd-new-row]');
 const pooled = () =>
   [...pool().querySelectorAll('[data-chip]')].map((one) => one.getAttribute('data-chip') ?? '');
 const drawnRows = () =>
-  [...document.querySelectorAll('.bb-row')].map((row) =>
+  [...document.querySelectorAll('.dnd-row')].map((row) =>
     [...row.querySelectorAll('[data-chip]')].map((one) => one.getAttribute('data-chip') ?? ''),
   );
 const state = () => screen.getByTestId('bb-state').getAttribute('data-status');
@@ -143,16 +151,7 @@ describe('custom buttons in the builder', () => {
     ]);
     renderPage(page());
     await ready();
-    fireEvent.click(chipButton(REF_LINK));
-    fireEvent.change(
-      within(screen.getByTestId('bb-inspector')).getByLabelText(t('web.bb_place_into')),
-      { target: { value: 'new' } },
-    );
-    fireEvent.click(
-      screen
-        .getByTestId('bb-inspector')
-        .querySelector('[data-move="web.bb_place_go"]') as HTMLElement,
-    );
+    drag(REF_LINK, newRowZone());
     expect(drawnRows().at(-1)).toEqual([REF_LINK]);
     fireEvent.click(toolbarButton(t('web.bb_save_draft')));
     await waitFor(() => expect(draftPuts(api)).toHaveLength(1));
@@ -178,12 +177,7 @@ describe('custom buttons in the builder', () => {
     ]);
     renderPage(page());
     await ready();
-    fireEvent.click(chipButton('help'));
-    fireEvent.click(
-      screen
-        .getByTestId('bb-inspector')
-        .querySelector('[data-move="web.bb_move_prev_row"]') as HTMLElement,
-    );
+    drag('help', document.querySelector('[data-dnd-row="0"]'));
     fireEvent.click(toolbarButton(t('web.bb_save_draft')));
     await waitFor(() => expect(draftPuts(api)).toHaveLength(1));
     expect((draftPuts(api)[0]?.body as { layout: { v: number } }).layout.v).toBe(1);
@@ -268,12 +262,7 @@ describe('custom buttons in the builder', () => {
     await ready();
     expect(drawnRows()).toContainEqual([REF_LINK]);
     // An unrelated unsaved edit, made before the archive.
-    fireEvent.click(chipButton('services'));
-    fireEvent.click(
-      screen
-        .getByTestId('bb-inspector')
-        .querySelector('[data-move="web.bb_move_own_row"]') as HTMLElement,
-    );
+    drag('services', newRowZone());
     expect(drawnRows()).toContainEqual(['services']);
     expect(state()).toBe('unsaved');
 
@@ -298,7 +287,7 @@ describe('custom buttons in the builder', () => {
     );
     renderPage(page());
     await ready();
-    fireEvent.click(chipButton(REF_LINK));
+    fireEvent.focus(chipButton(REF_LINK));
     const inspector = within(screen.getByTestId('bb-inspector'));
     expect(inspector.getByText(t('web.bb_custom_inspector_note'))).toBeTruthy();
     expect(screen.queryByTestId('bb-icon')).toBeNull();

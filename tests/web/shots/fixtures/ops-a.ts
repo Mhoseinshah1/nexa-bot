@@ -24,6 +24,7 @@ import {
   productListResponseSchema,
   providerListResponseSchema,
   serviceListResponseSchema,
+  customMenuButtonListResponseSchema,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { ago, fixture, type ShotFixture } from '../fixture.ts';
@@ -512,6 +513,11 @@ export const OPS_A: readonly ShotFixture[] = [
     iconEligibility: [
       { botInstanceId: BOT_ID, username: 'nexa_store_bot', status: 'ACTIVE', eligible: true },
     ],
+  }),
+  fixture('/bot-menu/custom-buttons', customMenuButtonListResponseSchema, {
+    featureEnabled: true,
+    buttons: [],
+    storage: { usedBytes: 0, maxBytes: 1_000_000 },
   }),
   fixture('/bot-menu/builder/revisions', mainMenuRevisionListResponseSchema, {
     revisions: [

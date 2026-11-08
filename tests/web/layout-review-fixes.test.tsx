@@ -120,9 +120,8 @@ describe('B2: the bot-buttons builder between 761px and 1180px', () => {
    * builder is one column of framed cards at every width — the free buttons full width
    * ABOVE the menu, not a narrow column beside the phone.
    */
-  it('puts the free buttons full width above the phone, in one column', () => {
+  it('stacks the menu and its editor in one column', () => {
     expect(declarations('.bb-card .bb-workspace')['grid-template-columns']).toBe('minmax(0, 1fr)');
-    expect(declarations('.bb-card .bb-workspace > .bb-pool')['grid-column']).toBe('1 / -1');
   });
 
   it('goes from three editor columns straight to one', () => {

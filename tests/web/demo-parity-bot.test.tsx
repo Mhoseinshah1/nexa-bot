@@ -32,7 +32,6 @@ describe('the bot family demo-parity fixtures', () => {
 describe('the bot family composition (CSS)', () => {
   it('stacks the bot-buttons builder in one column of framed cards', () => {
     expect(rule('.bb-card .bb-workspace')).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
-    expect(rule('.bb-card .bb-pool-list')).toMatch(/flex-direction:\s*column/);
   });
 
   it('draws a running broadcast in the chart blue', () => {

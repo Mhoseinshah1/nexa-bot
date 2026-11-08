@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type KeyboardEvent,
@@ -229,6 +230,8 @@ export function LayoutDnd({
   label,
   rtl = true,
   disabled = false,
+  onSelect,
+  className,
 }: {
   layout: DndLayout;
   onChange: (next: DndLayout) => void;
@@ -240,8 +243,13 @@ export function LayoutDnd({
   label: string;
   rtl?: boolean;
   disabled?: boolean;
+  /** Called when an item is pressed or focused (a page that edits the item beside the layout). */
+  onSelect?: (id: string) => void;
+  /** Extra class on the root, for a page's own look of the items. */
+  className?: string;
 }) {
   const fixed = rules.fixed ?? [];
+  const hintId = useId();
   const press = useRef<{ id: string; x: number; y: number } | null>(null);
   const [drag, setDrag] = useState<{ id: string; over: DropTarget | null } | null>(null);
   const [grabbed, setGrabbed] = useState<{ id: string; snapshot: DndLayout } | null>(null);
@@ -261,6 +269,7 @@ export function LayoutDnd({
 
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>, id: string) => {
     if (disabled || fixed.includes(id) || event.button !== 0) return;
+    onSelect?.(id);
     press.current = { id, x: event.clientX, y: event.clientY };
     const move = (e: PointerEvent) => {
       const start = press.current;
@@ -373,8 +382,9 @@ export function LayoutDnd({
         role="button"
         tabIndex={isFixed || disabled ? -1 : 0}
         aria-pressed={grabbed?.id === id}
-        aria-describedby={isFixed ? undefined : 'dnd-hint'}
+        aria-describedby={isFixed ? undefined : hintId}
         onPointerDown={(e) => onPointerDown(e, id)}
+        onFocus={() => onSelect?.(id)}
         onKeyDown={(e) => onKeyDown(e, id)}
       >
         {renderItem(id)}
@@ -383,8 +393,13 @@ export function LayoutDnd({
   };
 
   return (
-    <div ref={root} className="dnd-layout" role="group" aria-label={label}>
-      <span id="dnd-hint" className="visually-hidden">
+    <div
+      ref={root}
+      className={className === undefined ? 'dnd-layout' : `dnd-layout ${className}`}
+      role="group"
+      aria-label={label}
+    >
+      <span id={hintId} className="visually-hidden">
         {t('web.kit_dnd_item_hint')}
       </span>
       <span className="visually-hidden" role="status" aria-live="polite">
