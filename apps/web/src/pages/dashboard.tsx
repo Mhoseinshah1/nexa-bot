@@ -1330,7 +1330,7 @@ function AttentionCard({
       title={t('web.dashboard_attention')}
       hint={t('web.dashboard_attention_hint')}
       actions={
-        <a className="btn sm" href="/alerts" onClick={onLink}>
+        <a className="btn sm" href="/notification-center?filter=open" onClick={onLink}>
           {t('web.nav_alerts')}
         </a>
       }

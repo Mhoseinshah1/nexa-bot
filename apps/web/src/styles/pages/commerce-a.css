@@ -727,3 +727,34 @@
 .service-why {
   margin-block-start: calc(-1 * var(--gap) / 2);
 }
+
+/* PR-8 (system menu): the unified notifications + alerts page and the bell's drawer. */
+.nc-bell-list {
+  margin: 0;
+}
+.nc-bell-list .nc-item:last-child {
+  border-block-end: 0;
+}
+.alerts-head,
+.notifications-head,
+.ops-group-tabhead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-end: 12px;
+}
+.alerts-head {
+  justify-content: flex-end;
+}
+.notifications-head p,
+.ops-group-tabhead p {
+  margin: 0;
+  flex: 1 1 280px;
+}
+.notifications-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

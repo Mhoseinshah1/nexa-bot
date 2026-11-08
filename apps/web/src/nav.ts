@@ -31,7 +31,8 @@ export interface NavEntry {
    * session; an ARRAY means ANY of them, because a page can serve more than one
    * capability and gating it on the first one hides the others.
    *
-   * `/notifications` is why this is not a single string. It carries two
+   * `/notifications` (now the delivery-log tab of `/ops-group`) is why this is not a single
+   * string. It carries two
    * separate server capabilities — the delivery history (`opslog.view`) and the
    * test send (`settings.edit`, which `POST /notifications/test` authorizes on
    * its own and which the page already gates separately). Requiring only
@@ -574,40 +575,27 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_system',
   },
   {
-    // WP-A4: «گروه گزارش‌های مدیریتی». Read with `settings.view`, acted on with
-    // `settings.edit`, which the page gates itself.
+    // WP-A4: «گروه لاگ». Two tabs, each with the permission it always had: the group is read
+    // with `settings.view` (acted on with `settings.edit`, which the page gates itself), and
+    // «گزارش ارسال‌ها» — the delivery log that was `/notifications` — with `opslog.view` (its
+    // test sends are `settings.edit`). EITHER capability, see `NavEntry.permission`: an actor
+    // holding only `opslog.view` still reaches the delivery log.
     id: 'ops-group',
     path: '/ops-group',
     label: 'web.nav_ops_group',
     icon: 'radio',
-    permission: 'settings.view',
+    permission: ['settings.view', 'opslog.view', 'settings.edit'],
     group: 'web.navgroup_system',
   },
   {
-    // Phase B3: the notification center. Every administrator has an inbox; the server
-    // filters it by the categories their permissions admit.
+    // Phase B3: the notification center, which is also «هشدارهای مدیریتی» (the alerts chips,
+    // `opslog.view` — gated on the page). Every administrator has an inbox; the server
+    // filters it by the categories their permissions admit. `/alerts` redirects here.
     id: 'inbox',
     path: '/notification-center',
     label: 'web.nav_inbox',
     icon: 'bell',
     permission: null,
-    group: 'web.navgroup_system',
-  },
-  {
-    id: 'notifications',
-    path: '/notifications',
-    label: 'web.nav_notifications',
-    icon: 'bell',
-    // EITHER capability. See `NavEntry.permission`.
-    permission: ['opslog.view', 'settings.edit'],
-    group: 'web.navgroup_system',
-  },
-  {
-    id: 'alerts',
-    path: '/alerts',
-    label: 'web.nav_alerts',
-    icon: 'alertOctagon',
-    permission: 'opslog.view',
     group: 'web.navgroup_system',
   },
   {

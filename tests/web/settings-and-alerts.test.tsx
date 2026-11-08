@@ -947,7 +947,7 @@ describe('management alerts', () => {
    */
   it('defaults to the management history and can be narrowed to open items', async () => {
     const api = stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
-    renderPage(<AlertsPage denied={false} />);
+    const { rerender } = renderPage(<AlertsPage denied={false} />);
     // The FILTERED empty state, because the default view is history and did not
     // ask whether anything is open. This assertion used to name the open-alert
     // copy, which pinned the wrong string in place: the page said "there is no
@@ -956,7 +956,7 @@ describe('management alerts', () => {
     expect(screen.queryByText('هشدار بازی وجود ندارد.')).toBeNull();
     expect(api.calls[0]?.url).not.toContain('open=');
 
-    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
+    rerender(<AlertsPage denied={false} openOnly />);
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('open=true'))).toBe(true);
     });
@@ -971,10 +971,10 @@ describe('management alerts', () => {
    */
   it('claims that nothing is open only from the unfiltered open view', async () => {
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
-    renderPage(<AlertsPage denied={false} />);
+    const { rerender } = renderPage(<AlertsPage denied={false} />);
     await screen.findByText(t('web.alerts_empty_filter'));
 
-    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
+    rerender(<AlertsPage denied={false} openOnly />);
     // Now it has asked, so now it may answer.
     await screen.findByText('هشدار بازی وجود ندارد.');
     expect(screen.queryByText(t('web.alerts_empty_filter'))).toBeNull();
@@ -991,9 +991,9 @@ describe('management alerts', () => {
    */
   it('does not deny that anything is open when a severity filter emptied the page', async () => {
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
-    renderPage(<AlertsPage denied={false} />);
+    const { rerender } = renderPage(<AlertsPage denied={false} />);
     await screen.findByText(t('web.alerts_empty_filter'));
-    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
+    rerender(<AlertsPage denied={false} openOnly />);
     await screen.findByText('هشدار بازی وجود ندارد.');
 
     fireEvent.change(within(openFilterPanel()).getByLabelText('شدت'), {
@@ -1061,9 +1061,9 @@ describe('management alerts', () => {
         },
       },
     ]);
-    renderPage(<AlertsPage denied={false} />);
+    const { rerender } = renderPage(<AlertsPage denied={false} />);
     await screen.findByText('A budget filled up.');
-    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
+    rerender(<AlertsPage denied={false} openOnly />);
     await screen.findByText('A budget filled up.');
 
     // Page two, and by then the condition has been resolved elsewhere.
@@ -1120,7 +1120,7 @@ describe('management alerts', () => {
    */
   it('asks for the conditions scope when narrowed to open items', async () => {
     const api = stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
-    renderPage(<AlertsPage denied={false} />);
+    const { rerender } = renderPage(<AlertsPage denied={false} />);
     // The default view is history, so this is the filtered empty state.
     await screen.findByText(t('web.alerts_empty_filter'));
 
@@ -1128,7 +1128,7 @@ describe('management alerts', () => {
       new URL(url, 'https://admin.example.test').searchParams.get('scope');
     expect(scopeOf(api.calls[0]?.url ?? '')).toBe('MANAGEMENT');
 
-    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
+    rerender(<AlertsPage denied={false} openOnly />);
     await waitFor(() => {
       const open = api.calls.find((call) => call.url.includes('open=true'));
       expect(open, 'no open request was made').toBeDefined();
@@ -1137,9 +1137,9 @@ describe('management alerts', () => {
       expect(scopeOf(open?.url ?? '')).toBe('MANAGEMENT_CONDITIONS');
     });
 
-    // ...and going back to history restores the wide scope, so the narrowing
+    // ...and going back to the recorded chip restores the wide scope, so the narrowing
     // is a filter rather than a one-way door.
-    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'همه' }));
+    rerender(<AlertsPage denied={false} />);
     await waitFor(() => {
       const last = api.calls[api.calls.length - 1];
       expect(scopeOf(last?.url ?? '')).toBe('MANAGEMENT');

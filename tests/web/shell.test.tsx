@@ -322,7 +322,7 @@ describe('the sidebar', () => {
     const spoken = t('web.nav_counter_at_least_spoken').replace('{count}', capped);
     expect(badge.querySelector('[aria-hidden="true"]')?.textContent).toBe(`${capped}+`);
     const link = badge.closest('a') as HTMLAnchorElement;
-    expect(link).toHaveAccessibleName(`${t('web.nav_alerts')}${spoken}`);
+    expect(link).toHaveAccessibleName(`${t('web.nav_inbox')}${spoken}`);
     expect(link).toHaveAccessibleDescription(spoken);
   });
 

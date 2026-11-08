@@ -333,7 +333,6 @@ export const WEB_FA_SYSTEM = {
 
   // --- Alerts --------------------------------------------------------------
   'web.alerts_title': 'هشدارهای مدیریتی',
-  'web.alerts_intro': 'مواردی که واقعاً به رسیدگی یک نفر نیاز دارند.',
   'web.alerts_scope_body':
     'تنها رویدادهای مدیریتی اینجا می‌آیند: تغییر مدیران و نقش‌ها، قفل‌شدن حساب، رد دسترسی، پرشدن سهمیهٔ پایش یک مستأجر، و تنظیمی که دیگر خوانده نمی‌شود. جریان روتین — هر بررسی سلامت، هر تلاش ارسال، و ازکارافتادن کانال اعلان — به گروه گزارش تلگرام می‌رود.',
   // Two empty states, because there are two questions and only one of them was
@@ -353,7 +352,7 @@ export const WEB_FA_SYSTEM = {
   'web.build_time': 'زمان ساخت',
   'web.node_version': 'نسخهٔ Node',
   'web.last_login': 'آخرین ورود',
-  'web.opsgroup_title': 'گروه گزارش‌های مدیریتی',
+  'web.opsgroup_title': 'گروه لاگ',
   'web.opsgroup_subtitle':
     'گروه تلگرامی که Nexa گزارش‌های سیستم، خطاها و پرداخت‌ها را در تاپیک‌های خودش در آن ارسال می‌کند.',
   'web.opsgroup_lane_off':
@@ -518,13 +517,24 @@ export const WEB_FA_SYSTEM = {
   'web.recovery_verdict_behind': 'عقب‌تر از این نسخه',
   'web.recovery_verdict_none': 'بدون مهاجرت',
   'web.recovery_verdict_diverged': 'ناهم‌خوان با این نسخه',
-  'web.nc_title': 'مرکز اعلان‌ها',
+  'web.nc_title': 'اعلان‌ها و هشدارها',
   'web.nc_intro':
     'رخدادهایی که به اقدام مدیر نیاز دارند، از گزارش عملیاتی سامانه. هر رخداد تکراری یک اعلان با شمارنده است؛ وضعیت خوانده‌شدن برای هر مدیر جداست و رخداد را حل نمی‌کند.',
   'web.nc_bell': 'اعلان‌ها',
   'web.nc_bell_unread': 'اعلان خوانده‌نشده',
   'web.nc_filter_all': 'همه',
   'web.nc_filter_unread': 'خوانده‌نشده',
+  'web.nc_filter_open_alerts': 'هشدارهای باز',
+  'web.nc_filter_recorded_alerts': 'هشدارهای ثبت‌شده',
+  'web.nc_filters_label': 'نمایش',
+  'web.nc_source_alert': 'هشدار مدیریتی',
+  'web.nc_alerts_strip_title': 'هشدار باز',
+  'web.nc_alerts_strip_link': 'مشاهدهٔ هشدارهای باز',
+  'web.nc_bell_drawer_title': 'اعلان‌های خوانده‌نشده',
+  'web.nc_bell_drawer_empty': 'خوانده‌نشده‌ای نمانده است.',
+  'web.nc_bell_drawer_all': 'همهٔ اعلان‌ها و هشدارها',
+  'web.opsgroup_tab_group': 'تنظیمات گروه',
+  'web.opsgroup_tab_log': 'گزارش ارسال‌ها',
   'web.nc_filter_category': 'دسته',
   'web.nc_category_all': 'همهٔ دسته‌ها',
   'web.nc_mark_all': 'همه را خوانده‌شده کن',

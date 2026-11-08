@@ -38,6 +38,7 @@ import {
   Ltr,
   Num,
   PageHead,
+  RoutedTabs,
   StatCard,
   StateSwitch,
   StatusDot,
@@ -49,6 +50,8 @@ import { Icon } from '../ui/icons';
 import { ListFilterBar } from '../ui/filter-bar';
 import { ListFreshness } from '../ui/list-search';
 import { ErrorRef } from '../ui/technical-details';
+import { useRoute, type Route } from '../router';
+import { NotificationsPage } from './alerts';
 
 /**
  * «گروه گزارش‌های مدیریتی» (WP-A4): the Telegram group Nexa posts its operations log to.
@@ -163,7 +166,7 @@ function settleUnlessInFlight(
   submission.settleOn(error);
 }
 
-export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage: boolean }) {
+function OpsGroupSettingsTab({ denied, mayManage }: { denied: boolean; mayManage: boolean }) {
   const queries = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
@@ -264,11 +267,10 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
 
   return (
     <>
-      <PageHead
-        title={t('web.opsgroup_title')}
-        subtitle={t('web.opsgroup_subtitle')}
-        actions={<ListFreshness query={status} />}
-      />
+      <div className="ops-group-tabhead">
+        <p className="muted small">{t('web.opsgroup_subtitle')}</p>
+        <ListFreshness query={status} />
+      </div>
 
       <StateSwitch query={status} denied={denied} isEmpty={false}>
         {view !== undefined && (
@@ -577,6 +579,58 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
           </>
         )}
       </StateSwitch>
+    </>
+  );
+}
+
+/**
+ * «گروه لاگ»: the Telegram group Nexa posts its operations log to («تنظیمات گروه»), and the log
+ * of what was sent there and elsewhere («گزارش ارسال‌ها» — the delivery log with its test sends,
+ * which was the page `/notifications`).
+ *
+ * Each tab keeps the permission it always had: the group is read with `settings.view` and
+ * changed with `settings.edit`; the delivery log is read with `opslog.view`, and its test sends
+ * are `settings.edit`. An administrator holding only `opslog.view` therefore opens on the log
+ * tab (the group tab is not offered to them). A page without `log` (no delivery capability at
+ * all) is the group alone.
+ */
+export function OpsGroupPage({
+  denied,
+  mayManage,
+  log,
+  route: given,
+}: {
+  denied: boolean;
+  mayManage: boolean;
+  /** The resolved route (its `?tab=`); the live location when a caller has none. */
+  route?: Route;
+  /** The delivery log tab's capabilities; omitted, the page has no such tab. */
+  log?: { readonly denied: boolean; readonly mayTest: boolean };
+}) {
+  const live = useRoute();
+  const route = given ?? live;
+  const groupTab = { id: 'group' as const, label: t('web.opsgroup_tab_group') };
+  const logTab = { id: 'log' as const, label: t('web.opsgroup_tab_log') };
+  // The first tab is the fallback, so it is the first one this administrator may read.
+  const items = (
+    log === undefined ? [groupTab] : denied && !log.denied ? [logTab, groupTab] : [groupTab, logTab]
+  ) as readonly (typeof groupTab | typeof logTab)[];
+  return (
+    <>
+      <PageHead title={t('web.opsgroup_title')} />
+      {items.length === 1 ? (
+        <OpsGroupSettingsTab denied={denied} mayManage={mayManage} />
+      ) : (
+        <RoutedTabs route={route} items={items} panelId="ops-group-tabs">
+          {(selected) =>
+            selected === 'log' && log !== undefined ? (
+              <NotificationsPage mayTest={log.mayTest} denied={log.denied} />
+            ) : (
+              <OpsGroupSettingsTab denied={denied} mayManage={mayManage} />
+            )
+          }
+        </RoutedTabs>
+      )}
     </>
   );
 }

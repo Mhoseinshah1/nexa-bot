@@ -32,7 +32,6 @@ import { BotButtonsPage } from './pages/bot-buttons';
 import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { RemindersPage } from './pages/reminders';
-import { AlertsPage, NotificationsPage } from './pages/alerts';
 // Phase B3: the notification center and its top-bar bell.
 import { NotificationBell, NotificationCenterPage } from './pages/notification-center';
 import { IncidentBanner, IncidentDetailPage, IncidentsPage } from './pages/incidents';
@@ -1339,11 +1338,16 @@ export function resolve(
     };
   }
 
+  /*
+   * «هشدارهای مدیریتی» is the alerts chips of «اعلان‌ها و هشدارها»: the old path REPLACES
+   * itself with the unified page on its «هشدارهای باز» chip, so a bookmark lands there and
+   * Back does not bounce into the redirect. The permission (`opslog.view`) is the chips'.
+   */
   if (route.path === '/alerts') {
     return {
-      element: <AlertsPage denied={!may('opslog.view')} />,
-      crumbs: [{ label: t('web.nav_alerts') }],
-      title: t('web.nav_alerts'),
+      element: <RedirectPage to="/notification-center?filter=open" />,
+      crumbs: [{ label: t('web.nav_inbox') }],
+      title: t('web.nc_title'),
     };
   }
 
@@ -1385,11 +1389,12 @@ export function resolve(
     };
   }
 
+  // The delivery log is the tab «گزارش ارسال‌ها» of «گروه لاگ»; the old path replaces itself.
   if (route.path === '/notifications') {
     return {
-      element: <NotificationsPage mayTest={may('settings.edit')} denied={!may('opslog.view')} />,
-      crumbs: [{ label: t('web.nav_notifications') }],
-      title: t('web.nav_notifications'),
+      element: <RedirectPage to="/ops-group?tab=log" />,
+      crumbs: [{ label: t('web.nav_ops_group') }],
+      title: t('web.opsgroup_title'),
     };
   }
 
@@ -1409,7 +1414,18 @@ export function resolve(
 
   if (route.path === '/ops-group') {
     return {
-      element: <OpsGroupPage denied={!may('settings.view')} mayManage={may('settings.edit')} />,
+      element: (
+        <OpsGroupPage
+          route={route}
+          denied={!may('settings.view')}
+          mayManage={may('settings.edit')}
+          // The delivery log tab keeps what `/notifications` had: read with `opslog.view`, test
+          // sends with `settings.edit` (which the server authorizes on its own).
+          {...(may('opslog.view') || may('settings.edit')
+            ? { log: { denied: !may('opslog.view'), mayTest: may('settings.edit') } }
+            : {})}
+        />
+      ),
       crumbs: [{ label: t('web.nav_ops_group') }],
       title: t('web.opsgroup_title'),
     };

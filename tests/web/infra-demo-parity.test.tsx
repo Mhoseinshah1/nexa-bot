@@ -69,15 +69,13 @@ describe('alerts (demo parity)', () => {
     expect(message.closest('details')).toBeNull();
   });
 
-  it('shows the status filter as a chip even at its default («وضعیت: همه»)', async () => {
+  it("has no status chip of its own: «باز» / «ثبت‌شده» are the unified page's chips", async () => {
     stubApi([{ url: '/ops-log', body: { events: [event()], nextCursor: null } }]);
     const { container } = renderPage(<AlertsPage denied={false} />);
     await screen.findByText('Roles changed.');
-    const chip = container.querySelector('.lfb-chip') as HTMLElement;
-    expect(chip).not.toBeNull();
-    expect(chip).toHaveTextContent(t('web.status'));
-    expect(chip).toHaveTextContent(t('web.all'));
-    expect(container.querySelector('.lfb-none')).toBeNull();
+    // Only the severity filter is left in the bar, and it has no value at its default.
+    expect(container.querySelector('.lfb-chip')).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.unresolved') })).toBeNull();
   });
 });
 

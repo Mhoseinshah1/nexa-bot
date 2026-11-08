@@ -1,0 +1,42 @@
+# PR-8 (part A): before/after inventory — notifications and the system menu (6 → 3)
+
+Presentation and routing only: every query, mutation, permission prop, confirm, reason field and idempotency key is the
+page's own, unchanged. No endpoint was added. The owner's rule (brief §2.5 «System menu»): «مرکز اعلان‌ها» + «هشدارهای مدیریتی»
+become one page; «اعلان‌ها» (delivery log) becomes a tab of «گروه لاگ». The audit-log → «سامانه» move is another worktree.
+
+## «اعلان‌ها و هشدارها» — `/notification-center` (`pages/notification-center.tsx`, `pages/alerts.tsx`)
+
+| Before                                                                                                                                                                                      | After                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| «مرکز اعلان‌ها» title + intro line                                                                                                                                                          | Title «اعلان‌ها و هشدارها» (nav label too); the same intro line                                                                                                                                                                              |
+| Pills «خوانده‌نشده / همه»                                                                                                                                                                   | Chips (`QuickFilters`) «خوانده‌نشده» (with the server unread count while it is not capped) / «همه» / «هشدارهای باز» / «هشدارهای ثبت‌شده»                                                                                                     |
+| Category filter, «همه را خوانده‌شده کن», mark read/unread, «مشاهده» deep link, details disclosure                                                                                           | Unchanged on the inbox chips (category narrows «همه» to the inbox; the mark-all button is drawn on the two inbox chips)                                                                                                                      |
+| `/alerts` page «هشدارهای مدیریتی» (table, status/«وضعیت» filter «باز / همه»)                                                                                                                | Chips «هشدارهای باز» (`MANAGEMENT_CONDITIONS`, `open=true`) and «هشدارهای ثبت‌شده» (`MANAGEMENT`, history): the status filter became these chips                                                                                             |
+| Alerts table: severity, event, Persian message + «جزئیات فنی», occurrences, first/last seen, status badge («ثبت‌شده / باز / رفع‌شده»), severity filter, refresh, scope banner, cursor pager | Unchanged (the same table, `AlertsPage`); refresh moved from the page head to a row above the card, still withdrawn once the refusal is final                                                                                                |
+| Alerts subtitle `alerts_intro`                                                                                                                                                              | Dropped (it restated the page name; the scope banner stays)                                                                                                                                                                                  |
+| (none)                                                                                                                                                                                      | Red `AttentionStrip` while an alert is open (one `MANAGEMENT_CONDITIONS` row probe, `opslog.view` only); its link switches to «هشدارهای باز»                                                                                                 |
+| An event in both lists                                                                                                                                                                      | On «همه» both feeds are laid into one newest-first list and an event with the same id is drawn ONCE (inbox actions plus the alert's status badge); alert-only events are drawn as alert cards. Keyset paging is kept per feed (`mergeFeeds`) |
+| Bell: a link with the unread count                                                                                                                                                          | Bell button (count, tone) on every page opens a `Drawer` with the latest 8 unread items (open = marks read), «همه را خوانده‌شده کن», and a link «همهٔ اعلان‌ها و هشدارها». The drawer asks only while open                                   |
+| `/alerts`                                                                                                                                                                                   | Redirects to `/notification-center?filter=open` (replace). Dashboard link, attention row and the `ALERTS` deep link point at it directly                                                                                                     |
+
+Permissions: the inbox needs a session only (as before); the alert chips, the strip and the «همه» alert half need `opslog.view` and issue no
+request without it (the chips show the page's existing denied state). Nav counter (`openConditions`) moved from the removed «هشدارها» entry to «اعلان‌ها و هشدارها».
+
+## «گروه لاگ» — `/ops-group` (`pages/ops-group.tsx`)
+
+| Before                                                                                                                    | After                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Title «گروه گزارش‌های مدیریتی», nav «گروه گزارش‌ها»                                                                       | «گروه لاگ» (title, nav label, the feature-where label)                                                                                |
+| Group connect/verify/reconnect/disconnect/test/requeue, topics, manual fallback                                           | Unchanged, tab «تنظیمات گروه» (`settings.view` / `settings.edit`); its subtitle and the freshness stamp sit in one row under the tabs |
+| `/notifications` «اعلان‌ها»: delivery list, attempts panel, released claims, test sends (`settings.edit`), pager, polling | Tab «گزارش ارسال‌ها» — the same `NotificationsPage` (head replaced by one muted line + the two test-send buttons); `?tab=log`         |
+| `/notifications`                                                                                                          | Redirects to `/ops-group?tab=log` (replace)                                                                                           |
+
+Permissions: the nav entry carries the list `settings.view | opslog.view | settings.edit` (EITHER). The log tab is offered to `opslog.view` or `settings.edit`;
+it reads with `opslog.view` (denied otherwise, no request) and test sends are `settings.edit`. An actor with only `opslog.view` opens ON the log tab and the group
+tab is refused without a request to `/ops-group`. The old menu entries «اعلان‌ها» and «هشدارهای مدیریتی» are gone from `NAV` (51 entries).
+
+## Decisions
+
+- «هشدارهای ثبت‌شده» = the whole management history (`MANAGEMENT`), as the old page's default; the server has no "not open" filter and the client may not filter a page.
+- `/alerts` redirects to the «هشدارهای باز» chip.
+- Telegram texts that name the group «گروه گزارش‌های مدیریتی» (backup destination copy) are left: they name the Telegram group, not the page.

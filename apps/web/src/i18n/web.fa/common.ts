@@ -36,7 +36,6 @@ export const WEB_FA_COMMON = {
   'web.nav_settings': 'تنظیمات',
   'web.nav_features': 'قابلیت‌ها',
   'web.nav_templates': 'متن‌ها',
-  'web.nav_notifications': 'اعلان‌ها',
 
   // Shared
   'web.save': 'ذخیره',
@@ -342,7 +341,7 @@ export const WEB_FA_COMMON = {
   // WP-A4 — «گروه گزارش‌های مدیریتی».
   // --- Premium UI: «ظاهر ربات» -----------------------------------------------------
   'web.nav_appearance': 'ظاهر ربات',
-  'web.nav_ops_group': 'گروه گزارش‌ها',
+  'web.nav_ops_group': 'گروه لاگ',
   'web.nav_reseller_requests': 'درخواست‌های نمایندگی',
 
   // WP-A7 — support tickets.
@@ -353,7 +352,7 @@ export const WEB_FA_COMMON = {
   'web.nav_broadcasts': 'ارسال همگانی',
   'web.nav_bulk_operations': 'عملیات گروهی',
   // Phase B3: the notification center.
-  'web.nav_inbox': 'مرکز اعلان‌ها',
+  'web.nav_inbox': 'اعلان‌ها و هشدارها',
   // --- Phase D2: the administrator's own account and its security section ------------
   'web.account_title': 'حساب من',
   'web.account_subtitle': 'تنظیمات امنیتی حساب خودتان. این بخش فقط روی حساب شما اثر دارد.',
