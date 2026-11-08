@@ -19,7 +19,7 @@ import {
 import { renderTemplateBody } from '@nexa/i18n';
 import { renderPage, stubApi } from './harness';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { openFilterPanel, setDateField } from './ui-helpers';
+import { setDateField } from './ui-helpers';
 
 /**
  * «ارسال همگانی» in the Web Admin (round N, B1): the list, the confirmation that binds to the
@@ -400,7 +400,7 @@ describe('broadcast in the Web Admin', () => {
     });
   });
 
-  it('filters the recipients by state from the filter panel, from the first page', async () => {
+  it('filters the recipients by state from the quick-filter chips, from the first page', async () => {
     const api = stubApi([
       { url: `/broadcasts/${ID}`, body: { broadcast: broadcast({ state: 'COMPLETED' }) } },
       { url: `/broadcasts/${ID}/recipients`, body: { recipients: [], nextCursor: null } },
@@ -412,10 +412,9 @@ describe('broadcast in the Web Admin', () => {
     const first = api.calls.find((call) => call.url.includes('/recipients'));
     expect(new URL(first?.url ?? '', 'http://x').searchParams.get('limit')).toBe('10');
     const card = screen.getByRole('heading', { name: t('web.bc_recipients') }).closest('section');
-    const panel = openFilterPanel(card as HTMLElement);
-    fireEvent.change(within(panel).getByRole('combobox', { name: t('web.bc_state') }), {
-      target: { value: 'FAILED' },
-    });
+    fireEvent.click(
+      within(card as HTMLElement).getByRole('button', { name: t('web.bc_r_failed') }),
+    );
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.includes('/recipients?limit=10&state=FAILED'))).toBe(
         true,
