@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { t } from '../i18n/web.fa';
+import { formatNumber } from '../format';
 import { Button, type Column } from './kit';
+import { SelectionBar } from './redesign';
 
 /**
  * R12 F3 item 8: row selection and a CSV export on the users, orders and payments lists.
@@ -111,7 +113,8 @@ export function downloadCsv(filename: string, text: string): void {
 }
 
 /**
- * The bar above a selectable list: select the page, how many are ticked, and the export. Not
+ * The selection of a selectable list (redesign PR-2): a select-the-page tick above the rows, and
+ * the selection bar — count, the CSV export, the cap, clear — only while rows are ticked. Not
  * drawn at all unless the list is readable (`allowed`) and has rows.
  */
 export function RowExportBar<T>({
@@ -139,19 +142,17 @@ export function RowExportBar<T>({
         />
         <span>{t('web.export_select_all')}</span>
       </label>
-      <span className="muted small" aria-live="polite">
-        {t('web.export_selected')} {count}
-      </span>
-      <Button
-        size="sm"
-        disabled={count === 0}
-        onClick={() => downloadCsv(`${filename}.csv`, toCsv(selection.chosen, columns))}
-      >
-        {t('web.export_csv')}
-      </Button>
-      <span className="muted small">
-        {t('web.export_cap')} {CSV_EXPORT_MAX_ROWS}
-      </span>
+      <SelectionBar count={count} onClear={selection.clear}>
+        <Button
+          size="sm"
+          onClick={() => downloadCsv(`${filename}.csv`, toCsv(selection.chosen, columns))}
+        >
+          {t('web.export_csv')}
+        </Button>
+        <span className="muted small">
+          {t('web.export_cap')} {formatNumber(CSV_EXPORT_MAX_ROWS)}
+        </span>
+      </SelectionBar>
     </div>
   );
 }

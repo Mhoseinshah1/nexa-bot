@@ -468,7 +468,7 @@ describe('the payments route', () => {
     const view = renderPage(resolved.element as ReactElement);
     // The placeholder's own heading, which must NOT be here any more.
     expect(view.container.textContent).not.toContain('چرا هنوز فعال نیست');
-    expect(view.container.textContent).toContain('پرداخت‌ها');
+    expect(view.container.textContent).toContain(t('web.payment_ops_title'));
   });
 
   /*
@@ -1489,13 +1489,17 @@ describe('the payment diagnostics (§21)', () => {
     const headers = within(table)
       .getAllByRole('columnheader')
       .map((cell) => cell.textContent);
-    // Demo parity X9: the gateway is a column; who paid, the external reference and updated-at
+    // Redesign PR-2: the gateway shares the «روش» column with the method (the table fits at
+    // 1440 without a sideways scroll); who paid, the external reference and updated-at
     // are the row's detail, one toggle away on the same row. PR-C: the payment's uuid is no
     // longer a column — the tracking code is the payment's name, the uuid is «کپی شناسه».
     expect(headers).not.toContain('شناسهٔ پرداخت');
-    for (const header of ['درگاه']) {
-      expect(headers, header).toContain(header);
-    }
+    expect(headers).toContain(t('web.payment_method'));
+    expect(headers).not.toContain('درگاه');
+    // The gateway still prints, in the method cell, under the method.
+    expect(table.querySelector('.pay-route-cell')?.textContent).toContain(
+      t('web.payment_gateway_provider_manual_transfer'),
+    );
     fireEvent.click(within(table).getByRole('button', { name: t('web.payment_row_detail') }));
     const terms = within(table)
       .getAllByRole('term')
