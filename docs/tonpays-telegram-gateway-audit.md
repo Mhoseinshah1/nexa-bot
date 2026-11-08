@@ -208,14 +208,14 @@ How a route's visible name is decided today:
    (`'تون‌پیز (TonPays)'`) and which a tenant may override per locale in
    `template_overrides` (`schema/control-plane.ts:80-124`).
 3. The Web Admin's own label for a NULL name, `web.payment_gateway_provider_tonpays`
-   (`apps/web/src/i18n/web.fa.ts:1752`, used at `payment-gateways.tsx:141-142` and
+   (`apps/web/src/i18n/web.fa/payments-1.ts:476`, used at `payment-gateways.tsx:141-142` and
    `payments.tsx:252`).
 
 To change the website route's DEFAULT visible name to «درگاه پرداخت تون پی وبسایت» without
 touching any tenant's custom name or the persisted identity:
 
 - change the catalogue VALUE at `packages/i18n/src/catalogue.fa.ts:1099` and the web label at
-  `apps/web/src/i18n/web.fa.ts:1752`. Nothing else;
+  `apps/web/src/i18n/web.fa/payments-1.ts:476`. Nothing else;
 - do NOT rename the provider value `TONPAYS`, the template key `bot.payment.route_name_tonpays`
   or `web.payment_gateway_provider_tonpays` — the key is the contract, the text is not;
 - a tenant whose `display_name` is set keeps it (step 1 wins); a tenant with a
@@ -873,7 +873,7 @@ operational codes, operator endpoints.
 | Evidence kind `RECONCILIATION`                      | `payment.ts:214-215` ("an operator resolved an UNKNOWN outcome against the gateway's own records")         | Never written                                                                                           |
 | Event `PaymentOutcomeUnknown`                       | `events.ts:114`, payload `:315-327` ("so a reconciliation surface has something to list")                  | No producer, no consumer (grepped `apps/api/src`)                                                       |
 | Reconciliation queue index                          | `payments_unknown_idx` `schema/payments.ts:272-275` ("the reconciliation queue")                           | No reader                                                                                               |
-| Web Admin                                           | `payments.tsx:1313-1315` banner, `web.fa.ts:2101-2102`; `payment-timeline.tsx:362`                         | Renders, but nothing reaches it                                                                         |
+| Web Admin                                           | `payments.tsx:1313-1315` banner, `web.fa/payments-2.ts:118-119`; `payment-timeline.tsx:362`                | Renders, but nothing reaches it                                                                         |
 | Operator write on a gateway payment                 | `surfaces/web/payments.controller.ts:76-238`: `GET` routes only                                            | None                                                                                                    |
 | Permission                                          | `payments.retry` "Retry a payment settlement" (`permissions.ts:101`)                                       | No reader in `apps/api/src`; its name is a retry, not a reconciliation                                  |
 | `CREATE_UNKNOWN`                                    | `gateway-invoices.ts:66-72`                                                                                | About the CREATE; leaves the payment `PENDING` until its deadline. Does not fit                         |
