@@ -26,6 +26,7 @@ export const WEB_FA_SETTINGS = {
   'web.settings_group_ops': 'گزارش‌های مدیریتی',
   'web.settings_group_customer_notices': 'اعلان‌های مشتری',
   'web.settings_group_other': 'سایر تنظیمات',
+  'web.settings_bar_failed': '{n} مورد ذخیره نشد؛ خطا را در همان تنظیم ببینید.',
   'web.settings_current_value': 'مقدار فعلی',
   'web.settings_value_unset': 'تنظیم نشده',
   'web.settings_range_from': 'عدد صحیح از',

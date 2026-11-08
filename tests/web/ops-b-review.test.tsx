@@ -581,7 +581,7 @@ describe('the recovery step strip after a verification fails', () => {
 // ---------------------------------------------------------------------------
 
 describe('focus after a confirmed write', () => {
-  it('returns focus to Save once a confirmed currency change has settled', async () => {
+  it('returns focus to the row once a confirmed currency change has settled', async () => {
     stubApi([
       {
         url: '/settings',
@@ -605,8 +605,8 @@ describe('focus after a confirmed write', () => {
       `${t('web.currency')} — ${t('web.setting_sales_currency')}`,
     );
     fireEvent.change(select, { target: { value: 'IRR' } });
-    const row = select.closest('article') as HTMLElement;
-    const save = within(row).getByRole('button', { name: t('web.save') });
+    // The page's one sticky bar holds Save; the row has none of its own.
+    const save = screen.getByRole('button', { name: t('web.save') });
     fireEvent.click(save);
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', {
@@ -617,8 +617,15 @@ describe('focus after a confirmed write', () => {
     expect(save).not.toHaveFocus();
 
     writes.release();
-    await waitFor(() => expect(save).toBeEnabled());
-    await waitFor(() => expect(save).toHaveFocus());
+    // The write is adopted, the bar goes away, and focus returns to the row's own control
+    // rather than falling to the page body.
+    await waitFor(() => expect(screen.queryByRole('button', { name: t('web.save') })).toBeNull());
+    // The editor is remounted on the adopted version, so it is looked up again.
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(`${t('web.currency')} — ${t('web.setting_sales_currency')}`),
+      ).toHaveFocus(),
+    );
   });
 
   const opsGroup = (connection: 'CONNECTED' | 'DISCONNECTED') => ({

@@ -21,6 +21,7 @@ import {
   Tabs,
   Value,
 } from '../ui/kit';
+import { ListFreshness } from '../ui/list-search';
 import { useLinkHandler } from '../router';
 import {
   FEATURE_CATEGORIES,
@@ -93,6 +94,13 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
 
   const onCount = rows.filter((flag) => flag.enabled).length;
   const panelId = 'feature-pane';
+  // The list is its own scroll panel: choosing a category (or starting a search) shows the new
+  // list from its top, and never moves the page.
+  const pane = useRef<HTMLDivElement>(null);
+  const paneKey = searching ? '' : (selected ?? '');
+  useEffect(() => {
+    pane.current?.scrollTo?.({ top: 0 });
+  }, [paneKey, searching]);
   const groups = searching
     ? categories
         .map((id) => ({ id, flags: (byCategory.get(id) ?? []).filter(passes) }))
@@ -103,7 +111,11 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
 
   return (
     <>
-      <PageHead title={t('web.features_title')} subtitle={t('web.features_intro')} />
+      <PageHead
+        title={t('web.features_title')}
+        subtitle={t('web.features_intro')}
+        actions={<ListFreshness query={flags} />}
+      />
       <StateSwitch query={flags} denied={denied} isEmpty={rows.length === 0}>
         <FilterBar>
           <SearchInput
@@ -158,6 +170,7 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
           )}
           <div
             id={panelId}
+            ref={pane}
             className="feature-pane-body"
             {...(searching || selected === undefined
               ? { role: 'region', 'aria-label': t('web.features_results_label') }

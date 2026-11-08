@@ -108,6 +108,19 @@ describe('the Features page', () => {
     await waitFor(() => expect(tabFor('referral')).toHaveAttribute('aria-selected', 'true'));
   });
 
+  it('keeps the list in its own scroll panel and shows a new category from its top', async () => {
+    stubApi([{ url: '/features', body: { flags: all() } }]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+    await screen.findByRole('tablist');
+    const pane = document.querySelector('.feature-pane-body') as HTMLElement;
+    const scrollTo = vi.fn();
+    pane.scrollTo = scrollTo;
+    // The categories sit in a column beside the pane, not inside what scrolls.
+    expect(pane.contains(screen.getByRole('tablist'))).toBe(false);
+    fireEvent.click(tabFor('miniapp'));
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 0 }));
+  });
+
   it('shows where, what switching off does and a real link on a row', async () => {
     stubApi([{ url: '/features', body: { flags: [flag('ops_notifications', true)] } }]);
     renderPage(<FeaturesPage mayEdit denied={false} />);

@@ -237,6 +237,9 @@
 }
 
 /* --- Settings: collapsible sections of setting rows ------------------------------ */
+.settings-section {
+  padding: 12px 16px;
+}
 .settings-section-head {
   margin: 0;
   font-size: 16px;
