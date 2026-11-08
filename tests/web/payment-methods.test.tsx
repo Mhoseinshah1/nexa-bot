@@ -221,8 +221,8 @@ describe('the list → a provider → back', () => {
       const links = within(table)
         .getAllByRole('link')
         .filter((link) => link.getAttribute('href') === paymentMethodPath(provider));
-      // The name and «مدیریت», both to the same view.
-      expect(links.length, provider).toBe(2);
+      // The name is the one link to the route's view (redesign PR-2: no «مدیریت» column).
+      expect(links.length, provider).toBe(1);
     }
     // No write control and no form on the list: they belong to a route's own view.
     expect(within(table).queryByRole('button', { name: t('web.payment_gateway_edit') })).toBeNull();
@@ -236,8 +236,10 @@ describe('the list → a provider → back', () => {
     go('/payment-gateways');
     const first = renderPage(<App />);
     const table = await screen.findByRole('table');
+    // Redesign PR-2: the route opens from its NAME link — the «مدیریت» column is gone.
+    expect(within(table).queryByRole('link', { name: t('web.payment_method_open') })).toBeNull();
     const open = within(table)
-      .getAllByRole('link', { name: t('web.payment_method_open') })
+      .getAllByRole('link')
       .find((link) => link.getAttribute('href') === '/payment-gateways/nowpayments') as HTMLElement;
     act(() => {
       fireEvent.click(open);

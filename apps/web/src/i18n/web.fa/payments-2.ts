@@ -51,7 +51,6 @@ export const WEB_FA_PAYMENTS_2 = {
   'web.payment_gateway_tonpays_link_web': 'صفحهٔ وب تون‌پیز',
   'web.payment_gateway_verified_phone_list': '📱 نیاز به تأیید شماره',
   'web.payment_gateway_updated': 'آخرین تغییر',
-  'web.payment_gateway_actions': 'عملیات',
   'web.payment_gateway_edit': 'ویرایش',
   'web.payment_gateway_enable': 'فعال کردن',
   'web.payment_gateway_disable': 'غیرفعال کردن',
