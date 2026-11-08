@@ -638,6 +638,26 @@ describe('the product detail', () => {
 // ---------------------------------------------------------------------------
 
 describe('the order list', () => {
+  it('draws the server total beside the title; exact has no «حدود»', async () => {
+    stubApi([
+      {
+        url: '/orders',
+        body: { orders: [order()], nextCursor: null, total: { value: 42, estimated: false } },
+      },
+    ]);
+    const { container } = renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
+    await waitFor(() => {
+      expect(container.querySelector('.page-head .count-chip')?.textContent).toBe('42');
+    });
+  });
+
+  it('draws no count chip when the server sent no total', async () => {
+    stubApi(orderList([order()]));
+    const { container } = renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
+    await screen.findAllByRole('row');
+    expect(container.querySelector('.page-head .count-chip')).toBeNull();
+  });
+
   it('renders the SNAPSHOT title, not a product lookup', async () => {
     stubApi(orderList([order({ lineTitle: 'نامی که دیگر وجود ندارد' })]));
     renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);

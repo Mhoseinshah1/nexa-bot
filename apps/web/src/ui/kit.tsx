@@ -567,6 +567,7 @@ export function PageHead({
   meta,
   actions,
   count,
+  countEstimated = false,
   freshness,
   onRefresh,
   refreshing = false,
@@ -577,7 +578,12 @@ export function PageHead({
    * A count chip beside the title (web redesign PR-0). Must be a REAL server total — never the
    * length of the page of rows on screen. Absent, no chip is drawn.
    */
-  count?: number;
+  count?: number | undefined;
+  /**
+   * The server answered with the planner's estimate, not a count (`ListTotal.estimated`): the
+   * chip reads «حدود N». Only meaningful with `count`.
+   */
+  countEstimated?: boolean | undefined;
   /** The «last updated» line — drawn in the same row as the refresh button and the page actions. */
   freshness?: ReactNode;
   /** When given, a refresh icon button is drawn in the actions row. */
@@ -602,7 +608,13 @@ export function PageHead({
         {trail.length > 1 && <Breadcrumbs items={trail} />}
         <h1>
           {title}
-          {count !== undefined && <span className="count-chip num">{formatNumber(count)}</span>}
+          {count !== undefined && (
+            <span className="count-chip num" data-estimated={countEstimated ? 'true' : undefined}>
+              {countEstimated
+                ? t('web.kit_count_estimated').replace('{n}', formatNumber(count))
+                : formatNumber(count)}
+            </span>
+          )}
           {badge}
           {maturity !== undefined && <MaturityBadge value={maturity} />}
         </h1>

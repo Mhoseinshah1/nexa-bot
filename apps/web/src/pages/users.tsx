@@ -398,6 +398,10 @@ export function UsersPage({
     <>
       <PageHead
         title={t('web.users_title')}
+        // PR-10: the server's total (exact, or «حدود N» when it is the planner's estimate);
+        // absent when it could not produce one in time, and then no chip is drawn.
+        count={customers.data?.total?.value}
+        countEstimated={customers.data?.total?.estimated}
         actions={
           <>
             <ListFreshness query={customers} hidden={toolbarHidden} />

@@ -582,7 +582,10 @@ export function ServicesPage({
     <>
       <PageHead
         title={t('web.services_title')}
-        // Redesign PR-1: no count chip — `GET /services` sends a keyset page and no total.
+        // PR-10: the server's total (exact, or «حدود N» when it is the planner's estimate);
+        // absent when it could not produce one in time, and then no chip is drawn.
+        count={services.data?.total?.value}
+        countEstimated={services.data?.total?.estimated}
         actions={
           <>
             <ListFreshness query={services} hidden={toolbarHidden} />

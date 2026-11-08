@@ -47,6 +47,17 @@ describe('PageHead extras', () => {
     expect(within(row).getByRole('button', { name: 'جدید' })).toBeTruthy();
   });
 
+  it('reads an estimated count as «حدود N» and an exact one as the bare number', () => {
+    const { rerender } = render(<PageHead title="سرویس‌ها" count={200_000} countEstimated />);
+    const chip = () => document.querySelector('.count-chip') as HTMLElement;
+    expect(chip().textContent).toMatch(/^حدود /);
+    expect(chip().textContent).toContain('200,000');
+    expect(chip().dataset.estimated).toBe('true');
+    rerender(<PageHead title="سرویس‌ها" count={200_000} />);
+    expect(chip().textContent).not.toContain('حدود');
+    expect(chip().dataset.estimated).toBeUndefined();
+  });
+
   it('draws neither chip nor refresh when not asked', () => {
     render(<PageHead title="کاربران" />);
     expect(document.querySelector('.count-chip')).toBeNull();
