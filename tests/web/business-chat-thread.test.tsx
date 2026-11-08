@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { BusinessChatDetailPage } from '../../apps/web/src/pages/business-chats';
+import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  BUSINESS_CHAT_REFRESH_MS,
+  BusinessChatDetailPage,
+} from '../../apps/web/src/pages/business-chats';
 import {
   THREAD_PAGE_SIZE,
   entryMatchesFilter,
@@ -299,6 +302,26 @@ describe('the thread on the page', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: t('web.bchat_thread_jump') })).toBeNull(),
     );
+  });
+
+  it('keeps the entry being read on screen when a poll adds a message while scrolled up', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    open(conversation(80));
+    await screen.findByText('پیام شمارهٔ 80');
+    expect(screen.getByText('پیام شمارهٔ 31')).toBeTruthy();
+    expect(screen.queryByText('پیام شمارهٔ 30')).toBeNull();
+    const box = screen.getByRole('region', { name: t('web.bchat_transcript') });
+    Object.defineProperty(box, 'scrollHeight', { configurable: true, value: 5000 });
+    Object.defineProperty(box, 'clientHeight', { configurable: true, value: 600 });
+    box.scrollTop = 100;
+    fireEvent.scroll(box);
+    stubApi([{ url: `/business-chats/${CHAT_ID}`, body: detail(conversation(81)) }]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BUSINESS_CHAT_REFRESH_MS + 100);
+    });
+    await screen.findByText('پیام شمارهٔ 81');
+    expect(screen.getByText('پیام شمارهٔ 31')).toBeTruthy();
+    vi.useRealTimers();
   });
 
   it('opens its own scrolling box at the latest message', async () => {

@@ -1068,6 +1068,15 @@ function TranscriptCard({
   const stick = useRef(true);
   const revealedFrom = useRef<number | null>(null);
 
+  // A poll that adds entries while the reader is scrolled up must not push the oldest visible
+  // entry out of the window: grow it by what arrived, so what is being read stays on screen.
+  const loadedCount = useRef(entries.length);
+  const arrived = entries.length - loadedCount.current;
+  if (arrived !== 0) {
+    loadedCount.current = entries.length;
+    if (arrived > 0 && !stick.current) setShown((count) => count + arrived);
+  }
+
   const view = visibleEntries(entries, { filter, query, shown, eventText: handoffText });
   const rows = layoutThread(view.entries, formatDate);
   const newest = view.entries[view.entries.length - 1]?.id ?? '';
