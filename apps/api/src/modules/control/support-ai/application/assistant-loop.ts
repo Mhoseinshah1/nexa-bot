@@ -21,6 +21,7 @@ import {
   type LoopTenantScope,
 } from '../../../../infrastructure/lifecycle/tenant-pass.js';
 import type { SupportHandoffRateAlert } from './handoff-rate-alert.js';
+import { isUnreadableSecretError } from '../../../../infrastructure/lifecycle/unreadable-secret.js';
 
 export const ASSISTANT_INTERVAL_MS = 2_000;
 /** The bounds a job's worst case is derived from. */
@@ -223,7 +224,10 @@ export class AssistantLoop {
                   : await this.assist.produce(scope, job);
             }
           } catch (error: unknown) {
-            this.options.logger.error({ err: error, jobId: job.id }, 'assistant: a job failed');
+            // An unreadable AI key is reported once per kind (`UnreadableSecretReporter`).
+            if (!isUnreadableSecretError(error)) {
+              this.options.logger.error({ err: error, jobId: job.id }, 'assistant: a job failed');
+            }
             result = 'exception';
             if (job.kind === 'AUTO_DECISION' && auto?.recoverFromException !== undefined) {
               try {
@@ -344,7 +348,9 @@ export class AssistantLoop {
       }
       this.progress.record(this.options.now().getTime());
     } catch (error: unknown) {
-      this.options.logger.error({ err: error }, 'assistant pass failed');
+      if (!isUnreadableSecretError(error)) {
+        this.options.logger.error({ err: error }, 'assistant pass failed');
+      }
     } finally {
       this.running = false;
     }

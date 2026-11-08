@@ -233,6 +233,14 @@ const RECORDED_BY: Readonly<Record<string, { file: string; needle: string }>> = 
     file: 'apps/api/src/modules/platform/recovery/application/recovery-executor.ts',
     needle: "code: 'recovery.run_ok'",
   },
+  'secrets.read_failed': {
+    file: 'apps/api/src/modules/platform/opslog/application/unreadable-secret-reporter.ts',
+    needle: 'code: SECRET_READ_FAILED_CODE',
+  },
+  'secrets.read_ok': {
+    file: 'apps/api/src/modules/platform/opslog/application/unreadable-secret-reporter.ts',
+    needle: 'code: SECRET_READ_OK_CODE',
+  },
   'panel.monitor.tenant_budget_exceeded': {
     file: 'apps/api/src/modules/platform/panels/application/panel-monitor.service.ts',
     needle: "const TENANT_BUDGET_CONDITION = 'panel.monitor.tenant_budget_exceeded'",

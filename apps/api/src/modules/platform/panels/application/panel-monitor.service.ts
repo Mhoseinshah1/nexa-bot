@@ -45,6 +45,7 @@ import type { DuePanel, PanelHealthRecord, PanelMonitorRepository, PanelView } f
 import type { PanelCapacityRepository } from './capacity-ports.js';
 import { CAPACITY_CODES, capacityAlertFor, capacityConditionKey } from './panel-capacity-alerts.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import { isUnreadableSecretError } from '../../../../infrastructure/lifecycle/unreadable-secret.js';
 
 /**
  * The permission the monitor acts under.
@@ -547,10 +548,13 @@ export class PanelMonitorService {
           // did that, counting it as progress kept the container healthy, so
           // nothing anywhere said the monitor had stopped working.
           failed += 1;
-          this.deps.logger.error(
-            { err: error, panelId: candidate.panelId, tenantId: candidate.tenantId },
-            'panel monitor probe failed',
-          );
+          // Unreadable credentials are reported once per kind (`UnreadableSecretReporter`).
+          if (!isUnreadableSecretError(error)) {
+            this.deps.logger.error(
+              { err: error, panelId: candidate.panelId, tenantId: candidate.tenantId },
+              'panel monitor probe failed',
+            );
+          }
           await this.deferInternalError(candidate);
         }
       }

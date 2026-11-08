@@ -252,6 +252,10 @@ import {
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
 import {
+  ReportingSecretCipher,
+  UnreadableSecretReporter,
+} from './modules/platform/opslog/application/unreadable-secret-reporter.js';
+import {
   DrizzleOperationalConditionReader,
   DrizzleOperationalEventReader,
 } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
@@ -2145,7 +2149,6 @@ export function createContainer(
   };
   const uow = new DrizzleUnitOfWork(database.db, writeGate);
   const tenants = new DrizzleTenantRepository(database.db);
-  const botInstances = new DrizzleBotInstanceRepository(database.db, cipher);
 
   const outbox = new OutboxWriter(ids, clock);
   const audit = new DrizzleAuditWriter(database.db, ids, clock);
@@ -2167,6 +2170,22 @@ export function createContainer(
     // transaction survived that transaction rolling back.
     record: (scope, event, tx) => opsLogRef.current.record(scope, event, tx),
   };
+  /*
+   * NEXA-FIX-RESTORE-SECRETS §2.6: the cipher every credential the background lanes read
+   * goes through — bot tokens, panel credentials, gateway keys, the backup password, the
+   * support AI key. The same cipher, with each decrypt reported: a secret that stops
+   * decrypting is ONE log line and ONE Web Admin alert per kind (`secrets.read_failed`),
+   * closed when it reads again, instead of a stack trace on every tick of every loop. The
+   * keyring, recovery and CLI paths keep the bare cipher: their failures are their own.
+   */
+  const unreadableSecrets = new UnreadableSecretReporter({
+    recorder: opsLog,
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    clock,
+    logger,
+  });
+  const credentialCipher = new ReportingSecretCipher(cipher, unreadableSecrets);
+  const botInstances = new DrizzleBotInstanceRepository(database.db, credentialCipher);
   /*
    * WP20: the one anti-spam counter. Shared by the bot runtime and by the webhook's
    * `/ping` branch, which answers before the runtime runs: an interaction the runtime
@@ -3893,10 +3912,12 @@ export function createContainer(
   const gatewayCardTransferRepository = new DrizzleGatewayCardTransferRepository(database.db);
   // Round 6: cancels, refunds and the provider's latest word on what the customer owes.
   const gatewayProviderRequestRepository = new DrizzleGatewayProviderRequestRepository(database.db);
-  const refundCardSealer = new SecretCipherRefundCardSealer(cipher);
+  const refundCardSealer = new SecretCipherRefundCardSealer(credentialCipher);
   const gatewayInvoiceRepository = new DrizzleGatewayInvoiceRepository(database.db);
-  const gatewayCredentialStore = new DrizzleGatewayCredentialStore(database.db, cipher, () =>
-    ids.uuid(),
+  const gatewayCredentialStore = new DrizzleGatewayCredentialStore(
+    database.db,
+    credentialCipher,
+    () => ids.uuid(),
   );
   const publicOrigins = new DrizzlePublicOriginReader(database.db);
   const gatewayCallbackUrlFor = async (
@@ -4730,7 +4751,7 @@ export function createContainer(
   // environment.
   const urlPolicy = panelUrlPolicy(config, outboundAllowList);
 
-  const panelCredentials = new DrizzlePanelCredentialStore(database.db, cipher);
+  const panelCredentials = new DrizzlePanelCredentialStore(database.db, credentialCipher);
 
   const panelHttp = new SafeHttpClient({
     ...urlPolicy,
@@ -7575,8 +7596,10 @@ export function createContainer(
     ['ANTHROPIC', new AnthropicAdapter()],
     ['ZAI', new ZaiAdapter()],
   ]);
-  const supportAiCredentials = new DrizzleSupportAiCredentialStore(database.db, cipher, () =>
-    ids.uuid(),
+  const supportAiCredentials = new DrizzleSupportAiCredentialStore(
+    database.db,
+    credentialCipher,
+    () => ids.uuid(),
   );
   const supportAiConfigs = new DrizzleSupportAiConfigRepository(database.db);
   const supportAiRuns = new DrizzleSupportAiRunRecorder(database.db);
@@ -8381,7 +8404,7 @@ export function createContainer(
    * E4: the password that seals 7-Zip archives, read on the INSTALLATION tenant (a backup
    * is the whole database). With none stored, archives stay the keyring `NXB` they were.
    */
-  const backupPasswordStore = new DrizzleBackupPasswordStore(database.db, cipher, () =>
+  const backupPasswordStore = new DrizzleBackupPasswordStore(database.db, credentialCipher, () =>
     installationTenantId === null ? null : { tenantId: installationTenantId, botInstanceId: null },
   );
   const backupArchiver = new DualFormatBackupArchiver(
