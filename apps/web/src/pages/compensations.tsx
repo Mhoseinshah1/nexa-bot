@@ -6,6 +6,7 @@ import { formatTimestampNumeric } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { RecordLink, recordHref } from '../ui/record-ref';
 import { setQuery, type Route } from '../router';
+import { ListFreshness } from '../ui/list-search';
 import {
   LIST_PAGE_SIZE,
   Badge,
@@ -151,8 +152,16 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
 
   return (
     <>
-      <PageHead title={t('web.compensations_title')} subtitle={t('web.compensations_intro')} />
+      <PageHead
+        title={t('web.compensations_title')}
+        // Redesign PR-2: no count chip — the list is a keyset page with no server total. The
+        // intro is one muted line in the card, no longer a subtitle under the title.
+        actions={<ListFreshness query={compensations} hidden={denied} />}
+      />
       <Card className="ca-list">
+        <p className="muted small ca-list-note" hidden={denied}>
+          {t('web.compensations_intro')}
+        </p>
         <StateSwitch query={compensations} denied={denied}>
           {compensations.data === undefined ? null : compensations.data.compensations.length ===
             0 ? (

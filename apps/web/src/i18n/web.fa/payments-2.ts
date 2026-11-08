@@ -51,7 +51,6 @@ export const WEB_FA_PAYMENTS_2 = {
   'web.payment_gateway_tonpays_link_web': 'صفحهٔ وب تون‌پیز',
   'web.payment_gateway_verified_phone_list': '📱 نیاز به تأیید شماره',
   'web.payment_gateway_updated': 'آخرین تغییر',
-  'web.payment_gateway_actions': 'عملیات',
   'web.payment_gateway_edit': 'ویرایش',
   'web.payment_gateway_enable': 'فعال کردن',
   'web.payment_gateway_disable': 'غیرفعال کردن',
@@ -115,6 +114,17 @@ export const WEB_FA_PAYMENTS_2 = {
    * non-terminal for that reason, and this copy says what an operator must do
    * rather than inviting them to guess.
    */
+  'web.pay_qa_label': 'عملیات پرداخت',
+  'web.pay_qa_group_receipt': 'رسید',
+  'web.pay_qa_group_gateway': 'درگاه',
+  'web.pay_qa_group_refund': 'بازگشت وجه',
+  'web.pay_qa_view_receipts': 'رسیدهای مشتری',
+  'web.pay_qa_review': 'تأیید یا رد رسید…',
+  'web.pay_qa_reconcile': 'حل وضعیت نامعلوم…',
+  'web.pay_qa_late': 'تصمیم برای پرداخت دیرهنگام…',
+  'web.pay_qa_refund': 'ثبت بازگشت وجه',
+  'web.pay_attn_review': 'رسید در انتظار تأیید یا رد شماست',
+  'web.pay_attn_late': 'پرداخت دیرهنگام منتظر تصمیم است',
   'web.payment_unknown_banner':
     'نتیجهٔ این پرداخت مشخص نیست. تا زمانی که با سوابق طرف مقابل تطبیق داده نشود، نه موفق است و نه ناموفق.',
   /*

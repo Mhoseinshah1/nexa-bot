@@ -70,7 +70,6 @@ import {
   Tabs,
   BarChart,
   compactAxis,
-  ButtonGroup,
   ChartCard,
   CountedPager,
   CursorPager,
@@ -86,6 +85,7 @@ import {
 } from '../ui/kit';
 import type { DonutSlice, SeriesTone } from '../ui/charts';
 import { Icon } from '../ui/icons';
+import { QuickFilters } from '../ui/redesign';
 import { TrendChart } from '../ui/trend-chart';
 import { STATE_LABELS as SERVICE_STATE_LABELS } from './services';
 import { STATUS_LABELS as PRODUCT_STATUS_LABELS } from './products';
@@ -210,19 +210,16 @@ export function RangePicker({
   };
   return (
     <div className="report-range">
-      <ButtonGroup segmented label={t('web.period_label')}>
-        {REPORT_RANGES.map((range) => (
-          <button
-            key={range}
-            type="button"
-            className={selection.range === range ? 'btn sm on' : 'btn sm'}
-            aria-pressed={selection.range === range}
-            onClick={() => choose(range)}
-          >
-            {t(REPORT_RANGE_LABELS[range])}
-          </button>
-        ))}
-      </ButtonGroup>
+      {/* Redesign PR-2: the range as quick-filter chips (same URL keys, same presets). */}
+      <QuickFilters
+        label={t('web.period_label')}
+        value={selection.range}
+        onChange={choose}
+        items={REPORT_RANGES.map((range) => ({
+          key: range,
+          label: t(REPORT_RANGE_LABELS[range]),
+        }))}
+      />
       {selection.range === 'CUSTOM' && (
         // Keyed by the APPLIED dates, so a range that arrives by history or a link starts a
         // fresh draft: the inputs never show one range while the figures show another.
@@ -877,7 +874,8 @@ export function ReportsPage({
   if (denied) {
     return (
       <>
-        <PageHead title={t('web.nav_reports')} subtitle={t('web.report_page_intro')} />
+        <PageHead title={t('web.nav_reports')} />
+        <p className="muted small">{t('web.report_page_intro')}</p>
         <Empty
           title={t('web.report_owner_only')}
           hint={t('web.report_owner_only_hint')}
@@ -888,12 +886,10 @@ export function ReportsPage({
   }
   return (
     <>
-      <PageHead
-        title={t('web.nav_reports')}
-        subtitle={t('web.report_page_intro')}
-        actions={<RefreshButton />}
-      />
+      <PageHead title={t('web.nav_reports')} actions={<RefreshButton />} />
       <Card className="report-range-card">
+        {/* The intro is one muted line over the range, no longer a subtitle under the title. */}
+        <p className="muted small">{t('web.report_page_intro')}</p>
         <RangePicker route={route} selection={selection} />
       </Card>
       <Tabs
@@ -963,7 +959,12 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
     {
       key: 'title',
       header: t('web.report_col_product'),
-      render: (r) => <span dir="auto">{r.title}</span>,
+      // The row opens from its main name: the product title is the link to the order.
+      render: (r) => (
+        <a href={`/orders/${r.orderId}`} onClick={onLink} dir="auto">
+          {r.title}
+        </a>
+      ),
     },
     {
       key: 'subtotal',
@@ -992,14 +993,9 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
       key: 'links',
       header: t('web.report_col_links'),
       render: (r) => (
-        <span className="btn-group">
-          <a href={`/orders/${r.orderId}`} onClick={onLink}>
-            {t('web.report_link_order')}
-          </a>
-          <a href={`/users/${r.customerId}`} onClick={onLink}>
-            {t('web.report_link_customer')}
-          </a>
-        </span>
+        <a href={`/users/${r.customerId}`} onClick={onLink}>
+          {t('web.report_link_customer')}
+        </a>
       ),
     },
   ];

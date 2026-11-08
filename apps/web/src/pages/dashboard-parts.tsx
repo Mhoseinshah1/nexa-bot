@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { KpiDelta } from '../dashboard-view';
 import { t } from '../i18n/web.fa';
 import { Icon, type IconName } from '../ui/icons';
+import { QuickFilters } from '../ui/redesign';
 import { Num, PERIOD_PRESETS, type DistributionSlice, type PeriodPreset } from '../ui/kit';
 import type { WebKey } from '../i18n/web.fa';
 
@@ -153,19 +154,13 @@ export function DashboardControls({
 }) {
   return (
     <div className="dash-ctrls">
-      <div className="pills dash-seg" role="group" aria-label={t('web.period_label')}>
-        {PERIOD_PRESETS.map((preset) => (
-          <button
-            key={preset}
-            type="button"
-            className={value === preset ? 'on' : undefined}
-            aria-pressed={value === preset}
-            onClick={() => onChange(preset)}
-          >
-            {t(PERIOD_LABEL[preset])}
-          </button>
-        ))}
-      </div>
+      {/* Redesign PR-2: the period as quick-filter chips (same presets, same handler). */}
+      <QuickFilters
+        label={t('web.period_label')}
+        value={value}
+        onChange={onChange}
+        items={PERIOD_PRESETS.map((preset) => ({ key: preset, label: t(PERIOD_LABEL[preset]) }))}
+      />
       {value === 'custom' && custom}
       <button
         type="button"

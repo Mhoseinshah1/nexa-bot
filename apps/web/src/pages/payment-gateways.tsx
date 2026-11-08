@@ -64,6 +64,7 @@ import {
   SecretInput,
 } from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
+import { ListFreshness } from '../ui/list-search';
 import { saveChangedSecrets } from '../ui/secret-form';
 
 /** TonPays' two routes share one signature scheme and one set of texts (R7). */
@@ -1066,20 +1067,6 @@ export function PaymentGatewaysPage({
           </span>
         ),
     },
-    {
-      key: 'actions',
-      header: t('web.payment_gateway_actions'),
-      align: 'end',
-      /*
-       * The list opens a route's own view, for every reader — a view-only role reads the
-       * route there too. The writes live on that view, beside the route they change.
-       */
-      render: (row) => (
-        <a className="btn sm" href={paymentMethodPath(row.provider)} onClick={onLink}>
-          {t('web.payment_method_open')}
-        </a>
-      ),
-    },
   ];
 
   /** The one route this view is about, when it is a provider's own view. */
@@ -1091,9 +1078,11 @@ export function PaymentGatewaysPage({
     <>
       {/* A provider's view has its own head, drawn by the page that holds it. */}
       {provider === undefined && (
+        // Redesign PR-2: no subtitle under the title (its sentence is the muted line in the list
+        // card) and no count chip — the roster is the software's fixed list, not a server total.
         <PageHead
           title={t('web.payment_gateways_title')}
-          subtitle={t('web.payment_gateways_subtitle')}
+          actions={<ListFreshness query={gateways} hidden={denied} />}
         />
       )}
       {tabs}
@@ -1118,6 +1107,7 @@ export function PaymentGatewaysPage({
         >
           {provider === undefined ? (
             <Card title={t('web.payment_gateways_title')} hint={t('web.payment_gateways_hint')}>
+              <p className="muted small">{t('web.payment_gateways_subtitle')}</p>
               <DataTable
                 stack
                 columns={columns}
@@ -1133,11 +1123,7 @@ export function PaymentGatewaysPage({
              * route it belongs to, never at the foot of a page of other routes.
              */
             <Card title={t('web.payment_method_settings')}>
-              <KV
-                items={columns
-                  .filter((column) => column.key !== 'actions')
-                  .map((column) => [column.header, column.render(only)])}
-              />
+              <KV items={columns.map((column) => [column.header, column.render(only)])} />
               {(onlyActions !== null || extraActions !== undefined) && (
                 <div className="form-actions">
                   <RowActions wrap>

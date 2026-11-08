@@ -221,6 +221,7 @@ export const WEB_FA_COMMON = {
   'web.dashboard_title': 'نمای کلی',
   'web.dashboard_intro':
     'نمای اجرایی و عملیاتی فروشگاه از داده‌های واقعی — به‌روزرسانی خودکار هر 60 ثانیه.',
+  'web.dashboard_about_fold': 'دربارهٔ این صفحه',
   'web.dashboard_updated_at': 'آخرین به‌روزرسانی:',
   'web.dashboard_business': 'فروش و مشتریان',
   'web.dashboard_operations': 'وضعیت عملیاتی',
@@ -292,7 +293,6 @@ export const WEB_FA_COMMON = {
   'web.export_select': 'انتخاب',
   'web.export_select_row': 'انتخاب این ردیف',
   'web.export_select_all': 'انتخاب همهٔ ردیف‌های این صفحه',
-  'web.export_selected': 'انتخاب‌شده:',
   'web.export_csv': 'خروجی CSV',
   'web.export_cap': 'حداکثر ردیف در هر فایل:',
   // Payment routes (Phase 5C) — which ways a customer may pay, and under what
