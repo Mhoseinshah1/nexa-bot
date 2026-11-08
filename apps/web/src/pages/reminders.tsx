@@ -41,7 +41,8 @@ import { DirtyScope, UnsavedCount, useDirtySet, useReportDirty } from './ops-b-l
 import { KeptSheet } from './editor-layout';
 import { fill } from './bot-buttons/canvas';
 import { Icon } from '../ui/icons';
-import { DateField } from '../ui/date-field';
+import { TimeField24 } from '../ui/time-field24';
+import { ListFreshness } from '../ui/list-search';
 import { ErrorReport } from './settings';
 import { TemplateCard } from './content';
 import { featurePresentation } from './features-catalogue';
@@ -338,9 +339,12 @@ export function RemindersPage({
     <>
       <PageHead
         title={t('web.reminders_title')}
-        subtitle={t('web.reminders_intro')}
         badge={<UnsavedCount count={dirty.size} />}
+        actions={<ListFreshness query={settings} hidden={denied} />}
       />
+      <Disclosure size="sm" summary={t('web.reminders_about_fold')}>
+        <p className="muted small">{t('web.reminders_intro')}</p>
+      </Disclosure>
       <StateSwitch query={settings} denied={denied} isEmpty={false}>
         {ready && (
           <DirtyScope report={report}>
@@ -953,7 +957,7 @@ function TimeRow({
 
   return (
     <RowShell
-      id={id}
+      id={`${id}-h`}
       label={label}
       hint={t('web.reminders_quiet_time_hint')}
       problem={!valid && draft !== '' ? t('web.reminders_quiet_time_hint') : null}
@@ -964,7 +968,7 @@ function TimeRow({
       saving={save.isPending}
       onSubmit={onSubmit}
       field={
-        <DateField id={id} mode="time" value={draft} disabled={!mayEdit} onChange={setDraft} />
+        <TimeField24 id={id} label={label} value={draft} disabled={!mayEdit} onChange={setDraft} />
       }
     >
       {setting.storedValueInvalid && <Banner tone="danger">{t('web.stored_value_invalid')}</Banner>}
