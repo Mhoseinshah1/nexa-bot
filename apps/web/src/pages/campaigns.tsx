@@ -58,7 +58,9 @@ import {
   Badge,
   Banner,
   Card,
+  CellMain,
   CursorPager,
+  Disclosure,
   LIST_PAGE_SIZE,
   DataTable,
   Drawer,
@@ -72,10 +74,7 @@ import {
   StateSwitch,
   Button,
   ConfirmDialog,
-  FilterChip,
-  FilterChips,
   StatCard,
-  TwoColumn,
   useToast,
   useUnsavedChanges,
   type Column,
@@ -85,8 +84,16 @@ import {
 import { Icon } from '../ui/icons';
 import { ErrorCodeLabel } from '../ui/technical-details';
 import { DotTabs, SaveBar, jalaliDatesIn } from './editor-layout';
-import { ListFilterBar } from '../ui/filter-bar';
-import { DateField } from '../ui/date-field';
+import { ListFreshness } from '../ui/list-search';
+import {
+  AttentionStrip,
+  CardRows,
+  KpiRow,
+  QuickActionBar,
+  QuickFilters,
+  type QuickFilterItem,
+} from '../ui/redesign';
+import { TimeField24 } from '../ui/time-field24';
 
 /**
  * Campaigns — «کمپین‌ها» (round N, C1; `docs/round-n-campaigns-audit.md`).
@@ -262,10 +269,17 @@ export function CampaignsPage({
     {
       key: 'name',
       header: t('web.campaign_name'),
+      // The name opens the campaign; the kinds of action it takes sit under it (the former
+      // «اقدام‌ها» column, merged so the table fits at 1440).
       render: (row) => (
-        <a href={`/campaigns/${row.id}`} onClick={onLink} className="strong">
-          {row.name}
-        </a>
+        <CellMain
+          primary={
+            <a href={`/campaigns/${row.id}`} onClick={onLink} className="strong">
+              {row.name}
+            </a>
+          }
+          secondary={<KindTags kinds={row.actionKinds} />}
+        />
       ),
     },
     { key: 'state', header: t('web.status'), render: (row) => <StateBadge value={row.state} /> },
@@ -277,11 +291,6 @@ export function CampaignsPage({
           <Moment value={row.startLocal} /> ← <Moment value={row.endLocal} />
         </span>
       ),
-    },
-    {
-      key: 'actions',
-      header: t('web.campaign_actions'),
-      render: (row) => <KindTags kinds={row.actionKinds} />,
     },
     {
       key: 'audience',
@@ -296,66 +305,52 @@ export function CampaignsPage({
     },
   ];
 
+  const stateItems: QuickFilterItem<StateFilter>[] = [
+    { key: 'ALL', label: t('web.campaign_filter_all') },
+    ...CAMPAIGN_STATES.map((state) => ({
+      key: state as StateFilter,
+      label: t(CAMPAIGN_STATE_LABELS[state]),
+    })),
+  ];
+
   return (
     <>
       <PageHead
         title={t('web.campaigns_title')}
-        subtitle={t('web.campaigns_intro')}
         actions={
-          mayManage && !denied ? (
-            <>
-              <a className="btn" href="/discounts" onClick={onLink}>
-                <Icon name="discounts" />
-                {t('web.nav_discounts')}
-              </a>
-              <a className="btn primary" href="/campaigns/new" onClick={onLink}>
-                <Icon name="plus" />
-                {t('web.campaign_new')}
-              </a>
-            </>
-          ) : undefined
+          <>
+            <ListFreshness query={list} hidden={denied} />
+            {mayManage && !denied ? (
+              <>
+                <a className="btn" href="/discounts" onClick={onLink}>
+                  <Icon name="discounts" />
+                  {t('web.nav_discounts')}
+                </a>
+                <a className="btn primary" href="/campaigns/new" onClick={onLink}>
+                  <Icon name="plus" />
+                  {t('web.campaign_new')}
+                </a>
+              </>
+            ) : undefined}
+          </>
         }
       />
-      <Banner tone="info" title={t('web.campaign_semantics_title')}>
-        <p>{t('web.campaign_semantics_audience')}</p>
-        <p>{t('web.campaign_semantics_cancel')}</p>
-        <p>{t('web.campaign_semantics_results')}</p>
-      </Banner>
+      <Disclosure size="sm" summary={t('web.campaigns_rules_fold')}>
+        <p className="muted small">{t('web.campaigns_intro')}</p>
+        <p className="strong small">{t('web.campaign_semantics_title')}</p>
+        <p className="muted small">{t('web.campaign_semantics_audience')}</p>
+        <p className="muted small">{t('web.campaign_semantics_cancel')}</p>
+        <p className="muted small">{t('web.campaign_semantics_results')}</p>
+      </Disclosure>
       <Card>
-        <ListFilterBar
-          label={t('web.campaigns_title')}
-          filters={[
-            {
-              key: 'state',
-              label: t('web.status'),
-              active: filter === 'ALL' ? null : t(CAMPAIGN_STATE_LABELS[filter]),
-              onClear: () => navigate('/campaigns', { replace: true }),
-              control: (
-                <FilterChips label={t('web.status')}>
-                  {(
-                    [
-                      { id: 'ALL', label: t('web.campaign_filter_all') },
-                      ...CAMPAIGN_STATES.map((state) => ({
-                        id: state,
-                        label: t(CAMPAIGN_STATE_LABELS[state]),
-                      })),
-                    ] as { id: StateFilter; label: string }[]
-                  ).map((item) => (
-                    <FilterChip
-                      key={item.id}
-                      pressed={filter === item.id}
-                      onClick={() => {
-                        const suffix = item.id === 'ALL' ? '' : `?state=${item.id}`;
-                        navigate(`/campaigns${suffix}`, { replace: true });
-                      }}
-                    >
-                      {item.label}
-                    </FilterChip>
-                  ))}
-                </FilterChips>
-              ),
-            },
-          ]}
+        <QuickFilters
+          label={t('web.status')}
+          items={stateItems}
+          value={filter}
+          onChange={(next) => {
+            const suffix = next === 'ALL' ? '' : `?state=${next}`;
+            navigate(`/campaigns${suffix}`, { replace: true });
+          }}
         />
         <StateSwitch
           query={list}
@@ -1076,8 +1071,7 @@ function CampaignForm({
                     value={state.startDate}
                     onChange={(event) => set('startDate', event.target.value.trim())}
                   />
-                  <DateField
-                    mode="time"
+                  <TimeField24
                     label={`${t('web.campaign_start')} — ${t('web.cb_time')}`}
                     value={state.startTime}
                     onChange={(next) => set('startTime', next)}
@@ -1097,8 +1091,7 @@ function CampaignForm({
                     value={state.endDate}
                     onChange={(event) => set('endDate', event.target.value.trim())}
                   />
-                  <DateField
-                    mode="time"
+                  <TimeField24
                     label={`${t('web.campaign_end')} — ${t('web.cb_time')}`}
                     value={state.endTime}
                     onChange={(next) => set('endTime', next)}
@@ -1679,34 +1672,68 @@ function CampaignDetailBody({
   const confirmSubmission = useSubmissionKey();
   const commands = useCampaignCommands(campaign);
   const draftConfirm = mayManage && campaign.state === 'DRAFT';
+  const pendingLaunch =
+    ['SCHEDULED', 'ACTIVE', 'PAUSED'].includes(campaign.state) &&
+    campaign.actions.some((a) => a.state === 'PENDING' || a.state === 'FAILED');
   return (
     <>
       <PageHead
         title={campaign.name}
         badge={<StateBadge value={campaign.state} />}
         {...(campaign.description === '' ? {} : { subtitle: campaign.description })}
-        actions={
-          mayManage && !editing ? (
-            <>
-              {campaign.state === 'DRAFT' && (
-                <Button icon="edit" onClick={() => setEditing(true)}>
-                  {t('web.campaign_edit')}
-                </Button>
-              )}
-              {draftConfirm && (
-                <Button
-                  variant="primary"
-                  icon="check"
-                  aria-haspopup="dialog"
-                  onClick={() => setConfirmOpen(true)}
-                >
-                  {t('web.campaign_section_preview')}
-                </Button>
-              )}
-              {commands.buttons}
-            </>
-          ) : undefined
-        }
+      />
+      {mayManage && !editing && (
+        <QuickActionBar
+          groups={[
+            {
+              key: 'campaign',
+              label: t('web.campaign_group_manage'),
+              actions: [
+                campaign.state === 'DRAFT' && (
+                  <Button key="edit" icon="edit" onClick={() => setEditing(true)}>
+                    {t('web.campaign_edit')}
+                  </Button>
+                ),
+                draftConfirm && (
+                  <Button
+                    key="preview"
+                    variant="primary"
+                    icon="check"
+                    aria-haspopup="dialog"
+                    onClick={() => setConfirmOpen(true)}
+                  >
+                    {t('web.campaign_section_preview')}
+                  </Button>
+                ),
+                commands.buttons,
+              ],
+            },
+          ]}
+        />
+      )}
+      {pendingLaunch && (
+        <AttentionStrip
+          items={[{ key: 'pending', label: t('web.campaign_attn_pending_launch') }]}
+        />
+      )}
+      <KpiRow
+        items={[
+          {
+            key: 'audience',
+            label: t('web.campaign_audience_confirmed'),
+            value:
+              campaign.audienceConfirmedCount === null ? (
+                '—'
+              ) : (
+                <Num value={campaign.audienceConfirmedCount} />
+              ),
+          },
+          {
+            key: 'actions',
+            label: t('web.campaign_actions'),
+            value: <Num value={campaign.actions.length} />,
+          },
+        ]}
       />
       {mayManage && !editing && (
         <p className="muted small" data-testid="campaign-commands-hint">
@@ -1723,14 +1750,17 @@ function CampaignDetailBody({
           onSaved={() => setEditing(false)}
         />
       ) : (
-        <TwoColumn
-          main={
-            <>
-              <ActionsCard campaign={campaign} />
-              {campaign.state !== 'DRAFT' && <ResultsCard id={campaign.id} />}
-            </>
-          }
-          side={<SummaryCard campaign={campaign} />}
+        <CardRows
+          rows={[
+            {
+              key: 'actions',
+              main: <ActionsCard campaign={campaign} />,
+              side: <SummaryCard campaign={campaign} />,
+            },
+            ...(campaign.state !== 'DRAFT'
+              ? [{ key: 'results', main: <ResultsCard id={campaign.id} /> }]
+              : []),
+          ]}
         />
       )}
       {/*

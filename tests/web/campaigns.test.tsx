@@ -10,7 +10,7 @@ import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Api } from './harness';
-import { addAudienceCondition, openFilterPanel } from './ui-helpers';
+import { addAudienceCondition } from './ui-helpers';
 
 /** Holds every request whose URL contains `path` until `release` is called. */
 function holdRequests(path: string): { release: () => void } {
@@ -200,7 +200,7 @@ describe('the campaigns list', () => {
     expect(screen.getByText(/نه فقط برای مخاطبان/)).toBeInTheDocument();
   });
 
-  it('asks for ten a page, and keeps the state filter in the filter panel', async () => {
+  it('asks for ten a page, and keeps the state filter in the quick-filter chips', async () => {
     const api = stubApi([{ url: '/campaigns', body: { campaigns: [], nextCursor: null } }]);
     renderPage(
       <CampaignsPage
@@ -213,12 +213,15 @@ describe('the campaigns list', () => {
     const list = new URL(api.calls[0]?.url ?? '', 'http://x');
     expect(list.searchParams.get('limit')).toBe('10');
     expect(list.searchParams.get('state')).toBe('ACTIVE');
-    // The active filter is a removable chip on the line; its choices sit in the panel.
-    expect(screen.queryByRole('button', { name: t('web.campaign_filter_all') })).toBeNull();
-    const panel = openFilterPanel();
+    // The state is a row of quick-filter chips (no counts: the API gives no total per state);
+    // the active one is pressed and «همه» clears it.
+    expect(screen.getByRole('button', { name: t('web.campaign_filter_all') })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
     expect(
-      within(panel).getByRole('button', { name: t('web.campaign_filter_all') }),
-    ).toBeInTheDocument();
+      screen.getByRole('button', { name: t('web.campaign_state_active') }),
+    ).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('is reachable from the navigation under its own view key', () => {
