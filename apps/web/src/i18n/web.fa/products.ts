@@ -167,6 +167,9 @@ export const WEB_FA_PRODUCTS = {
   'web.category_hidden': 'پنهان',
   'web.category_actions': 'اقدام‌ها',
   'web.category_edit': 'ویرایش',
+  'web.categories_about_fold': 'دربارهٔ این فهرست',
+  'web.categories_filter_label': 'وضعیت دسته',
+  'web.categories_filter_all': 'همه',
   'web.category_activate': 'فعال‌سازی',
   'web.category_deactivate': 'غیرفعال‌سازی',
   'web.category_show': 'نمایش در فهرست',
@@ -386,6 +389,11 @@ export const WEB_FA_PRODUCTS = {
   'web.trials_panel_offered': 'در حال ارائه',
   'web.trials_panel_not_offered': 'روشن، ولی فعلاً ارائه نمی‌شود',
   'web.trials_panel_disabled': 'خاموش',
+  'web.trials_panels_filter': 'وضعیت سرویس تست پنل',
+  'web.trials_filter_all': 'همه',
+  'web.trials_panel_filter_offered': 'در حال ارائه',
+  'web.trials_panel_filter_not_offered': 'ارائه نمی‌شود',
+  'web.trials_panel_filter_disabled': 'خاموش',
 
   /* Shared by the two rule tables and the two forms. */
   'web.rule_label': 'عنوان',
@@ -432,6 +440,7 @@ export const WEB_FA_PRODUCTS = {
   'web.purpose_change_location': 'تغییر لوکیشن',
   // Round 4 B6: «حجم، زمان و کاربر اضافه» — traffic and time packages beside the user rate.
   'web.extra_packages_title': 'حجم، زمان و کاربر اضافه',
+  'web.extra_packages_about_fold': 'دربارهٔ این فهرست',
   'web.extra_packages_subtitle':
     'بسته‌های حجم و زمان اضافه که مشتری برای سرویس فعلی خود می‌خرد؛ قیمت هر بسته را خودتان وارد می‌کنید و از ربات قبلی چیزی وارد نمی‌شود.',
   'web.extra_packages_tab_traffic': 'حجم',

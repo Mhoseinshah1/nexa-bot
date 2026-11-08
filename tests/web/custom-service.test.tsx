@@ -313,7 +313,7 @@ describe('writing a price rule', () => {
     );
     render();
     await screen.findByText('Bulk volume');
-    fireEvent.click(within(rowOf('Bulk volume')).getByRole('button', { name: 'ویرایش' }));
+    fireEvent.click(within(rowOf('Bulk volume')).getByRole('button', { name: 'Bulk volume' }));
     expect(input('custom-rule-edit-minimum').value).toBe('10.25');
     const card = input('custom-rule-edit-minimum').closest('[role="dialog"]') as HTMLElement;
     fireEvent.click(within(card).getByRole('button', { name: t('web.rule_save') }));
@@ -417,7 +417,7 @@ describe('locations', () => {
     const api = stubApi(routes({ locations: [location()] }));
     render();
     await screen.findByText('🇩🇪 آلمان');
-    fireEvent.click(within(rowOf('🇩🇪 آلمان')).getByRole('button', { name: 'ویرایش' }));
+    fireEvent.click(within(rowOf('🇩🇪 آلمان')).getByRole('button', { name: '🇩🇪 آلمان' }));
     expect(input('custom-location-label').value).toBe('🇩🇪 آلمان');
 
     const card = input('custom-location-label').closest('[role="dialog"]') as HTMLElement;
@@ -611,7 +611,7 @@ describe('closing a form drawer that holds unsaved input (W3)', () => {
     closeDrawer();
     fireEvent.click(within(ask()).getByRole('button', { name: t('web.discard') }));
     await waitFor(() => expect(document.getElementById('custom-rule-create-label')).toBeNull());
-    fireEvent.click(within(rowOf('Bulk volume')).getByRole('button', { name: t('web.rule_edit') }));
+    fireEvent.click(within(rowOf('Bulk volume')).getByRole('button', { name: 'Bulk volume' }));
     expect(document.getElementById('custom-rule-edit-dimension')).not.toBeNull();
   });
 
@@ -619,7 +619,7 @@ describe('closing a form drawer that holds unsaved input (W3)', () => {
     stubApi(routes({ locations: [location()] }));
     render();
     await screen.findByText('🇩🇪 آلمان');
-    const edit = () => within(rowOf('🇩🇪 آلمان')).getByRole('button', { name: t('web.rule_edit') });
+    const edit = () => within(rowOf('🇩🇪 آلمان')).getByRole('button', { name: '🇩🇪 آلمان' });
     expect(document.getElementById('custom-location-label')).toBeNull();
     fireEvent.click(edit());
     fireEvent.change(input('custom-location-label'), { target: { value: 'پیش‌نویس' } });

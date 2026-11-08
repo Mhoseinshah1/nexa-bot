@@ -43,6 +43,7 @@ import {
   StateSwitch,
   ToggleRow,
   TabPanel,
+  Disclosure,
   Tabs,
   useDiscardGuard,
   useQueryTab,
@@ -50,6 +51,7 @@ import {
   useUnsavedChanges,
   type Column,
 } from '../ui/kit';
+import { ListFreshness } from '../ui/list-search';
 import { ErrorRef } from '../ui/technical-details';
 import { ExtraDevicesPage } from './extra-devices';
 import { SaveBar } from './editor-layout';
@@ -141,18 +143,7 @@ export function ExtraPackagesPage({
   const [tab, setTab] = useQueryTab<ExtraPackageTab>(route, EXTRA_PACKAGE_TABS, 'tab');
   return (
     <>
-      {tab !== 'devices' && (
-        <PageHead
-          title={t('web.extra_packages_title')}
-          subtitle={t('web.extra_packages_subtitle')}
-        />
-      )}
-      {tab === 'devices' && (
-        <PageHead
-          title={t('web.extra_packages_title')}
-          subtitle={t('web.extra_devices_subtitle')}
-        />
-      )}
+      <PageHead title={t('web.extra_packages_title')} />
       {(!denied || mayEdit) && (
         <Tabs
           value={tab}
@@ -179,6 +170,11 @@ export function ExtraPackagesPage({
           />
         )}
       </TabPanel>
+      <Disclosure size="sm" summary={t('web.extra_packages_about_fold')}>
+        <p className="muted small">
+          {t(tab === 'devices' ? 'web.extra_devices_subtitle' : 'web.extra_packages_subtitle')}
+        </p>
+      </Disclosure>
     </>
   );
 }
@@ -301,7 +297,26 @@ function PackageSection({
     {
       key: 'title',
       header: t('web.extra_devices_rate_title'),
-      render: (row) => <span className="strong">{row.title}</span>,
+      render: (row) =>
+        !mayEdit ? (
+          <span className="strong">{row.title}</span>
+        ) : (
+          <button
+            type="button"
+            className="link strong"
+            disabled={busy}
+            title={t('web.extra_devices_edit')}
+            onClick={() =>
+              discard.confirmDiscard(() => {
+                setEditing(row.id);
+                setForm(formOf(row));
+                setOpen(true);
+              })
+            }
+          >
+            {row.title}
+          </button>
+        ),
     },
     {
       key: 'amount',
@@ -364,21 +379,6 @@ function PackageSection({
             <Button
               size="sm"
               variant="ghost"
-              icon="edit"
-              disabled={busy}
-              onClick={() =>
-                discard.confirmDiscard(() => {
-                  setEditing(row.id);
-                  setForm(formOf(row));
-                  setOpen(true);
-                })
-              }
-            >
-              {t('web.extra_devices_edit')}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
               disabled={busy}
               onClick={() => toggle.mutate({ id: row.id, active: row.status !== 'ACTIVE' })}
             >
@@ -396,6 +396,7 @@ function PackageSection({
     <>
       <div className="toolbar">
         <p className="muted small">{t('web.extra_packages_scope_note')}</p>
+        {!denied && <ListFreshness query={list} />}
         {mayEdit && (
           <Button
             variant="primary"
