@@ -6,7 +6,7 @@ import {
   type SecretCipher,
   type SecretContext,
 } from '@nexa/contracts';
-import { heldKeysFor, type SecretKeyring } from './keyring.js';
+import { activeKeyOnly as onlyTheActiveKey, heldKeysFor, type SecretKeyring } from './keyring.js';
 
 /**
  * Envelope encryption for stored secrets.
@@ -131,6 +131,15 @@ export class AesGcmSecretCipher implements SecretCipher {
      */
     private readonly acceptV1: boolean,
   ) {}
+
+  /**
+   * A cipher holding ONLY this one's active key (the configured bytes under that id),
+   * v2 only: "does this value authenticate under the key new values are sealed with?"
+   * — the question an id comparison cannot answer (NEXA-FIX-RESTORE-SECRETS §1).
+   */
+  activeKeyOnly(): AesGcmSecretCipher {
+    return new AesGcmSecretCipher(onlyTheActiveKey(this.keyring), false);
+  }
 
   private key(keyId: string): Buffer {
     const key = this.keyring.keys.get(keyId);

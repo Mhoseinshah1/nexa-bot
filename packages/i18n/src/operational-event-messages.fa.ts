@@ -1,4 +1,8 @@
-import type { UnreadableSecretKind } from '@nexa/contracts';
+import {
+  unreadableSecretKindOf,
+  type SecretPurpose,
+  type UnreadableSecretKind,
+} from '@nexa/contracts';
 
 /**
  * Persian sentences for the operational events whose recorded `message` is an English log line.
@@ -183,6 +187,58 @@ export const UNREADABLE_SECRET_ALERTS_FA: Readonly<Record<UnreadableSecretKind, 
     'کلید پشتیبانی هوشمند قابل خواندن نیست؛ آن را در صفحهٔ پشتیبانی هوشمند دوباره وارد کنید.',
   OTHER: 'یک رمز ذخیره‌شده قابل خواندن نیست؛ آن را در پنل مدیریت دوباره وارد کنید.',
 };
+
+/**
+ * NEXA-FIX-RESTORE-SECRETS §2.3/§2.5: what each kind of secret is called, and where in the
+ * Web Admin it is entered again — for `botctl secrets verify` and `botctl restore`.
+ */
+export const UNREADABLE_SECRET_KIND_LABELS_FA: Readonly<Record<UnreadableSecretKind, string>> = {
+  BOT_TOKEN: 'توکن ربات',
+  PANEL_CREDENTIALS: 'نام کاربری و رمز پنل',
+  GATEWAY_KEYS: 'کلید درگاه پرداخت',
+  BACKUP_PASSWORD: 'رمز بکاپ',
+  SUPPORT_AI_KEY: 'کلید پشتیبانی هوشمند',
+  OTHER: 'سایر رمزها',
+};
+
+const REENTRY_PLACES_FA: Readonly<Record<UnreadableSecretKind, string>> = {
+  BOT_TOKEN: 'ربات‌ها',
+  PANEL_CREDENTIALS: 'پنل‌ها',
+  GATEWAY_KEYS: 'روش‌های پرداخت',
+  BACKUP_PASSWORD: 'بکاپ و بازیابی',
+  SUPPORT_AI_KEY: 'پشتیبانی هوشمند',
+  OTHER: 'پنل مدیریت',
+};
+
+/** The purposes of kind `OTHER`, each with its own place. */
+const REENTRY_PLACE_BY_PURPOSE_FA: Readonly<Partial<Record<SecretPurpose, string>>> = {
+  'payment_gateway.refund_card': 'بازپرداخت‌ها (فقط با کیت بازیابی سرور قبلی)',
+  'admin.totp_secret': 'حساب کاربری (ورود دومرحله‌ای را دوباره فعال کنید)',
+  'hosting.totp_secret': 'میزبانی ربات‌ها (ورود دومرحله‌ای را دوباره فعال کنید)',
+  'legacy_migration.package_key': 'انتقال از میرزا (بسته را دوباره بارگذاری کنید)',
+  'gift_card.batch_export': 'کارت‌های هدیه (خروجی را دوباره بسازید)',
+};
+
+/** Where a secret of `purpose` is entered again, in Persian. */
+export function secretReentryPlaceFa(purpose: SecretPurpose): string {
+  return REENTRY_PLACE_BY_PURPOSE_FA[purpose] ?? REENTRY_PLACES_FA[unreadableSecretKindOf(purpose)];
+}
+
+const KIND_LABEL_BY_PURPOSE_FA: Readonly<Partial<Record<SecretPurpose, string>>> = {
+  'payment_gateway.refund_card': 'کارت مقصد بازپرداخت',
+  'admin.totp_secret': 'کلید ورود دومرحله‌ای',
+  'hosting.totp_secret': 'کلید ورود دومرحله‌ای میزبانی',
+  'legacy_migration.package_key': 'کلید بستهٔ میرزا',
+  'gift_card.batch_export': 'خروجی کارت‌های هدیه',
+};
+
+/** What a secret of `purpose` is called, in Persian. */
+export function secretKindLabelFa(purpose: SecretPurpose): string {
+  return (
+    KIND_LABEL_BY_PURPOSE_FA[purpose] ??
+    UNREADABLE_SECRET_KIND_LABELS_FA[unreadableSecretKindOf(purpose)]
+  );
+}
 
 /** The per-kind sentence for a `secrets.read_failed` row's context, or null for any other. */
 export function unreadableSecretAlertFa(secretKind: unknown): string | null {

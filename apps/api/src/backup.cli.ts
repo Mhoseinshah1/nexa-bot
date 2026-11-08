@@ -24,7 +24,8 @@ import type { AppConfig } from './infrastructure/config/config.schema.js';
 import { S3OffsiteUploader } from './modules/platform/backup/infrastructure/s3-offsite-uploader.js';
 import type { OffsiteUploadOutcome } from './modules/platform/backup/application/ports.js';
 import { openRecoveryKit } from './infrastructure/crypto/recovery-kit.js';
-import { unreadableCounts } from './infrastructure/crypto/secret-trial.js';
+import { unreadableCounts, type SecretTrialReport } from './infrastructure/crypto/secret-trial.js';
+import { secretKindLabelFa } from '@nexa/i18n';
 
 /**
  * `backup run|list|verify|restore` — the operator's side of the pipeline.
@@ -693,18 +694,7 @@ async function secureRestoredSecrets(
   const keys = container.recoveryKeyCoverage;
   const trial = await keys.trialDecrypt(target, bundled ?? []);
   if (trial.unreadableTotal > 0) {
-    const counts = unreadableCounts(trial)
-      .map(({ purpose, count }) => `  ${purpose}  ${String(count)}`)
-      .join('\n');
-    process.stderr.write(
-      `UNREADABLE  ${String(trial.unreadableTotal)} restored secret(s) do not decrypt with any key ` +
-        `this installation holds${bundled === null ? '' : ' or the archive carried'}:\n${counts}\n` +
-        (bundled === null
-          ? "This archive carries no keys. Give the old server's Recovery Kit with --kit, or " +
-            're-enter these values after switching. '
-          : '') +
-        'Do not serve this database as it is: nothing was re-encrypted.\n',
-    );
+    process.stderr.write(unreadableRefusalFa(trial, bundled !== null));
     return 1;
   }
   const rewrap = await keys.rewrapUnderActiveKey(target, bundled ?? []);
@@ -713,6 +703,28 @@ async function secureRestoredSecrets(
       `the active key (${String(rewrap.alreadyCurrent)} already were)\n`,
   );
   return 0;
+}
+
+/**
+ * `botctl restore`'s refusal when restored secrets do not read (NEXA-FIX-RESTORE-SECRETS
+ * §2.3), in Persian: each kind that failed with its count, and the owner's two ways on.
+ * Counts and kinds only — never a value, a key id or a key.
+ */
+export function unreadableRefusalFa(trial: SecretTrialReport, archiveCarriedKeys: boolean): string {
+  const lines = unreadableCounts(trial).map(
+    ({ purpose, count }) => `  - ${secretKindLabelFa(purpose)} (${purpose}): ${String(count)}`,
+  );
+  return (
+    `ریستور متوقف شد: ${String(trial.unreadableTotal)} رمز بازگردانده‌شده با هیچ کلیدی که این سرور ` +
+    `${archiveCarriedKeys ? 'یا خود فایل بکاپ ' : ''}دارد باز نمی‌شود:\n${lines.join('\n')}\n` +
+    'این پایگاه داده را همین‌طور به کار نگیرید؛ هیچ رمزی دوباره رمزگذاری نشد.\n' +
+    'راه ادامه: همین فایل بکاپ را در پنل مدیریت، «بکاپ و بازیابی»، بارگذاری کنید و یکی را برگزینید:\n' +
+    (archiveCarriedKeys
+      ? ''
+      : '  ۱. «بارگذاری کیت بازیابی سرور قبلی» — یا همین فرمان را با --kit و کیت سرور قبلی اجرا کنید.\n') +
+    `  ${archiveCarriedKeys ? '۱' : '۲'}. «ادامه؛ این‌ها را دوباره وارد می‌کنم» — ` +
+    'این مقادیر پاک می‌شوند و باید بعد از ریستور دوباره وارد شوند.\n'
+  );
 }
 
 /** The uploader exactly as the container builds it, from the configuration alone. */
