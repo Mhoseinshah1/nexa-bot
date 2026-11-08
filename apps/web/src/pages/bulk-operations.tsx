@@ -41,6 +41,7 @@ import {
   Banner,
   Card,
   CursorPager,
+  Disclosure,
   DataTable,
   Empty,
   Field,
@@ -60,6 +61,7 @@ import {
   PermissionDeniedState,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ListFreshness } from '../ui/list-search';
 import { CheckField } from './editor-layout';
 import { CodeName } from './code-name';
 import { REPORT_FAILURE_KIND_LABEL } from '../report-view';
@@ -262,14 +264,16 @@ export function BulkOperationsPage({
     <>
       <PageHead
         title={t('web.bulk_page_title')}
-        subtitle={t('web.bulk_page_intro')}
         actions={
-          mayRun ? (
-            <a className="btn primary" href="/bulk-operations/new" onClick={onLink}>
-              <Icon name="plus" />
-              {t('web.bulk_new')}
-            </a>
-          ) : undefined
+          <>
+            <ListFreshness query={list} />
+            {mayRun ? (
+              <a className="btn primary" href="/bulk-operations/new" onClick={onLink}>
+                <Icon name="plus" />
+                {t('web.bulk_new')}
+              </a>
+            ) : undefined}
+          </>
         }
       />
       <Card>
@@ -296,6 +300,9 @@ export function BulkOperationsPage({
             </>
           )}
         </StateSwitch>
+        <Disclosure size="sm" summary={t('web.bulk_about_fold')}>
+          <p className="muted small">{t('web.bulk_page_intro')}</p>
+        </Disclosure>
       </Card>
     </>
   );

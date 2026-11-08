@@ -1305,7 +1305,14 @@ describe('system and operations', () => {
     // WP16's diagnostics tab is a queue of stuck work, not a log browser: it reads
     // counts and the oldest rows of two lanes and links each to its entity. D3's roles
     // tab is the permission editor, not a log either.
-    expect(tabs).toEqual(['وضعیت', 'عیب‌یابی', 'پایش', 'مدیران', 'نقش‌ها و دسترسی‌ها']);
+    expect(tabs).toEqual([
+      'وضعیت',
+      'عیب‌یابی',
+      'پایش',
+      'مدیران',
+      'نقش‌ها و دسترسی‌ها',
+      'تاریخچهٔ تغییرات',
+    ]);
     expect(screen.getByText(/گروه گزارش تلگرام/)).toBeInTheDocument();
   });
 });

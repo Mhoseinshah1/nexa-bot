@@ -36,7 +36,6 @@ import { RemindersPage } from './pages/reminders';
 import { NotificationBell, NotificationCenterPage } from './pages/notification-center';
 import { IncidentBanner, IncidentDetailPage, IncidentsPage } from './pages/incidents';
 import { SecretReentryStrip } from './pages/recovery-secrets';
-import { AuditLogPage, auditLogFirstScreen } from './pages/audit-log';
 import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
 import { SystemPage } from './pages/system';
@@ -1329,12 +1328,13 @@ export function resolve(
   }
 
   if (route.path === '/audit-log') {
+    // «گزارش ممیزی» is the «تاریخچهٔ تغییرات» tab of «سامانه»: old links land there with their filters.
+    const query = new URLSearchParams(route.query);
+    query.set('section', 'audit');
     return {
-      element: (
-        <AuditLogPage route={route} denied={!may('audit.view')} mayExport={may('audit.export')} />
-      ),
-      crumbs: [{ label: t('web.nav_audit_log') }],
-      title: t('web.audit_title'),
+      element: <RedirectPage to={`/system?${query.toString()}`} />,
+      crumbs: [{ label: t('web.nav_system') }],
+      title: t('web.nav_system'),
     };
   }
 
@@ -1527,7 +1527,6 @@ function NotFound() {
  */
 export const NAV_PREFETCH: Readonly<Record<string, NavPrefetch>> = {
   '/users': { permission: 'users.view', queries: customersFirstScreen },
-  '/audit-log': { permission: 'audit.view', queries: auditLogFirstScreen },
   '/settings': { permission: 'settings.view', queries: () => [settingsQuery()] },
 };
 
