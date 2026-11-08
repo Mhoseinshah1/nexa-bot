@@ -59,9 +59,12 @@ import { SourceBadge } from '../ui/source-badge';
 import {
   Badge,
   Banner,
+  Button,
   Card,
   CellMain,
   ChipDivider,
+  DetailHead,
+  Disclosure,
   CursorPager,
   DataTable,
   Empty,
@@ -81,6 +84,14 @@ import {
 } from '../ui/kit';
 import { ListFreshness, listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { Icon } from '../ui/icons';
+import {
+  AttentionStrip,
+  CardRows,
+  KpiRow,
+  QuickAction,
+  QuickActionBar,
+  QuickFilters,
+} from '../ui/redesign';
 import { DateField } from '../ui/date-field';
 import { FilePicker } from '../ui/file-picker';
 import { ListFilterBar } from '../ui/filter-bar';
@@ -414,6 +425,9 @@ export function TicketsPage({
   });
 
   const rows = tickets.data?.tickets ?? [];
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const quickStatus: TicketStatus | 'ALL' | 'AWAITING' =
+    status !== null ? status : awaiting === 'support' ? 'AWAITING' : 'ALL';
   const nextCursor = tickets.data?.nextCursor ?? null;
   const filtering = searchSignature !== '{}';
   const dateProblem =
@@ -461,14 +475,15 @@ export function TicketsPage({
     },
     { key: 'category', header: t('web.ticket_category'), render: (row) => row.categoryTitle },
     {
+      /* Status and priority share one cell (two columns before). */
       key: 'status',
-      header: t('web.status'),
-      render: (row) => <StatusBadge status={row.status} />,
-    },
-    {
-      key: 'priority',
-      header: t('web.ticket_priority'),
-      render: (row) => <PriorityBadge priority={row.priority} />,
+      header: `${t('web.status')}${t('web.list_separator')}${t('web.ticket_priority')}`,
+      render: (row) => (
+        <span className="tickets-state-cell">
+          <StatusBadge status={row.status} />
+          <PriorityBadge priority={row.priority} />
+        </span>
+      ),
     },
     {
       key: 'customer',
@@ -493,14 +508,15 @@ export function TicketsPage({
         ),
     },
     {
+      /* The last message and, under it, when the ticket was opened (two columns before). */
       key: 'last',
-      header: t('web.ticket_last_message'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.lastMessageAt)}</span>,
-    },
-    {
-      key: 'created',
-      header: t('web.ticket_created_at'),
-      render: (row) => <span className="nowrap muted">{formatTimestamp(row.createdAt)}</span>,
+      header: `${t('web.ticket_last_message')}${t('web.list_separator')}${t('web.ticket_created_at')}`,
+      render: (row) => (
+        <span className="tickets-time-cell">
+          <span className="nowrap">{formatTimestamp(row.lastMessageAt)}</span>
+          <span className="nowrap muted small">{formatTimestamp(row.createdAt)}</span>
+        </span>
+      ),
     },
   ];
 
@@ -543,11 +559,47 @@ export function TicketsPage({
     <>
       <PageHead
         title={t('web.tickets_title')}
-        subtitle={t('web.tickets_intro')}
-        actions={<ListFreshness query={tickets} hidden={!requestable} labelled />}
+        actions={
+          <>
+            <ListFreshness query={tickets} hidden={!requestable} labelled />
+            {!denied && (
+              <Button
+                size="sm"
+                aria-expanded={categoriesOpen}
+                onClick={() => setCategoriesOpen((open) => !open)}
+              >
+                {t(categoriesOpen ? 'web.tickets_categories_hide' : 'web.tickets_categories_show')}
+              </Button>
+            )}
+          </>
+        }
       />
 
       <Card>
+        {requestable && (
+          /* The status as chips over the table; no counts — the queue has no server total per
+             status. The same facet is still in the filters panel. */
+          <div className="tickets-quick">
+            <QuickFilters
+              label={t('web.status')}
+              value={quickStatus}
+              onChange={(next) =>
+                setQueries(route, [
+                  ['status', next === 'ALL' || next === 'AWAITING' ? null : next],
+                  ['awaiting', next === 'AWAITING' ? 'support' : null],
+                ])
+              }
+              items={[
+                { key: 'ALL' as const, label: t('web.ticket_filter_all') },
+                { key: 'AWAITING' as const, label: t('web.ticket_filter_awaiting_support') },
+                ...TICKET_STATUSES.map((value) => ({
+                  key: value,
+                  label: t(TICKET_STATUS_LABELS[value]),
+                })),
+              ]}
+            />
+          </div>
+        )}
         {requestable && (
           <ListFilterBar
             label={t('web.tickets_title')}
@@ -786,9 +838,12 @@ export function TicketsPage({
             }
           />
         </StateSwitch>
+        <Disclosure size="sm" summary={t('web.tickets_about_fold')}>
+          <p className="muted small">{t('web.tickets_intro')}</p>
+        </Disclosure>
       </Card>
 
-      {!denied && (
+      {!denied && categoriesOpen && (
         <TicketCategoriesCard
           categories={categories.data?.categories ?? []}
           query={categories}
@@ -1156,53 +1211,131 @@ export function TicketDetailPage({
     enabled: !denied,
   });
   const data = ticket.data;
+  const onLink = useLinkHandler();
   return (
     <>
-      <PageHead
-        title={
-          data === undefined ? (
-            t('web.ticket_detail')
-          ) : (
-            <>
-              {t('web.ticket_detail')} <Ltr mono={false}>#{data.ticket.number}</Ltr>{' '}
-              <span className="record-ref">
-                <CodeText code={data.ticket.code} />
-                {/* R5C-2 D1: the copy beside the code copies the code; the uuid only from the technical section. */}
-                {data.ticket.code === null ? (
-                  <CopyIdButton id={data.ticket.id} />
-                ) : (
-                  <CopyCodeButton code={data.ticket.code} />
-                )}
-              </span>
-            </>
-          )
-        }
-        badge={
-          data === undefined ? undefined : (
-            <>
-              <StatusBadge status={data.ticket.status} />
-              <PriorityBadge priority={data.ticket.priority} />
-            </>
-          )
-        }
-        subtitle={data?.ticket.subject ?? t('web.ticket_detail_intro')}
-      />
+      {/* The page keeps ONE level-one heading: loaded, the head card carries it. */}
+      {data === undefined && <PageHead title={t('web.ticket_detail')} />}
       <StateSwitch query={ticket} denied={denied}>
-        {data !== undefined && data.ticket.code !== null && <TechnicalIds id={data.ticket.id} />}
         {data !== undefined && (
-          <div className="two-col ticket-layout ops-sticky-cols">
-            <div className="stack">
-              <TicketConversationCard messages={data.messages} />
-              {mayReply && <TicketReplyCard ticket={data.ticket} />}
-            </div>
-            <div className="stack">
-              {(mayAssign || mayClose) && (
-                <TicketActionsCard ticket={data.ticket} mayAssign={mayAssign} mayClose={mayClose} />
-              )}
-              <TicketSummaryCard detail={data} />
-              {data.escalations.length > 0 && <TicketEscalationsCard detail={data} />}
-              <TicketContextCard detail={data} mayAssign={mayAssign} />
-            </div>
+          <div className="ticket-detail">
+            <DetailHead
+              level={1}
+              back={{ href: '/tickets', label: t('web.tickets_title') }}
+              title={
+                <>
+                  {t('web.ticket_detail')} <Ltr mono={false}>#{data.ticket.number}</Ltr>{' '}
+                  <span className="record-ref">
+                    <CodeText code={data.ticket.code} />
+                    {/* R5C-2 D1: the copy beside the code copies the code; the uuid only from the technical section. */}
+                    {data.ticket.code === null ? (
+                      <CopyIdButton id={data.ticket.id} />
+                    ) : (
+                      <CopyCodeButton code={data.ticket.code} />
+                    )}
+                  </span>
+                </>
+              }
+              badge={
+                <>
+                  <StatusBadge status={data.ticket.status} />
+                  <PriorityBadge priority={data.ticket.priority} />
+                </>
+              }
+              meta={
+                <>
+                  {data.ticket.subject !== null && (
+                    <span className="ca-meta strong">{data.ticket.subject}</span>
+                  )}
+                  <a
+                    href={`/users/${encodeURIComponent(data.customer.id)}`}
+                    onClick={onLink}
+                    className="ca-meta"
+                  >
+                    {data.customer.displayName ?? <Ltr>{data.customer.telegramUserId}</Ltr>}
+                  </a>
+                  <span className="ca-meta">
+                    <span className="faint">{t('web.ticket_category')}</span>
+                    {data.ticket.categoryTitle}
+                  </span>
+                  <span className="ca-meta">
+                    <span className="faint">{t('web.ticket_assignee')}</span>
+                    {data.ticket.assignedAdminUsername === null ? (
+                      <span className="muted">{t('web.ticket_unassigned')}</span>
+                    ) : (
+                      <Ltr mono={false}>@{data.ticket.assignedAdminUsername}</Ltr>
+                    )}
+                  </span>
+                </>
+              }
+              actions={
+                mayAssign || mayClose ? (
+                  <TicketActionsBar
+                    ticket={data.ticket}
+                    mayAssign={mayAssign}
+                    mayClose={mayClose}
+                  />
+                ) : undefined
+              }
+            />
+            {data.ticket.code !== null && <TechnicalIds id={data.ticket.id} />}
+            <AttentionStrip
+              items={[
+                ...(data.ticket.status === 'WAITING_FOR_SUPPORT'
+                  ? [{ key: 'waiting', label: t('web.ticket_attn_waiting_support') }]
+                  : []),
+                ...(data.ticket.assignedAdminId === null && data.ticket.status !== 'CLOSED'
+                  ? [{ key: 'unassigned', label: t('web.ticket_attn_unassigned') }]
+                  : []),
+              ]}
+            />
+            <KpiRow
+              items={[
+                {
+                  key: 'created',
+                  label: t('web.ticket_created_at'),
+                  value: formatTimestamp(data.ticket.createdAt),
+                },
+                {
+                  key: 'last',
+                  label: t('web.ticket_last_message'),
+                  value: formatTimestamp(data.ticket.lastMessageAt),
+                },
+                {
+                  key: 'closed',
+                  label: t('web.ticket_closed_at'),
+                  value:
+                    data.ticket.closedAt === null ? (
+                      <Dash />
+                    ) : (
+                      formatTimestamp(data.ticket.closedAt)
+                    ),
+                },
+              ]}
+            />
+            <CardRows
+              rows={[
+                {
+                  key: 'thread',
+                  main: <TicketConversationCard messages={data.messages} />,
+                  side: <TicketSummaryCard detail={data} />,
+                },
+                {
+                  key: 'reply',
+                  main: mayReply ? (
+                    <TicketReplyCard ticket={data.ticket} />
+                  ) : (
+                    <TicketContextCard detail={data} mayAssign={mayAssign} />
+                  ),
+                  ...(mayReply
+                    ? { side: <TicketContextCard detail={data} mayAssign={mayAssign} /> }
+                    : {}),
+                },
+                ...(data.escalations.length > 0
+                  ? [{ key: 'escalations', main: <TicketEscalationsCard detail={data} /> }]
+                  : []),
+              ]}
+            />
           </div>
         )}
       </StateSwitch>
@@ -1418,7 +1551,7 @@ function TicketLinksForm({ ticket, onClose }: { ticket: TicketSummary; onClose: 
   );
 }
 
-function TicketActionsCard({
+function TicketActionsBar({
   ticket,
   mayAssign,
   mayClose,
@@ -1473,42 +1606,71 @@ function TicketActionsCard({
   );
 
   return (
-    <Card title={t('web.ticket_actions')} hint={t('web.ticket_actions_hint')}>
-      {mayClose && (
-        <div className="btn-group ticket-transitions" role="group" aria-label={t('web.status')}>
-          {targets.map((to) => (
-            <button
-              key={to}
-              type="button"
-              className={to === 'CLOSED' ? 'btn danger sm' : 'btn sm'}
-              disabled={status.isPending}
-              onClick={() => status.mutate(to)}
-            >
-              {ticket.status === 'CLOSED' ? t('web.ticket_action_reopen') : t(STATUS_ACTIONS[to])}
-            </button>
-          ))}
-        </div>
-      )}
-      {mayAssign && (
-        <div className="ops-row-actions ticket-manage">
-          <button type="button" className="btn sm" onClick={() => setPicking('assignee')}>
-            {t('web.ticket_assignee_change')}
-          </button>
-          {viewer !== null && viewer !== ticket.assignedAdminId && (
-            <button
-              type="button"
-              className="btn ghost sm"
-              disabled={assign.isPending}
-              onClick={() => assign.mutate(viewer)}
-            >
-              {t('web.ticket_assign_me')}
-            </button>
-          )}
-          <button type="button" className="btn sm" onClick={() => setPicking('priority')}>
-            {t('web.ticket_priority_change')}
-          </button>
-        </div>
-      )}
+    <>
+      <QuickActionBar
+        label={t('web.ticket_actions')}
+        groups={[
+          {
+            key: 'status',
+            label: t('web.status'),
+            actions: !mayClose
+              ? []
+              : targets.map((to) =>
+                  // Closing keeps today's behaviour — one press, no confirm — so it is red but
+                  // does not claim a «…» dialog it does not open.
+                  to === 'CLOSED' ? (
+                    <button
+                      key={to}
+                      type="button"
+                      className="qa danger"
+                      disabled={status.isPending}
+                      onClick={() => status.mutate(to)}
+                    >
+                      {t(STATUS_ACTIONS[to])}
+                    </button>
+                  ) : (
+                    <QuickAction
+                      key={to}
+                      label={
+                        ticket.status === 'CLOSED'
+                          ? t('web.ticket_action_reopen')
+                          : t(STATUS_ACTIONS[to])
+                      }
+                      disabled={status.isPending}
+                      onClick={() => status.mutate(to)}
+                    />
+                  ),
+                ),
+          },
+          {
+            key: 'manage',
+            label: t('web.ticket_actions'),
+            actions: !mayAssign
+              ? []
+              : [
+                  <QuickAction
+                    key="assignee"
+                    label={t('web.ticket_assignee_change')}
+                    onClick={() => setPicking('assignee')}
+                  />,
+                  viewer !== null && viewer !== ticket.assignedAdminId ? (
+                    <QuickAction
+                      key="me"
+                      label={t('web.ticket_assign_me')}
+                      disabled={assign.isPending}
+                      onClick={() => assign.mutate(viewer)}
+                    />
+                  ) : null,
+                  <QuickAction
+                    key="priority"
+                    label={t('web.ticket_priority_change')}
+                    onClick={() => setPicking('priority')}
+                  />,
+                ],
+          },
+        ]}
+      />
+      <p className="muted small ticket-actions-hint">{t('web.ticket_actions_hint')}</p>
       {mayAssign && (
         // W3: the two selects open in a drawer; a choice still applies at once, as before.
         <OpsActionDrawer
@@ -1567,7 +1729,7 @@ function TicketActionsCard({
           </Field>
         </OpsActionDrawer>
       )}
-    </Card>
+    </>
   );
 }
 

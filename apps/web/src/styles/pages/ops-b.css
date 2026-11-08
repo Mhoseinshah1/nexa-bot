@@ -1701,3 +1701,28 @@ form.set-row > * + * {
   padding: 0;
   list-style: none;
 }
+
+/* --- Tickets (web redesign PR-3) -------------------------------------------------- */
+
+.tickets-quick {
+  padding: 12px 18px 0;
+}
+.tickets-state-cell,
+.tickets-time-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.ticket-detail > .detail-head .head-card {
+  align-items: center;
+}
+.ticket-detail > .detail-head .head-card .quick {
+  flex: 1 1 100%;
+}
+.ticket-detail > .detail-head .qbar {
+  width: 100%;
+}
+.ticket-actions-hint {
+  margin: 0;
+}
