@@ -15,6 +15,7 @@ import {
   money,
   priceQuoteWireSchema,
   type ListSearchTerm,
+  type ListTotal,
   type PriceQuote,
   type RecordSource,
   type SourceSurface,
@@ -46,6 +47,7 @@ import {
   orPublicCode,
   readCustomerIdentities,
 } from '../../../../infrastructure/persistence/list-search.js';
+import { listTotal } from '../../../../infrastructure/persistence/list-total.js';
 import type {
   OrderCursor,
   OrderCustomerIdentity,
@@ -258,6 +260,45 @@ export class DrizzleOrderRepository implements OrderRepository {
     productIds: readonly string[] = [],
   ) {
     const tenantId = requireTenantId(scope);
+    const conditions = this.searchConditions(tenantId, search, productIds);
+    if (cursor !== null) {
+      conditions.push(
+        sql`(${orders.createdAt}, ${orders.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+
+    return this.exec(tx)
+      .select({
+        ...getTableColumns(orders),
+        createdAtText: sql<string>`to_char(${orders.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      })
+      .from(orders)
+      .where(and(...conditions))
+      .orderBy(asc(orders.createdAt), asc(orders.id))
+      .limit(limit + 1);
+  }
+
+  /**
+   * The count chip's total for the same filters the list applies, without its cursor
+   * (PR-10). Exact when the planner expects a small selection, its estimate otherwise;
+   * see `listTotal`. `null` when none could be produced in time.
+   */
+  async total(scope: TenantContext, search: OrderSearch): Promise<ListTotal | null> {
+    const productIds =
+      search.text?.kind === 'TEXT' ? await this.productIdsTitled(scope, search.text.folded) : [];
+    return listTotal(
+      this.db,
+      orders,
+      and(...this.searchConditions(requireTenantId(scope), search, productIds)),
+    );
+  }
+
+  /** The list's filters, tenant first — shared by the page statement and the total. */
+  private searchConditions(
+    tenantId: string,
+    search: OrderSearch,
+    productIds: readonly string[],
+  ): SQL[] {
     const conditions: SQL[] = [eq(orders.tenantId, tenantId)];
 
     if (search.state !== undefined) conditions.push(eq(orders.state, search.state));
@@ -275,21 +316,7 @@ export class DrizzleOrderRepository implements OrderRepository {
         ),
       );
     }
-    if (cursor !== null) {
-      conditions.push(
-        sql`(${orders.createdAt}, ${orders.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
-      );
-    }
-
-    return this.exec(tx)
-      .select({
-        ...getTableColumns(orders),
-        createdAtText: sql<string>`to_char(${orders.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
-      })
-      .from(orders)
-      .where(and(...conditions))
-      .orderBy(asc(orders.createdAt), asc(orders.id))
-      .limit(limit + 1);
+    return conditions;
   }
 
   async customerIdentities(

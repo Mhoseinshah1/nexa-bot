@@ -97,6 +97,8 @@ export class OrdersController {
         toSummary(record, identities.get(record.customerId), labels),
       ),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
+      // Omitted, not null, when none could be produced in time (`listTotalSchema`).
+      ...(result.total === null ? {} : { total: result.total }),
     };
   }
 

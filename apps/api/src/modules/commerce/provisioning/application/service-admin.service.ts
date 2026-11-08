@@ -26,7 +26,7 @@ import type {
   PanelOperabilityReader,
   ServiceCursor,
   ServiceCustomerIdentity,
-  ServicePage,
+  ServiceListing,
   ServiceRecord,
   ServiceRepository,
   ServiceSearch,
@@ -147,10 +147,15 @@ export class ServiceAdminService {
     scope: TenantContext,
     actor: ActorContext,
     query: ServiceAdminQuery,
-  ): Promise<ServicePage> {
+  ): Promise<ServiceListing> {
     await this.deps.guard.check(scope, actor, SERVICE_VIEW_PERMISSION);
     const limit = Math.min(Math.max(query.limit ?? SERVICE_PAGE_DEFAULT, 1), SERVICE_PAGE_MAX);
-    return this.deps.services.list(scope, query.search, limit, query.cursor ?? null);
+    // The count chip's total runs beside the page, never before it, and never fails it.
+    const [page, total] = await Promise.all([
+      this.deps.services.list(scope, query.search, limit, query.cursor ?? null),
+      this.deps.services.total(scope, query.search),
+    ]);
+    return { ...page, total };
   }
 
   /**

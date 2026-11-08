@@ -1,6 +1,7 @@
 import type {
   BotInstanceId,
   ListSearchTerm,
+  ListTotal,
   OperationId,
   OperationState,
   OperationTarget,
@@ -192,6 +193,11 @@ export interface ServiceCursor {
   readonly id: string;
 }
 
+/** A page plus the count chip's total, which only the operator list asks for. */
+export interface ServiceListing extends ServicePage {
+  readonly total: ListTotal | null;
+}
+
 export interface ServicePage {
   readonly items: readonly ServiceRecord[];
   readonly nextCursor: ServiceCursor | null;
@@ -358,6 +364,13 @@ export interface ServiceRepository {
     cursor: ServiceCursor | null,
     tx?: unknown,
   ): Promise<ServicePage>;
+
+  /**
+   * The count chip's total for the same filters as `list`, without its cursor (web
+   * redesign PR-10): exact when small, the planner's estimate when large, `null` when none
+   * could be produced in time. Never throws, and never waits on `list`.
+   */
+  total(scope: TenantContext, search: ServiceSearch): Promise<ListTotal | null>;
 
   /** The Telegram identity of each of these customers, inside the tenant, in one read. */
   customerIdentities(

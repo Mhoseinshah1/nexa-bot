@@ -95,6 +95,8 @@ export class CustomersController {
     return {
       customers: result.items.map(toSummary),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
+      // Omitted, not null, when none could be produced in time (`listTotalSchema`).
+      ...(result.total === null ? {} : { total: result.total }),
     };
   }
 

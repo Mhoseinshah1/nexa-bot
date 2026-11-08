@@ -51,7 +51,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   CustomerCursor,
-  CustomerPage,
+  CustomerListing,
   CustomerRecord,
   CustomerRepository,
   CustomerSearch,
@@ -502,7 +502,7 @@ export class CustomerService {
       readonly limit?: number;
       readonly cursor?: CustomerCursor | null;
     },
-  ): Promise<CustomerPage> {
+  ): Promise<CustomerListing> {
     await this.deps.guard.check(scope, actor, CUSTOMER_VIEW_PERMISSION);
     const search = query.search ?? {};
     const searching =
@@ -514,7 +514,12 @@ export class CustomerService {
       await this.deps.guard.check(scope, actor, CUSTOMER_SEARCH_PERMISSION);
     }
     const limit = Math.min(Math.max(query.limit ?? CUSTOMER_PAGE_DEFAULT, 1), CUSTOMER_PAGE_MAX);
-    return this.deps.repository.list(scope, search, limit, query.cursor ?? null);
+    // The count chip's total runs beside the page, never before it, and never fails it.
+    const [page, total] = await Promise.all([
+      this.deps.repository.list(scope, search, limit, query.cursor ?? null),
+      this.deps.repository.total(scope, search),
+    ]);
+    return { ...page, total };
   }
 
   /**

@@ -81,7 +81,7 @@ import type { DiscountCodeCaptureRepository } from '../../pricing/application/po
 import type {
   OrderCursor,
   OrderCustomerIdentity,
-  OrderPage,
+  OrderListing,
   OrderRecord,
   OrderRepository,
   OrderSearch,
@@ -347,10 +347,19 @@ export const ORDER_PAGE_MAX = 100;
 export class OrderService {
   constructor(private readonly deps: OrderServiceDeps) {}
 
-  async list(scope: TenantContext, actor: ActorContext, query: OrderListQuery): Promise<OrderPage> {
+  async list(
+    scope: TenantContext,
+    actor: ActorContext,
+    query: OrderListQuery,
+  ): Promise<OrderListing> {
     await this.deps.guard.check(scope, actor, ORDER_VIEW_PERMISSION);
     const limit = Math.min(Math.max(query.limit ?? ORDER_PAGE_DEFAULT, 1), ORDER_PAGE_MAX);
-    return this.deps.repository.list(scope, query.search, limit, query.cursor ?? null);
+    // The count chip's total runs beside the page, never before it, and never fails it.
+    const [page, total] = await Promise.all([
+      this.deps.repository.list(scope, query.search, limit, query.cursor ?? null),
+      this.deps.repository.total(scope, query.search),
+    ]);
+    return { ...page, total };
   }
 
   /**
