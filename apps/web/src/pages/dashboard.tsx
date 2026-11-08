@@ -46,6 +46,7 @@ import {
   BarChart,
   compactAxis,
   Badge,
+  Disclosure,
   Card,
   ChartCard,
   DataTable,
@@ -206,14 +207,14 @@ export function DashboardPage({
     <>
       <PageHead
         title={t('web.dashboard_title')}
-        subtitle={
-          <>
-            {t('web.dashboard_intro')}
-            <LastUpdated
-              summary={superAdmin ? shownSummary : undefined}
-              operations={shownOperations}
-            />
-          </>
+        // Redesign PR-2: the intro is a fold at the foot of the page, not a subtitle; the
+        // freshness line sits in the actions row beside the refresh. No count chip: nothing
+        // on this page is a list with a server total.
+        freshness={
+          <LastUpdated
+            summary={superAdmin ? shownSummary : undefined}
+            operations={shownOperations}
+          />
         }
         {...(superAdmin
           ? {
@@ -315,6 +316,9 @@ export function DashboardPage({
         <SystemStatusCard query={readiness} />
         {mayViewOps && <AttentionCard query={alerts} />}
       </div>
+      <Disclosure size="sm" summary={t('web.dashboard_about_fold')}>
+        <p className="muted small">{t('web.dashboard_intro')}</p>
+      </Disclosure>
     </>
   );
 }

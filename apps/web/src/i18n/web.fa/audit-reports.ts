@@ -91,7 +91,6 @@ export const WEB_FA_AUDIT_REPORTS = {
     'مقایسه با همان مدتِ دورهٔ قبل. رشد یا افت خودبه‌خود خوب یا بد نامیده نمی‌شود.',
   'web.report_lengths_differ': 'طول دو دوره برابر نیست.',
   'web.report_link_customer': 'مشتری',
-  'web.report_link_order': 'سفارش',
   'web.report_metric_new_users': 'کاربر جدید',
   'web.report_metric_renewals': 'تمدید',
   'web.report_metric_revenue': 'درآمد',

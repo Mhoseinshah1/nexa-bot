@@ -221,6 +221,7 @@ export const WEB_FA_COMMON = {
   'web.dashboard_title': 'نمای کلی',
   'web.dashboard_intro':
     'نمای اجرایی و عملیاتی فروشگاه از داده‌های واقعی — به‌روزرسانی خودکار هر 60 ثانیه.',
+  'web.dashboard_about_fold': 'دربارهٔ این صفحه',
   'web.dashboard_updated_at': 'آخرین به‌روزرسانی:',
   'web.dashboard_business': 'فروش و مشتریان',
   'web.dashboard_operations': 'وضعیت عملیاتی',
