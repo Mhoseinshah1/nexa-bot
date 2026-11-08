@@ -1726,3 +1726,28 @@ form.set-row > * + * {
 .ticket-actions-hint {
   margin: 0;
 }
+
+/* --- Incidents (web redesign PR-8) ------------------------------------------------- */
+
+/* Status, severity and kind as chips under the title; the drawer's link to the full page. */
+.incident-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-block-end: var(--gap);
+}
+.incident-open-full {
+  margin-inline-start: auto;
+}
+/* In the side drawer the summary and the side column stack. */
+.incident-detail.in-drawer {
+  grid-template-columns: minmax(0, 1fr);
+}
+/*
+ * The drawer's edit, start / resolve / cancel and notice dialogs open ABOVE it: the kit
+ * puts its dialog layer (100) under the drawer (101). Scoped to an open incident drawer.
+ */
+:root:has(.incident-detail.in-drawer) :is(.modal-layer, .dialog-backdrop) {
+  z-index: 102;
+}

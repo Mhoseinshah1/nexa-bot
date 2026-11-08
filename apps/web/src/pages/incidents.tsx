@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import {
@@ -43,7 +43,7 @@ import {
 import { formatNumber, formatTimestamp } from '../format';
 import { errorCodeLabel } from '../ops-code-labels';
 import { t, type WebKey } from '../i18n/web.fa';
-import { navigate, useLinkHandler } from '../router';
+import { useLinkHandler } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import { messageFor } from './settings';
 import {
@@ -53,6 +53,7 @@ import {
   Card,
   Checkbox,
   CursorPager,
+  Disclosure,
   DataTable,
   Empty,
   Field,
@@ -70,7 +71,8 @@ import {
 } from '../ui/kit';
 import { ActionPanel } from '../ui/action-panel';
 import { DateField } from '../ui/date-field';
-import { Modal } from '../ui/overlays';
+import { Drawer, Modal } from '../ui/overlays';
+import { ListFreshness } from '../ui/list-search';
 import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
 
 /**
@@ -266,8 +268,20 @@ export function IncidentBanner({ mayView }: { mayView: boolean }) {
 // The list
 // ---------------------------------------------------------------------------------------
 
-export function IncidentsPage({ denied, mayManage }: { denied: boolean; mayManage: boolean }) {
-  const onLink = useLinkHandler();
+export function IncidentsPage({
+  denied,
+  mayManage,
+  mayNotify = false,
+  mayViewPanels = false,
+}: {
+  denied: boolean;
+  /** `incidents.manage`: create here; edit, start, resolve, cancel, apply in the drawer. */
+  mayManage: boolean;
+  /** `incidents.notify`: the customer notice, in the drawer. */
+  mayNotify?: boolean;
+  /** `panels.view`: the drawer names a panel target by the panel's name. */
+  mayViewPanels?: boolean;
+}) {
   // A stack of cursors: the last is the page shown, popping it goes back one.
   const [cursors, setCursors] = useState<readonly string[]>([]);
   const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
@@ -279,22 +293,47 @@ export function IncidentsPage({ denied, mayManage }: { denied: boolean; mayManag
     }),
   );
   const [creating, setCreating] = useState(false);
+  /*
+   * The incident open in the side drawer, by the id of the row its name was pressed on. The
+   * drawer reads that incident itself (`GET /incidents/:id`, the detail page's own query):
+   * it never looks the id up among the rows of the page that happens to be loaded.
+   */
+  const [openId, setOpenId] = useState<string | null>(null);
   const rows = list.data?.incidents ?? [];
   const nextCursor = list.data?.nextCursor ?? null;
+  // The drawer's head names the incident: the body's own read (one request, shared by key),
+  // so a just-created incident not on this page is named too.
+  const opened = useQuery({
+    queryKey: ['incident', openId],
+    queryFn: () => fetchIncident(openId ?? ''),
+    enabled: !denied && openId !== null,
+  });
+  /* The name is a real link (a new tab, a copied address still reach the full page); a plain
+     click opens the drawer instead of leaving the list. */
+  const openInDrawer = (event: MouseEvent<HTMLAnchorElement>, id: string) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+      return;
+    event.preventDefault();
+    setOpenId(id);
+  };
   return (
     <>
       <PageHead
         title={t('web.nav_incidents')}
-        subtitle={t('web.inc_subtitle')}
-        {...(mayManage && !denied
-          ? {
+        {...(denied
+          ? {}
+          : {
               actions: (
-                <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
-                  {t('web.inc_new')}
-                </Button>
+                <>
+                  <ListFreshness query={list} />
+                  {mayManage && (
+                    <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
+                      {t('web.inc_new')}
+                    </Button>
+                  )}
+                </>
               ),
-            }
-          : {})}
+            })}
       />
       <StateSwitch
         query={list}
@@ -303,17 +342,22 @@ export function IncidentsPage({ denied, mayManage }: { denied: boolean; mayManag
         empty={<Empty title={t('web.inc_empty')} />}
       >
         <Card>
+          <p className="muted small">{t('web.inc_list_hint')}</p>
           <DataTable
             caption={t('web.nav_incidents')}
             rows={rows}
             rowKey={(row) => row.id}
+            rowClassName={(row) => (row.id === openId ? 'selected' : undefined)}
             columns={[
               {
                 key: 'title',
                 header: t('web.inc_col_title'),
                 wrap: true,
                 render: (row) => (
-                  <a href={`/incidents/${encodeURIComponent(row.id)}`} onClick={onLink}>
+                  <a
+                    href={`/incidents/${encodeURIComponent(row.id)}`}
+                    onClick={(event) => openInDrawer(event, row.id)}
+                  >
                     {row.title}
                   </a>
                 ),
@@ -371,11 +415,32 @@ export function IncidentsPage({ denied, mayManage }: { denied: boolean; mayManag
           />
         </Card>
       </StateSwitch>
+      <Disclosure size="sm" summary={t('web.inc_about_fold')}>
+        <p className="muted small">{t('web.inc_subtitle')}</p>
+      </Disclosure>
+      <Drawer
+        open={openId !== null}
+        onClose={() => setOpenId(null)}
+        wide
+        title={opened.data?.incident.title ?? t('web.inc_drawer_title')}
+      >
+        {openId !== null && (
+          <IncidentDetail
+            key={openId}
+            id={openId}
+            denied={denied}
+            mayManage={mayManage}
+            mayNotify={mayNotify}
+            mayViewPanels={mayViewPanels}
+            inDrawer
+          />
+        )}
+      </Drawer>
       {creating && (
         <IncidentFormModal
           incident={null}
           onClose={() => setCreating(false)}
-          onSaved={(saved) => navigate(`/incidents/${encodeURIComponent(saved.id)}`)}
+          onSaved={(saved) => setOpenId(saved.id)}
         />
       )}
     </>
@@ -394,13 +459,11 @@ function StatusBadge({ status }: { status: IncidentStatus }) {
 // The detail
 // ---------------------------------------------------------------------------------------
 
-export function IncidentDetailPage({
-  id,
-  denied,
-  mayManage,
-  mayNotify,
-  mayViewPanels = false,
-}: {
+export function IncidentDetailPage(props: IncidentDetailProps) {
+  return <IncidentDetail {...props} />;
+}
+
+interface IncidentDetailProps {
   id: string;
   denied: boolean;
   /** `incidents.manage`: edit, start, resolve, cancel, apply effects. */
@@ -412,7 +475,21 @@ export function IncidentDetailPage({
    * panel list is asked for and the target shows its id, as before.
    */
   mayViewPanels?: boolean;
-}) {
+}
+
+/**
+ * One incident: the detail page's body, and the same body in the list's side drawer
+ * (`inDrawer`), where the drawer's own head carries the title. Every query, mutation,
+ * permission and dialog is this component's, wherever it is drawn.
+ */
+function IncidentDetail({
+  id,
+  denied,
+  mayManage,
+  mayNotify,
+  mayViewPanels = false,
+  inDrawer = false,
+}: IncidentDetailProps & { inDrawer?: boolean }) {
   const detail = useQuery({
     queryKey: ['incident', id],
     queryFn: () => fetchIncident(id),
@@ -431,6 +508,7 @@ export function IncidentDetailPage({
   const [noticing, setNoticing] = useState(false);
   const queries = useQueryClient();
   const toast = useToast();
+  const onLink = useLinkHandler();
   const apply = useMutation({
     mutationFn: () => applyIncidentEffects(id),
     onSuccess: async () => {
@@ -445,12 +523,23 @@ export function IncidentDetailPage({
     <StateSwitch query={detail} denied={denied}>
       {incident !== undefined && (
         <>
-          <PageHead
-            title={incident.title}
-            subtitle={`${t(INCIDENT_KIND_LABELS[incident.kind])} · ${t(
-              INCIDENT_SEVERITY_LABELS[incident.severity],
-            )}`}
-          />
+          {!inDrawer && <PageHead title={incident.title} />}
+          <div className="incident-chips">
+            <StatusBadge status={incident.status} />
+            <Badge tone={SEVERITY_TONES[incident.severity]}>
+              {t(INCIDENT_SEVERITY_LABELS[incident.severity])}
+            </Badge>
+            <Badge tone="neutral">{t(INCIDENT_KIND_LABELS[incident.kind])}</Badge>
+            {inDrawer && (
+              <a
+                className="incident-open-full small"
+                href={`/incidents/${encodeURIComponent(incident.id)}`}
+                onClick={onLink}
+              >
+                {t('web.inc_open_full')}
+              </a>
+            )}
+          </div>
           {incident.status === 'ACTIVE' && incident.stopSales && (
             <Banner tone="info">{t('web.inc_money_note')}</Banner>
           )}
@@ -530,7 +619,7 @@ export function IncidentDetailPage({
               ]}
             />
           )}
-          <div className="incident-detail">
+          <div className={`incident-detail${inDrawer ? ' in-drawer' : ''}`}>
             <Card title={t('web.inc_summary')} className="incident-summary">
               <KV
                 items={[
