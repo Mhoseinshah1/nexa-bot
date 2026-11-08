@@ -26,7 +26,7 @@ describe('panels (demo parity)', () => {
     expect(screen.queryByText(t('web.diag_failure_timeout'))).toBeNull();
   });
 
-  it('draws the detail as a page header with its figures as six separate cards', async () => {
+  it('draws the detail as a page header with its figures as a six-cell KPI row', async () => {
     stubApi([{ url: '/panels/', body: { panel: panel() } }]);
     const { container } = renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
@@ -35,7 +35,7 @@ describe('panels (demo parity)', () => {
     expect(container.querySelector('.detail-head')).toBeNull();
     const strip = container.querySelector('.panel-head-stats') as HTMLElement;
     expect(strip).not.toBeNull();
-    expect(strip.querySelectorAll(':scope > .stat')).toHaveLength(6);
+    expect(strip.querySelectorAll('.kpi-cell')).toHaveLength(6);
     expect(within(strip).getByText(t('web.panel_capacity'))).toBeInTheDocument();
     // The lifecycle hint sits under the header's actions, for an ACTIVE panel.
     expect(screen.getByText(t('web.panel_lifecycle_hint'))).toBeInTheDocument();
