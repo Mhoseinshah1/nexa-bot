@@ -877,6 +877,15 @@ only appears on old rows). You then have two choices:
    before the cutover, so they survive it. Details: ADR-0032 and
    `docs/recovery-kit-format.md`.
 
+   Three consequences of choosing 2: a payment gateway's **refund card cannot be cleared**
+   (clearing it would change a refund), so a backup whose list contains one must be restored
+   with the old Recovery Kit; a **bot whose token was cleared is stopped** until its token is
+   entered again; and until every cleared value is re-entered the Web Admin shows an
+   **attention strip** (`GET /secret-reentry`, `backup.view`) above every page, one row per
+   value with a link to the page where it is entered. A row disappears as soon as its value
+   is set again; the strip hides when none are left. After a restore the row in the history
+   reports how many secrets were re-encrypted under this server's key and how many cleared.
+
 ### What the Web path does NOT do
 
 **It does not restart anything.** The cutover needs no configuration change —
