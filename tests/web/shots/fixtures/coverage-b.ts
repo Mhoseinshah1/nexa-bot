@@ -12,6 +12,8 @@ import {
   incidentListResponseSchema,
   legacyMigrationCapabilitiesResponseSchema,
   supportAiConfigResponseSchema,
+  supportKnowledgeGapsResponseSchema,
+  supportReadinessResponseSchema,
   supportAiDraftViewSchema,
   supportAiUsageResponseSchema,
   legacyMigrationImportListResponseSchema,
@@ -398,7 +400,7 @@ const conversation = (over: Json = {}): Json => ({
 });
 
 const message = (n: number, origin: string, text: string, minutes: number): Json => ({
-  id: `019420ab-cdef-7012-8345-6789abcdef0${n}`,
+  id: `019420ab-cdef-7012-8345-${String(n).padStart(12, '0')}`,
   origin,
   kind: 'TEXT',
   text,
@@ -407,10 +409,32 @@ const message = (n: number, origin: string, text: string, minutes: number): Json
   deleted: false,
 });
 
+// A long conversation (110 earlier messages over three days), so the thread's own scroll, the
+// «older» reveal and the day separators are what the report looks at.
+const EARLIER_MESSAGES: Json[] = Array.from({ length: 110 }, (_, index) =>
+  message(
+    100 + index,
+    index % 4 === 0 ? 'INBOUND' : index % 4 === 3 ? 'HUMAN' : 'OWN_ECHO',
+    `پیام شمارهٔ ${index + 1} در این گفتگو`,
+    60 + (110 - index) * 40,
+  ),
+);
+
 const CHAT_DETAIL = {
   conversation: { ...conversation(), controlEpoch: 3, lastHumanAt: null },
-  escalations: [],
+  escalations: [
+    {
+      id: '019450ab-cdef-7012-8345-6789abcdef01',
+      reason: 'HANDOFF_TOPIC',
+      summary: 'مشتری بازپرداخت می‌خواهد.',
+      ticketId: null,
+      ticketOutcome: 'NO_CUSTOMER',
+      createdAt: ago(13),
+      aiFailure: null,
+    },
+  ],
   messages: [
+    ...EARLIER_MESSAGES,
     message(1, 'INBOUND', 'سلام، از دیشب سرویس وصل نمی‌شود.', 30),
     message(
       2,
@@ -527,6 +551,24 @@ export const COVERAGE_B: readonly ShotFixture[] = [
 
   // The support AI: configured for drafts, its analytics, knowledge, learning and build.
   fixture('/support-ai/config', supportAiConfigResponseSchema, SUPPORT_AI_CONFIG),
+  fixture('/support-ai/readiness', supportReadinessResponseSchema, {
+    checks: [
+      { check: 'BUSINESS_CONNECTION', status: 'OK', detail: 'CONNECTED', count: null, handles: [] },
+      { check: 'PROVIDER_KEY', status: 'OK', detail: 'KEY_OK', count: null, handles: [] },
+      { check: 'KNOWLEDGE', status: 'OK', detail: 'KNOWLEDGE_READY', count: 3, handles: [] },
+    ],
+  }),
+  fixture('/support-ai/knowledge-gaps', supportKnowledgeGapsResponseSchema, {
+    gaps: [
+      {
+        topic: 'CONNECTION_TROUBLESHOOTING',
+        intent: 'اتصال در اندروید',
+        count: 4,
+        reasons: ['HANDOFF_TOPIC'],
+        examples: [],
+      },
+    ],
+  }),
   fixture('/support-ai/usage', supportAiUsageResponseSchema, {
     since: ago(60 * 24 * 7),
     rows: [

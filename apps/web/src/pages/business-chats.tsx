@@ -1118,6 +1118,7 @@ function TranscriptCard({
           <div className="bchat-tbar">
             <input
               type="search"
+              dir="rtl"
               className="input sm bchat-search"
               aria-label={t('web.bchat_thread_search')}
               placeholder={t('web.bchat_thread_search')}

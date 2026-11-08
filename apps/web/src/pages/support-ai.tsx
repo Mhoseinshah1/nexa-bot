@@ -249,8 +249,8 @@ export function SupportAiPage({
               </Banner>
             )}
             {/* Cards side by side at one height, row by row (the configuration beside what it
-                needs to be ready; the credentials beside the ticket switch; the test console
-                beside the usage). */}
+                needs to be ready; the credentials beside the ticket switch); the wide cards
+                — the test console and the usage table — a row each. */}
             <CardRows
               rows={[
                 {
@@ -276,8 +276,9 @@ export function SupportAiPage({
                       maySearchCustomers={maySearchCustomers}
                     />
                   ),
-                  side: <UsageCard />,
                 },
+                // The usage table needs the width: a row of its own.
+                { key: 'usage', main: <UsageCard /> },
               ]}
             />
             <Disclosure size="sm" summary={t('web.sai_about_fold')}>
