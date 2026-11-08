@@ -64,6 +64,9 @@ export interface UnreadableSecretReporterDeps {
 /** A condition whose `unreadable` list this process cannot read is never closed by it. */
 const UNLISTED = '\u0000unlisted';
 
+/** The context key of a condition's list of unreadable secrets (`purpose|row`). */
+const UNREADABLE_LIST = 'unreadable';
+
 /**
  * NEXA-FIX-RESTORE-SECRETS §2.6: what a running installation does when a stored secret stops
  * decrypting (`platform.secret_auth_failed`, or a key id it does not hold).
@@ -276,12 +279,10 @@ export class UnreadableSecretReporter {
     const previous = this.recording.get(pair);
     const work = (async () => {
       await previous?.catch(() => undefined);
-      // Merged with the open row's list: the dedupe update replaces the context, and a
-      // secret another process listed must stay listed until it is read again.
-      const open = await this.deps.conditions
-        .openConditionContext(scope, dedupeKey)
-        .catch(() => null);
-      const listed = new Set(open === null ? [] : unreadableList(open));
+      // This process's failing secrets of the kind. The recorder unions them with the open
+      // row's list under the row's lock (`mergeList`), so a concurrent report of another
+      // secret from another process is never overwritten (Codex on #424).
+      const listed = new Set<string>();
       for (const other of this.failing.values()) {
         if (other.tenantId === entry.tenantId && other.kind === entry.kind) {
           listed.add(other.secret);
@@ -294,6 +295,7 @@ export class UnreadableSecretReporter {
           `A stored ${context.purpose} secret cannot be read with this installation's keys ` +
           `(${errorCode(error)}); it has to be re-entered.`,
         dedupeKey,
+        mergeList: UNREADABLE_LIST,
         // Not `secret…`: the redactor blanks any context key that names a secret.
         context: {
           kind: entry.kind,
@@ -316,6 +318,11 @@ export class UnreadableSecretReporter {
     this.track(work);
   }
 
+  /**
+   * Records `secrets.read_ok` for the kind, naming every secret read successfully here. The
+   * recorder removes those from the open row's list under its lock and closes the row only
+   * when nothing is left listed — the CURRENT list, not the one this process looked up.
+   */
   private async writeClose(tenantId: string, kind: UnreadableSecretKind): Promise<boolean> {
     const recorded = await recordQuietly(
       this.deps.recorder,
@@ -327,10 +334,14 @@ export class UnreadableSecretReporter {
         context: { kind },
         recoversCode: SECRET_READ_FAILED_CODE,
         recoversDedupeKey: secretUnreadableConditionKey(kind),
+        recoversListed: {
+          key: UNREADABLE_LIST,
+          read: [...(this.readOk.get(`${tenantId}|${kind}`) ?? [])].sort(),
+        },
       },
       this.deps.logger,
     );
-    return recorded !== null;
+    return recorded !== null && recorded.withheld !== true;
   }
 
   private track(work: Promise<unknown>): void {
@@ -392,7 +403,7 @@ function secretId(context: SecretContext): string {
 }
 
 function unreadableList(context: Record<string, unknown>): string[] {
-  const list = context['unreadable'];
+  const list = context[UNREADABLE_LIST];
   return Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string') : [];
 }
 

@@ -66,10 +66,36 @@ class FakeConditions {
     return this.recorded.map((event) => event.code);
   }
 
-  record(event: OperationalEventInput): void {
+  /** As `DrizzleOperationalEventRecorder` does it: `mergeList` unions, `recoversListed` withholds. */
+  record(event: OperationalEventInput): { withheld: boolean } {
+    const list = (context: Record<string, unknown> | undefined, key: string): string[] =>
+      (context?.[key] as string[] | undefined) ?? [];
+    if (event.recoversDedupeKey !== undefined) {
+      const open = this.open.get(event.recoversDedupeKey);
+      if (open !== undefined && event.recoversListed !== undefined) {
+        const { key, read } = event.recoversListed;
+        const left = list(open, key).filter((item) => !read.includes(item));
+        if (left.length > 0) {
+          this.open.set(event.recoversDedupeKey, { ...open, [key]: left });
+          return { withheld: true };
+        }
+      }
+      this.recorded.push(event);
+      this.open.delete(event.recoversDedupeKey);
+      return { withheld: false };
+    }
     this.recorded.push(event);
-    if (event.recoversDedupeKey !== undefined) this.open.delete(event.recoversDedupeKey);
-    else if (event.dedupeKey !== undefined) this.open.set(event.dedupeKey, event.context ?? {});
+    if (event.dedupeKey !== undefined) {
+      const open = this.open.get(event.dedupeKey);
+      const context = { ...(event.context ?? {}) };
+      if (open !== undefined && event.mergeList !== undefined) {
+        context[event.mergeList] = [
+          ...new Set([...list(open, event.mergeList), ...list(event.context, event.mergeList)]),
+        ].sort();
+      }
+      this.open.set(event.dedupeKey, context);
+    }
+    return { withheld: false };
   }
 
   async openConditionContext(
@@ -88,8 +114,8 @@ function setup(options: { store?: FakeConditions; rerecordMs?: number } = {}) {
   const reporter = new UnreadableSecretReporter({
     recorder: {
       async record(_scope, event) {
-        store.record(event);
-        return { isNew: true, reopened: false } as never;
+        const { withheld } = store.record(event);
+        return { isNew: true, reopened: false, withheld } as never;
       },
     },
     conditions: store,
