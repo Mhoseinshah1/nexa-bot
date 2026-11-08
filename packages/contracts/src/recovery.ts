@@ -672,7 +672,12 @@ export const recoveryAcknowledgeUnreadableRequestSchema = z.object({
       }),
     )
     .min(1)
-    .max(SECRET_PURPOSES.length),
+    .max(SECRET_PURPOSES.length)
+    // One entry per purpose: a list that splits a purpose in two could add up to the
+    // recorded count without being the list the owner was shown.
+    .refine((list) => new Set(list.map((entry) => entry.purpose)).size === list.length, {
+      message: 'each purpose may appear once',
+    }),
 });
 export type RecoveryAcknowledgeUnreadableRequest = z.infer<
   typeof recoveryAcknowledgeUnreadableRequestSchema

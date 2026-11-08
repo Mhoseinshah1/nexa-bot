@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  recoveryAcknowledgeUnreadableRequestSchema,
   BACKUP_TRIGGERS,
   canTransition,
   cutoverPermitted,
@@ -240,5 +241,23 @@ describe('the recovery id', () => {
     expect(recoveryIdSchema.safeParse('01a05e35-c9ad-4e93-bef3-1ed9b55292fe').success).toBe(false);
     expect(recoveryIdSchema.safeParse('../../etc/passwd').success).toBe(false);
     expect(recoveryIdSchema.safeParse('').success).toBe(false);
+  });
+});
+
+describe('the acknowledgment of unreadable secrets (NEXA-FIX-RESTORE-SECRETS §2.3)', () => {
+  it('refuses a list that names a purpose twice, even when the counts add up', () => {
+    const parse = (unreadable: unknown) =>
+      recoveryAcknowledgeUnreadableRequestSchema.safeParse({
+        idempotencyKey: 'ack-12345678',
+        unreadable,
+      }).success;
+    expect(parse([{ purpose: 'panel.password', count: 2 }])).toBe(true);
+    expect(
+      parse([
+        { purpose: 'panel.password', count: 1 },
+        { purpose: 'panel.password', count: 1 },
+      ]),
+    ).toBe(false);
+    expect(parse([])).toBe(false);
   });
 });
