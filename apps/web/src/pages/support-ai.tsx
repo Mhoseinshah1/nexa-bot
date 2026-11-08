@@ -36,6 +36,7 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
+import { CardRows } from '../ui/redesign';
 import { useSubmissionKey } from '../submission-key';
 import { messageFor } from './settings';
 import {
@@ -229,9 +230,8 @@ export function SupportAiPage({
     <>
       <PageHead
         title={t('web.sai_title')}
-        subtitle={t('web.sai_intro')}
-        // Demo parity (DIFFS support-ai #3): the mode is a pill on the controls' side, under
-        // the subtitle — not a chip beside the title.
+        // Demo parity (DIFFS support-ai #3): the mode is a pill on the controls' side — not a
+        // chip beside the title. The intro that used to be a subtitle is a fold under the cards.
         actions={
           data === undefined ? undefined : (
             <Badge tone={MODE_TONES[data.config.mode]}>
@@ -248,15 +248,41 @@ export function SupportAiPage({
                 <p>{t('web.sai_chain_unavailable_hint')}</p>
               </Banner>
             )}
-            <ReadinessCard config={data} />
-            <ConfigCard response={data} mayAutoReply={mayAutoReply} />
-            <TicketAiSwitchCard
-              automatic={data.config.mode === 'AUTO_REPLY_SAFE'}
-              mayEdit={mayAutoReply}
+            {/* Cards side by side at one height, row by row (the configuration beside what it
+                needs to be ready; the credentials beside the ticket switch; the test console
+                beside the usage). */}
+            <CardRows
+              rows={[
+                {
+                  key: 'config',
+                  main: <ConfigCard response={data} mayAutoReply={mayAutoReply} />,
+                  side: <ReadinessCard config={data} />,
+                },
+                {
+                  key: 'credentials',
+                  main: <CredentialsCard response={data} />,
+                  side: (
+                    <TicketAiSwitchCard
+                      automatic={data.config.mode === 'AUTO_REPLY_SAFE'}
+                      mayEdit={mayAutoReply}
+                    />
+                  ),
+                },
+                {
+                  key: 'test',
+                  main: (
+                    <TestConsoleCard
+                      mode={data.config.mode}
+                      maySearchCustomers={maySearchCustomers}
+                    />
+                  ),
+                  side: <UsageCard />,
+                },
+              ]}
             />
-            <CredentialsCard response={data} />
-            <TestConsoleCard mode={data.config.mode} maySearchCustomers={maySearchCustomers} />
-            <UsageCard />
+            <Disclosure size="sm" summary={t('web.sai_about_fold')}>
+              <p className="muted small">{t('web.sai_intro')}</p>
+            </Disclosure>
           </div>
         )}
       </StateSwitch>

@@ -34,6 +34,7 @@ export const WEB_FA_SUPPORT = {
   'web.channel_enforcement_hint':
     'ربات باید در هر کانال اجباری مدیر باشد. برای کانال خصوصی، شناسهٔ عددی و لینک عضویت را وارد کنید.',
   'web.support_title': 'پشتیبانی',
+  'web.support_about_fold': 'دربارهٔ این فهرست',
   'web.support_subtitle':
     'سوالات متداولی که ربات به مشتری نشان می‌دهد، به همان ترتیب، و راه ارتباط با پشتیبانی.',
   'web.support_faq_hint':

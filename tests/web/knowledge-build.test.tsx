@@ -298,3 +298,22 @@ describe('the Build-from-NEXA page', () => {
     expect(await screen.findByText(t('web.kb_fault_running'))).toBeInTheDocument();
   });
 });
+
+describe('PR-3: the build’s own counts are key figures, and the intro is a fold', () => {
+  it('draws each server count in the key-figure row and keeps the intro out of the head', async () => {
+    page();
+    const group = await screen.findByRole('group', { name: t('web.kb_counts') });
+    for (const label of [
+      t('web.kb_kind_add'),
+      t('web.kb_kind_update'),
+      t('web.kb_kind_conflict'),
+      t('web.kb_kind_retire'),
+      t('web.kb_kind_unchanged'),
+    ]) {
+      expect(within(group).getByText(label)).toBeInTheDocument();
+    }
+    // Add 1, update 0, conflict 1, retire 0, unchanged 1 — the server's numbers, no fabricated zero.
+    expect(group.textContent).toContain('0');
+    expect(screen.getByText(t('web.kb_about_fold'))).toBeInTheDocument();
+  });
+});

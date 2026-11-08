@@ -19,7 +19,19 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
 import { knowledgeFault } from './support-knowledge';
-import { Badge, Banner, Card, Empty, PageHead, StateSwitch, useToast, type Tone } from '../ui/kit';
+import { KpiRow } from '../ui/redesign';
+import {
+  Badge,
+  Banner,
+  Card,
+  Disclosure,
+  Empty,
+  Num,
+  PageHead,
+  StateSwitch,
+  useToast,
+  type Tone,
+} from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { ErrorRef } from '../ui/technical-details';
 
@@ -164,7 +176,6 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
     <>
       <PageHead
         title={t('web.kb_title')}
-        subtitle={t('web.kb_subtitle')}
         actions={
           mayReview ? (
             <button
@@ -266,9 +277,34 @@ function BuildCard({
       }
     >
       {!open && <Banner tone="warn">{t('web.kb_superseded')}</Banner>}
-      <p className="small" aria-label={t('web.kb_counts')}>
-        {`${t('web.kb_kind_add')}: ${String(build.counts.add)} · ${t('web.kb_kind_update')}: ${String(build.counts.update)} · ${t('web.kb_kind_conflict')}: ${String(build.counts.conflict)} · ${t('web.kb_kind_retire')}: ${String(build.counts.retire)} · ${t('web.kb_kind_unchanged')}: ${String(build.counts.unchanged)}`}
-      </p>
+      {/* The build's own counts (the server's), as key figures. */}
+      <div role="group" aria-label={t('web.kb_counts')}>
+        <KpiRow
+          items={[
+            { key: 'add', label: t('web.kb_kind_add'), value: <Num value={build.counts.add} /> },
+            {
+              key: 'update',
+              label: t('web.kb_kind_update'),
+              value: <Num value={build.counts.update} />,
+            },
+            {
+              key: 'conflict',
+              label: t('web.kb_kind_conflict'),
+              value: <Num value={build.counts.conflict} />,
+            },
+            {
+              key: 'retire',
+              label: t('web.kb_kind_retire'),
+              value: <Num value={build.counts.retire} />,
+            },
+            {
+              key: 'unchanged',
+              label: t('web.kb_kind_unchanged'),
+              value: <Num value={build.counts.unchanged} />,
+            },
+          ]}
+        />
+      </div>
       {/* Phase 4 PR-2: a cap is never silent — a Persian warning says what it left out. */}
       {build.capped > 0 && <Banner tone="warn">{t('web.kb_capped_warning')}</Banner>}
       {(build.truncated > 0 || build.capped > 0) && (
@@ -355,6 +391,9 @@ function BuildCard({
           ))}
         </ol>
       )}
+      <Disclosure size="sm" summary={t('web.kb_about_fold')}>
+        <p className="muted small">{t('web.kb_subtitle')}</p>
+      </Disclosure>
     </Card>
   );
 }

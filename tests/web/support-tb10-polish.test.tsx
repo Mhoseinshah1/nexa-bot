@@ -188,8 +188,10 @@ describe('the inbox: the customer’s wait and the ticket', () => {
       },
     ]);
     renderPage(<BusinessChatDetailPage id={CHAT_ID} denied={false} mayReply={false} />);
-    const open = await screen.findByRole('link', { name: t('web.bchat_ticket_open') });
-    expect(open.getAttribute('href')).toBe(`/tickets/${TICKET_ID}`);
+    // The head card's meta line and the control card both link the ticket.
+    const open = await screen.findAllByRole('link', { name: t('web.bchat_ticket_open') });
+    expect(open.length).toBeGreaterThanOrEqual(1);
+    for (const link of open) expect(link.getAttribute('href')).toBe(`/tickets/${TICKET_ID}`);
     expect(screen.getByText(t('web.bchat_wait_just_now'))).toBeTruthy();
   });
 });

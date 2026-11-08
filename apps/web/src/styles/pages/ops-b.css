@@ -247,25 +247,19 @@ form.set-row > * + * {
 /* Where support goes is edited on the settings page: said in one quiet line. */
 .support-destination {
   display: flex;
-  /* Demo parity (DIFFS support #2): the icon and «رفتن به تنظیمات» align with the title. */
   align-items: flex-start;
   gap: 12px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--panel-row);
+  margin-block-end: 12px;
   color: var(--fg-3);
 }
-.support-destination > div {
+.support-destination p {
+  margin: 0;
   flex: 1;
   min-width: 0;
-  color: var(--fg);
-}
-.support-destination p {
-  margin: 2px 0 0;
 }
 .support-destination > svg {
   margin-top: 3px;
+  flex: none;
 }
 /*
  * The answer under its question, two lines at most in the list. TB10: each paragraph takes
