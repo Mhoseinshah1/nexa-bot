@@ -4,10 +4,12 @@ import { keepPageWhileTurning } from '../ui/paging';
 import {
   isConditionRecoveryCode,
   isOneShotManagementCode,
+  SECRET_READ_FAILED_CODE,
   type NotificationDetailResponse,
   type NotificationListResponse,
   type OperationalSeverity,
 } from '@nexa/contracts';
+import { unreadableSecretAlertFa } from '@nexa/i18n';
 import {
   fetchNotification,
   fetchNotifications,
@@ -50,6 +52,26 @@ import {
 } from '../ops-code-labels';
 
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
+
+/**
+ * The Persian sentence a row reads as. An unreadable stored secret (NEXA-FIX-RESTORE-SECRETS
+ * §2.6) names its KIND and where it is re-entered, from the row's `context.kind`; every
+ * other code reads as its label.
+ */
+export function alertMessage(code: string, context: Record<string, unknown> | null): string {
+  return (
+    unreadableSecretMessage(code, context) ??
+    (hasOpsCodeLabel(code) ? opsCodeLabel(code) : t('web.alerts_message_unnamed'))
+  );
+}
+
+/** The per-kind sentence of a `secrets.read_failed` row, or null for every other row. */
+export function unreadableSecretMessage(
+  code: string,
+  context: Record<string, unknown> | null,
+): string | null {
+  return code === SECRET_READ_FAILED_CODE ? unreadableSecretAlertFa(context?.['kind']) : null;
+}
 
 /** Each severity in the operator's words — the same names the settings page uses. */
 export const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
@@ -203,9 +225,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
        */
       render: (row) => (
         <>
-          <span className="alerts-message">
-            {hasOpsCodeLabel(row.code) ? opsCodeLabel(row.code) : t('web.alerts_message_unnamed')}
-          </span>
+          <span className="alerts-message">{alertMessage(row.code, row.context)}</span>
           <TechnicalDetails lines={[row.message]} />
         </>
       ),

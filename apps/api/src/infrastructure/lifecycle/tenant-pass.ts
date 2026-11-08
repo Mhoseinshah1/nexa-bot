@@ -1,4 +1,5 @@
 import type { TenantContext, TenantId } from '@nexa/contracts';
+import { isUnreadableSecretError } from './unreadable-secret.js';
 
 /**
  * Phase 6A PR-6 — one background loop, every ACTIVE tenant.
@@ -180,7 +181,9 @@ export class TenantFanOut {
             failed += 1;
             if (tenantId === primary) primaryFailed = true;
             firstError ??= error;
-            if (!isReportedTenantFailure(error)) {
+            // An unreadable stored secret is reported once, by `UnreadableSecretReporter`
+            // (one log line, one Web Admin alert per kind), never once per tenant per tick.
+            if (!isReportedTenantFailure(error) && !isUnreadableSecretError(error)) {
               this.deps.logger.error(
                 { loop: name, tenantId, err: String(error) },
                 'background pass failed for one tenant; the others are still served',

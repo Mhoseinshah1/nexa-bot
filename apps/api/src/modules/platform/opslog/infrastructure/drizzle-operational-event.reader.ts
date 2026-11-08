@@ -254,6 +254,30 @@ export class DrizzleOperationalConditionReader implements OperationalConditionRe
   }
 
   /**
+   * The (redacted) context of ONE subject's open condition, or null when none is open.
+   * NEXA-FIX-RESTORE-SECRETS §2.6: an unreadable-secret condition lists the secrets it was
+   * raised for, and a process that did not raise it may close it only by reading those.
+   */
+  async openConditionContext(
+    scope: ScopeContext,
+    dedupeKey: string,
+  ): Promise<Record<string, unknown> | null> {
+    const [row] = await this.db
+      .select({ context: operationalEvents.context })
+      .from(operationalEvents)
+      .where(
+        and(
+          eq(operationalEvents.dedupeScope, scopeRef(scope, 'OPSLOG')),
+          eq(operationalEvents.dedupeKey, dedupeKey),
+          isNull(operationalEvents.resolvedAt),
+        ),
+      )
+      .limit(1);
+    if (row === undefined) return null;
+    return (row.context as Record<string, unknown> | null) ?? {};
+  }
+
+  /**
    * The unresolved rows among these dedupe keys, with what an operator reads off
    * them. Phase C2's panel health dashboard: keyed exactly as `openConditions`,
    * through `operational_events_dedupe_key`, so the answer is about the rows a

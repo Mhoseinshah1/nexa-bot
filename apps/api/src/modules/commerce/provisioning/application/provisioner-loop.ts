@@ -10,6 +10,7 @@ import {
   reportedTenantFailure,
   type LoopTenantScope,
 } from '../../../../infrastructure/lifecycle/tenant-pass.js';
+import { isUnreadableSecretError } from '../../../../infrastructure/lifecycle/unreadable-secret.js';
 
 /**
  * The loop that drives the executor, and the readiness signal it earns.
@@ -282,7 +283,13 @@ export class ProvisionerLoop {
            * together are what make the heartbeat honest.
            */
           failed = true;
-          this.options.logger.error({ tenantId: scope.tenantId, error }, 'provisioner tick failed');
+          // Unreadable panel credentials are reported once per kind (`UnreadableSecretReporter`).
+          if (!isUnreadableSecretError(error)) {
+            this.options.logger.error(
+              { tenantId: scope.tenantId, error },
+              'provisioner tick failed',
+            );
+          }
         }
         /*
          * Then the settlement lanes, EACH on its own (Codex review of #83, round 11).
@@ -308,10 +315,12 @@ export class ProvisionerLoop {
           } catch (error: unknown) {
             failed = true;
             this.touch();
-            this.options.logger.error(
-              { tenantId: scope.tenantId, error, lane },
-              'provisioner settlement lane failed',
-            );
+            if (!isUnreadableSecretError(error)) {
+              this.options.logger.error(
+                { tenantId: scope.tenantId, error, lane },
+                'provisioner settlement lane failed',
+              );
+            }
           }
         }
         if (failed) throw reportedTenantFailure('a provisioner lane failed for this tenant');

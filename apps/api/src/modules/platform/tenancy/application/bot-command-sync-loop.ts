@@ -5,6 +5,7 @@ import {
 } from '../domain/bot-command-sync.js';
 import type { BotCommandSyncService, CommandSyncTickResult } from './bot-command-sync.service.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import { isUnreadableSecretError } from '../../../../infrastructure/lifecycle/unreadable-secret.js';
 
 /**
  * The command-sync lane's timer, in the WORKER (round P).
@@ -84,7 +85,10 @@ export class BotCommandSyncLoop {
       }
       return { ...result, reconciled };
     } catch (error: unknown) {
-      this.options.logger.error({ err: String(error) }, 'command sync tick failed');
+      // An unreadable bot token is reported once (`UnreadableSecretReporter`), not per tick.
+      if (!isUnreadableSecretError(error)) {
+        this.options.logger.error({ err: String(error) }, 'command sync tick failed');
+      }
       return idle;
     } finally {
       this.running = false;

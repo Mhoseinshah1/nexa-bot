@@ -334,6 +334,8 @@ interface Harness {
     delays: { dump: number; encrypt: number; verify: number; deliver: number };
     /** Thrown by the archiver's `preflight` before the dump, when set (Round 5B). */
     preflightError: Error | null;
+    /** Thrown by `archiver.nextFormat`, which reads the stored backup password. */
+    nextFormatError: Error | null;
     /** Round 8 B3: the volume as the disk preflight sees it; null is "unknown". */
     disk: { freeBytes: number; requiredBytes: number } | null;
     /** Round 8 B2: how many times retention ran after a success, and whether it throws. */
@@ -393,6 +395,7 @@ function harness(
     open: new Set<string>(),
     delays: { dump: 0, encrypt: 0, verify: 0, deliver: 0 },
     preflightError: null,
+    nextFormatError: null,
     disk: null,
     pruneCalls: 0,
     pruneThrows: false,
@@ -447,6 +450,10 @@ function harness(
       },
     },
     archiver: {
+      async nextFormat() {
+        if (state.nextFormatError !== null) throw state.nextFormatError;
+        return 'NXB';
+      },
       async preflight() {
         if (state.preflightError !== null) throw state.preflightError;
       },
@@ -2344,5 +2351,55 @@ describe('the off-site copy of a verified archive (Phase 6A D0)', () => {
     };
     await h.service.run('MANUAL');
     expect(uploader.calls).toEqual([]);
+  });
+});
+
+/*
+ * NEXA-FIX-RESTORE-SECRETS §2.7: a backup password that does not decrypt (restored onto a
+ * server whose key has the same id and different material) refuses the run AT ONCE, before
+ * the dump, with the owner's reason and its own code — never the cipher's generic text.
+ */
+describe('§2.7: an unreadable backup password', () => {
+  const REASON = 'رمز بکاپ قابل خواندن نیست؛ آن را در «بکاپ و بازیابی» دوباره وارد کنید';
+  const unreadable = (code: string): NexaError =>
+    new NexaError({
+      kind: 'INTERNAL',
+      code,
+      message: 'A stored secret failed authenticated decryption.',
+    });
+
+  it.each([
+    ['nextFormat', PLATFORM_ERROR_CODES.SECRET_AUTH_FAILED],
+    ['nextFormat', PLATFORM_ERROR_CODES.SECRET_KEY_UNKNOWN],
+    ['preflight', PLATFORM_ERROR_CODES.SECRET_AUTH_FAILED],
+  ] as const)(
+    'fails the run before the dump when %s meets %s, with the clear reason and code',
+    async (step, code) => {
+      const h = harness();
+      if (step === 'nextFormat') h.state.nextFormatError = unreadable(code);
+      else h.state.preflightError = unreadable(code);
+      const run = await completed(h);
+
+      expect(run.state).toBe('FAILED');
+      expect(run.failureCode).toBe(PLATFORM_ERROR_CODES.BACKUP_PASSWORD_UNREADABLE);
+      expect(run.failureMessage).toBe(REASON);
+      // At once: nothing was dumped, sealed or delivered.
+      expect(h.state.dumps).toBe(0);
+      expect(h.runs.stages).toEqual(['DUMP']);
+      const failures = h.state.recorded.filter((event) => event.code === 'backup.run_failed');
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.context).toMatchObject({
+        failureCode: PLATFORM_ERROR_CODES.BACKUP_PASSWORD_UNREADABLE,
+        failureMessage: REASON,
+      });
+    },
+  );
+
+  it('leaves every other preflight failure as it was', async () => {
+    const h = harness();
+    h.state.nextFormatError = new Error('the archive directory is not writable');
+    const run = await completed(h);
+    expect(run.failureCode).toBe('backup.failed');
+    expect(run.failureMessage).toBe('the archive directory is not writable');
   });
 });
