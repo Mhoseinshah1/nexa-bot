@@ -169,7 +169,7 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
 
 /**
  * NEXA-FIX-RESTORE-SECRETS §2.6: what a `secrets.read_failed` condition says, per secret KIND
- * (its `context.secretKind`), with the page where the owner re-enters it. The alerts page
+ * (its `context.kind`), with the page where the owner re-enters it. The alerts page
  * shows this in place of the code's generic sentence when the kind is known.
  */
 export const UNREADABLE_SECRET_ALERTS_FA: Readonly<Record<UnreadableSecretKind, string>> = {

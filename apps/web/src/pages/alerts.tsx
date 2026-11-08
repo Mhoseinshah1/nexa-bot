@@ -55,7 +55,7 @@ const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ER
 
 /**
  * The Persian sentence a row reads as. An unreadable stored secret (NEXA-FIX-RESTORE-SECRETS
- * §2.6) names its KIND and where it is re-entered, from the row's `context.secretKind`; every
+ * §2.6) names its KIND and where it is re-entered, from the row's `context.kind`; every
  * other code reads as its label.
  */
 export function alertMessage(code: string, context: Record<string, unknown> | null): string {
@@ -70,7 +70,7 @@ export function unreadableSecretMessage(
   code: string,
   context: Record<string, unknown> | null,
 ): string | null {
-  return code === SECRET_READ_FAILED_CODE ? unreadableSecretAlertFa(context?.['secretKind']) : null;
+  return code === SECRET_READ_FAILED_CODE ? unreadableSecretAlertFa(context?.['kind']) : null;
 }
 
 /** Each severity in the operator's words — the same names the settings page uses. */

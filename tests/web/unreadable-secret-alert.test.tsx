@@ -5,7 +5,7 @@ import { event, renderPage, stubApi } from './harness';
 
 /*
  * NEXA-FIX-RESTORE-SECRETS §2.6: the «هشدارهای مدیریتی» page reads an unreadable stored
- * secret as its KIND and the page to re-enter it on — from the row's `context.secretKind` —
+ * secret as its KIND and the page to re-enter it on — from the row's `context.kind` —
  * because the operations group may itself need the token that cannot be read.
  */
 describe('an unreadable stored secret on the alerts page', () => {
@@ -20,14 +20,14 @@ describe('an unreadable stored secret on the alerts page', () => {
               code: 'secrets.read_failed',
               severity: 'ERROR',
               message: 'A stored bot_instance.token secret cannot be read.',
-              context: { secretKind: 'BOT_TOKEN', purpose: 'bot_instance.token' },
+              context: { kind: 'BOT_TOKEN', purpose: 'bot_instance.token' },
             }),
             event({
               id: '01a05e35-c9ad-7e93-bef3-1ed9b55292d2',
               code: 'secrets.read_failed',
               severity: 'ERROR',
               message: 'A stored panel.password secret cannot be read.',
-              context: { secretKind: 'PANEL_CREDENTIALS', purpose: 'panel.password' },
+              context: { kind: 'PANEL_CREDENTIALS', purpose: 'panel.password' },
             }),
           ],
           nextCursor: null,

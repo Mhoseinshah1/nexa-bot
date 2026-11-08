@@ -42,10 +42,16 @@ describe('an unreadable bot token on a running installation', () => {
   }
 
   async function events(): Promise<
-    { code: string; dedupe_key: string | null; occurrence_count: number; resolved: boolean }[]
+    {
+      code: string;
+      dedupe_key: string | null;
+      occurrence_count: number;
+      resolved: boolean;
+      context: Record<string, unknown> | null;
+    }[]
   > {
     const result = await ctx.container.database.db.execute(sql`
-      SELECT code, dedupe_key, occurrence_count, resolved_at IS NOT NULL AS resolved
+      SELECT code, dedupe_key, occurrence_count, resolved_at IS NOT NULL AS resolved, context
         FROM operational_events
        WHERE tenant_id = ${tenantA.tenantId} AND code LIKE 'secrets.%'
        ORDER BY first_seen_at, id`);
@@ -69,6 +75,12 @@ describe('an unreadable bot token on a running installation', () => {
         dedupe_key: 'secrets.read_failed:BOT_TOKEN',
         occurrence_count: 1,
         resolved: false,
+        // Survives the recorder's redaction: the alerts page reads `kind`, and a process that
+        // did not raise it closes it only by reading a secret on `unreadable`.
+        context: expect.objectContaining({
+          kind: 'BOT_TOKEN',
+          unreadable: [`bot_instance.token|${BOT}`],
+        }),
       },
     ]);
 

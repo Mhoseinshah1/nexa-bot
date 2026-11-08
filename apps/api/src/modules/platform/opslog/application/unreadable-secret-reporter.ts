@@ -35,6 +35,8 @@ export const UNREADABLE_SECRET_FORGET_MS = 26 * 60 * 60_000;
 interface FailingSecret {
   /** The ciphertext as last seen failing. A different one is a re-entered value. */
   readonly stamp: string;
+  /** `purpose|row`: which secret, as the condition's `unreadable` list names it. */
+  readonly secret: string;
   readonly kind: UnreadableSecretKind;
   readonly tenantId: string;
   recordedAt: number;
@@ -44,7 +46,11 @@ interface FailingSecret {
 export interface UnreadableSecretReporterDeps {
   readonly recorder: Pick<OperationalEventRecorder, 'record'>;
   readonly conditions: {
-    openConditions(scope: TenantContext, dedupeKeys: readonly string[]): Promise<string[]>;
+    /** The context of the open condition with this dedupe key, or null when none is open. */
+    openConditionContext(
+      scope: TenantContext,
+      dedupeKey: string,
+    ): Promise<Record<string, unknown> | null>;
   };
   readonly clock: Clock;
   readonly logger: {
@@ -54,6 +60,9 @@ export interface UnreadableSecretReporterDeps {
   /** Overrides `UNREADABLE_SECRET_RERECORD_MS`; production never sets it. */
   readonly rerecordMs?: number;
 }
+
+/** A condition whose `unreadable` list this process cannot read is never closed by it. */
+const UNLISTED = '\u0000unlisted';
 
 /**
  * NEXA-FIX-RESTORE-SECRETS §2.6: what a running installation does when a stored secret stops
@@ -67,25 +76,35 @@ export interface UnreadableSecretReporterDeps {
  * Now, per secret (tenant, purpose, row):
  * - the FIRST failure of a given ciphertext logs one line (no stack, no value) and records
  *   `secrets.read_failed` on the tenant's condition for that KIND — one Web Admin alert per
- *   kind, however many rows and loops hit it;
+ *   kind, however many rows and loops hit it. The row's context lists every secret it was
+ *   raised for (`unreadable`, `purpose|row`), merged with what the open row already listed, so
+ *   two processes failing on two rows both appear;
  * - every later failure of the SAME ciphertext is silent (re-recorded on the open row at most
  *   every `UNREADABLE_SECRET_RERECORD_MS`); callers check `isUnreadableSecretError` and log
  *   nothing of their own;
  * - a DIFFERENT ciphertext that still fails is a new state: one more line, one more record
  *   (the dedupe key keeps it the same alert);
- * - the first successful read after a failure logs one line and, once no row of that kind is
- *   failing in this process, records `secrets.read_ok`, closing the condition. A process that
- *   did not see the failure (restarted after the value was re-entered) closes a condition it
- *   finds open the first time it reads that kind.
+ * - `secrets.read_ok` closes the condition only once nothing of that kind fails in this
+ *   process AND every secret the open row lists has been read successfully HERE. A healthy
+ *   read of another row of the same kind (panel 2, when panel 1 is the broken one) leaves it
+ *   open: closing on it let a process that never saw the failure close another's condition,
+ *   which then reopened and was announced again (lead review of this round).
  *
  * The state is per process and in memory; the condition row is what survives a restart. It
  * never throws: reporting must not change what the caller's decrypt does.
  */
 export class UnreadableSecretReporter {
   private readonly failing = new Map<string, FailingSecret>();
-  /** `tenant|kind` pairs whose inherited condition has been looked for and settled. */
-  private readonly inheritedChecked = new Set<string>();
-  private readonly inheritedChecking = new Set<string>();
+  /** `tenant|kind` → the secrets read successfully in this process. */
+  private readonly readOk = new Map<string, Set<string>>();
+  /** `tenant|kind` → listed secrets not yet read here, for an open condition. */
+  private readonly remaining = new Map<string, Set<string>>();
+  /** `tenant|kind` pairs known to have no open condition this process must close. */
+  private readonly settled = new Set<string>();
+  private readonly looking = new Set<string>();
+  private readonly closing = new Set<string>();
+  /** `tenant|kind` → this process's failure record in flight; a look-up waits for it. */
+  private readonly recording = new Map<string, Promise<unknown>>();
   private readonly pending = new Set<Promise<unknown>>();
 
   constructor(private readonly deps: UnreadableSecretReporterDeps) {}
@@ -101,6 +120,12 @@ export class UnreadableSecretReporter {
       const key = secretKey(context);
       const stamp = `${secret.keyId}\u0000${secret.ciphertext}`;
       const now = this.deps.clock.now().getTime();
+      const kind = unreadableSecretKindOf(context.purpose);
+      const pair = `${context.tenantId}|${kind}`;
+      this.readOk.get(pair)?.delete(secretId(context));
+      // Whatever this process concluded about the open row no longer holds.
+      this.settled.delete(pair);
+      this.remaining.delete(pair);
       const prior = this.failing.get(key);
       const rerecordMs = this.deps.rerecordMs ?? UNREADABLE_SECRET_RERECORD_MS;
       if (prior !== undefined && prior.stamp === stamp) {
@@ -112,7 +137,8 @@ export class UnreadableSecretReporter {
       }
       const entry: FailingSecret = {
         stamp,
-        kind: unreadableSecretKindOf(context.purpose),
+        secret: secretId(context),
+        kind,
         tenantId: context.tenantId,
         recordedAt: now,
         lastSeenAt: now,
@@ -122,7 +148,7 @@ export class UnreadableSecretReporter {
       this.deps.logger.warn(
         {
           purpose: context.purpose,
-          secretKind: entry.kind,
+          kind: entry.kind,
           tenantId: context.tenantId,
           entityId: context.entityId,
           keyId: secret.keyId,
@@ -138,59 +164,42 @@ export class UnreadableSecretReporter {
     return true;
   }
 
-  /** A decrypt for `context` succeeded. Cheap: a map lookup on the hot path. */
+  /** A decrypt for `context` succeeded. Cheap: map lookups on the hot path. */
   readable(context: SecretContext): void {
     try {
       const key = secretKey(context);
+      const id = secretId(context);
       const kind = unreadableSecretKindOf(context.purpose);
       const pair = `${context.tenantId}|${kind}`;
+      let ok = this.readOk.get(pair);
+      if (ok === undefined) {
+        ok = new Set();
+        this.readOk.set(pair, ok);
+      }
+      ok.add(id);
       const was = this.failing.get(key);
       if (was !== undefined) {
         this.failing.delete(key);
         this.deps.logger.info(
           {
             purpose: context.purpose,
-            secretKind: kind,
+            kind,
             tenantId: context.tenantId,
             entityId: context.entityId,
           },
           'a stored secret that could not be read reads again',
         );
-        if (!this.kindFailing(context.tenantId, kind)) {
-          this.track(
-            this.writeClose(context.tenantId, kind).then((closed) => {
-              // Not closed: the next read looks the condition up and closes it then.
-              if (closed) this.inheritedChecked.add(pair);
-            }),
-          );
-        }
+      } else if (this.settled.has(pair)) {
         return;
       }
-      if (this.inheritedChecked.has(pair) || this.inheritedChecking.has(pair)) return;
-      if (this.kindFailing(context.tenantId, kind)) return;
-      this.inheritedChecking.add(pair);
-      this.track(
-        (async () => {
-          try {
-            const scope = tenantScope(context.tenantId);
-            const open = await this.deps.conditions.openConditions(scope, [
-              secretUnreadableConditionKey(kind),
-            ]);
-            if (
-              open.includes(SECRET_READ_FAILED_CODE) &&
-              !this.kindFailing(context.tenantId, kind)
-            ) {
-              if (await this.writeClose(context.tenantId, kind)) this.inheritedChecked.add(pair);
-            } else {
-              this.inheritedChecked.add(pair);
-            }
-          } catch {
-            // Looked for again on the next successful read.
-          } finally {
-            this.inheritedChecking.delete(pair);
-          }
-        })(),
-      );
+      const remaining = this.remaining.get(pair);
+      if (remaining !== undefined) {
+        remaining.delete(id);
+        this.maybeClose(pair, context.tenantId, kind);
+        return;
+      }
+      if (this.kindFailing(context.tenantId, kind) || this.looking.has(pair)) return;
+      this.lookUp(pair, context.tenantId, kind);
     } catch {
       // Reporting never changes what the decrypt does.
     }
@@ -199,6 +208,52 @@ export class UnreadableSecretReporter {
   /** Waits for the recordings in flight. For tests and orderly shutdown. */
   async settle(): Promise<void> {
     while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
+  }
+
+  /** Reads the open condition's list of secrets, less those already read here. */
+  private lookUp(pair: string, tenantId: string, kind: UnreadableSecretKind): void {
+    this.looking.add(pair);
+    this.track(
+      (async () => {
+        try {
+          // A failure this process is still recording would otherwise read as "none open".
+          await this.recording.get(pair);
+          const context = await this.deps.conditions.openConditionContext(
+            tenantScope(tenantId),
+            secretUnreadableConditionKey(kind),
+          );
+          if (context === null) {
+            this.settled.add(pair);
+            return;
+          }
+          const listed = unreadableList(context);
+          const remaining = new Set(listed.length === 0 ? [UNLISTED] : listed);
+          for (const id of this.readOk.get(pair) ?? []) remaining.delete(id);
+          this.remaining.set(pair, remaining);
+          this.maybeClose(pair, tenantId, kind);
+        } catch {
+          // Looked up again on the next successful read.
+        } finally {
+          this.looking.delete(pair);
+        }
+      })(),
+    );
+  }
+
+  private maybeClose(pair: string, tenantId: string, kind: UnreadableSecretKind): void {
+    const remaining = this.remaining.get(pair);
+    if (remaining === undefined || remaining.size > 0) return;
+    if (this.kindFailing(tenantId, kind) || this.closing.has(pair)) return;
+    this.closing.add(pair);
+    this.track(
+      this.writeClose(tenantId, kind)
+        .then((closed) => {
+          // Not closed: the next read looks the condition up again.
+          if (closed) this.settled.add(pair);
+          this.remaining.delete(pair);
+        })
+        .finally(() => this.closing.delete(pair)),
+    );
   }
 
   private kindFailing(tenantId: string, kind: UnreadableSecretKind): boolean {
@@ -215,28 +270,50 @@ export class UnreadableSecretReporter {
   }
 
   private record(entry: FailingSecret, context: SecretContext, error: unknown): void {
-    const event: OperationalEventInput = {
-      code: SECRET_READ_FAILED_CODE,
-      severity: OPS_ERROR_CLASS_POLICY.ERROR.storedSeverity,
-      message:
-        `A stored ${context.purpose} secret cannot be read with this installation's keys ` +
-        `(${errorCode(error)}); it has to be re-entered.`,
-      dedupeKey: secretUnreadableConditionKey(entry.kind),
-      context: {
-        secretKind: entry.kind,
-        purpose: context.purpose,
-        entityId: context.entityId,
-        errorCode: errorCode(error),
-      },
-    };
-    this.track(
-      recordQuietly(this.deps.recorder, tenantScope(entry.tenantId), event, this.deps.logger).then(
-        (recorded) => {
-          // Not recorded: try again on the next failure rather than waiting out the window.
-          if (recorded === null) entry.recordedAt = Number.NEGATIVE_INFINITY;
+    const scope = tenantScope(entry.tenantId);
+    const dedupeKey = secretUnreadableConditionKey(entry.kind);
+    const pair = `${entry.tenantId}|${entry.kind}`;
+    const previous = this.recording.get(pair);
+    const work = (async () => {
+      await previous?.catch(() => undefined);
+      // Merged with the open row's list: the dedupe update replaces the context, and a
+      // secret another process listed must stay listed until it is read again.
+      const open = await this.deps.conditions
+        .openConditionContext(scope, dedupeKey)
+        .catch(() => null);
+      const listed = new Set(open === null ? [] : unreadableList(open));
+      for (const other of this.failing.values()) {
+        if (other.tenantId === entry.tenantId && other.kind === entry.kind) {
+          listed.add(other.secret);
+        }
+      }
+      const event: OperationalEventInput = {
+        code: SECRET_READ_FAILED_CODE,
+        severity: OPS_ERROR_CLASS_POLICY.ERROR.storedSeverity,
+        message:
+          `A stored ${context.purpose} secret cannot be read with this installation's keys ` +
+          `(${errorCode(error)}); it has to be re-entered.`,
+        dedupeKey,
+        // Not `secret…`: the redactor blanks any context key that names a secret.
+        context: {
+          kind: entry.kind,
+          purpose: context.purpose,
+          entityId: context.entityId,
+          errorCode: errorCode(error),
+          unreadable: [...listed].sort(),
         },
-      ),
-    );
+      };
+      const recorded = await recordQuietly(this.deps.recorder, scope, event, this.deps.logger);
+      // Not recorded: try again on the next failure rather than waiting out the window.
+      if (recorded === null) entry.recordedAt = Number.NEGATIVE_INFINITY;
+    })();
+    this.recording.set(pair, work);
+    void work
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.recording.get(pair) === work) this.recording.delete(pair);
+      });
+    this.track(work);
   }
 
   private async writeClose(tenantId: string, kind: UnreadableSecretKind): Promise<boolean> {
@@ -247,7 +324,7 @@ export class UnreadableSecretReporter {
         code: SECRET_READ_OK_CODE,
         severity: OPS_ERROR_CLASS_POLICY.INFO.storedSeverity,
         message: `Stored ${kind} secrets read again with this installation's keys.`,
-        context: { secretKind: kind },
+        context: { kind },
         recoversCode: SECRET_READ_FAILED_CODE,
         recoversDedupeKey: secretUnreadableConditionKey(kind),
       },
@@ -305,8 +382,18 @@ export class ReportingSecretCipher implements SecretCipher {
  * purpose alone names it.
  */
 function secretKey(context: SecretContext): string {
+  return `${context.tenantId}|${secretId(context)}`;
+}
+
+/** `purpose|row` — the tenant is the condition's own scope. */
+function secretId(context: SecretContext): string {
   const entity = context.purpose === 'backup.archive_password' ? 'current' : context.entityId;
-  return `${context.tenantId}|${context.purpose}|${entity}`;
+  return `${context.purpose}|${entity}`;
+}
+
+function unreadableList(context: Record<string, unknown>): string[] {
+  const list = context['unreadable'];
+  return Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string') : [];
 }
 
 function tenantScope(tenantId: string): TenantContext {

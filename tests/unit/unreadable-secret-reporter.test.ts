@@ -52,24 +52,47 @@ const inner: SecretCipher = {
   mask: () => '****',
 };
 
-function setup(options: { open?: string[]; rerecordMs?: number } = {}) {
+/**
+ * The open conditions, as the recorder and the condition reader see them: one row per dedupe
+ * key (a failure replaces its context, a recovery resolves it). Shared by two reporters to
+ * stand for two processes, or for a process and its previous life.
+ */
+class FakeConditions {
+  readonly open = new Map<string, Record<string, unknown>>();
+  readonly recorded: OperationalEventInput[] = [];
+  readonly lookups: string[] = [];
+
+  codes(): string[] {
+    return this.recorded.map((event) => event.code);
+  }
+
+  record(event: OperationalEventInput): void {
+    this.recorded.push(event);
+    if (event.recoversDedupeKey !== undefined) this.open.delete(event.recoversDedupeKey);
+    else if (event.dedupeKey !== undefined) this.open.set(event.dedupeKey, event.context ?? {});
+  }
+
+  async openConditionContext(
+    _scope: TenantContext,
+    dedupeKey: string,
+  ): Promise<Record<string, unknown> | null> {
+    this.lookups.push(dedupeKey);
+    return this.open.get(dedupeKey) ?? null;
+  }
+}
+
+function setup(options: { store?: FakeConditions; rerecordMs?: number } = {}) {
   let now = Date.parse('2026-11-08T10:00:00Z');
-  const recorded: OperationalEventInput[] = [];
-  const queries: string[][] = [];
+  const store = options.store ?? new FakeConditions();
   const log = { warn: vi.fn(), info: vi.fn() };
   const reporter = new UnreadableSecretReporter({
     recorder: {
       async record(_scope, event) {
-        recorded.push(event);
+        store.record(event);
         return { isNew: true, reopened: false } as never;
       },
     },
-    conditions: {
-      async openConditions(_scope: TenantContext, keys: readonly string[]) {
-        queries.push([...keys]);
-        return options.open ?? [];
-      },
-    },
+    conditions: store,
     clock: { now: () => new Date(now) },
     logger: log,
     ...(options.rerecordMs === undefined ? {} : { rerecordMs: options.rerecordMs }),
@@ -78,13 +101,13 @@ function setup(options: { open?: string[]; rerecordMs?: number } = {}) {
   return {
     reporter,
     cipher,
-    recorded,
-    queries,
+    store,
+    recorded: store.recorded,
     log,
     advance: (ms: number) => {
       now += ms;
     },
-    codes: () => recorded.map((event) => event.code),
+    codes: () => store.recorded.map((event) => event.code),
   };
 }
 
@@ -125,13 +148,13 @@ describe('a loop hitting an unreadable bot token (§2.6)', () => {
     expect(t.recorded[0]).toMatchObject({
       severity: 'ERROR',
       dedupeKey: 'secrets.read_failed:BOT_TOKEN',
-      context: { secretKind: 'BOT_TOKEN', purpose: 'bot_instance.token', entityId: BOT },
+      context: { kind: 'BOT_TOKEN', purpose: 'bot_instance.token', entityId: BOT },
     });
     // The loop says nothing per tick; the reporter said it once, without a stack.
     expect(loopLog.error).not.toHaveBeenCalled();
     expect(t.log.warn).toHaveBeenCalledTimes(1);
     const [fields] = t.log.warn.mock.calls[0]!;
-    expect(fields).toMatchObject({ secretKind: 'BOT_TOKEN', code: 'platform.secret_auth_failed' });
+    expect(fields).toMatchObject({ kind: 'BOT_TOKEN', code: 'platform.secret_auth_failed' });
     expect(JSON.stringify(fields)).not.toContain('sealed-under');
     expect(Object.values(fields as object).some((value) => value instanceof Error)).toBe(false);
 
@@ -175,6 +198,7 @@ describe('UnreadableSecretReporter', () => {
     expect(() => t.cipher.decrypt(tokenRow('bad'), TOKEN)).toThrow(
       expect.objectContaining({ code: PLATFORM_ERROR_CODES.SECRET_AUTH_FAILED }),
     );
+    await t.reporter.settle();
     expect(t.cipher.decrypt(tokenRow('good-1'), TOKEN)).toBe('plain:good-1');
     // A failure that is not about the key is not reported as one.
     expect(() => t.cipher.decrypt(tokenRow('garbage'), TOKEN)).toThrow('not an envelope');
@@ -247,20 +271,90 @@ describe('UnreadableSecretReporter', () => {
     };
     const replacement: SecretContext = { ...old, entityId: 'row-2' };
     expect(() => t.cipher.decrypt(tokenRow('bad'), old)).toThrow();
+    await t.reporter.settle();
     t.cipher.decrypt(tokenRow('good-new'), replacement);
     await t.reporter.settle();
     expect(t.codes()).toEqual(['secrets.read_failed', 'secrets.read_ok']);
     expect(t.recorded[1]?.recoversDedupeKey).toBe('secrets.read_failed:BACKUP_PASSWORD');
   });
 
-  it('closes, once, a condition a previous life left open, and asks only once', async () => {
-    const t = setup({ open: ['secrets.read_failed'] });
+  it('closes, once, a condition a previous life left open for THIS secret, and asks once', async () => {
+    const store = new FakeConditions();
+    store.open.set('secrets.read_failed:BOT_TOKEN', {
+      kind: 'BOT_TOKEN',
+      unreadable: [`bot_instance.token|${BOT}`],
+    });
+    const t = setup({ store });
     for (let i = 0; i < 5; i += 1) t.cipher.decrypt(tokenRow('good-1'), TOKEN);
     await t.reporter.settle();
     for (let i = 0; i < 5; i += 1) t.cipher.decrypt(tokenRow('good-1'), TOKEN);
     await t.reporter.settle();
     expect(t.codes()).toEqual(['secrets.read_ok']);
-    expect(t.queries).toEqual([['secrets.read_failed:BOT_TOKEN']]);
+    expect(store.lookups).toEqual(['secrets.read_failed:BOT_TOKEN']);
+  });
+
+  /*
+   * Lead review: a process that reads a HEALTHY secret of the same kind must not close a
+   * condition another process raised for a broken one — it reopened within the re-record
+   * window and was announced again.
+   */
+  it('two processes: a healthy read of ANOTHER row leaves the condition open; reading the broken one closes it', async () => {
+    const store = new FakeConditions();
+    const a = setup({ store });
+    const b = setup({ store });
+    const x: SecretContext = { purpose: 'panel.password', tenantId: TENANT, entityId: 'panel-x' };
+    const y: SecretContext = { purpose: 'panel.password', tenantId: TENANT, entityId: 'panel-y' };
+
+    expect(() => a.cipher.decrypt(tokenRow('bad-x'), x)).toThrow();
+    await a.reporter.settle();
+    expect(store.open.get('secrets.read_failed:PANEL_CREDENTIALS')).toMatchObject({
+      kind: 'PANEL_CREDENTIALS',
+      unreadable: ['panel.password|panel-x'],
+    });
+
+    for (let i = 0; i < 10; i += 1) {
+      b.cipher.decrypt(tokenRow('good-y'), y);
+      await b.reporter.settle();
+    }
+    expect(store.codes()).toEqual(['secrets.read_failed']);
+    expect(store.open.has('secrets.read_failed:PANEL_CREDENTIALS')).toBe(true);
+
+    // X is re-entered; process B reads it, and that closes the condition, once.
+    b.cipher.decrypt(tokenRow('good-x'), x);
+    await b.reporter.settle();
+    b.cipher.decrypt(tokenRow('good-x'), x);
+    await b.reporter.settle();
+    expect(store.codes()).toEqual(['secrets.read_failed', 'secrets.read_ok']);
+    expect(store.open.has('secrets.read_failed:PANEL_CREDENTIALS')).toBe(false);
+  });
+
+  it('lists the rows two processes failed on, and closes only when both read', async () => {
+    const store = new FakeConditions();
+    const a = setup({ store });
+    const b = setup({ store });
+    const x: SecretContext = { purpose: 'panel.password', tenantId: TENANT, entityId: 'panel-x' };
+    const y: SecretContext = { purpose: 'panel.password', tenantId: TENANT, entityId: 'panel-y' };
+    expect(() => a.cipher.decrypt(tokenRow('bad-x'), x)).toThrow();
+    await a.reporter.settle();
+    expect(() => b.cipher.decrypt(tokenRow('bad-y'), y)).toThrow();
+    await b.reporter.settle();
+    expect(store.open.get('secrets.read_failed:PANEL_CREDENTIALS')?.['unreadable']).toEqual([
+      'panel.password|panel-x',
+      'panel.password|panel-y',
+    ]);
+    // A's own row reads again, but B's is still listed: A does not close it.
+    a.cipher.decrypt(tokenRow('good-x'), x);
+    await a.reporter.settle();
+    expect(store.open.has('secrets.read_failed:PANEL_CREDENTIALS')).toBe(true);
+    b.cipher.decrypt(tokenRow('good-y'), y);
+    await b.reporter.settle();
+    b.cipher.decrypt(tokenRow('good-x'), x);
+    await b.reporter.settle();
+    expect(store.codes()).toEqual([
+      'secrets.read_failed',
+      'secrets.read_failed',
+      'secrets.read_ok',
+    ]);
   });
 
   it('records nothing for a healthy installation', async () => {
