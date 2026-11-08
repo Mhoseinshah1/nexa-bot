@@ -113,6 +113,16 @@ const page = () =>
   renderPage(<RemindersPage mayEdit denied={false} mayViewTemplates mayEditTemplates />);
 
 describe('the reminders screen', () => {
+  it('the head refresh re-reads the feature flags as well as the settings', async () => {
+    const { calls } = api();
+    page();
+    await screen.findByRole('heading', { name: t('web.reminders_expiry_title') });
+    const featureReads = () => calls.filter((c) => c.url.endsWith('/features')).length;
+    const before = featureReads();
+    fireEvent.click(screen.getByRole('button', { name: t('web.list_refresh') }));
+    await waitFor(() => expect(featureReads()).toBeGreaterThan(before));
+  });
+
   it('shows the four families and the usage thresholds as traffic REMAINING', async () => {
     api();
     page();

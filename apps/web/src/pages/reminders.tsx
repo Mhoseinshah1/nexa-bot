@@ -340,7 +340,16 @@ export function RemindersPage({
       <PageHead
         title={t('web.reminders_title')}
         badge={<UnsavedCount count={dirty.size} />}
-        actions={<ListFreshness query={settings} hidden={denied} />}
+        actions={
+          <ListFreshness
+            query={{
+              dataUpdatedAt: Math.min(settings.dataUpdatedAt, flags.dataUpdatedAt),
+              isFetching: settings.isFetching || flags.isFetching,
+              refetch: () => Promise.all([settings.refetch(), flags.refetch()]),
+            }}
+            hidden={denied}
+          />
+        }
       />
       <Disclosure size="sm" summary={t('web.reminders_about_fold')}>
         <p className="muted small">{t('web.reminders_intro')}</p>
