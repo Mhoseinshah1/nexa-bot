@@ -481,7 +481,7 @@ export const WEB_FA_BOT_1 = {
   'web.qrt_dimensions': 'ابعاد (پیکسل)',
   'web.qrt_file': 'فایل PNG پس‌زمینه',
   'web.qrt_file_hint':
-    'فقط PNG، حداکثر 1 مگابایت، هر ضلع بین {min} و {max} پیکسل، 8 بیتی و بدون interlace.',
+    'فقط PNG، حداکثر 1 مگابایت، هر ضلع بین {min} و {max} پیکسل، 8 بیتی و بدون پویش درهم‌تنیده.',
   'web.qrt_upload': 'بارگذاری پس‌زمینه',
   'web.qrt_replace': 'جایگزینی پس‌زمینه',
   'web.qrt_uploaded': 'پس‌زمینهٔ QR ذخیره شد.',
@@ -491,7 +491,7 @@ export const WEB_FA_BOT_1 = {
   'web.qrt_problem_unreadable': 'سرآیند فایل خوانده نشد.',
   'web.qrt_problem_dimensions': 'ابعاد تصویر خارج از محدودهٔ مجاز است.',
   'web.qrt_problem_format':
-    'این نوع PNG پشتیبانی نمی‌شود (16 بیتی، کمتر از 8 بیت یا interlace). آن را به PNG معمولی 8 بیتی تبدیل کنید.',
+    'این نوع PNG پشتیبانی نمی‌شود (16 بیتی، کمتر از 8 بیت یا درهم‌تنیده). آن را به PNG معمولی 8 بیتی تبدیل کنید.',
   'web.qrt_problem_bomb': 'دادهٔ تصویر بیش از اندازهٔ اعلام‌شده باز می‌شود و پذیرفته نشد.',
   'web.qrt_problem_corrupt': 'فایل PNG آسیب دیده است.',
   'web.qrt_placement_title': 'جای QR',
