@@ -177,8 +177,14 @@ export function DiscountsPage({
           { id: 'preview', label: t('web.preview_title') },
         ]}
       />
-      {panel('discounts', <DiscountRules denied={denied} mayEdit={mayEditDiscounts} options={options} />)}
-      {panel('cashback', <CashbackRules denied={denied} mayEdit={mayEditCashback} options={options} />)}
+      {panel(
+        'discounts',
+        <DiscountRules denied={denied} mayEdit={mayEditDiscounts} options={options} />,
+      )}
+      {panel(
+        'cashback',
+        <CashbackRules denied={denied} mayEdit={mayEditCashback} options={options} />,
+      )}
       {panel('preview', <PricePreview denied={denied} options={options} />)}
     </>
   );

@@ -219,9 +219,10 @@ describe('the campaigns list', () => {
       'aria-pressed',
       'false',
     );
-    expect(
-      screen.getByRole('button', { name: t('web.campaign_state_active') }),
-    ).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: t('web.campaign_state_active') })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 
   it('is reachable from the navigation under its own view key', () => {
