@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BUSINESS_CONVERSATION_STATES,
@@ -29,7 +29,7 @@ import {
   sendBusinessChatMessage,
   takeOverBusinessChat,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatDate, formatNumber, formatTimeOfDay, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
 import { setQuery, useLinkHandler, type Route } from '../router';
@@ -42,13 +42,12 @@ import {
   Badge,
   Banner,
   Card,
-  ChipDivider,
   ConfirmDialog,
   DataTable,
+  DetailHead,
+  Disclosure,
   Empty,
   Field,
-  FilterChip,
-  FilterChips,
   IdentityCell,
   KV,
   LIST_PAGE_SIZE,
@@ -65,7 +64,24 @@ import { Icon, type IconName } from '../ui/icons';
 import { AssistCard } from './support-assist';
 import { ProposeKnowledgeButton } from './support-knowledge';
 import { FailureDiagnosticView } from './support-ai-failure';
-import { ListFilterBar } from '../ui/filter-bar';
+import { ListFreshness } from '../ui/list-search';
+import {
+  AttentionStrip,
+  CardRows,
+  KpiRow,
+  QuickAction,
+  QuickActionBar,
+  QuickFilters,
+} from '../ui/redesign';
+import {
+  THREAD_FILTERS,
+  THREAD_PAGE_SIZE,
+  layoutThread,
+  threadEntries,
+  visibleEntries,
+  type ThreadEscalation,
+  type ThreadFilter,
+} from './business-chat-thread-model';
 import { ErrorRef } from '../ui/technical-details';
 /**
  * TB2 — Telegram Business conversations (ADR-0033): the inbox, the connections it arrives
@@ -494,25 +510,24 @@ export function BusinessChatsPage({
       render: (row) => <WaitAge since={row.unansweredSince} />,
     },
     {
-      key: 'preview',
-      header: t('web.bchat_preview'),
-      wrap: true,
-      render: (row) =>
-        row.preview === null ? (
-          <span className="muted small">{t('web.bchat_text_gone')}</span>
-        ) : (
-          <span className="bchat-preview">{row.preview}</span>
-        ),
-    },
-    {
+      /* One cell: the preview, and when it was said under it (was two columns). */
       key: 'last',
       header: t('web.bchat_last_message'),
-      render: (row) =>
-        row.lastMessageAt === null ? (
-          <Dash />
-        ) : (
-          <span className="nowrap">{formatTimestamp(row.lastMessageAt)}</span>
-        ),
+      wrap: true,
+      render: (row) => (
+        <span className="bchat-last-cell">
+          {row.preview === null ? (
+            <span className="muted small">{t('web.bchat_text_gone')}</span>
+          ) : (
+            <span className="bchat-preview">{row.preview}</span>
+          )}
+          {row.lastMessageAt === null ? (
+            <Dash />
+          ) : (
+            <span className="nowrap muted small">{formatTimestamp(row.lastMessageAt)}</span>
+          )}
+        </span>
+      ),
     },
   ];
 
@@ -520,45 +535,34 @@ export function BusinessChatsPage({
     <>
       <PageHead
         title={t('web.bchats_title')}
-        subtitle={t('web.bchats_intro')}
-        actions={mayReply && !denied ? <ResumeAllButton /> : undefined}
+        actions={
+          <>
+            <ListFreshness query={chats} hidden={!requestable} />
+            {mayReply && !denied ? <ResumeAllButton /> : undefined}
+          </>
+        }
       />
       {aiMode === 'OFF' && <Banner tone="warn">{t('web.bchat_mode_off_note')}</Banner>}
       {aiMode === 'ASSIST_ONLY' && <Banner tone="info">{t('web.bchat_mode_assist_note')}</Banner>}
 
       <Card>
         {requestable && (
-          <ListFilterBar
-            label={t('web.bchats_title')}
-            filters={[
-              {
-                key: 'state',
-                label: t('web.status'),
-                active: state === null ? null : t(BUSINESS_STATE_LABELS[state]),
-                onClear: () => setQuery(route, 'state', null),
-                control: (
-                  <FilterChips label={t('web.status')}>
-                    <FilterChip
-                      pressed={state === null}
-                      onClick={() => setQuery(route, 'state', null)}
-                    >
-                      {t('web.bchat_filter_all')}
-                    </FilterChip>
-                    <ChipDivider />
-                    {BUSINESS_CONVERSATION_STATES.map((value) => (
-                      <FilterChip
-                        key={value}
-                        pressed={state === value}
-                        onClick={() => setQuery(route, 'state', value)}
-                      >
-                        {t(BUSINESS_STATE_LABELS[value])}
-                      </FilterChip>
-                    ))}
-                  </FilterChips>
-                ),
-              },
-            ]}
-          />
+          /* Quick-filter chips replace the filter panel's state row. No counts: the inbox has no
+             server total per state, and a client count would be a lie. */
+          <div className="bchat-quick">
+            <QuickFilters
+              label={t('web.status')}
+              value={state ?? 'ALL'}
+              onChange={(next) => setQuery(route, 'state', next === 'ALL' ? null : next)}
+              items={[
+                { key: 'ALL' as const, label: t('web.bchat_filter_all') },
+                ...BUSINESS_CONVERSATION_STATES.map((value) => ({
+                  key: value,
+                  label: t(BUSINESS_STATE_LABELS[value]),
+                })),
+              ]}
+            />
+          </div>
         )}
 
         <StateSwitch
@@ -596,6 +600,9 @@ export function BusinessChatsPage({
             </button>
           </div>
         </StateSwitch>
+        <Disclosure size="sm" summary={t('web.bchats_about_fold')}>
+          <p className="muted small">{t('web.bchats_intro')}</p>
+        </Disclosure>
       </Card>
 
       {!denied && <BusinessConnectionsCard />}
@@ -677,49 +684,197 @@ export function BusinessChatDetailPage({
     refetchInterval: pollUnlessFinal(BUSINESS_CHAT_REFRESH_MS),
   });
   const data = denied ? undefined : chat.data;
-  const conversation = data?.conversation;
   return (
     <>
-      <PageHead
-        title={
-          conversation === undefined
-            ? t('web.bchat_detail')
-            : `${t('web.bchat_detail')}${t('web.list_separator')}${customerName(conversation)}`
-        }
-        badge={
-          conversation === undefined ? undefined : (
-            <StateBadge value={conversation.state} mode={data?.aiMode} />
-          )
-        }
-        subtitle={
-          conversation === undefined
-            ? t('web.bchat_detail_intro')
-            : t(STATE_EXPLAINED[conversation.state])
-        }
-      />
+      {/* The page keeps ONE level-one heading: loaded, the head card carries it. */}
+      {data === undefined && <PageHead title={t('web.bchat_detail')} />}
       <StateSwitch query={chat} denied={denied}>
         {data !== undefined && (
-          <div className="two-col bchat-layout ops-sticky-cols">
-            <div className="stack">
-              <TranscriptCard detail={data} mayPropose={mayPropose} />
-              {mayAssist && (
-                <AssistCard
-                  conversationId={data.conversation.id}
-                  mayReply={mayReply}
-                  connected={data.conversation.connectionStatus === 'ACTIVE'}
-                />
-              )}
-              {mayReply && <ComposerCard detail={data} />}
-            </div>
-            <div className="stack">
-              <ControlCard detail={data} mayReply={mayReply} aiMode={data.aiMode} />
-              {data.escalations.length > 0 && <EscalationsCard detail={data} />}
-              <OutboundCard detail={data} mayPropose={mayPropose} />
-            </div>
-          </div>
+          <ConversationView
+            data={data}
+            mayReply={mayReply}
+            mayAssist={mayAssist}
+            mayPropose={mayPropose}
+          />
         )}
       </StateSwitch>
     </>
+  );
+}
+
+/** The loaded conversation: head card, strip, key figures, then the cards row by row. */
+function ConversationView({
+  data,
+  mayReply,
+  mayAssist,
+  mayPropose,
+}: {
+  data: BusinessChatDetailResponse;
+  mayReply: boolean;
+  mayAssist: boolean;
+  mayPropose: boolean;
+}) {
+  const { conversation } = data;
+  const controls = useConversationControls(conversation);
+  const onLink = useLinkHandler();
+  // A person's message only pauses the AI (a SOFT hold); a sticky (HARD) human hold is
+  // already taken over.
+  const stickyHuman = conversation.state === 'HUMAN_ACTIVE' && conversation.handoffKind !== 'SOFT';
+  const aiHolds = conversation.state === 'AI_ACTIVE';
+  const attention = [
+    ...(conversation.state === 'HANDOFF_REQUIRED'
+      ? [{ key: 'handoff', label: t('web.bchat_attn_handoff') }]
+      : []),
+    ...(conversation.connectionStatus !== 'ACTIVE'
+      ? [{ key: 'connection', label: t('web.bchat_attn_connection') }]
+      : []),
+  ];
+  const rows = [
+    ...(mayAssist || data.escalations.length > 0
+      ? [
+          {
+            key: 'assist',
+            main: mayAssist ? (
+              <AssistCard
+                conversationId={conversation.id}
+                mayReply={mayReply}
+                connected={conversation.connectionStatus === 'ACTIVE'}
+              />
+            ) : (
+              <EscalationsCard detail={data} />
+            ),
+            ...(mayAssist && data.escalations.length > 0
+              ? { side: <EscalationsCard detail={data} /> }
+              : {}),
+          },
+        ]
+      : []),
+    { key: 'outbound', main: <OutboundCard detail={data} mayPropose={mayPropose} /> },
+  ];
+  return (
+    <div className="bchat-detail">
+      <DetailHead
+        level={1}
+        back={{ href: '/business-chats', label: t('web.bchats_title') }}
+        title={customerName(conversation)}
+        badge={
+          <>
+            <StateBadge value={conversation.state} mode={data.aiMode} />
+            <HoldKindBadge conversation={conversation} />
+          </>
+        }
+        meta={
+          <>
+            {conversation.customer?.username != null &&
+              conversation.customer.firstName !== null && (
+                <span className="ca-meta">
+                  <Ltr mono={false}>{`@${conversation.customer.username}`}</Ltr>
+                </span>
+              )}
+            <span className="ca-meta">
+              <span className="faint">{t('web.bchat_peer')}</span>
+              <Ltr>{conversation.peerTelegramUserId}</Ltr>
+            </span>
+            {conversation.customer !== null && (
+              <a href={`/users/${encodeURIComponent(conversation.customer.id)}`} onClick={onLink}>
+                {t('web.bchat_customer_open')}
+              </a>
+            )}
+            {conversation.ticketId !== null && (
+              <a href={ticketPath(conversation.ticketId)} onClick={onLink}>
+                {t('web.bchat_ticket_open')}
+              </a>
+            )}
+            <ConnectionBadge status={conversation.connectionStatus} />
+          </>
+        }
+        actions={
+          mayReply ? (
+            <QuickActionBar
+              label={t('web.bchat_control')}
+              groups={[
+                {
+                  key: 'control',
+                  label: t('web.bchat_group_control'),
+                  actions: [
+                    <QuickAction
+                      key="takeover"
+                      label={t('web.bchat_takeover')}
+                      icon="user"
+                      disabled={controls.busy || stickyHuman}
+                      {...(stickyHuman
+                        ? { disabledReason: t('web.bchat_takeover_disabled_human') }
+                        : {})}
+                      onClick={controls.takeOver}
+                    />,
+                    <QuickAction
+                      key="resume"
+                      label={t('web.bchat_resume')}
+                      icon="bots"
+                      disabled={controls.busy || aiHolds}
+                      {...(aiHolds ? { disabledReason: t('web.bchat_resume_disabled_ai') } : {})}
+                      onClick={controls.askResume}
+                    />,
+                  ],
+                },
+              ]}
+            />
+          ) : undefined
+        }
+      />
+      {controls.dialog}
+      <AttentionStrip items={attention} />
+      <KpiRow
+        items={[
+          {
+            key: 'inbound',
+            label: t('web.bchat_last_inbound'),
+            value:
+              conversation.lastInboundAt === null ? (
+                <Dash />
+              ) : (
+                formatTimestamp(conversation.lastInboundAt)
+              ),
+          },
+          {
+            key: 'human',
+            label: t('web.bchat_last_human'),
+            value:
+              conversation.lastHumanAt === null ? (
+                <Dash />
+              ) : (
+                formatTimestamp(conversation.lastHumanAt)
+              ),
+          },
+          {
+            key: 'wait',
+            label: t('web.bchat_wait'),
+            value: <WaitAge since={conversation.unansweredSince} />,
+          },
+          {
+            key: 'handoffs',
+            label: t('web.bchat_escalations'),
+            value: <Num value={data.escalations.length} />,
+          },
+        ]}
+      />
+      <CardRows
+        rows={[
+          {
+            key: 'thread',
+            main: (
+              <TranscriptCard
+                detail={data}
+                mayPropose={mayPropose}
+                composer={mayReply ? <ComposerCard detail={data} /> : undefined}
+              />
+            ),
+            side: <ControlCard detail={data} aiMode={data.aiMode} />,
+          },
+          ...rows,
+        ]}
+      />
+    </div>
   );
 }
 
@@ -732,18 +887,15 @@ function useRefresh(id: string): () => void {
   };
 }
 
-function ControlCard({
-  detail,
-  mayReply,
-  aiMode,
-}: {
-  detail: BusinessChatDetailResponse;
-  mayReply: boolean;
-  aiMode?: SupportAiMode | undefined;
-}) {
-  const { conversation } = detail;
+/**
+ * Take over and hand back: the two writes, their idempotency keys and the hand-back
+ * confirmation, exactly as the control card held them — now driven from the head's quick-action
+ * bar, so the card below is the facts only.
+ */
+function useConversationControls(
+  conversation: BusinessConversationSummary & { controlEpoch: number },
+) {
   const notify = useToast();
-  const onLink = useLinkHandler();
   const refresh = useRefresh(conversation.id);
   const takeoverKey = useSubmissionKey();
   const resumeKey = useSubmissionKey();
@@ -791,8 +943,35 @@ function ControlCard({
       refresh();
     },
   });
-  const busy = takeover.isPending || resume.isPending;
+  return {
+    busy: takeover.isPending || resume.isPending,
+    takeOver: () => takeover.mutate(),
+    askResume: () => setConfirmingResume(true),
+    dialog: confirmingResume ? (
+      <ConfirmDialog
+        title={t('web.bchat_resume_confirm_title')}
+        question={t('web.bchat_resume_confirm_body')}
+        confirmLabel={t('web.bchat_resume_confirm')}
+        cancelLabel={t('web.bchat_cancel')}
+        onConfirm={() => {
+          setConfirmingResume(false);
+          resume.mutate();
+        }}
+        onCancel={() => setConfirmingResume(false)}
+      />
+    ) : null,
+  };
+}
 
+function ControlCard({
+  detail,
+  aiMode,
+}: {
+  detail: BusinessChatDetailResponse;
+  aiMode?: SupportAiMode | undefined;
+}) {
+  const { conversation } = detail;
+  const onLink = useLinkHandler();
   return (
     <Card title={t('web.bchat_control')} hint={t(STATE_EXPLAINED[conversation.state])}>
       <KV
@@ -844,23 +1023,6 @@ function ControlCard({
           ],
           [t('web.bchat_peer'), <Ltr key="p">{conversation.peerTelegramUserId}</Ltr>],
           [
-            t('web.bchat_last_inbound'),
-            conversation.lastInboundAt === null ? (
-              <Dash key="i" />
-            ) : (
-              formatTimestamp(conversation.lastInboundAt)
-            ),
-          ],
-          [
-            t('web.bchat_last_human'),
-            conversation.lastHumanAt === null ? (
-              <Dash key="l" />
-            ) : (
-              formatTimestamp(conversation.lastHumanAt)
-            ),
-          ],
-          [t('web.bchat_wait'), <WaitAge key="w" since={conversation.unansweredSince} />],
-          [
             t('web.bchat_ticket'),
             conversation.ticketId === null ? (
               <Dash key="k" />
@@ -872,47 +1034,6 @@ function ControlCard({
           ],
         ]}
       />
-      {mayReply && (
-        <div className="btn-group bchat-controls">
-          {/* Phase 4 PR-1: a person's message only pauses the AI (a SOFT hold); taking the
-              conversation over makes the hold sticky. */}
-          {(conversation.state !== 'HUMAN_ACTIVE' || conversation.handoffKind === 'SOFT') && (
-            <button
-              type="button"
-              className="btn primary sm"
-              disabled={busy}
-              onClick={() => takeover.mutate()}
-            >
-              <Icon name="user" />
-              {t('web.bchat_takeover')}
-            </button>
-          )}
-          {conversation.state !== 'AI_ACTIVE' && (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy}
-              onClick={() => setConfirmingResume(true)}
-            >
-              <Icon name="bots" />
-              {t('web.bchat_resume')}
-            </button>
-          )}
-        </div>
-      )}
-      {confirmingResume && (
-        <ConfirmDialog
-          title={t('web.bchat_resume_confirm_title')}
-          question={t('web.bchat_resume_confirm_body')}
-          confirmLabel={t('web.bchat_resume_confirm')}
-          cancelLabel={t('web.bchat_cancel')}
-          onConfirm={() => {
-            setConfirmingResume(false);
-            resume.mutate();
-          }}
-          onCancel={() => setConfirmingResume(false)}
-        />
-      )}
     </Card>
   );
 }
@@ -920,55 +1041,219 @@ function ControlCard({
 function TranscriptCard({
   detail,
   mayPropose = false,
+  composer,
 }: {
   detail: BusinessChatDetailResponse;
   /** D8: draws "propose as knowledge" on what the owner typed. Courtesy only. */
   mayPropose?: boolean;
+  /** The operator's composer, drawn under the thread (absent without `business_chats.reply`). */
+  composer?: ReactNode;
 }) {
-  // Oldest first, as a chat reads; ties by id so two polls draw the same order.
-  const messages = [...detail.messages].sort((a, b) =>
-    a.sentAt === b.sentAt ? a.id.localeCompare(b.id) : a.sentAt.localeCompare(b.sentAt),
+  const handoffText = (escalation: ThreadEscalation) =>
+    `${t('web.bchat_event_handoff')} ${t(
+      HANDOFF_LABELS[businessHandoffReasonOf(escalation.reason, escalation.reasonDetail)],
+    )}`;
+  // Oldest first, handoffs in their place; a poll that changes nothing keeps the same array.
+  const entries = useMemo(
+    () => threadEntries(detail.messages, detail.escalations),
+    [detail.messages, detail.escalations],
   );
+  const [filter, setFilter] = useState<ThreadFilter>('all');
+  const [query, setQueryText] = useState('');
+  const [shown, setShown] = useState(THREAD_PAGE_SIZE);
+  const [atBottom, setAtBottom] = useState(true);
+  const box = useRef<HTMLDivElement>(null);
+  // Follow the newest message while the reader is at the bottom; leave them alone when they
+  // have scrolled up to read.
+  const stick = useRef(true);
+  const revealedFrom = useRef<number | null>(null);
+
+  const view = visibleEntries(entries, { filter, query, shown, eventText: handoffText });
+  const rows = layoutThread(view.entries, formatDate);
+  const newest = view.entries[view.entries.length - 1]?.id ?? '';
+
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (el === null) return;
+    if (revealedFrom.current !== null) {
+      // Older entries were added above: keep what the reader was looking at where it was.
+      el.scrollTop += el.scrollHeight - revealedFrom.current;
+      revealedFrom.current = null;
+      return;
+    }
+    if (stick.current) el.scrollTop = el.scrollHeight;
+  }, [rows.length, newest, filter, query]);
+
+  const toBottom = () => {
+    const el = box.current;
+    stick.current = true;
+    if (el !== null) el.scrollTop = el.scrollHeight;
+    setAtBottom(true);
+  };
+  const restart = () => {
+    stick.current = true;
+    revealedFrom.current = null;
+    setShown(THREAD_PAGE_SIZE);
+    setAtBottom(true);
+  };
+  const revealOlder = () => {
+    revealedFrom.current = box.current?.scrollHeight ?? 0;
+    stick.current = false;
+    setShown(shown + THREAD_PAGE_SIZE);
+  };
+  const onScroll = () => {
+    const el = box.current;
+    if (el === null) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stick.current = near;
+    if (near !== atBottom) setAtBottom(near);
+  };
+
   return (
     <Card title={t('web.bchat_transcript')} hint={t('web.bchat_transcript_hint')}>
-      {messages.length === 0 ? (
+      {entries.length === 0 ? (
         <Empty title={t('web.bchat_transcript_empty')} icon="message" />
       ) : (
-        <ol className="bchat-thread" aria-label={t('web.bchat_transcript')}>
-          {messages.map((message) => (
-            <li
-              key={message.id}
-              className={`bchat-message origin-${message.origin.toLowerCase().replace('_', '-')}`}
-              data-origin={message.origin}
+        <>
+          <div className="bchat-tbar">
+            <input
+              type="search"
+              className="input sm bchat-search"
+              aria-label={t('web.bchat_thread_search')}
+              placeholder={t('web.bchat_thread_search')}
+              value={query}
+              onChange={(event) => {
+                setQueryText(event.target.value);
+                restart();
+              }}
+            />
+            <QuickFilters
+              label={t('web.bchat_thread_filters')}
+              value={filter}
+              onChange={(next) => {
+                setFilter(next);
+                restart();
+              }}
+              items={THREAD_FILTERS.map((key) => ({ key, label: t(THREAD_FILTER_LABELS[key]) }))}
+            />
+            {view.hits !== null && (
+              <span className="muted small" aria-live="polite">
+                {t('web.bchat_thread_hits').replace('{n}', formatNumber(view.hits))}
+              </span>
+            )}
+          </div>
+          <div className="bchat-scroll-wrap">
+            <div
+              ref={box}
+              className="bchat-scroll"
+              role="region"
+              tabIndex={0}
+              aria-label={t('web.bchat_transcript')}
+              onScroll={onScroll}
             >
-              <div className="bchat-message-head">
-                <span className="avatar bchat-avatar" aria-hidden="true">
-                  <Icon name={ORIGIN_ICONS[message.origin]} size={13} />
-                </span>
-                <strong>{t(BUSINESS_ORIGIN_LABELS[message.origin])}</strong>
-                <span className="muted small">{formatTimestamp(message.sentAt)}</span>
-                {message.edited && <Badge tone="info">{t('web.bchat_edited')}</Badge>}
-                {message.deleted && <Badge tone="danger">{t('web.bchat_deleted')}</Badge>}
-              </div>
-              <MessageBody text={message.text} kind={message.kind} />
-              {/* D8: a reply the owner typed on the phone can feed learning; a customer's never. */}
-              {mayPropose &&
-                message.origin === 'HUMAN' &&
-                message.kind === 'TEXT' &&
-                !message.deleted &&
-                message.text !== null && (
-                  <ProposeKnowledgeButton
-                    conversationId={detail.conversation.id}
-                    messageId={message.id}
-                  />
-                )}
-            </li>
-          ))}
-        </ol>
+              {view.older > 0 && (
+                <button type="button" className="btn sm bchat-older" onClick={revealOlder}>
+                  {t('web.bchat_thread_older').replace(
+                    '{n}',
+                    formatNumber(Math.min(THREAD_PAGE_SIZE, view.older)),
+                  )}
+                </button>
+              )}
+              {rows.length === 0 ? (
+                <p className="muted small bchat-none">{t('web.bchat_thread_none')}</p>
+              ) : (
+                <ol className="bchat-thread" aria-label={t('web.bchat_transcript')}>
+                  {rows.map((row) => {
+                    if (row.type === 'day') {
+                      return (
+                        <li key={row.key} role="separator" className="bchat-day">
+                          <span>{formatDate(row.at)}</span>
+                        </li>
+                      );
+                    }
+                    if (row.type === 'event') {
+                      const escalation = row.entry.escalation;
+                      return (
+                        <li key={row.key} className="bchat-event" data-event="handoff">
+                          <b>{t('web.bchat_event_handoff')}</b>
+                          <span>
+                            {t(
+                              HANDOFF_LABELS[
+                                businessHandoffReasonOf(escalation.reason, escalation.reasonDetail)
+                              ],
+                            )}
+                          </span>
+                          <span className="muted small">
+                            {formatTimeOfDay(escalation.createdAt)}
+                          </span>
+                        </li>
+                      );
+                    }
+                    const message = row.entry.message;
+                    return (
+                      <li
+                        key={row.key}
+                        className={`bchat-message origin-${message.origin.toLowerCase().replace('_', '-')}${row.showWho ? '' : ' same-sender'}${view.hits === null ? '' : ' hit'}`}
+                        data-origin={message.origin}
+                      >
+                        {row.showWho && (
+                          <div className="bchat-message-head">
+                            <span className="avatar bchat-avatar" aria-hidden="true">
+                              <Icon name={ORIGIN_ICONS[message.origin]} size={13} />
+                            </span>
+                            <strong>{t(BUSINESS_ORIGIN_LABELS[message.origin])}</strong>
+                          </div>
+                        )}
+                        <MessageBody text={message.text} kind={message.kind} />
+                        {(row.showTime || message.edited || message.deleted) && (
+                          <div className="bchat-message-meta">
+                            {message.edited && <Badge tone="info">{t('web.bchat_edited')}</Badge>}
+                            {message.deleted && (
+                              <Badge tone="danger">{t('web.bchat_deleted')}</Badge>
+                            )}
+                            {row.showTime && (
+                              <span className="muted small">{formatTimeOfDay(message.sentAt)}</span>
+                            )}
+                          </div>
+                        )}
+                        {/* D8: a reply the owner typed on the phone can feed learning; a customer's never. */}
+                        {mayPropose &&
+                          message.origin === 'HUMAN' &&
+                          message.kind === 'TEXT' &&
+                          !message.deleted &&
+                          message.text !== null && (
+                            <ProposeKnowledgeButton
+                              conversationId={detail.conversation.id}
+                              messageId={message.id}
+                            />
+                          )}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+            </div>
+            {!atBottom && (
+              <button type="button" className="btn primary sm bchat-jump" onClick={toBottom}>
+                {t('web.bchat_thread_jump')}
+              </button>
+            )}
+          </div>
+          <p className="muted small">{t('web.bchat_thread_note')}</p>
+        </>
       )}
+      {composer}
     </Card>
   );
 }
+
+const THREAD_FILTER_LABELS: Readonly<Record<ThreadFilter, WebKey>> = {
+  all: 'web.bchat_tf_all',
+  customer: 'web.bchat_tf_customer',
+  ai: 'web.bchat_tf_ai',
+  operator: 'web.bchat_tf_operator',
+  events: 'web.bchat_tf_events',
+};
 
 /** TB7: each handoff — why, what became of the ticket, and the AI's note for the operator. */
 function EscalationsCard({ detail }: { detail: BusinessChatDetailResponse }) {
@@ -1074,6 +1359,13 @@ function OutboundCard({
   );
 }
 
+/**
+ * The operator's reply box, under the thread. It is writable only while a person holds the
+ * conversation (`HUMAN_ACTIVE`): before that the box says to take it over first. The server
+ * still decides — sending is itself a takeover (ADR-0033 §4) and it charges
+ * `business_chats.reply` — this only stops the operator typing into a box that would silently
+ * move the conversation off the AI.
+ */
 function ComposerCard({ detail }: { detail: BusinessChatDetailResponse }) {
   const { conversation } = detail;
   const notify = useToast();
@@ -1083,6 +1375,7 @@ function ComposerCard({ detail }: { detail: BusinessChatDetailResponse }) {
   useUnsavedChanges(text.trim() !== '');
   const parsed = businessTextSchema.safeParse(text);
   const connected = conversation.connectionStatus === 'ACTIVE';
+  const held = conversation.state === 'HUMAN_ACTIVE';
   const send = useMutation({
     // The text travels as the VARIABLE, so a retry sends what the key was minted for.
     mutationFn: (body: string) =>
@@ -1104,13 +1397,15 @@ function ComposerCard({ detail }: { detail: BusinessChatDetailResponse }) {
     },
   });
   return (
-    <Card title={t('web.bchat_reply')}>
-      <Banner tone="info">{t('web.bchat_reply_takes_over')}</Banner>
+    <div className="bchat-composer">
+      <h3 className="bchat-composer-title">{t('web.bchat_reply')}</h3>
+      <p className="muted small">{t('web.bchat_reply_takes_over')}</p>
+      {!held && <Banner tone="info">{t('web.bchat_composer_locked')}</Banner>}
       {!connected && <Banner tone="warn">{t('web.bchat_reply_connection_unusable')}</Banner>}
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          if (parsed.success && connected) send.mutate(parsed.data);
+          if (held && parsed.success && connected) send.mutate(parsed.data);
         }}
       >
         <Field label={t('web.bchat_reply_text')} htmlFor="bchat-reply-text">
@@ -1118,8 +1413,9 @@ function ComposerCard({ detail }: { detail: BusinessChatDetailResponse }) {
             dir="auto"
             id="bchat-reply-text"
             className="input"
-            rows={5}
+            rows={3}
             value={text}
+            disabled={!held}
             maxLength={BUSINESS_MESSAGE_TEXT_MAX}
             onChange={(event) => setText(event.target.value)}
           />
@@ -1131,7 +1427,8 @@ function ComposerCard({ detail }: { detail: BusinessChatDetailResponse }) {
           <button
             type="submit"
             className="btn primary"
-            disabled={!parsed.success || !connected || send.isPending}
+            disabled={!held || !parsed.success || !connected || send.isPending}
+            {...(held ? {} : { title: t('web.bchat_composer_locked') })}
           >
             <Icon name="send" />
             {t('web.bchat_send')}
@@ -1144,7 +1441,7 @@ function ComposerCard({ detail }: { detail: BusinessChatDetailResponse }) {
           <ErrorRef error={send.error} />
         </Banner>
       )}
-    </Card>
+    </div>
   );
 }
 

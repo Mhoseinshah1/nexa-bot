@@ -13,7 +13,6 @@ import { ApiError } from '../../apps/web/src/api/client';
 import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
-import { openFilterPanel } from './ui-helpers';
 
 /**
  * TB2 — the Web Admin's Telegram Business inbox and one conversation. Fixtures go through
@@ -194,10 +193,11 @@ describe('the business inbox', () => {
     expect(params.get('cursor')).toBeNull();
     expect(await screen.findByText(t('web.bchat_connections_empty'))).toBeTruthy();
 
-    const panel = openFilterPanel();
-    fireEvent.click(within(panel).getByRole('button', { name: t('web.bchat_state_paused') }));
+    // Quick-filter chips over the table (the redesign), not a filter panel.
+    const chips = screen.getByRole('group', { name: t('web.status') });
+    fireEvent.click(within(chips).getByRole('button', { name: t('web.bchat_state_paused') }));
     expect(new URLSearchParams(window.location.search).get('state')).toBe('PAUSED');
-    fireEvent.click(within(panel).getByRole('button', { name: t('web.bchat_filter_all') }));
+    fireEvent.click(within(chips).getByRole('button', { name: t('web.bchat_filter_all') }));
     expect(new URLSearchParams(window.location.search).get('state')).toBeNull();
   });
 
@@ -362,7 +362,7 @@ describe('one business conversation', () => {
       },
     ]);
     renderPage(<BusinessChatDetailPage id={CHAT_ID} denied={false} mayReply={false} />);
-    expect(await screen.findByText(t('web.bchat_escalations'))).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: t('web.bchat_escalations') })).toBeTruthy();
     expect(screen.getByText('مشتری بازپرداخت می‌خواهد.')).toBeTruthy();
     const link = screen.getByRole('link', { name: t('web.bchat_escalation_ticket_created') });
     expect(link.getAttribute('href')).toBe('/tickets/019460ab-cdef-7012-8345-6789abcdef01');
@@ -371,7 +371,7 @@ describe('one business conversation', () => {
     expect(failure.textContent).toContain(t('web.sai_failure_schema_invalid'));
     expect(failure.textContent).toContain('intent (too_big)');
     expect(screen.getAllByText(t('web.bchat_handoff_topic')).length).toBeGreaterThan(0);
-    expect(screen.getByText(t('web.bchat_handoff_identity'))).toBeTruthy();
+    expect(screen.getAllByText(t('web.bchat_handoff_identity')).length).toBeGreaterThan(0);
   });
 
   it('D8: proposes a reply the owner typed on the phone, never a customer message', async () => {
@@ -449,10 +449,12 @@ describe('one business conversation', () => {
     expect(await screen.findByRole('button', { name: t('web.bchat_takeover') })).toBeTruthy();
   });
 
-  it('Phase 4 PR-1: no takeover button on a sticky (HARD) human hold', async () => {
+  it('Phase 4 PR-1: the takeover button is disabled on a sticky (HARD) human hold', async () => {
     page({ state: 'HUMAN_ACTIVE', handoffReason: null, handoffKind: 'HARD' });
     await screen.findByRole('button', { name: t('web.bchat_resume') });
-    expect(screen.queryByRole('button', { name: t('web.bchat_takeover') })).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: t('web.bchat_takeover') }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it('takes the conversation over through its own route, with an idempotency key', async () => {
@@ -529,18 +531,27 @@ describe('one business conversation', () => {
   it('draws take over only when a human does not hold it, and resume only when the AI does not', async () => {
     page({ state: 'HUMAN_ACTIVE', handoffReason: null, takeoverReason: 'OPERATOR_TAKEOVER' });
     await screen.findByRole('button', { name: t('web.bchat_resume') });
-    expect(screen.queryByRole('button', { name: t('web.bchat_takeover') })).toBeNull();
+    // A sticky human hold: the takeover button stays, disabled, and says why on hover.
+    const takeover = screen.getByRole('button', { name: t('web.bchat_takeover') });
+    expect((takeover as HTMLButtonElement).disabled).toBe(true);
+    expect(takeover.closest('.qa-wrap')?.getAttribute('title')).toBe(
+      t('web.bchat_takeover_disabled_human'),
+    );
     expect(screen.getByText(t('web.bchat_takeover_operator'))).toBeTruthy();
   });
 
   it('draws no resume while the AI holds the conversation', async () => {
     page({ state: 'AI_ACTIVE', handoffReason: null });
     await screen.findByRole('button', { name: t('web.bchat_takeover') });
-    expect(screen.queryByRole('button', { name: t('web.bchat_resume') })).toBeNull();
+    const resume = screen.getByRole('button', { name: t('web.bchat_resume') });
+    expect((resume as HTMLButtonElement).disabled).toBe(true);
+    expect(resume.closest('.qa-wrap')?.getAttribute('title')).toBe(
+      t('web.bchat_resume_disabled_ai'),
+    );
   });
 
   it('sends a reply with its key, says it takes over, and counts against 4096', async () => {
-    const api = page();
+    const api = page({ state: 'HUMAN_ACTIVE', handoffReason: null });
     expect(await screen.findByText(t('web.bchat_reply_takes_over'))).toBeTruthy();
     const box = await screen.findByLabelText(t('web.bchat_reply_text'));
     expect(box.getAttribute('maxLength')).toBe('4096');
@@ -557,7 +568,7 @@ describe('one business conversation', () => {
   });
 
   it('refuses to send through a connection that cannot send, and says why', async () => {
-    const api = page({ connectionStatus: 'RIGHTS_INSUFFICIENT' });
+    const api = page({ connectionStatus: 'RIGHTS_INSUFFICIENT', state: 'HUMAN_ACTIVE' });
     const box = await screen.findByLabelText(t('web.bchat_reply_text'));
     fireEvent.change(box, { target: { value: 'سلام' } });
     expect(screen.getByText(t('web.bchat_reply_connection_unusable'))).toBeTruthy();
