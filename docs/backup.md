@@ -47,7 +47,9 @@ VERIFY_RESTORE, the Web Admin recovery, the recovery executor and the CLI.
 The password reaches 7-Zip on **stdin**, never as `-p<secret>` in argv (which any user on
 the host could read in `/proc`). A replaced password is superseded, not deleted, so older
 archives on this server still open. **Changing the password affects future backups only**: an
-older archive still needs the password it was made with. Keep it somewhere other than the operations group: the
+older archive still needs the password it was made with. Because `keys.json` carries this server's own key
+(wrapped), an archive **and** its password together expose that key as well as the data: if both
+leak, rotate the key (`SECRETS_KEYS`, then `botctl secrets rewrap`) as well as the password. Keep it somewhere other than the operations group: the
 group holds the parts, and the parts plus the password are the whole database.
 
 **Parts.** An archive above **45 MiB** (`BACKUP_PART_MAX_BYTES`, under Telegram's 50 MiB bot
