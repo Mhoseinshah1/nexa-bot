@@ -8,7 +8,7 @@
 - PR: https://github.com/Mhoseinshah1/nexa-bot/pull/425 — MERGED as merge commit `af9271eaf`; head `a9b7b0cc0`; CI green 23/23 on that head.
 - Codex: one `@codex review` used; review of `a9b7b0cc` clean ("Didn't find any major issues"). No fix commit.
 - Issue comment «شکستن فایل‌های بزرگ»: https://github.com/Mhoseinshah1/nexa-bot/issues/358#issuecomment-6720628462
-- Push CI on main for `af9271eaf`: see "Next step".
+- Push CI on main for `af9271eaf`: green 23/23 after ONE re-run of Integration (5/10) (see Unresolved).
 - Gate holds: none.
 
 ## Done
@@ -30,6 +30,10 @@
 - WEB_FA key order is now grouped by slice (nothing in apps/web iterates it).
 - `/settings` dark screenshot differs by 16 px at the sidebar card edge: nondeterministic, either build produces either image.
 
+## Unresolved
+
+- `tests/integration/capacity-guards.test.ts` "over the new-customer rate" failed once on main's push run (201, expected 429), passed on re-run. Root cause: `NewCustomerGate` (`apps/api/src/modules/platform/capacity/application/new-customer-gate.ts`) windows by the real wall-clock minute, and the test's two `/start` calls can straddle a minute boundary. Pre-existing (Phase 6A), not touched by #425. Proposed fix (not done: this round's merge permission was #425 only): in that test, wait out the minute boundary when fewer than ~10 s remain before the two calls, or give the gate a controllable clock.
+
 ## Not done on purpose / open
 
 - Audit rows phase6b #9 ("capacity ABSENT") and wp5 G2 ("no category column") were stale before the split; re-pointed, wording untouched.
@@ -37,4 +41,4 @@
 
 ## Next step
 
-- None for this task. A later session: confirm the push CI on main for `af9271eaf` is green (`bash scripts/claude/ci-status.sh af9271eaf`); a red main is the next task.
+- Owner: decide whether to fix the capacity-guards timing test (Unresolved) in its own PR.
