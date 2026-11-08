@@ -3616,7 +3616,12 @@ export const installationKeys = pgTable(
   'installation_keys',
   {
     id: uuid('id').primaryKey(),
-    /** The key's label, unique across the installation. Never a configured key's id. */
+    /**
+     * The key's label, unique across this table. MAY equal a configured key's id when
+     * the bytes differ (another installation named its key alike): such a key is held
+     * as a second decrypt-only candidate for that id, wrapped under the configured key
+     * of the same name. The same id with the same bytes is never stored.
+     */
     keyId: text('key_id').notNull(),
     /** `kekFingerprint` of the key. Safe to show; compared on every unwrap. */
     fingerprint: text('fingerprint').notNull(),
@@ -3651,9 +3656,12 @@ export const installationKeys = pgTable(
     check('installation_keys_source_check', enumCheck('source', INSTALLATION_KEY_SOURCES)),
     check('installation_keys_key_id_check', sql`key_id ~ '^[A-Za-z0-9._-]{1,64}$'`),
     check('installation_keys_fingerprint_check', sql`fingerprint ~ '^[0-9a-f]{32}$'`),
+    // `wrapped_under_key_id` may equal `key_id`: the configured key of that name
+    // wraps an imported key that shares the name (the wrap's AAD binds both ids,
+    // and the unwrap tries every held key under the wrapping id).
     check(
       'installation_keys_wrapped_under_check',
-      sql`wrapped_under_key_id IS NULL OR (wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id)`,
+      sql`wrapped_under_key_id IS NULL OR wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$'`,
     ),
     /** A live row has its wrap; a tombstone has neither half of it. Both directions. */
     check(

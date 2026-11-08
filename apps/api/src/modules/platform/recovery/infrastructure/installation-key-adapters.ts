@@ -1,3 +1,4 @@
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Client } from 'pg';
@@ -9,6 +10,20 @@ import {
   resolveStoredKeys,
   type InstallationKeyring,
 } from '../../../../infrastructure/crypto/installation-keyring.js';
+import {
+  heldKeysFor,
+  withExtraKeys,
+  type ExtraKey,
+} from '../../../../infrastructure/crypto/keyring.js';
+import { kekFingerprint } from '../../../../infrastructure/crypto/recovery-kit.js';
+import { AesGcmSecretCipher } from '../../../../infrastructure/crypto/secret-cipher.js';
+import {
+  rewrapAndProve,
+  trialDecryptSecrets,
+  type SecretRewrapReport,
+  type SecretRowQueryable,
+  type SecretTrialReport,
+} from '../../../../infrastructure/crypto/secret-trial.js';
 import type {
   CandidateKeyStore,
   InstallationKeyRepository,
@@ -116,6 +131,15 @@ export class PgCandidateKeyStore implements CandidateKeyStore {
     private readonly databaseUrl: string,
     private readonly liveDatabase: string,
   ) {}
+
+  /**
+   * Runs `fn` on a connection to `database` — never the live one. For the trial
+   * decryption and the pre-cutover rewrap, which read and write exactly the secret
+   * columns of the database they are handed.
+   */
+  async use<T>(database: string, fn: (db: SecretRowQueryable) => Promise<T>): Promise<T> {
+    return this.withClient(database, (client) => fn(client as unknown as SecretRowQueryable));
+  }
 
   private async withClient<T>(database: string, fn: (client: Client) => Promise<T>): Promise<T> {
     assertNotLiveTarget({ database }, this.liveDatabase);
@@ -318,11 +342,16 @@ export class InstallationKeyLoader {
       })),
       this.keyring.configuredKeys,
     );
-    // A stored id that a CONFIGURED key also answers to is never loaded — the
-    // configuration is the authority. `resolveStoredKeys` skips them; they are
-    // named here so the log says why a row in the list is not in use.
+    // A stored key that IS a configured key (same id, same fingerprint) is never
+    // loaded twice. `resolveStoredKeys` skips them; they are named here so the log
+    // says why a row in the list is not in use. A DIFFERENT key under a configured
+    // id is loaded, as a second candidate for that id.
     const shadowed = rows
-      .filter((row) => row.wrappedMaterial !== null && this.keyring.isConfigured(row.keyId))
+      .filter((row) => {
+        if (row.wrappedMaterial === null) return false;
+        const own = this.keyring.configuredKeys.get(row.keyId);
+        return own !== undefined && kekFingerprint(own) === row.fingerprint;
+      })
       .map((row) => row.keyId);
     const refused = [...shadowed, ...this.keyring.replaceImported(resolved)];
     for (const material of resolved.values()) material.fill(0);
@@ -369,6 +398,30 @@ export class InstallationKeyLoader {
   }
 }
 
+/**
+ * The bundled keys of one recovery, sealed for its executor.
+ *
+ *   { format: 1, wrappingKeyId, keys: [{ keyId, fingerprint, iv, wrapped, tag }] }
+ *
+ * AES-256-GCM under the CONFIGURED active key, associated data
+ * `nexa.recovery.bundled_key.v1|<recoveryId>|<keyId>|<fingerprint>|<wrappingKeyId>`:
+ * a file from another recovery, or an entry relabelled, fails its tag. Not
+ * `wrapInstallationKey`'s format, so it can never be mistaken for an imported key.
+ */
+const BUNDLED_FOR_EXECUTOR_FORMAT = 1;
+
+function bundledKeyAad(
+  recoveryId: string,
+  keyId: string,
+  fingerprint: string,
+  wrappingKeyId: string,
+): Buffer {
+  return Buffer.from(
+    `nexa.recovery.bundled_key.v1|${recoveryId}|${keyId}|${fingerprint}|${wrappingKeyId}`,
+    'utf8',
+  );
+}
+
 /** The recovery's view of the keyring. See `RecoveryKeyCoverage`. */
 export class KeyringRecoveryKeyCoverage implements RecoveryKeyCoverage {
   constructor(
@@ -376,6 +429,8 @@ export class KeyringRecoveryKeyCoverage implements RecoveryKeyCoverage {
     private readonly loader: InstallationKeyLoader,
     private readonly repository: InstallationKeyRepository,
     private readonly candidates: CandidateKeyStore,
+    /** Whether this installation still reads v1 envelopes (`acceptsV1`). */
+    private readonly acceptV1: boolean = true,
   ) {}
 
   /**
@@ -389,9 +444,118 @@ export class KeyringRecoveryKeyCoverage implements RecoveryKeyCoverage {
     await this.loader.refresh();
   }
 
-  async missingFrom(database: string): Promise<readonly string[]> {
-    const referenced = await this.candidates.referencedKeyIds(database);
-    return referenced.filter((keyId) => !this.keyring.keys.has(keyId));
+  async trialDecrypt(
+    database: string,
+    extraKeys: readonly ExtraKey[] = [],
+  ): Promise<SecretTrialReport> {
+    const cipher = new AesGcmSecretCipher(withExtraKeys(this.keyring, extraKeys), this.acceptV1);
+    return this.candidates.use(database, (db) => trialDecryptSecrets(db, cipher));
+  }
+
+  async rewrapUnderActiveKey(
+    database: string,
+    extraKeys: readonly ExtraKey[] = [],
+  ): Promise<SecretRewrapReport> {
+    const keyring = withExtraKeys(this.keyring, extraKeys);
+    const { proof: _proof, ...report } = await this.candidates.use(database, (db) =>
+      rewrapAndProve(db, keyring, this.acceptV1),
+    );
+    return report;
+  }
+
+  sealForExecutor(recoveryId: string, keys: readonly ExtraKey[]): string {
+    const wrappingKeyId = this.keyring.activeKeyId;
+    const wrappingKey = this.keyring.configuredKeys.get(wrappingKeyId);
+    if (wrappingKey === undefined) throw new Error('the active key is not configured');
+    return JSON.stringify({
+      format: BUNDLED_FOR_EXECUTOR_FORMAT,
+      wrappingKeyId,
+      keys: keys.map((key) => {
+        const fingerprint = kekFingerprint(key.material);
+        const iv = randomBytes(12);
+        const cipher = createCipheriv('aes-256-gcm', wrappingKey, iv);
+        cipher.setAAD(bundledKeyAad(recoveryId, key.keyId, fingerprint, wrappingKeyId));
+        const wrapped = Buffer.concat([cipher.update(key.material), cipher.final()]);
+        return {
+          keyId: key.keyId,
+          fingerprint,
+          iv: iv.toString('base64url'),
+          wrapped: wrapped.toString('base64url'),
+          tag: cipher.getAuthTag().toString('base64url'),
+        };
+      }),
+    });
+  }
+
+  openForExecutor(recoveryId: string, sealed: string): ExtraKey[] {
+    const refused = (): Error =>
+      new Error("this recovery's bundled keys could not be opened with a configured key");
+    let document: {
+      format?: unknown;
+      wrappingKeyId?: unknown;
+      keys?: unknown;
+    };
+    try {
+      document = JSON.parse(sealed) as typeof document;
+    } catch {
+      throw refused();
+    }
+    if (
+      document.format !== BUNDLED_FOR_EXECUTOR_FORMAT ||
+      typeof document.wrappingKeyId !== 'string' ||
+      !Array.isArray(document.keys)
+    ) {
+      throw refused();
+    }
+    const wrappingKeyId = document.wrappingKeyId;
+    // Configured keys only: these were wrapped under the configured active key, and
+    // an imported key never wraps anything.
+    const wrappingKeys = heldKeysFor(
+      { activeKeyId: '', format: 'canonical', keys: this.keyring.configuredKeys },
+      wrappingKeyId,
+    );
+    const opened: ExtraKey[] = [];
+    try {
+      for (const entry of document.keys as Record<string, unknown>[]) {
+        const { keyId, fingerprint, iv, wrapped, tag } = entry;
+        if (
+          typeof keyId !== 'string' ||
+          typeof fingerprint !== 'string' ||
+          typeof iv !== 'string' ||
+          typeof wrapped !== 'string' ||
+          typeof tag !== 'string'
+        ) {
+          throw refused();
+        }
+        let material: Buffer | null = null;
+        for (const wrappingKey of wrappingKeys) {
+          try {
+            const decipher = createDecipheriv(
+              'aes-256-gcm',
+              wrappingKey,
+              Buffer.from(iv, 'base64url'),
+              { authTagLength: 16 },
+            );
+            decipher.setAAD(bundledKeyAad(recoveryId, keyId, fingerprint, wrappingKeyId));
+            decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+            material = Buffer.concat([
+              decipher.update(Buffer.from(wrapped, 'base64url')),
+              decipher.final(),
+            ]);
+            break;
+          } catch {
+            // Not this candidate.
+          }
+        }
+        if (material === null) throw refused();
+        opened.push({ keyId, material });
+        if (material.length !== 32 || kekFingerprint(material) !== fingerprint) throw refused();
+      }
+      return opened;
+    } catch (error) {
+      for (const key of opened) key.material.fill(0);
+      throw error;
+    }
   }
 
   async carryInto(database: string): Promise<readonly string[]> {

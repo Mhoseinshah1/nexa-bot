@@ -261,11 +261,12 @@ describe('restoring another installation’s backup with its Recovery Kit', () =
     created.push(row?.displacedDatabase ?? '');
 
     // --- After the cutover ------------------------------------------------
-    // B's live database IS A's data now: A's tokens, sealed under kek-a.
+    // B's live database IS A's data now: A's tokens — re-encrypted under B's own
+    // active key before the cutover, so nothing served depends on the kit's key.
     const restored = await tokens(b.database);
-    expect(restored.map((r) => r.token_ciphertext)).toEqual(
-      oldTokens.map((r) => r.token_ciphertext),
-    );
+    expect(restored.map((r) => r.id)).toEqual(oldTokens.map((r) => r.id));
+    expect(restored.every((r) => r.token_key_id === 'kek-b')).toBe(true);
+    expect(row?.restoreTest?.secretsRewrapped).toBeGreaterThan(0);
 
     // The kit's key CAME ACROSS the cutover. It was carried into the candidate,
     // so a fresh load from the restored database still holds it…
@@ -366,8 +367,16 @@ describe('restoring another installation’s backup with its Recovery Kit', () =
     // The archive DECRYPTED — so this is not a foreign archive — and the scratch
     // restore found secrets under a key nobody here holds.
     expect(tested.request.verification?.decrypted).toBe(true);
-    expect(tested.failureCode).toBe('recovery.candidate_keys_missing');
+    expect(tested.failureCode).toBe('recovery.candidate_secrets_unreadable');
     expect(tested.request.state).toBe('FAILED');
+    // Which kinds failed, and that only the old server's kit could help (an .nxb
+    // carries no keys of its own).
+    expect(tested.request.restoreTest?.unreadableSecrets).toEqual(
+      expect.arrayContaining([
+        { purpose: 'bot_instance.token', count: (await tokens(a.database)).length },
+      ]),
+    );
+    expect(tested.request.restoreTest?.canUploadKit).toBe(true);
   });
 
   it('carries a TOMBSTONE into the candidate, and flags a key only the backup had', async () => {

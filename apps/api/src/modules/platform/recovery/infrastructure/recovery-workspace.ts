@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import type { RecoveryWorkspace, RecoveryWorkspaceFactory } from '../application/ports.js';
@@ -67,6 +67,7 @@ export class FilesystemRecoveryWorkspaces implements RecoveryWorkspaceFactory {
 class DirectoryRecoveryWorkspace implements RecoveryWorkspace {
   readonly archivePath: string;
   readonly dumpPath: string;
+  private readonly bundledKeysPath: string;
 
   constructor(readonly directory: string) {
     // Fixed names inside a random directory. Nothing from the request reaches a
@@ -74,6 +75,25 @@ class DirectoryRecoveryWorkspace implements RecoveryWorkspace {
     // than a sanitiser somebody has to get right.
     this.archivePath = join(directory, 'upload.nxb');
     this.dumpPath = join(directory, 'decrypted.pgcustom');
+    this.bundledKeysPath = join(directory, 'bundled-keys.sealed');
+  }
+
+  async writeBundledKeys(sealed: string): Promise<void> {
+    await writeFile(this.bundledKeysPath, sealed, { mode: 0o600, flag: 'w' });
+  }
+
+  async readBundledKeys(): Promise<string | null> {
+    try {
+      return await readFile(this.bundledKeysPath, 'utf8');
+    } catch (error) {
+      // Absent is the one failure that means "none": an archive without a bundle.
+      if ((error as { code?: unknown } | null)?.code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
+  async discardBundledKeys(): Promise<readonly string[]> {
+    return removeAll([this.bundledKeysPath]);
   }
 
   async discardPlaintext(): Promise<readonly string[]> {

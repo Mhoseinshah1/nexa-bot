@@ -1,7 +1,18 @@
 import type { BackupArchiveFormat, BackupManifest } from '@nexa/contracts';
 import { dirname, join } from 'node:path';
 import type { SecretKeyring } from '../../../../infrastructure/crypto/keyring.js';
-import type { BackupArchivePasswordSource, BackupArchiver } from '../application/ports.js';
+import {
+  openKeyBundle,
+  sealKeyBundle,
+  wipeBundleKeys,
+  type BundleKey,
+} from '../../../../infrastructure/crypto/key-bundle.js';
+import type { KitKdfProfile } from '../../../../infrastructure/crypto/recovery-kit.js';
+import type {
+  BackupArchivePasswordSource,
+  BackupArchiver,
+  BundledKeyMaterial,
+} from '../application/ports.js';
 import { checksumFile, openArchive, sealArchive } from './archive.js';
 import {
   assertSevenZipMemory,
@@ -59,6 +70,17 @@ export class KeyringBackupArchiver implements BackupArchiver {
  * come through here, so what is verified and what is restored are opened by one function,
  * whichever container it is (ADR-0025).
  */
+/**
+ * What a 7z seal carries besides the dump: the keys its secrets are sealed under.
+ *
+ * `keys` returns COPIES the archiver zeroes after wrapping — never the keyring's own
+ * buffers, which other readers are using.
+ */
+export interface KeyBundleSource {
+  keys(): Promise<readonly BundleKey[]>;
+  readonly profile: KitKdfProfile;
+}
+
 export class DualFormatBackupArchiver implements BackupArchiver {
   private readonly keyringArchiver: KeyringBackupArchiver;
 
@@ -66,8 +88,24 @@ export class DualFormatBackupArchiver implements BackupArchiver {
     keyring: SecretKeyring,
     private readonly passwords: BackupArchivePasswordSource,
     private readonly sevenZip: SevenZipOptions,
+    /**
+     * Self-contained backups: without it a 7z carries no keys (the CLI's offline
+     * tools, which only open). The pipeline's archiver always has one.
+     */
+    private readonly keyBundle?: KeyBundleSource,
   ) {
     this.keyringArchiver = new KeyringBackupArchiver(keyring);
+  }
+
+  /** The key bundle for one seal, wrapped under `password`; the copies are zeroed here. */
+  private async bundleFor(password: string, backupId: string): Promise<Buffer | undefined> {
+    if (this.keyBundle === undefined) return undefined;
+    const keys = await this.keyBundle.keys();
+    try {
+      return await sealKeyBundle({ keys, password, backupId, profile: this.keyBundle.profile });
+    } finally {
+      for (const key of keys) key.material.fill(0);
+    }
   }
 
   async seal(input: {
@@ -88,12 +126,14 @@ export class DualFormatBackupArchiver implements BackupArchiver {
       return { ...sealed, archivePath: input.archivePath, passwordId: null };
     }
     const archivePath = input.sevenZipPath ?? join(dirname(input.archivePath), 'archive.7z');
+    const keyBundle = await this.bundleFor(password.password, input.manifest.backupId);
     const sealed = await sealSevenZip({
       dumpPath: input.dumpPath,
       archivePath,
       manifest: input.manifest,
       password: password.password,
       options: this.sevenZip,
+      ...(keyBundle === undefined ? {} : { keyBundle }),
     });
     return {
       archiveBytes: sealed.archiveBytes,
@@ -126,14 +166,21 @@ export class DualFormatBackupArchiver implements BackupArchiver {
     archivePath: string;
     dumpPath: string;
     passwords?: readonly string[];
+    withBundledKeys?: boolean;
   }): Promise<{
     manifest: BackupManifest;
     dumpChecksum: string;
     dumpBytes: number;
     format: BackupArchiveFormat;
+    bundledKeys: readonly BundledKeyMaterial[] | null;
+    hadKeyBundle: boolean;
   }> {
     if (!(await isSevenZipFile(input.archivePath))) {
-      return this.keyringArchiver.open(input);
+      return {
+        ...(await this.keyringArchiver.open(input)),
+        bundledKeys: null,
+        hadKeyBundle: false,
+      };
     }
     const passwords =
       input.passwords !== undefined && input.passwords.length > 0
@@ -145,11 +192,25 @@ export class DualFormatBackupArchiver implements BackupArchiver {
       passwords,
       options: this.sevenZip,
     });
+    let bundledKeys: readonly BundledKeyMaterial[] | null = null;
+    if (opened.keyBundle !== null) {
+      // The SAME password that opened the archive: a bundle is never opened with a
+      // password the archive itself did not accept.
+      const keys = await openKeyBundle({
+        bundle: opened.keyBundle,
+        password: passwords[opened.passwordIndex] ?? '',
+        backupId: opened.manifest.backupId,
+      });
+      if (input.withBundledKeys === true) bundledKeys = keys;
+      else wipeBundleKeys(keys);
+    }
     return {
       manifest: opened.manifest,
       dumpChecksum: opened.dumpChecksum,
       dumpBytes: opened.dumpBytes,
       format: 'SEVEN_ZIP',
+      bundledKeys,
+      hadKeyBundle: opened.keyBundle !== null,
     };
   }
 

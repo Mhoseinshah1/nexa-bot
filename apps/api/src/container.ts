@@ -1882,6 +1882,12 @@ export interface Container {
   readonly keyring: InstallationKeyring;
   readonly installationKeyLoader: InstallationKeyLoader;
   /**
+   * What a recovery asks about keys: the trial decryption and the pre-cutover rewrap
+   * of a NON-live database. Exposed for `backup restore`, which does the same to its
+   * explicit target.
+   */
+  readonly recoveryKeyCoverage: KeyringRecoveryKeyCoverage;
+  /**
    * Keeps this role's cached installation tenant true after the database under it is
    * replaced by a restore. Started by `resolveInstallationTenant`, stopped by `shutdown`.
    */
@@ -8398,6 +8404,30 @@ export function createContainer(
       sealTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
       openTimeoutMs: config.BACKUP_RESTORE_TIMEOUT_MS,
     },
+    /*
+     * Self-contained backups: a 7z carries the keys its secrets are sealed under,
+     * wrapped under the backup password, so a restore needs only the file and the
+     * password. Which keys: every held key under every id a stored secret names
+     * (an id can name several — the incident), and the active key whatever the
+     * count says, since anything written after the count is sealed under it. COPIES:
+     * the archiver zeroes what it is given, and these buffers are the keyring's.
+     */
+    {
+      profile: config.PASSWORD_HASH_PROFILE === 'fast' ? FAST_KIT_KDF : PRODUCTION_KIT_KDF,
+      keys: async () => {
+        const ids = new Set([
+          keyring.activeKeyId,
+          ...(await installationKeyRepository.secretCountsByKeyId()).keys(),
+        ]);
+        const keys: { keyId: string; material: Buffer }[] = [];
+        for (const keyId of [...ids].sort()) {
+          for (const material of keyring.candidatesFor(keyId)) {
+            keys.push({ keyId, material: Buffer.from(material) });
+          }
+        }
+        return keys;
+      },
+    },
   );
   /**
    * Whether the installation's backup condition of this code is open — read from
@@ -8597,6 +8627,7 @@ export function createContainer(
     installationKeyLoader,
     installationKeyRepository,
     new PgCandidateKeyStore(config.DATABASE_URL, backupTools.liveDatabase),
+    acceptsV1(config, configuredKeyring),
   );
   const installationKeys = new InstallationKeyService({
     ownerAlerts,
@@ -9978,6 +10009,7 @@ export function createContainer(
     migrationWorkspaces,
     keyring,
     installationKeyLoader,
+    recoveryKeyCoverage,
     outboundAllowList,
     installationKeyRepository,
     installationKeys,

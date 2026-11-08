@@ -6,7 +6,7 @@ import {
   type SecretCipher,
   type SecretContext,
 } from '@nexa/contracts';
-import type { SecretKeyring } from './keyring.js';
+import { heldKeysFor, type SecretKeyring } from './keyring.js';
 
 /**
  * Envelope encryption for stored secrets.
@@ -134,17 +134,29 @@ export class AesGcmSecretCipher implements SecretCipher {
 
   private key(keyId: string): Buffer {
     const key = this.keyring.keys.get(keyId);
-    if (key === undefined) {
-      throw new NexaError({
-        kind: 'CONFIGURATION',
-        code: PLATFORM_ERROR_CODES.SECRET_KEY_UNKNOWN,
-        message:
-          `A stored secret names key "${keyId}", which this installation does not hold. Add it to ` +
-          'SECRETS_KEYS — a retired key still has ciphertext depending on it.',
-        details: { requiredKeyId: keyId, configuredKeyIds: [...this.keyring.keys.keys()] },
-      });
-    }
+    if (key === undefined) throw this.unknownKey(keyId);
     return key;
+  }
+
+  /**
+   * Every held key the envelope's id may mean, configured first (`heldKeysFor`).
+   * Empty is the one non-cryptographic answer: this installation cannot attempt it.
+   */
+  private candidates(keyId: string): readonly Buffer[] {
+    const held = heldKeysFor(this.keyring, keyId);
+    if (held.length === 0) throw this.unknownKey(keyId);
+    return held;
+  }
+
+  private unknownKey(keyId: string): NexaError {
+    return new NexaError({
+      kind: 'CONFIGURATION',
+      code: PLATFORM_ERROR_CODES.SECRET_KEY_UNKNOWN,
+      message:
+        `A stored secret names key "${keyId}", which this installation does not hold. Add it to ` +
+        'SECRETS_KEYS — a retired key still has ciphertext depending on it.',
+      details: { requiredKeyId: keyId, configuredKeyIds: [...this.keyring.keys.keys()] },
+    });
   }
 
   encrypt(plaintext: string, context: SecretContext): EncryptedSecret {
@@ -238,28 +250,36 @@ export class AesGcmSecretCipher implements SecretCipher {
       });
     }
 
-    const kek = this.key(keyId);
-    let dataKey: Buffer | null = null;
-    try {
-      const unwrap = createDecipheriv('aes-256-gcm', kek, unb64(wrapIv));
-      // v1 wrapped without associated data; v2 binds its header.
-      if (version === V2) unwrap.setAAD(wrapAad(V2, keyId));
-      unwrap.setAuthTag(unb64(wrapTag));
-      dataKey = Buffer.concat([unwrap.update(unb64(wrappedDataKey)), unwrap.final()]);
+    // EVERY held key answering to this id, configured first. An id is a label, and
+    // two installations can give the same label to different bytes; the GCM tags
+    // are what say which key this value was sealed under. The first candidate under
+    // which BOTH the wrap and the payload authenticate wins; nothing that failed
+    // authentication is ever returned, and every failure is the one `authFailed`.
+    for (const kek of this.candidates(keyId)) {
+      let dataKey: Buffer | null = null;
+      try {
+        const unwrap = createDecipheriv('aes-256-gcm', kek, unb64(wrapIv));
+        // v1 wrapped without associated data; v2 binds its header.
+        if (version === V2) unwrap.setAAD(wrapAad(V2, keyId));
+        unwrap.setAuthTag(unb64(wrapTag));
+        dataKey = Buffer.concat([unwrap.update(unb64(wrappedDataKey)), unwrap.final()]);
 
-      const decipher = createDecipheriv('aes-256-gcm', dataKey, unb64(iv));
-      // v1 has no context to check. This is exactly the property that makes a
-      // v1 row transplantable, and exactly why v1 acceptance is temporary.
-      if (version === V2) decipher.setAAD(canonicalAad(context));
-      decipher.setAuthTag(unb64(tag));
-      return Buffer.concat([decipher.update(unb64(ciphertext)), decipher.final()]).toString('utf8');
-    } catch {
-      // Swallowed deliberately: the underlying message distinguishes causes
-      // this boundary must not distinguish.
-      throw authFailed();
-    } finally {
-      dataKey?.fill(0);
+        const decipher = createDecipheriv('aes-256-gcm', dataKey, unb64(iv));
+        // v1 has no context to check. This is exactly the property that makes a
+        // v1 row transplantable, and exactly why v1 acceptance is temporary.
+        if (version === V2) decipher.setAAD(canonicalAad(context));
+        decipher.setAuthTag(unb64(tag));
+        return Buffer.concat([decipher.update(unb64(ciphertext)), decipher.final()]).toString(
+          'utf8',
+        );
+      } catch {
+        // Swallowed deliberately: the underlying message distinguishes causes
+        // this boundary must not distinguish. The next candidate is tried.
+      } finally {
+        dataKey?.fill(0);
+      }
     }
+    throw authFailed();
   }
 
   /**

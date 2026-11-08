@@ -40,6 +40,7 @@ export const RECOVERY_FAILURE_TEXT: Readonly<Record<RecoveryFailureCode, WebKey>
   'recovery.readiness_failed': 'web.recovery_code_readiness_failed',
   'recovery.lease_expired': 'web.recovery_code_lease_expired',
   'recovery.candidate_keys_missing': 'web.recovery_failure_keys_missing',
+  'recovery.candidate_secrets_unreadable': 'web.recovery_failure_secrets_unreadable',
   'recovery.internal': 'web.recovery_code_internal',
 };
 

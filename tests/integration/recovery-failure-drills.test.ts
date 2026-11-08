@@ -367,10 +367,32 @@ describe('recovery and backup failure drills (E4)', () => {
       },
     },
     {
-      name: 'a candidate whose secrets need a key this installation lacks (executor re-check)',
-      code: 'recovery.candidate_keys_missing',
+      name: 'a candidate whose secrets do not decrypt here (executor re-check)',
+      code: 'recovery.candidate_secrets_unreadable',
       inject: (deps) => {
-        deps.keys.missingFrom = async () => ['a-key-nobody-holds'];
+        deps.keys.trialDecrypt = async () => ({
+          byPurpose: [{ purpose: 'bot_instance.token', readable: 0, unreadable: 1 }],
+          unreadable: [
+            {
+              purpose: 'bot_instance.token',
+              table: 'bot_instances',
+              column: 'token_ciphertext',
+              entityId: '00000000-0000-0000-0000-000000000001',
+              tenantId: '00000000-0000-0000-0000-000000000002',
+            },
+          ],
+          readableTotal: 0,
+          unreadableTotal: 1,
+        });
+      },
+    },
+    {
+      name: 'a candidate whose secrets do not converge onto the active key',
+      code: 'recovery.candidate_secrets_unreadable',
+      inject: (deps) => {
+        deps.keys.rewrapUnderActiveKey = async () => {
+          throw new Error('one secret did not re-encrypt');
+        };
       },
     },
   ];

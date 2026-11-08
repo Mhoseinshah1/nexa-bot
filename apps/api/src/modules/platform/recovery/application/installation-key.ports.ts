@@ -1,4 +1,10 @@
 import type { InstallationKeySource } from '@nexa/contracts';
+import type { ExtraKey } from '../../../../infrastructure/crypto/keyring.js';
+import type {
+  SecretRewrapReport,
+  SecretRowQueryable,
+  SecretTrialReport,
+} from '../../../../infrastructure/crypto/secret-trial.js';
 
 /**
  * Ports for the Recovery Kit's key lifecycle (ADR-0032).
@@ -140,6 +146,8 @@ export interface CandidateKeyStore {
    * `restored_at` in the candidate, for the list and the audit.
    */
   carryInto(database: string, rows: readonly InstallationKeyRow[]): Promise<readonly string[]>;
+  /** Runs `fn` on a short-lived connection to `database`, which must not be the live one. */
+  use<T>(database: string, fn: (db: SecretRowQueryable) => Promise<T>): Promise<T>;
 }
 
 /**
@@ -153,8 +161,31 @@ export interface CandidateKeyStore {
 export interface RecoveryKeyCoverage {
   /** Re-reads `installation_keys` into this process's keyring. Never empties it on failure. */
   refresh(): Promise<void>;
-  /** Key ids the database's stored secrets name that this installation does not hold. */
-  missingFrom(database: string): Promise<readonly string[]>;
+  /**
+   * Trial-decrypts every stored secret in `database` (a scratch or candidate, never
+   * the live one) with every key this installation holds — configured, imported —
+   * plus `extraKeys`, the keys a self-contained archive carried for THIS recovery.
+   * Read-only. Replaces the old id-only `missingFrom`: an id is a label, and two
+   * installations can give one label to different keys.
+   */
+  trialDecrypt(database: string, extraKeys?: readonly ExtraKey[]): Promise<SecretTrialReport>;
+  /**
+   * Re-encrypts every stored secret in the CANDIDATE under this installation's
+   * active key (reading with held keys plus `extraKeys`), then proves every one now
+   * reads under the active key alone. Throws when either step did not converge.
+   */
+  rewrapUnderActiveKey(
+    database: string,
+    extraKeys?: readonly ExtraKey[],
+  ): Promise<SecretRewrapReport>;
+  /**
+   * The archive's bundled keys, sealed for the EXECUTOR (another process) under this
+   * installation's configured active key and bound to the recovery id — so they can
+   * wait in the recovery's workspace without the backup password ever being stored.
+   */
+  sealForExecutor(recoveryId: string, keys: readonly ExtraKey[]): string;
+  /** The reverse of `sealForExecutor`. Throws when the file does not open for this recovery. */
+  openForExecutor(recoveryId: string, sealed: string): ExtraKey[];
   /**
    * Writes this installation's imported keys (and tombstones) into a candidate.
    * Returns the ids of keys that arrive with the restore and were never imported here.

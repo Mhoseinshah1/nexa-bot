@@ -132,6 +132,14 @@ export interface RecoveryWorkspace {
   readonly dumpPath: string;
   /** Removes the plaintext dump alone, keeping the archive. */
   discardPlaintext(): Promise<readonly string[]>;
+  /**
+   * The keys a self-contained archive carried, as `RecoveryKeyCoverage.sealForExecutor`
+   * sealed them (ciphertext, never key material). Written at verification, read by the
+   * executor, removed once the candidate is rewrapped. Null when none was written.
+   */
+  writeBundledKeys(sealed: string): Promise<void>;
+  readBundledKeys(): Promise<string | null>;
+  discardBundledKeys(): Promise<readonly string[]>;
   /** Removes the whole directory. Returns what it could not remove. */
   discard(): Promise<readonly string[]>;
 }

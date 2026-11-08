@@ -24,6 +24,7 @@ import type { AppConfig } from './infrastructure/config/config.schema.js';
 import { S3OffsiteUploader } from './modules/platform/backup/infrastructure/s3-offsite-uploader.js';
 import type { OffsiteUploadOutcome } from './modules/platform/backup/application/ports.js';
 import { openRecoveryKit } from './infrastructure/crypto/recovery-kit.js';
+import { unreadableCounts } from './infrastructure/crypto/secret-trial.js';
 
 /**
  * `backup run|list|verify|restore` — the operator's side of the pipeline.
@@ -281,10 +282,10 @@ async function passphraseFromStdin(): Promise<string> {
 async function withKit(keyring: InstallationKeyring, kitPath: string): Promise<number> {
   const opened = await openRecoveryKit(await readFile(kitPath), await passphraseFromStdin());
   try {
+    // A kit key under a configured id with DIFFERENT bytes is held too, as a second
+    // candidate for that id (`replaceImported` drops an exact duplicate).
     const next = new Map(keyring.importedKeys);
-    for (const key of opened.keys) {
-      if (!keyring.isConfigured(key.keyId)) next.set(key.keyId, key.material);
-    }
+    for (const key of opened.keys) next.set(key.keyId, key.material);
     keyring.replaceImported(next);
     return opened.keys.length;
   } finally {
@@ -633,6 +634,7 @@ async function cmdRestore(
   }
   const directory = await privateScratchDirectory(container.config.BACKUP_WORK_DIR, 'restore');
   const alive = keepScratchAlive(directory);
+  let bundled: readonly { keyId: string; material: Buffer }[] | null = null;
   try {
     const dumpPath = join(directory, 'dump.pgcustom');
     const archivePath = await joinedArchive(await orderedParts(paths), directory);
@@ -642,7 +644,12 @@ async function cmdRestore(
       archivePath,
       dumpPath,
       ...(passwords === undefined ? {} : { passwords }),
+      // A self-contained archive's keys, unwrapped with the password that opened it,
+      // for this command's lifetime only: they read the restored secrets once, so
+      // those can be moved onto this installation's key, and are then zeroed.
+      withBundledKeys: true,
     });
+    bundled = opened.bundledKeys ?? null;
     if (opened.dumpChecksum !== opened.manifest.checksum) {
       process.stderr.write(
         'The archive decrypted and its contents do not match its manifest. Refusing to restore ' +
@@ -660,11 +667,52 @@ async function cmdRestore(
     );
     await container.backupTools.restoreInto({ database: target }, dumpPath);
     process.stdout.write('Restored.\n');
-    return 0;
+    return await secureRestoredSecrets(container, target, bundled);
   } finally {
+    for (const key of bundled ?? []) key.material.fill(0);
     alive.stop();
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+/**
+ * After `backup restore`: the restored secrets must READ here, and are then moved
+ * onto this installation's active key — the same two steps the recovery executor
+ * takes before its cutover.
+ *
+ * The target is an explicit, non-live database, so nothing is cut over here and the
+ * operator decides what to do with it; this says whether it is fit to serve. Exit 1
+ * (and nothing rewritten) when any secret does not decrypt with a key held here or
+ * one the archive carried — the per-kind counts are printed, never a value or a key.
+ */
+async function secureRestoredSecrets(
+  container: Container,
+  target: string,
+  bundled: readonly { keyId: string; material: Buffer }[] | null,
+): Promise<number> {
+  const keys = container.recoveryKeyCoverage;
+  const trial = await keys.trialDecrypt(target, bundled ?? []);
+  if (trial.unreadableTotal > 0) {
+    const counts = unreadableCounts(trial)
+      .map(({ purpose, count }) => `  ${purpose}  ${String(count)}`)
+      .join('\n');
+    process.stderr.write(
+      `UNREADABLE  ${String(trial.unreadableTotal)} restored secret(s) do not decrypt with any key ` +
+        `this installation holds${bundled === null ? '' : ' or the archive carried'}:\n${counts}\n` +
+        (bundled === null
+          ? "This archive carries no keys. Give the old server's Recovery Kit with --kit, or " +
+            're-enter these values after switching. '
+          : '') +
+        'Do not serve this database as it is: nothing was re-encrypted.\n',
+    );
+    return 1;
+  }
+  const rewrap = await keys.rewrapUnderActiveKey(target, bundled ?? []);
+  process.stdout.write(
+    `Secrets   ${String(trial.readableTotal)} read; re-encrypted ${String(rewrap.rewrapped)} under ` +
+      `the active key (${String(rewrap.alreadyCurrent)} already were)\n`,
+  );
+  return 0;
 }
 
 /** The uploader exactly as the container builds it, from the configuration alone. */

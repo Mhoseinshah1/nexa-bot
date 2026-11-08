@@ -10,12 +10,14 @@ import {
   type CorrelationId,
   type OperationalEventRecorder,
   type RecoveryFailureCode,
+  type RecoveryRestoreTest,
   type ScopeContext,
   type TenantId,
 } from '@nexa/contracts';
 import type { BackupService } from '../../backup/application/backup.service.js';
 import { CutoverJournalUnreadable, isCutoverFailure } from './ports.js';
 import type {
+  CandidateCompatibility,
   CutoverJournal,
   DatabaseInspection,
   RecoveryRequestRepository,
@@ -28,6 +30,11 @@ import type { RecoveryKeyCoverage } from './installation-key.ports.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 import { isTenantForeignKeyViolation } from '../../../../infrastructure/lifecycle/installation-tenant-guard.js';
 import { runBoundedWrite } from './recovery-write-retry.js';
+import type { ExtraKey } from '../../../../infrastructure/crypto/keyring.js';
+import {
+  unreadableCounts,
+  type SecretTrialReport,
+} from '../../../../infrastructure/crypto/secret-trial.js';
 
 /**
  * The destructive half of a recovery, in its own process.
@@ -1205,29 +1212,88 @@ export class RecoveryExecutor {
         error,
       );
     }
-    const missing = await this.deps.keys.missingFrom(candidate);
-    if (missing.length > 0) {
-      throw new RecoveryAbort(
-        'recovery.candidate_keys_missing',
-        `The candidate's secrets need keys this installation does not hold: ${missing.join(', ')}.`,
-      );
+    /*
+     * THE SECRETS, decrypted, then MOVED onto this installation's own key.
+     *
+     * 1. The trial again, authoritatively, on the candidate: every stored secret
+     *    must decrypt with a key held here — configured, imported, or one the
+     *    archive itself carried (sealed into the workspace at verification). A key
+     *    held by NAME is not enough: that is the incident this replaced.
+     * 2. Every secret is re-encrypted under the ACTIVE key, in the candidate, and
+     *    then must read under the active key ALONE. After this nothing in the
+     *    database that is about to be served depends on an archive's key or an
+     *    imported key — which is what lets the archive's keys be dropped here.
+     *
+     * Both before the renames: any failure costs a candidate, never production.
+     */
+    const sealedBundle = await workspace.readBundledKeys();
+    let bundledKeys: ExtraKey[] = [];
+    let secretsRewrapped: number;
+    try {
+      if (sealedBundle !== null) {
+        try {
+          bundledKeys = this.deps.keys.openForExecutor(id, sealedBundle);
+        } catch (error) {
+          throw new RecoveryAbort(
+            'recovery.candidate_validation_failed',
+            "The archive's bundled keys could not be opened for the executor.",
+            error,
+          );
+        }
+      }
+      const trial = await this.deps.keys.trialDecrypt(candidate, bundledKeys);
+      if (trial.unreadableTotal > 0) {
+        await this.recordUnreadable(id, inspection.tableCount, compatibility, trial, sealedBundle);
+        throw new RecoveryAbort(
+          'recovery.candidate_secrets_unreadable',
+          `The candidate holds ${String(trial.unreadableTotal)} secret(s) no key held here decrypts.`,
+        );
+      }
+      try {
+        const rewrap = await this.deps.keys.rewrapUnderActiveKey(candidate, bundledKeys);
+        secretsRewrapped = rewrap.rewrapped;
+      } catch (error) {
+        throw new RecoveryAbort(
+          'recovery.candidate_secrets_unreadable',
+          "The candidate's secrets could not all be moved onto this installation's active key.",
+          error,
+        );
+      }
+    } finally {
+      for (const key of bundledKeys) key.material.fill(0);
+      const left = await workspace.discardBundledKeys();
+      if (left.length > 0) {
+        this.deps.logger.error(
+          { recoveryId: id, leftovers: left },
+          "a recovery could not remove its archive's sealed keys",
+        );
+      }
     }
+    this.deps.logger.info(
+      { recoveryId: id, secretsRewrapped, bundledKeys: sealedBundle === null ? 0 : 'present' },
+      "the candidate's secrets were re-encrypted under this installation's active key",
+    );
 
+    // The recovery summary: what the validation found and how many secrets were
+    // moved onto this installation's key. Carried into the RESTORED database's row
+    // too (below), since that is the row an operator reads after the cutover.
+    const validated: RecoveryRestoreTest = {
+      ...(request.restoreTest ?? {}),
+      restored: true,
+      tableCount: inspection.tableCount,
+      migrationVerdict: compatibility.verdict,
+      appliedMigrations: compatibility.applied,
+      expectedMigrations: compatibility.expected,
+      cutoverPermitted: true,
+      unreadableSecrets: [],
+      secretsRewrapped,
+    };
     await this.deps.requests.progress({
       id,
       stage: 'VALIDATE_CANDIDATE',
       leaseOwner: this.deps.leaseOwner,
       now: this.deps.clock.now(),
-      patch: {
-        restoreTest: {
-          restored: true,
-          tableCount: inspection.tableCount,
-          migrationVerdict: compatibility.verdict,
-          appliedMigrations: compatibility.applied,
-          expectedMigrations: compatibility.expected,
-          cutoverPermitted: true,
-        },
-      },
+      patch: { restoreTest: validated },
     });
 
     // ---- CUT OVER --------------------------------------------------------
@@ -1328,6 +1394,7 @@ export class RecoveryExecutor {
       cutoverAt: done.cutoverAt,
       finishedAt: null,
       failureCode: null,
+      restoreTest: validated,
     };
     if (
       !(await this.writeRequestRow(id, () => ({
@@ -1436,6 +1503,51 @@ export class RecoveryExecutor {
         error,
       );
     }
+  }
+
+  /**
+   * Records the trial's failures on the request before the abort, so the Web Admin
+   * can say which kinds of secret failed and whether a Recovery Kit could help — the
+   * same fields the restore test writes. Counts only; best effort (the abort that
+   * follows is the authoritative outcome).
+   */
+  private async recordUnreadable(
+    id: string,
+    tableCount: number,
+    compatibility: Pick<CandidateCompatibility, 'verdict' | 'applied' | 'expected'>,
+    trial: SecretTrialReport,
+    sealedBundle: string | null,
+  ): Promise<void> {
+    const unreadable = unreadableCounts(trial);
+    this.deps.logger.error(
+      { recoveryId: id, unreadable },
+      'the candidate holds secrets this installation cannot decrypt; not cutting over',
+    );
+    await this.deps.requests
+      .progress({
+        id,
+        stage: 'VALIDATE_CANDIDATE',
+        leaseOwner: this.deps.leaseOwner,
+        now: this.deps.clock.now(),
+        patch: {
+          restoreTest: {
+            restored: true,
+            tableCount,
+            migrationVerdict: compatibility.verdict,
+            appliedMigrations: compatibility.applied,
+            expectedMigrations: compatibility.expected,
+            cutoverPermitted: false,
+            unreadableSecrets: unreadable,
+            canUploadKit: sealedBundle === null,
+          },
+        },
+      })
+      .catch((error: unknown) =>
+        this.deps.logger.error(
+          { recoveryId: id, err: rootMessage(error) },
+          'could not record which secrets the candidate cannot decrypt',
+        ),
+      );
   }
 
   private async advance(

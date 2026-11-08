@@ -21,7 +21,12 @@ import {
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import { recordMutationDenial } from '../../access/application/authorized-mutation.js';
-import type { BackupArchiver, BackupManifest } from '../../backup/application/ports.js';
+import type {
+  BackupArchiver,
+  BackupManifest,
+  BundledKeyMaterial,
+} from '../../backup/application/ports.js';
+import { unreadableCounts } from '../../../../infrastructure/crypto/secret-trial.js';
 import {
   compareMigrations,
   type ExpectedMigration,
@@ -286,9 +291,23 @@ export class RecoveryService {
     }
 
     const workspace = this.deps.workspaces.open(request.workspacePath);
-    const verified = await this.decryptAndCheck(scope, id, workspace, input.archivePassword);
-    if (verified.failureCode !== null) return verified;
-    return this.restoreTest(scope, id, workspace);
+    // The keys a self-contained archive carried, unwrapped with its password: held in
+    // THIS call's memory for the restore test, and zeroed when it returns whatever
+    // happened. Never written anywhere in the clear and never added to the keyring.
+    const bundle: { keys: readonly BundledKeyMaterial[] | null } = { keys: null };
+    try {
+      const verified = await this.decryptAndCheck(
+        scope,
+        id,
+        workspace,
+        input.archivePassword,
+        bundle,
+      );
+      if (verified.failureCode !== null) return verified;
+      return await this.restoreTest(scope, id, workspace, bundle.keys);
+    } finally {
+      for (const key of bundle.keys ?? []) key.material.fill(0);
+    }
   }
 
   /** DECRYPT, CHECKSUM and MANIFEST, over the real restore path. */
@@ -297,6 +316,7 @@ export class RecoveryService {
     id: string,
     workspace: RecoveryWorkspace,
     archivePassword: string | undefined,
+    bundle: { keys: readonly BundledKeyMaterial[] | null },
   ): Promise<RecoveryStepOutcome> {
     let verification: RecoveryVerification;
     try {
@@ -313,7 +333,10 @@ export class RecoveryService {
         // A 7-Zip upload (E4): the operator's password first; without one, this
         // installation's own stored passwords (an archive it sealed itself).
         ...(archivePassword === undefined ? {} : { passwords: [archivePassword] }),
+        // A self-contained archive's keys, unwrapped with the same password.
+        withBundledKeys: true,
       });
+      bundle.keys = opened.bundledKeys ?? null;
       const matches = opened.dumpChecksum === opened.manifest.checksum;
       verification = {
         formatVersion: 1,
@@ -372,6 +395,12 @@ export class RecoveryService {
           verification,
         });
       }
+      if (bundle.keys !== null) {
+        // For the EXECUTOR, another process, which never sees the password: the
+        // bundled keys wait in this recovery's workspace sealed under this
+        // installation's configured active key, bound to this recovery's id.
+        await workspace.writeBundledKeys(this.deps.keys.sealForExecutor(id, bundle.keys));
+      }
       if (opened.format === 'SEVEN_ZIP') {
         // Verified: re-seal the SAME dump under the keyring, in place, so the executor
         // opens what was verified without the operator's password ever being stored.
@@ -419,6 +448,8 @@ export class RecoveryService {
     scope: TenantContext,
     id: string,
     workspace: RecoveryWorkspace,
+    /** The keys the archive carried; null when it carried none (an old archive, an `.nxb`). */
+    bundledKeys: readonly BundledKeyMaterial[] | null,
   ): Promise<RecoveryStepOutcome> {
     await this.deps.requests.transition({
       id,
@@ -465,24 +496,37 @@ export class RecoveryService {
           failure = 'recovery.migration_incompatible';
         } else {
           /*
-           * The restored database's SECRETS, as well as its archive.
+           * The restored database's SECRETS, as well as its archive — DECRYPTED.
            *
            * The archive opened, so its own key is held. That says nothing about
            * the bot tokens and panel credentials inside it, which are sealed
            * under whatever key the old installation was using when it wrote
-           * them — possibly a rotation-era key the archive's key never touched.
-           * Cutting over to a database this installation cannot read the
-           * credentials of is a restore that "succeeds" into an outage, so it is
-           * refused HERE, before the operator is asked to confirm anything, and
-           * again by the executor before the renames.
+           * them. And a key held by NAME proves nothing either: two installations
+           * made on the same day both called their key `install-<date>`, the old
+           * id-only check found the name, cut over, and every secret then failed
+           * authentication. So every stored secret is trial-decrypted here, with
+           * every key held plus the keys the archive itself carried, and any
+           * failure refuses BEFORE the operator is asked to confirm anything —
+           * and again in the executor before the renames.
            */
-          const missing = await this.deps.keys.missingFrom(scratch);
-          if (missing.length > 0) {
+          const trial = await this.deps.keys.trialDecrypt(scratch, bundledKeys ?? []);
+          const unreadable = unreadableCounts(trial);
+          restoreTest = {
+            ...restoreTest,
+            unreadableSecrets: unreadable,
+            // Only an archive with no bundle can be helped by the old server's kit:
+            // a bundle already carried every key its secrets were sealed under.
+            canUploadKit: bundledKeys === null,
+            bundledKeys: bundledKeys?.length ?? 0,
+          };
+          if (trial.unreadableTotal > 0) {
+            // Counts per kind of secret only: never an id, a key or a value.
             this.deps.logger.error(
-              { recoveryId: id, missingKeyIds: missing },
-              'a restored database names keys this installation does not hold',
+              { recoveryId: id, unreadable },
+              'a restored database holds secrets this installation cannot decrypt',
             );
-            failure = 'recovery.candidate_keys_missing';
+            restoreTest = { ...restoreTest, cutoverPermitted: false };
+            failure = 'recovery.candidate_secrets_unreadable';
           }
         }
       }
