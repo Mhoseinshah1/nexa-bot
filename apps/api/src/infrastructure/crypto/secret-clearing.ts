@@ -296,10 +296,7 @@ export async function clearUnreadableSecrets(
   return { cleared, kept, items: items.length };
 }
 
-function identity(
-  row: UnreadableSecret,
-  entityTable: string,
-): Omit<ItemRow, 'entityKey'> {
+function identity(row: UnreadableSecret, entityTable: string): Omit<ItemRow, 'entityKey'> {
   return {
     tenantId: row.tenantId,
     purpose: row.purpose,

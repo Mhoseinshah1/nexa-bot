@@ -148,9 +148,14 @@ describe('after a restore refused for unreadable secrets', () => {
       sizeBytes: size,
       archiveSha256: 'a'.repeat(64),
     });
-    return install.container.recoveryService.verifyAndTest(tenantA, install.owner, begun.request.id, {
-      archivePassword: BACKUP_PASSWORD,
-    });
+    return install.container.recoveryService.verifyAndTest(
+      tenantA,
+      install.owner,
+      begun.request.id,
+      {
+        archivePassword: BACKUP_PASSWORD,
+      },
+    );
   }
 
   async function confirmAndExecute(
@@ -291,9 +296,7 @@ describe('after a restore refused for unreadable secrets', () => {
     // What is served: the cleared values read as NOT SET — no failed authentication
     // anywhere except the token the stopped bot keeps until it is replaced.
     const live = await trialWithOnly(b.database, SAME_ID, keyB);
-    expect(new Set(live.unreadable.map((u) => u.purpose))).toEqual(
-      new Set(['bot_instance.token']),
-    );
+    expect(new Set(live.unreadable.map((u) => u.purpose))).toEqual(new Set(['bot_instance.token']));
     const state = await withDb(b.database, async (client) => ({
       bots: (await client.query<{ status: string }>('SELECT status FROM bot_instances')).rows,
       panel: (
@@ -413,6 +416,16 @@ describe('after a restore refused for unreadable secrets', () => {
         idempotencyKey: 'retest-wrong-failure',
       }),
     ).rejects.toMatchObject({ code: 'recovery.confirmation_invalid' });
+    // The repository's own guard: leaving FAILED names the failure code (and a kept upload).
+    expect(
+      await b.container.recoveryRequests.transition({
+        id: begun.request.id,
+        from: ['FAILED'],
+        to: 'UPLOADED',
+        now: new Date(),
+        failedWith: 'recovery.candidate_secrets_unreadable',
+      }),
+    ).toBe(false);
     await expect(
       b.container.recoveryService.acknowledgeUnreadable(tenantA, b.owner, begun.request.id, {
         idempotencyKey: 'ack-wrong-failure',
@@ -421,13 +434,30 @@ describe('after a restore refused for unreadable secrets', () => {
     ).rejects.toMatchObject({ code: 'recovery.confirmation_invalid' });
   }, 300_000);
 
+  it('the attention list is denied by default to an administrator without backup.view', async () => {
+    const b = await installation('kek-b', randomBytes(32));
+    const nobody = adminActorFor(
+      await createAdmin(b.container, tenantA, {
+        username: `nobody-${randomBytes(3).toString('hex')}`,
+      }),
+    );
+    await expect(b.container.secretReentry.list(tenantA, nobody)).rejects.toMatchObject({
+      kind: 'PERMISSION_DENIED',
+    });
+    expect(await b.container.secretReentry.list(tenantA, b.owner)).toEqual([]);
+  }, 300_000);
+
   it('clears only the named rows of the database it is pointed at — never the live one, never another tenant’s', async () => {
     const b = await installation('kek-b', randomBytes(32));
     const other = await installation('kek-other', randomBytes(32));
-    const bot = await withDb(other.database, async (client) =>
-      (await client.query<{ id: string; tenant_id: string }>(
-        'SELECT id::text AS id, tenant_id::text AS tenant_id FROM bot_instances LIMIT 1',
-      )).rows[0],
+    const bot = await withDb(
+      other.database,
+      async (client) =>
+        (
+          await client.query<{ id: string; tenant_id: string }>(
+            'SELECT id::text AS id, tenant_id::text AS tenant_id FROM bot_instances LIMIT 1',
+          )
+        ).rows[0],
     );
     if (bot === undefined) throw new Error('the seed made no bot');
     const named = {
@@ -445,10 +475,15 @@ describe('after a restore refused for unreadable secrets', () => {
     });
     expect(foreign).toMatchObject({ cleared: 0, items: 0, kept: [] });
     const status = async () =>
-      withDb(other.database, async (client) =>
-        (await client.query<{ status: string }>('SELECT status FROM bot_instances WHERE id = $1', [
-          bot.id,
-        ])).rows[0]?.status,
+      withDb(
+        other.database,
+        async (client) =>
+          (
+            await client.query<{ status: string }>(
+              'SELECT status FROM bot_instances WHERE id = $1',
+              [bot.id],
+            )
+          ).rows[0]?.status,
       );
     expect(await status()).toBe('ACTIVE');
     // The live database is refused by name, before a connection is opened.

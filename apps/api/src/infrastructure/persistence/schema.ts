@@ -3629,16 +3629,9 @@ export const secretReentryItems = pgTable(
     clearedAt: timestamptz('cleared_at').notNull(),
   },
   (table) => [
-    index('secret_reentry_items_tenant_cleared_idx').on(
-      table.tenantId,
-      table.clearedAt,
-      table.id,
-    ),
+    index('secret_reentry_items_tenant_cleared_idx').on(table.tenantId, table.clearedAt, table.id),
     check('secret_reentry_items_purpose_check', enumCheck('purpose', SECRET_PURPOSES)),
-    check(
-      'secret_reentry_items_entity_table_check',
-      sql`entity_table ~ '^[a-z_]{1,63}$'`,
-    ),
+    check('secret_reentry_items_entity_table_check', sql`entity_table ~ '^[a-z_]{1,63}$'`),
     check(
       'secret_reentry_items_entity_key_check',
       sql`entity_key IS NULL OR char_length(entity_key) BETWEEN 1 AND 64`,

@@ -486,7 +486,7 @@ export class RecoveryController {
     return { recovery: toRecoverySummary(outcome.request) };
   }
 
-  /** §2.3, choice 2 («ادامه؛ این‌ها را دوباره وارد می‌کنم»). */
+  /** §2.3, choice 2: continue, and re-enter the unreadable secrets after the cut-over. */
   @Post('recoveries/:id/acknowledge-unreadable')
   async acknowledgeUnreadable(
     @Req() request: FastifyRequest,

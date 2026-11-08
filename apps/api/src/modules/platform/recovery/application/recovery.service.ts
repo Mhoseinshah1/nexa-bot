@@ -25,10 +25,7 @@ import {
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import { recordMutationDenial } from '../../access/application/authorized-mutation.js';
-import type {
-  BackupArchiver,
-  BackupManifest,
-} from '../../backup/application/ports.js';
+import type { BackupArchiver, BackupManifest } from '../../backup/application/ports.js';
 import { unreadableCounts } from '../../../../infrastructure/crypto/secret-trial.js';
 import { UNCLEARABLE_PURPOSES } from '../../../../infrastructure/crypto/secret-clearing.js';
 import { rememberOnce } from '../../idempotency/application/remember-once.js';
@@ -730,9 +727,7 @@ export class RecoveryService {
     });
     const request = await this.require(scope, id);
     const acknowledged = normalisedUnreadable(input.unreadable);
-    const requestHash = digest(
-      `acknowledge\n${actor.id}\n${id}\n${JSON.stringify(acknowledged)}`,
-    );
+    const requestHash = digest(`acknowledge\n${actor.id}\n${id}\n${JSON.stringify(acknowledged)}`);
     const found = await this.deps.idempotency.find<{ recoveryId: string }>(
       scope,
       'WEB',
@@ -765,7 +760,7 @@ export class RecoveryService {
     if (unclearable.length > 0) {
       throw this.refuse(
         'recovery.candidate_secrets_unreadable',
-        'A refund card cannot be cleared by a restore. Import the old server\'s Recovery Kit.',
+        "A refund card cannot be cleared by a restore. Import the old server's Recovery Kit.",
       );
     }
 
@@ -1269,7 +1264,9 @@ export function sameUnreadable(
 ): boolean {
   return (
     a.length === b.length &&
-    a.every((entry, index) => entry.purpose === b[index]?.purpose && entry.count === b[index]?.count)
+    a.every(
+      (entry, index) => entry.purpose === b[index]?.purpose && entry.count === b[index]?.count,
+    )
   );
 }
 
