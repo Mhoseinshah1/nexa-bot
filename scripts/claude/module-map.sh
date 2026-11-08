@@ -14,7 +14,8 @@
 # services = *.service.ts files under application/ (the repo's real naming).
 # writes   = SQL tables named by .insert(X) / .update(X) / .delete(X) (also
 #            tx.insert(...), multi-line calls), X mapped to its SQL name through
-#            `export const X = pgTable('sql_name'` in schema.ts. An identifier
+#            `export const X = pgTable('sql_name'` in schema.ts and the per-module
+#            parts under schema/ that it re-exports. An identifier
 #            that is not a schema table (a Map.delete(key)) is dropped.
 # tests    = files under tests/ that import modules/<key>/..., or whose file
 #            name contains the module name as a whole -/./_-delimited word.
@@ -54,6 +55,7 @@ root="${MODULE_MAP_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 cd "$root"
 mods=apps/api/src/modules
 schema=apps/api/src/infrastructure/persistence/schema.ts
+schema_dir=apps/api/src/infrastructure/persistence/schema
 trace="$here/../../.claude/skills/nexa-code-navigation/scripts/trace.sh"
 if [[ ! -d "$mods" ]]; then echo "module-map: no $mods under $root" >&2; exit 2; fi
 
@@ -61,14 +63,18 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 # identifier -> sql name ("ident<TAB>sql"), name may sit on the line after pgTable(
 build_tables() {
-  [[ -f "$schema" ]] || { : >"$tmp/tables"; return 0; }
+  local files=()
+  [[ -f "$schema" ]] && files+=("$schema")
+  [[ -d "$schema_dir" ]] && files+=("$schema_dir"/*.ts)
+  ((${#files[@]})) || { : >"$tmp/tables"; return 0; }
   awk '
+    FNR == 1 { pend = "" }
     pend != "" { if (match($0, /\047[^\047]+\047/)) { print pend "\t" substr($0, RSTART+1, RLENGTH-2); pend = "" } else if ($0 !~ /^[ \t]*$/) pend = ""; next }
     match($0, /^export const [A-Za-z0-9_]+ = pgTable\(/) {
       s = substr($0, RSTART, RLENGTH); sub(/^export const /, "", s); sub(/ =.*/, "", s)
       rest = substr($0, RSTART + RLENGTH)
       if (match(rest, /\047[^\047]+\047/)) print s "\t" substr(rest, RSTART+1, RLENGTH-2); else pend = s
-    }' "$schema" >"$tmp/tables"
+    }' "${files[@]}" >"$tmp/tables"
 }
 
 list_modules() {

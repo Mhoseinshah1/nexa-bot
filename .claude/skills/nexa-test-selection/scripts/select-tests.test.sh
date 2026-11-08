@@ -30,6 +30,13 @@ expect "a migration asks for db:check" "pnpm db:check" "$out"
 expect "a migration runs migration-* suites" "tests/integration/migration-ordering.test.ts" "$out"
 reject "a NEXA migration does not pull the legacy importer suites" "legacy-migration.test.ts" "$out"
 
+out="$(bash "$sel" --files apps/api/src/infrastructure/persistence/schema/wallet.ts)"
+expect "a schema part asks for db:check" "pnpm db:check" "$out"
+expect "a schema part selects the importers of the schema index" "tests/integration/outbox.test.ts" "$out"
+
+out="$(bash "$sel" --files apps/web/src/i18n/web.fa/errors.ts)"
+expect "a web catalogue slice selects the importers of web.fa.ts" "tests/web/error-text.test.tsx" "$out"
+
 out="$(bash "$sel" --files deploy/bin/botctl)"
 expect "deploy runs the shell and botctl logic" "pnpm check:shell && pnpm test:deploy" "$out"
 

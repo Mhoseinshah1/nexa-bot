@@ -35,7 +35,7 @@ describe('customer notes never reach a customer surface', () => {
     expect(
       filesMatching(/customerNotes|customer_notes|insertNote|notesOf|findNote|CustomerNoteRecord/),
     ).toEqual([
-      'apps/api/src/infrastructure/persistence/schema.ts',
+      'apps/api/src/infrastructure/persistence/schema/customers.ts',
       'apps/api/src/modules/commerce/customers/application/customer-crm-ports.ts',
       'apps/api/src/modules/commerce/customers/application/customer-crm.service.ts',
       'apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer-crm.repository.ts',

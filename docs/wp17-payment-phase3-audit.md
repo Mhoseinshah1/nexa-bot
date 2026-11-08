@@ -77,7 +77,7 @@ arithmetic rule:
 - **Bound:** `refundFitsWithin` is `requested + consumed <= paid`, decided under the
   payment's row lock (`refund.service.ts:322-380`).
 - **Schema:** "A payment can be refunded MORE THAN ONCE — partially, by different
-  operators, at different times" (`schema.ts:3774-3776`).
+  operators, at different times" (`schema/refunds.ts:47-49`).
 - **Order state:** a partial refund leaves the order PAID. Only COMPLETED refunds that sum
   to the full amount move it to REFUNDED (`refund.service.ts:734-740`, WP10 P3).
 - **Reversals:** the cashback and referral reversals use the cumulative target, so

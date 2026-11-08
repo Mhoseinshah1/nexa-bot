@@ -1,5 +1,5 @@
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -18,10 +18,13 @@ import { PostgresDatabaseTools } from '../../apps/api/src/modules/platform/backu
  * `tests/integration/backup.test.ts` restores a real archive and compares the catalogs.
  */
 
-const SCHEMA = readFileSync(
-  join(__dirname, '../../apps/api/src/infrastructure/persistence/schema.ts'),
-  'utf8',
-);
+// The schema's per-module parts, which `schema.ts` re-exports.
+const SCHEMA_DIR = join(__dirname, '../../apps/api/src/infrastructure/persistence/schema');
+const SCHEMA = readdirSync(SCHEMA_DIR)
+  .filter((file) => file.endsWith('.ts'))
+  .sort()
+  .map((file) => readFileSync(join(SCHEMA_DIR, file), 'utf8'))
+  .join('\n');
 
 describe('the backup table-data exclusions', () => {
   it('are exactly the closed list, each with a reason', () => {

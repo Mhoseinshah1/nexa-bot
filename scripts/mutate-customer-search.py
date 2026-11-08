@@ -14,7 +14,7 @@ if subprocess.run(['git','diff','--quiet','--','apps','packages']).returncode !=
 
 LS='apps/web/src/ui/list-search.tsx'
 US='apps/web/src/pages/users.tsx'
-FA='apps/web/src/i18n/web.fa.ts'
+FA='apps/web/src/i18n/web.fa/customers.ts'
 REPO='apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository.ts'
 
 T_WEB=('web','tests/web/customer-search.test.tsx')

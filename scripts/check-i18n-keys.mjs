@@ -72,8 +72,18 @@ const SURFACE_DIRS = ['apps/api/src/surfaces', 'apps/web/src', 'apps/miniapp/src
  * than by `web.*` key, so the unused-key check below does not apply to it. Its coverage
  * is enforced by `tests/unit/template-copy.test.ts` instead.
  */
+/*
+ * `web.fa.ts` merges the Web Admin catalogue's slices, one per page group, from
+ * `apps/web/src/i18n/web.fa/`. Every slice is a catalogue file.
+ */
+const WEB_CATALOGUE_DIR = 'apps/web/src/i18n/web.fa';
+const WEB_CATALOGUE_SLICES = readdirSync(WEB_CATALOGUE_DIR)
+  .filter((entry) => entry.endsWith('.ts'))
+  .sort()
+  .map((entry) => join(WEB_CATALOGUE_DIR, entry));
 const CATALOGUE_FILES = new Set([
   'apps/web/src/i18n/web.fa.ts',
+  ...WEB_CATALOGUE_SLICES,
   'apps/web/src/i18n/templates.fa.ts',
   // Round 9, C5: the customer mini app's own chrome.
   'apps/miniapp/src/i18n/miniapp.fa.ts',
@@ -102,8 +112,22 @@ if (offenders.length > 0) {
 // The type system already catches a MISSING key, because `t()` is typed against
 // the catalogue. What it cannot catch is a key nobody renders any more, which is
 // how a catalogue turns into an archaeological record.
-const catalogueSource = readFileSync('apps/web/src/i18n/web.fa.ts', 'utf8');
+const catalogueSource = WEB_CATALOGUE_SLICES.map((file) => readFileSync(file, 'utf8')).join('\n');
 const declaredWebKeys = [...catalogueSource.matchAll(/'(web\.[a-z0-9_]+)':/g)].map((m) => m[1]);
+
+// One object literal refused a repeated key at compile time; slices merged by spreading do
+// not (the later slice would silently win), so a key declared in two slices is refused here.
+const webKeyOccurrences = [...catalogueSource.matchAll(/^ {2}'(web\.[A-Za-z0-9_.]+)':/gm)].map(
+  (m) => m[1],
+);
+const repeatedWebKeys = [
+  ...new Set(webKeyOccurrences.filter((key, index) => webKeyOccurrences.indexOf(key) !== index)),
+];
+if (repeatedWebKeys.length > 0) {
+  fail('Web catalogue keys declared more than once', repeatedWebKeys);
+} else {
+  console.log(`ok    no web.* key is declared twice across ${WEB_CATALOGUE_SLICES.length} slices`);
+}
 
 const webUsage = walk('apps/web/src')
   .filter((file) => !CATALOGUE_FILES.has(file))

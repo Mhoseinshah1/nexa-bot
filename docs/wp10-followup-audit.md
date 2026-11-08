@@ -84,7 +84,7 @@ untouched.
 - It uses the `PAY-37` text fallback when Telegram refuses the file.
 - `reviewNoteOf` bounds the customer note to 600 code points (`3226-3232`).
 
-**Capture idiom:** `admin_amount_captures` (`schema.ts:3949-4017`, `receipt-credit-capture.service.ts`) is the INCIDENT-FIN-001 answer:
+**Capture idiom:** `admin_amount_captures` (`schema/refunds.ts:197-356`, `receipt-credit-capture.service.ts`) is the INCIDENT-FIN-001 answer:
 
 - one open row per (tenant, bot, admin), by a partial unique index (`3985`) and the advisory lock `0x4143`;
 - it reads ONE value;
@@ -105,14 +105,14 @@ untouched.
 
 **The customer lane (`customer_notifications`) — cannot.**
 
-- Its identity is `UNIQUE (tenant, kind, subject_id)` (`schema.ts:6373`). That allows one row per payment, not one per administrator.
+- Its identity is `UNIQUE (tenant, kind, subject_id)` (`schema/notifications.ts:386`). That allows one row per payment, not one per administrator.
 - `customer_id` is a foreign key to `customers`.
 - Its kinds are a closed set with **no payload** and a customer audience. ADR-0030 §1 refuses exactly the widening this would need, and migration 0069's header says the same about admin kinds.
 
 **The operator lane (`notifications`, ADR-0018) — nearly fits, and is wrong on the property the owner stressed.** What it offers:
 
 - per-row destination snapshots;
-- `UNIQUE (tenant, dedupe_key)` (`schema.ts:1147`);
+- `UNIQUE (tenant, dedupe_key)` (`schema/notifications.ts:94`);
 - attempts and released claims;
 - Web visibility of FAILED intents.
 
@@ -150,7 +150,7 @@ payload `{ paymentId, receiptId }`. Adding it is a contract change in its own co
 **3. The lane table.** `receipt_review_pushes`:
 
 - **Identity:** `UNIQUE (tenant_id, receipt_id, admin_id)`.
-- **Composite foreign keys:** to `payments`, `payment_receipts` (`payment_receipts_tenant_id_key`, `schema.ts:4081`) and `admins` (`admins_tenant_id_key`, `656`), plus `bot_instance_id` copied from the receipt.
+- **Composite foreign keys:** to `payments`, `payment_receipts` (`payment_receipts_tenant_id_key`, `schema/payments.ts:575`) and `admins` (`admins_tenant_id_key`, `schema/identity.ts:77`), plus `bot_instance_id` copied from the receipt.
 - **States:** `PENDING | DELIVERED | UNKNOWN | FAILED | SUPERSEDED` (renamed by the owner's correction).
 - **Bookkeeping:** `attempts`, `next_attempt_at`, `send_started_at`, `resolved_at`, `chat_id` (stamped at send, as history) and `last_error_code` (a machine code).
 - **CHECKs:** `(state <> 'PENDING') = (resolved_at IS NOT NULL)`, and a partial due index `WHERE state = 'PENDING'`.
@@ -252,7 +252,7 @@ before anything is written. The typed text alone never changes a customer.
 | `REJECTED`           | `state = 'FAILED'`, `resolved_by_admin_id IS NOT NULL`, no credit row, and at least one receipt.                                                                             |
 | `null`               | Everything else: pending, expired, withdrawn, wallet, and a signal-only transfer decided without a receipt. That last case is a payment decision, not a receipt disposition. |
 
-The "has a receipt" test is `EXISTS` on `payment_receipts_payment_idx` (`schema.ts:4074`).
+The "has a receipt" test is `EXISTS` on `payment_receipts_payment_idx` (`schema/payments.ts:568`).
 
 **Web.**
 
@@ -281,18 +281,18 @@ Customer messaging is already right: a credit sends `RECEIPT_CREDITED_TO_WALLET`
 
 The caption is built in ONE application function, used by both the pull item and the push — one implementation, two wrappers. It renders `bot.admin.receipt`, extended with **optional** placeholders. That is a contract change, and it keeps tenants' existing overrides valid.
 
-| File 01 §4 field               | Source                                                                                                                                                                                                                                | Available?                                                                                                                                                    |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Operation type                 | `payments.order_id IS NULL` means a top-up; otherwise `orders.purpose` (`schema.ts:3008`; `ORDER_PURPOSES`, `commerce.ts:221`). The label is rendered from catalogue keys, never the enum.                                            | Yes                                                                                                                                                           |
-| Service username               | NEW_SERVICE: `service_username_reservations.username` by order (`schema.ts:1864`, unique by order `1924`). RENEW, ADD_TRAFFIC and ADD_TIME: `service_commercial_actions.service_id` (`4784`) → `services.provider_username` (`4382`). | Mostly. A panel with no template has no name until provisioning (`nx…`), so it shows a dash.                                                                  |
-| Product name, volume, duration | The order snapshot: `line_title`, `line_traffic_bytes` and `line_duration_days` (`schema.ts:3013-3015`). Rendered through the `BYTES` and `DURATION_DAYS` label keys (§11 correction).                                                | Yes, for order payments. A top-up shows a dash.                                                                                                               |
-| Account name                   | `customers.first_name` / `last_name` (`CustomerRecord`).                                                                                                                                                                              | Yes                                                                                                                                                           |
-| Numeric Telegram id            | `customers.telegram_user_id`.                                                                                                                                                                                                         | Yes (already shown)                                                                                                                                           |
-| Telegram username              | `customers.username`.                                                                                                                                                                                                                 | Yes (already shown)                                                                                                                                           |
-| Current wallet balance         | `WalletRepository.balanceOf(customer, payment currency)`: a `SUM` over the ledger, with no lock and no network (`drizzle-wallet.repository.ts:158`). The Web read charges `users.view` (`wallet.service.ts:60`, `170-179`).           | **Only for a recipient holding `users.view`**, read at render time and labelled as a snapshot. Otherwise a dash, because `receipt_reviewer` does not hold it. |
-| Amount                         | `payments.amount` (the expected amount).                                                                                                                                                                                              | Yes (already shown)                                                                                                                                           |
-| Payment tracking code          | `payments.reference`, the code the customer quotes.                                                                                                                                                                                   | Yes (already shown)                                                                                                                                           |
-| Customer's note                | `payment_receipts.caption` → `reviewNoteOf` (600 code points).                                                                                                                                                                        | Yes (already shown)                                                                                                                                           |
+| File 01 §4 field               | Source                                                                                                                                                                                                                                                                                         | Available?                                                                                                                                                    |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Operation type                 | `payments.order_id IS NULL` means a top-up; otherwise `orders.purpose` (`schema/orders.ts:350`; `ORDER_PURPOSES`, `commerce.ts:221`). The label is rendered from catalogue keys, never the enum.                                                                                               | Yes                                                                                                                                                           |
+| Service username               | NEW_SERVICE: `service_username_reservations.username` by order (`schema/orders.ts:252`, unique by order `schema/orders.ts:297`). RENEW, ADD_TRAFFIC and ADD_TIME: `service_commercial_actions.service_id` (`schema/services.ts:844`) → `services.provider_username` (`schema/services.ts:98`). | Mostly. A panel with no template has no name until provisioning (`nx…`), so it shows a dash.                                                                  |
+| Product name, volume, duration | The order snapshot: `line_title`, `line_traffic_bytes` and `line_duration_days` (`schema/orders.ts:373-388`). Rendered through the `BYTES` and `DURATION_DAYS` label keys (§11 correction).                                                                                                    | Yes, for order payments. A top-up shows a dash.                                                                                                               |
+| Account name                   | `customers.first_name` / `last_name` (`CustomerRecord`).                                                                                                                                                                                                                                       | Yes                                                                                                                                                           |
+| Numeric Telegram id            | `customers.telegram_user_id`.                                                                                                                                                                                                                                                                  | Yes (already shown)                                                                                                                                           |
+| Telegram username              | `customers.username`.                                                                                                                                                                                                                                                                          | Yes (already shown)                                                                                                                                           |
+| Current wallet balance         | `WalletRepository.balanceOf(customer, payment currency)`: a `SUM` over the ledger, with no lock and no network (`drizzle-wallet.repository.ts:158`). The Web read charges `users.view` (`wallet.service.ts:60`, `170-179`).                                                                    | **Only for a recipient holding `users.view`**, read at render time and labelled as a snapshot. Otherwise a dash, because `receipt_reviewer` does not hold it. |
+| Amount                         | `payments.amount` (the expected amount).                                                                                                                                                                                                                                                       | Yes (already shown)                                                                                                                                           |
+| Payment tracking code          | `payments.reference`, the code the customer quotes.                                                                                                                                                                                                                                            | Yes (already shown)                                                                                                                                           |
+| Customer's note                | `payment_receipts.caption` → `reviewNoteOf` (600 code points).                                                                                                                                                                                                                                 | Yes (already shown)                                                                                                                                           |
 
 **Excluded on purpose:**
 

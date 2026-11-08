@@ -3,7 +3,3 @@ export const widgets = pgTable(
   {},
 );
 export const gadgets = pgTable('gadget_rows', {});
-export const sprockets = pgTable(
-  'sprocket_rows_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-  {},
-);
