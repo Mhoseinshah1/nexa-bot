@@ -133,7 +133,7 @@ describe('the reseller expiry card (round 11, C2)', () => {
       />,
     );
     await screen.findByText('Reza Reseller');
-    fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
     await openResellerTab('expiry');
     await screen.findByText(t('web.reseller_expiry_title'));
     expect(screen.queryByText(t('web.reseller_expiry_manual_suspended'))).toBeNull();

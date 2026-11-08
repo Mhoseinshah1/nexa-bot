@@ -199,7 +199,7 @@ describe('the reseller plans page', () => {
   it('draws each tier’s allowed Products, panels and monthly minimum in words', async () => {
     stubApi(routes());
     render();
-    const cell = await screen.findByText('Gold', { selector: 'strong' });
+    const cell = await screen.findByText('Gold', { selector: 'button.link' });
     const tableRow = cell.closest('tr') ?? document.body;
     const text = tableRow.textContent ?? '';
     expect(text).toContain('محصول: همه');
@@ -244,7 +244,7 @@ describe('the reseller plans page', () => {
   it('asks for no progress without orders.view, and says why', async () => {
     const api = stubApi(routes());
     render({ orders: false });
-    await screen.findByText('Gold', { selector: 'strong' });
+    await screen.findByText('Gold', { selector: 'button.link' });
     expect(gets(api, '/reseller-minimums')).toHaveLength(0);
     expect(screen.getByText(/orders\.view/u)).toBeInTheDocument();
   });

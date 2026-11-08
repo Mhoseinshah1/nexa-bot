@@ -268,9 +268,13 @@ describe('the reseller list', () => {
     renderList();
     const table = await screen.findByRole('table', { name: 'فهرست نمایندگان' });
     const first = within(table).getByText('Reza Reseller').closest('tr') as HTMLElement;
-    expect(within(first).getByText('Reza Reseller').closest('a')?.getAttribute('href')).toBe(
-      `/users/${CUSTOMER_ID}`,
-    );
+    // The name opens the standing (a button); the customer page is its own link in the row.
+    expect(within(first).getByText('Reza Reseller').closest('a')).toBeNull();
+    expect(
+      within(first)
+        .getByRole('link', { name: t('web.reseller_customer_page') })
+        .getAttribute('href'),
+    ).toBe(`/users/${CUSTOMER_ID}`);
     expect(first.textContent).toContain('5551234567');
     expect(first.textContent).toContain('Gold');
     expect(first.textContent).toContain('فعال');
@@ -316,8 +320,9 @@ describe('the reseller list', () => {
     await screen.findByText('Reza Reseller');
     expect(gets(api, '/resellers?limit=10&search=5551234567')).toHaveLength(1);
 
-    // W1.3: the status chips and the tier select are in the «فیلترها» panel.
-    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'معلق' }));
+    // Redesign: the status chips are quick filters over the table; the tier select is in the
+    // «فیلترها» panel.
+    fireEvent.click(screen.getByRole('button', { name: 'معلق' }));
     await waitFor(() => expect(gets(api, 'status=SUSPENDED')).toHaveLength(1));
 
     fireEvent.change(within(openFilterPanel()).getByLabelText('سطح'), {
@@ -637,7 +642,7 @@ describe('the standing and register surfaces (W2/W3)', () => {
     expect(document.getElementById('reseller-standing')).toBeNull();
     expect(document.getElementById('reseller-register-customer')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.reseller_standing_open') }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
     const drawer = screen.getByRole('dialog');
     expect(drawer).toContainElement(document.getElementById('reseller-standing'));
     fireEvent.keyDown(document, { key: 'Escape' });
@@ -774,9 +779,7 @@ describe('unsaved edits on the reseller forms', () => {
     await openResellerTab('danger');
     fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
 
-    fireEvent.click(
-      within(row('Sara')).getByRole('button', { name: t('web.reseller_standing_open') }),
-    );
+    fireEvent.click(within(row('Sara')).getByRole('button', { name: 'Sara' }));
     const asked = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
     fireEvent.click(within(asked).getByRole('button', { name: t('web.unsaved_stay') }));
     expect((screen.getByLabelText('وضعیت') as HTMLSelectElement).value).toBe('SUSPENDED');
@@ -1047,6 +1050,10 @@ describe('the tiers page', () => {
     );
     const table = await screen.findByRole('table', { name: 'سطوح' });
     expect(screen.queryByLabelText('سقف اعتبار (واحد خرد)')).toBeNull();
+    // Redesign: the tier's name is the way in — the same edit drawer as the row's «ویرایش».
+    fireEvent.click(within(table).getByRole('button', { name: 'Gold' }));
+    expect(await screen.findByDisplayValue('Gold')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: t('web.close') }));
     fireEvent.click(within(table).getByRole('button', { name: 'ویرایش' }));
     const name = await screen.findByDisplayValue('Gold');
     fireEvent.change(name, { target: { value: 'Gold+' } });
