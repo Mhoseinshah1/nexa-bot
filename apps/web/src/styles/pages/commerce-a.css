@@ -710,3 +710,20 @@
   display: block;
   margin-block-start: 4px;
 }
+
+/* --- Redesign PR-1: merged list cells and the detail header's link line ---------- */
+.cell-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
+.meta-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--fg-3);
+}
+.service-why {
+  margin-block-start: calc(-1 * var(--gap) / 2);
+}

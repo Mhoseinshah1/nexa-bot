@@ -45,17 +45,23 @@ import {
   RecordLink,
   recordHref,
 } from '../ui/record-ref';
-import { BalancedColumns, ChipGroup, useListClearAll } from './commerce-parts';
-import { ActionPanel } from '../ui/action-panel';
+import { ChipGroup, useListClearAll } from './commerce-parts';
+import {
+  QuickAction,
+  QuickActionBar,
+  QuickFilters,
+  AttentionStrip,
+  KpiRow,
+  CardRows,
+} from '../ui/redesign';
 import {
   Badge,
-  Banner,
-  Button,
   Card,
   CopyButton,
   Copyable,
   CursorPager,
   DataTable,
+  Disclosure,
   Empty,
   KV,
   LIST_PAGE_SIZE,
@@ -64,11 +70,8 @@ import {
   Num,
   PageHead,
   Progress,
-  StatCard,
   progressRatio,
   StateSwitch,
-  TabPanel,
-  Tabs,
   usePagedRows,
   useToast,
   type Column,
@@ -396,44 +399,36 @@ export function ServicesPage({
     ),
   );
 
+  /*
+   * Redesign PR-1: five columns, so the table fits at 1440px without sideways scroll. Every
+   * field the nine columns carried is still drawn — the code under the username, the
+   * location under the panel, the delivery under the state, the original purchase under
+   * the expiry.
+   */
   const columns: readonly Column<ServiceSummaryResponse>[] = [
     {
       key: 'username',
-      header: t('web.service_username'),
+      header: t('web.services_col_service'),
       render: (row) => (
-        <>
-          <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-            <Ltr>{row.providerUsername}</Ltr>
-          </a>
-          {/* R1: a free trial, as the database marks it (`services.is_trial`). */}
-          {row.isTrial && (
-            <>
-              {' '}
-              <Badge tone="info">{t('web.service_trial_badge')}</Badge>
-            </>
-          )}
-        </>
+        <div className="cell-stack">
+          <span>
+            <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+              <Ltr>{row.providerUsername}</Ltr>
+            </a>
+            {/* R1: a free trial, as the database marks it (`services.is_trial`). */}
+            {row.isTrial && (
+              <>
+                {' '}
+                <Badge tone="info">{t('web.service_trial_badge')}</Badge>
+              </>
+            )}
+          </span>
+          {/* PR-C: the service's short public code, never its uuid. */}
+          <span className="muted small">
+            <RecordLink href={recordHref.service(row.id)} id={row.id} code={row.code} />
+          </span>
+        </div>
       ),
-    },
-    {
-      // PR-C: the service's short public code, never its uuid.
-      key: 'code',
-      header: t('web.record_code'),
-      render: (row) => <RecordLink href={recordHref.service(row.id)} id={row.id} code={row.code} />,
-    },
-    {
-      key: 'state',
-      header: t('web.service_state'),
-      render: (row) => (
-        <>
-          <StateBadge value={row.state} /> <MissingOnPanelBadge at={row.missingOnPanelAt} />
-        </>
-      ),
-    },
-    {
-      key: 'delivery',
-      header: t('web.service_delivery'),
-      render: (row) => <DeliveryBadge value={row.deliveryState} />,
     },
     {
       key: 'customer',
@@ -450,39 +445,51 @@ export function ServicesPage({
     },
     {
       key: 'panel',
-      header: t('web.service_panel'),
-      // PR-C: the panel by its name.
-      render: (row) => <PanelLink id={row.panelId} name={row.panelName} />,
+      header: t('web.services_col_panel'),
+      render: (row) => (
+        <div className="cell-stack">
+          {/* PR-C: the panel by its name. */}
+          <PanelLink id={row.panelId} name={row.panelName} />
+          {/* Program §13: where it is, as the panel's location configuration names it. */}
+          <span className="muted small">
+            {row.locationLabel === null ? <Dash /> : row.locationLabel}
+          </span>
+        </div>
+      ),
     },
     {
-      // Program §13: where it is, as the panel's location configuration names it.
-      key: 'location',
-      header: t('web.soc_location'),
-      render: (row) => (row.locationLabel === null ? <Dash /> : row.locationLabel),
-    },
-    {
-      key: 'expires',
-      header: t('web.service_expires_at'),
-      render: (row) =>
-        row.expiresAt === null ? (
-          <Dash />
-        ) : (
-          <span className="nowrap">{formatTimestampNumeric(row.expiresAt)}</span>
-        ),
+      key: 'state',
+      header: t('web.services_col_state'),
+      render: (row) => (
+        <div className="cell-stack">
+          <span>
+            <StateBadge value={row.state} /> <MissingOnPanelBadge at={row.missingOnPanelAt} />
+          </span>
+          <span>
+            <DeliveryBadge value={row.deliveryState} />
+          </span>
+        </div>
+      ),
     },
     {
       /*
-       * The ORIGINAL purchase (Track 3 §3), which is what the list is ordered by: for an
-       * imported service the previous bot's date, never the import. A response from the
-       * release before carries none, and then the creation is the honest fallback — it is
-       * the same instant for every service this installation made.
+       * The expiry, and under it the ORIGINAL purchase (Track 3 §3), which is what the list is
+       * ordered by: for an imported service the previous bot's date, never the import. A
+       * response from the release before carries none, and then the creation is the honest
+       * fallback — it is the same instant for every service this installation made.
        */
-      key: 'started',
-      header: t('web.service_started_at'),
+      key: 'expires',
+      header: t('web.services_col_dates'),
       render: (row) => (
-        <span className="nowrap">
-          {formatTimestampNumeric(row.originalStartedAt ?? row.createdAt)}
-        </span>
+        <div className="cell-stack">
+          <span className="nowrap">
+            {row.expiresAt === null ? <Dash /> : formatTimestampNumeric(row.expiresAt)}
+          </span>
+          <span className="muted small nowrap">
+            {t('web.service_started_at')}{' '}
+            {formatTimestampNumeric(row.originalStartedAt ?? row.createdAt)}
+          </span>
+        </div>
       ),
     },
   ];
@@ -575,7 +582,7 @@ export function ServicesPage({
     <>
       <PageHead
         title={t('web.services_title')}
-        subtitle={t('web.services_intro')}
+        // Redesign PR-1: no count chip — `GET /services` sends a keyset page and no total.
         actions={
           <>
             <ListFreshness query={services} hidden={toolbarHidden} />
@@ -594,13 +601,14 @@ export function ServicesPage({
       {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}
 
       <Card className="ca-list">
-        {/* Track 3 §3: the tab is in the URL, and the server filters and orders by it. */}
+        {/* Track 3 §3: the lifecycle is in the URL, and the server filters and orders by it.
+            Chips replace the tabs (redesign PR-1); no count, because the list has no total. */}
         {!denied && (
-          <Tabs
+          <QuickFilters
+            label={t('web.services_title')}
             value={lifecycle}
             onChange={selectLifecycle}
-            panelId="services-lifecycle"
-            items={LIFECYCLE_TABS.map((tab) => ({ id: tab.id, label: t(tab.label) }))}
+            items={LIFECYCLE_TABS.map((tab) => ({ key: tab.id, label: t(tab.label) }))}
           />
         )}
         <div hidden={toolbarHidden}>
@@ -636,7 +644,7 @@ export function ServicesPage({
           />
         </div>
 
-        <TabPanel id="services-lifecycle" labelledBy={`services-lifecycle-tab-${lifecycle}`}>
+        <div className="list-body">
           <StateSwitch query={services} denied={denied}>
             {services.data === undefined ? null : services.data.services.length === 0 ? (
               <Empty
@@ -675,7 +683,7 @@ export function ServicesPage({
               </>
             )}
           </StateSwitch>
-        </TabPanel>
+        </div>
       </Card>
     </>
   );
@@ -826,15 +834,19 @@ function ActionButton({
 }) {
   if (entry === undefined) return null;
   const action = entry.action as ServiceSimpleAction;
-  const why = !entry.available && entry.blocker !== null;
+  // Redesign PR-1: the reason shows on hover and focus, from the same sentences as the fold.
+  const reason = !mayEdit
+    ? t('web.service_action_denied_edit')
+    : !entry.available && entry.blocker !== null
+      ? t(BLOCKER_LABELS[entry.blocker])
+      : undefined;
   return (
-    <Button
+    <QuickAction
+      label={t(ACTION_LABELS[action])}
       disabled={!mayEdit || !entry.available || act.isPending}
-      {...(why ? { 'aria-describedby': `service-blocker-${action}` } : {})}
+      {...(reason === undefined ? {} : { disabledReason: reason })}
       onClick={() => act.mutate({ action })}
-    >
-      {t(ACTION_LABELS[action])}
-    </Button>
+    />
   );
 }
 
@@ -927,21 +939,26 @@ function ServiceActionPanel({
       );
     }
   }
+  const blockerLabel = (blocker: ServiceActionBlocker) => t(BLOCKER_LABELS[blocker]);
+  const terminateReason =
+    terminateBlocked && terminate.blocker !== null
+      ? t(BLOCKER_LABELS[terminate.blocker])
+      : undefined;
   return (
     <>
-      <ActionPanel
-        title={t('web.service_action_panel_title')}
+      <QuickActionBar
+        label={t('web.service_action_panel_title')}
         groups={[
           ...SERVICE_ACTION_GROUPS.map((group) => ({
             key: group.key,
-            title: t(group.title),
+            label: t(group.title),
             actions: group.actions.map((action) => (
               <ActionButton key={action} entry={byAction.get(action)} mayEdit={mayEdit} act={act} />
             )),
           })),
           {
             key: 'gift',
-            title: t('web.service_group_gift'),
+            label: t('web.service_group_gift'),
             actions: [
               <ServiceGrantButton
                 key="traffic"
@@ -950,6 +967,7 @@ function ServiceActionPanel({
                 entry={byAction.get('ADD_TRAFFIC')}
                 mayGrant={mayGrant}
                 onActed={onActed}
+                blockerLabel={blockerLabel}
               />,
               <ServiceGrantButton
                 key="time"
@@ -958,6 +976,7 @@ function ServiceActionPanel({
                 entry={byAction.get('ADD_TIME')}
                 mayGrant={mayGrant}
                 onActed={onActed}
+                blockerLabel={blockerLabel}
               />,
               <ServiceMoveButton
                 key="move"
@@ -965,26 +984,44 @@ function ServiceActionPanel({
                 entry={byAction.get('CHANGE_LOCATION')}
                 mayEdit={mayEdit}
                 onActed={onActed}
+                blockerLabel={blockerLabel}
               />,
             ],
           },
+          {
+            // The only action that deletes an account on somebody's panel: red, ends in «…»,
+            // and opens the modal with the typed phrase / the refund choice — unchanged.
+            key: 'danger',
+            label: t('web.action_panel_sensitive'),
+            actions: [
+              terminate !== undefined && mayTerminate ? (
+                <QuickAction
+                  key="terminate"
+                  danger
+                  icon="trash"
+                  label={t('web.service_delete_open')}
+                  disabled={terminateBlocked}
+                  {...(terminateReason === undefined ? {} : { disabledReason: terminateReason })}
+                  onClick={() => setDeleting(true)}
+                />
+              ) : null,
+            ],
+          },
         ]}
-        sensitive={[
-          terminate !== undefined && mayTerminate ? (
-            <Button
-              key="terminate"
-              variant="danger"
-              icon="trash"
-              disabled={terminateBlocked}
-              {...(terminateBlocked ? { 'aria-describedby': 'service-blocker-TERMINATE' } : {})}
-              onClick={() => setDeleting(true)}
-            >
-              {t('web.service_delete_open')}
-            </Button>
-          ) : null,
-        ]}
-        disabledReasons={reasons}
       />
+      {reasons.length > 0 && (
+        <Disclosure
+          size="sm"
+          className="action-panel-why service-why"
+          summary={t('web.action_panel_why_unavailable')}
+        >
+          <ul>
+            {reasons.map((reason, index) => (
+              <li key={index}>{reason}</li>
+            ))}
+          </ul>
+        </Disclosure>
+      )}
       {terminate !== undefined && mayTerminate && !terminateBlocked && (
         <ServiceDeleteModal
           open={deleting}
@@ -1095,7 +1132,7 @@ export function ServiceDetailPage({
     <>
       {row === undefined && (
         <>
-          <PageHead title={t('web.service_detail')} subtitle={t('web.services_intro')} />
+          <PageHead title={t('web.service_detail')} />
           {refundRequests}
         </>
       )}
@@ -1121,7 +1158,7 @@ export function ServiceDetailPage({
                   {row.isTrial && <Badge tone="info">{t('web.service_trial_badge')}</Badge>}
                 </span>
               }
-              subtitle={t('web.service_detail')}
+              meta={<ServiceMetaLine row={row} />}
             />
             {/*
               Track 3 §3: one quiet line for an IMPORTED service — the date the list orders it by.
@@ -1152,53 +1189,71 @@ export function ServiceDetailPage({
 
             {row.original != null && <OriginalPurchase original={row.original} />}
 
-            {row.state === 'UNRECONCILED' && (
-              <Banner tone="warn">{t('web.service_unreconciled_banner')}</Banner>
-            )}
-            {row.deliveryState === 'UNCONFIRMED' && (
-              <Banner tone="warn">{t('web.service_delivery_unconfirmed_banner')}</Banner>
-            )}
+            {/* The service's own warnings, as one yellow strip — and a red one for a failed delivery. */}
+            <AttentionStrip
+              items={[
+                ...(row.state === 'UNRECONCILED'
+                  ? [{ key: 'unreconciled', label: t('web.service_unreconciled_banner') }]
+                  : []),
+                ...(row.deliveryState === 'UNCONFIRMED'
+                  ? [{ key: 'unconfirmed', label: t('web.service_delivery_unconfirmed_banner') }]
+                  : []),
+              ]}
+            />
             {row.deliveryState === 'FAILED' && (
-              <Banner tone="danger">{t('web.service_delivery_failed_banner')}</Banner>
+              <AttentionStrip
+                tone="danger"
+                items={[{ key: 'failed', label: t('web.service_delivery_failed_banner') }]}
+              />
             )}
-
-            <ServiceStats row={row} />
 
             {refundRequests}
 
-            {/* W4: the identity card and the delivery card share one height. */}
-            <BalancedColumns
-              main={<ServiceIdentity row={row} />}
-              side={<ServiceDelivery row={row} />}
-            />
+            <ServiceStats row={row} />
 
-            <Card
-              id={SERVICE_PROVISIONING_ANCHOR}
-              title={t('web.service_operations_title')}
-              hint={t('web.service_operations_hint')}
-            >
-              <StateSwitch query={operations} denied={denied}>
-                {operations.data === undefined ? null : operations.data.operations.length === 0 ? (
-                  <Empty variant="compact" title={t('web.service_operations_empty')} />
-                ) : (
-                  <>
-                    <OperationsTable operations={operations.data.operations} />
-                    {/*
+            {/* The identity card and the delivery card share one height; the history is its own row. */}
+            <CardRows
+              rows={[
+                {
+                  key: 'identity',
+                  main: <ServiceIdentity row={row} />,
+                  side: <ServiceDelivery row={row} />,
+                },
+                {
+                  key: 'operations',
+                  main: (
+                    <Card
+                      id={SERVICE_PROVISIONING_ANCHOR}
+                      title={t('web.service_operations_title')}
+                      hint={t('web.service_operations_hint')}
+                    >
+                      <StateSwitch query={operations} denied={denied}>
+                        {operations.data === undefined ? null : operations.data.operations
+                            .length === 0 ? (
+                          <Empty variant="compact" title={t('web.service_operations_empty')} />
+                        ) : (
+                          <>
+                            <OperationsTable operations={operations.data.operations} />
+                            {/*
                       Printed only when the server says the history was CUT, and with the
                       server's own bound. `operations.length === limit` is the wrong test
                       and is why the response carries `hasMore`: a service with exactly
                       fifty operations has a full page and nothing behind it.
                     */}
-                    {operations.data.hasMore && (
-                      <p className="muted small">
-                        {t('web.service_operations_truncated')}{' '}
-                        <Num value={operations.data.limit} />
-                      </p>
-                    )}
-                  </>
-                )}
-              </StateSwitch>
-            </Card>
+                            {operations.data.hasMore && (
+                              <p className="muted small">
+                                {t('web.service_operations_truncated')}{' '}
+                                <Num value={operations.data.limit} />
+                              </p>
+                            )}
+                          </>
+                        )}
+                      </StateSwitch>
+                    </Card>
+                  ),
+                },
+              ]}
+            />
           </>
         )}
       </StateSwitch>
@@ -1263,67 +1318,107 @@ function ServiceStats({ row }: { row: ServiceDetail }) {
   const used = BigInt(row.trafficUsedBytes);
   const unlimited = limit === UNLIMITED_TRAFFIC_BYTES;
   return (
-    <div className="ca-stats">
-      <StatCard
-        icon="activity"
-        label={t('web.service_traffic_used')}
-        value={<Num value={formatTrafficGbText(used)} />}
-        unit={t('web.unit_gib')}
-        hint={
-          <span className="ca-stat-line">
-            <span>{t('web.service_traffic_limit')}</span>
-            <TrafficLimit bytes={row.trafficLimitBytes} />
-          </span>
-        }
-      >
-        {!unlimited && <UsageMeter used={used} limit={limit} />}
-        <span className="ca-stat-line faint">
-          <span>{t('web.service_usage_synced_at')}</span>
-          {row.usageSyncedAt === null ? (
-            <span>{t('web.service_usage_never')}</span>
-          ) : (
-            <span>{formatTimestampNumeric(row.usageSyncedAt)}</span>
-          )}
-        </span>
-      </StatCard>
-      <StatCard
-        icon="calendar"
-        label={t('web.service_expires_at')}
-        value={
-          row.expiresAt === null ? (
-            <Dash />
-          ) : (
-            <span className="ca-stat-when">{formatTimestampNumeric(row.expiresAt)}</span>
-          )
-        }
-      />
-      <StatCard
-        icon="send"
-        label={t('web.service_delivery_attempts')}
-        value={<Num value={row.deliveryAttempts} />}
-        hint={
-          <span className="ca-stat-line">
-            <span>{t('web.service_delivery_next_attempt')}</span>
-            {row.deliveryNextAttemptAt === null ? (
+    <KpiRow
+      items={[
+        {
+          key: 'traffic',
+          label: t('web.service_traffic_used'),
+          value: (
+            <>
+              <Num value={formatTrafficGbText(used)} />
+              <span className="kpi-cell-unit"> {t('web.unit_gib')}</span>
+              <span className="ca-stat-line">
+                <span>{t('web.service_traffic_limit')}</span>
+                <TrafficLimit bytes={row.trafficLimitBytes} />
+              </span>
+              {!unlimited && <UsageMeter used={used} limit={limit} />}
+              <span className="ca-stat-line faint">
+                <span>{t('web.service_usage_synced_at')}</span>
+                {row.usageSyncedAt === null ? (
+                  <span>{t('web.service_usage_never')}</span>
+                ) : (
+                  <span>{formatTimestampNumeric(row.usageSyncedAt)}</span>
+                )}
+              </span>
+            </>
+          ),
+        },
+        {
+          key: 'expires',
+          label: t('web.service_expires_at'),
+          value:
+            row.expiresAt === null ? (
               <Dash />
             ) : (
-              <span>{formatTimestampNumeric(row.deliveryNextAttemptAt)}</span>
-            )}
-          </span>
-        }
-      />
-      <StatCard
-        icon="devices"
-        label={t('web.service_device_limit')}
-        value={
-          row.deviceLimit === null ? (
-            <span className="ca-stat-sentence">{t('web.service_device_limit_none')}</span>
-          ) : (
-            <Num value={row.deviceLimit} />
-          )
-        }
-      />
-    </div>
+              <span className="ca-stat-when">{formatTimestampNumeric(row.expiresAt)}</span>
+            ),
+        },
+        {
+          key: 'attempts',
+          label: t('web.service_delivery_attempts'),
+          value: (
+            <>
+              <Num value={row.deliveryAttempts} />
+              <span className="ca-stat-line">
+                <span>{t('web.service_delivery_next_attempt')}</span>
+                {row.deliveryNextAttemptAt === null ? (
+                  <Dash />
+                ) : (
+                  <span>{formatTimestampNumeric(row.deliveryNextAttemptAt)}</span>
+                )}
+              </span>
+            </>
+          ),
+        },
+        {
+          key: 'devices',
+          label: t('web.service_device_limit'),
+          value:
+            row.deviceLimit === null ? (
+              <span className="ca-stat-sentence">{t('web.service_device_limit_none')}</span>
+            ) : (
+              <Num value={row.deviceLimit} />
+            ),
+        },
+      ]}
+    />
+  );
+}
+
+/**
+ * The header card's meta line (redesign PR-1): who and what this service belongs to, each a link —
+ * the customer, the product, the panel and the order. The identity card below still carries every
+ * one of them with its copy buttons; this line is the shortcut.
+ */
+function ServiceMetaLine({ row }: { row: ServiceDetail }) {
+  const onLink = useLinkHandler();
+  return (
+    <span className="meta-links">
+      <span>
+        {t('web.service_customer')}{' '}
+        <CustomerIdentityLink
+          customerId={row.customerId}
+          telegramUserId={row.customerTelegramUserId}
+          username={row.customerUsername}
+          onLink={onLink}
+        />
+      </span>
+      <span>
+        {t('web.service_product')}{' '}
+        {row.productId === null ? (
+          <span className="muted">{t('web.purpose_custom_service')}</span>
+        ) : (
+          <ProductLink id={row.productId} code={row.productCode} title={row.productTitle} />
+        )}
+      </span>
+      <span>
+        {t('web.service_panel')} <PanelLink id={row.panelId} name={row.panelName} />
+      </span>
+      <span>
+        {t('web.service_order')}{' '}
+        <RecordLink href={recordHref.order(row.orderId)} id={row.orderId} code={row.orderCode} />
+      </span>
+    </span>
   );
 }
 
