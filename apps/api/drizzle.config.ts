@@ -1,8 +1,9 @@
 import type { Config } from 'drizzle-kit';
 
 /**
- * Migrations are checked-in SQL files, generated from `schema.ts` and then
- * reviewed like any other code. They are forward-only: an applied migration is
+ * Migrations are checked-in SQL files, generated from `schema.ts` (an index that
+ * re-exports the per-module parts under `schema/`) and then reviewed like any
+ * other code. They are forward-only: an applied migration is
  * never edited. Destructive changes go through expand/contract in two releases.
  *
  * `drizzle-kit push` is banned outside a throwaway local database — CI asserts

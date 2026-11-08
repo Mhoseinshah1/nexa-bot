@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SECRET_COLUMNS } from '../../apps/api/src/infrastructure/crypto/secret-registry';
@@ -20,8 +20,13 @@ import { SECRET_PURPOSES } from '@nexa/contracts';
  * column names are right there in the file.
  */
 describe('the secret column registry', () => {
-  const schemaPath = join(__dirname, '../../apps/api/src/infrastructure/persistence/schema.ts');
-  const schema = readFileSync(schemaPath, 'utf8');
+  // The schema's per-module parts, which `schema.ts` re-exports.
+  const schemaDir = join(__dirname, '../../apps/api/src/infrastructure/persistence/schema');
+  const schema = readdirSync(schemaDir)
+    .filter((file) => file.endsWith('.ts'))
+    .sort()
+    .map((file) => readFileSync(join(schemaDir, file), 'utf8'))
+    .join('\n');
 
   /** Every `text('..._ciphertext')` the schema declares. */
   const declaredCiphertextColumns = (source: string): string[] => [

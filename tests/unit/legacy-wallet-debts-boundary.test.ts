@@ -28,7 +28,7 @@ const MENTION =
 
 const ALLOWED = new Set([
   // The table's definition and the composition root.
-  'apps/api/src/infrastructure/persistence/schema.ts',
+  'apps/api/src/infrastructure/persistence/schema/legacy-history.ts',
   'apps/api/src/container.ts',
   // The importer's read-only plan and reconciliation aggregates.
   'apps/api/src/modules/platform/legacy-importer/infrastructure/drizzle-legacy-importer.repository.ts',

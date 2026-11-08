@@ -89,11 +89,18 @@ for f in "${files[@]}"; do
   # 2. direct importers (repo paths behind ../../, extensionless or NodeNext .js)
   case "$f" in
     *.ts|*.tsx|*.mts)
-      stem="${f%.*}"
-      for d in tests/unit tests/web tests/integration; do
-        while IFS= read -r t; do [[ -n "$t" ]] && add_test "$t"; done \
-          < <(grep_tests "$stem'" "$d"; grep_tests "$stem\"" "$d"
-              grep_tests "$stem.js'" "$d"; grep_tests "$stem.js\"" "$d")
+      stems=("${f%.*}")
+      # A part of a split file is reached through its index: tests import the index.
+      case "$f" in
+        apps/api/src/infrastructure/persistence/schema/*) stems+=(apps/api/src/infrastructure/persistence/schema) ;;
+        apps/web/src/i18n/web.fa/*) stems+=(apps/web/src/i18n/web.fa) ;;
+      esac
+      for stem in "${stems[@]}"; do
+        for d in tests/unit tests/web tests/integration; do
+          while IFS= read -r t; do [[ -n "$t" ]] && add_test "$t"; done \
+            < <(grep_tests "$stem'" "$d"; grep_tests "$stem\"" "$d"
+                grep_tests "$stem.js'" "$d"; grep_tests "$stem.js\"" "$d")
+        done
       done
       ;;
   esac
@@ -111,7 +118,7 @@ for f in "${files[@]}"; do
       checks[money]=1; add_integ_matching '*provision*'; add_integ_matching '*refund*' ;;
   esac
   case "$f" in
-    apps/api/drizzle/*|apps/api/src/infrastructure/persistence/schema.ts|apps/api/src/infrastructure/persistence/migrat*|apps/api/src/infrastructure/persistence/online-indexes.ts)
+    apps/api/drizzle/*|apps/api/src/infrastructure/persistence/schema.ts|apps/api/src/infrastructure/persistence/schema/*|apps/api/src/infrastructure/persistence/migrat*|apps/api/src/infrastructure/persistence/online-indexes.ts)
       checks[migration]=1; add_integ_matching 'migration-*' ;;
   esac
   case "$f" in

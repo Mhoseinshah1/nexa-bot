@@ -55,8 +55,8 @@ layer "surface: gateway"  apps/api/src/surfaces/gateway
 layer "application"       apps/api/src/modules --glob '**/application/**'
 layer "domain"            apps/api/src/modules --glob '**/domain/**'
 layer "module infra"      apps/api/src/modules --glob '**/infrastructure/**'
-layer "infrastructure"    apps/api/src/infrastructure --glob '!**/persistence/schema.ts'
-layer "schema.ts"         apps/api/src/infrastructure/persistence/schema.ts
+layer "infrastructure"    apps/api/src/infrastructure --glob '!**/persistence/schema.ts' --glob '!**/persistence/schema/**'
+layer "schema"            apps/api/src/infrastructure/persistence/schema
 layer "migrations"        apps/api/drizzle --glob '*.sql'
 layer "contracts"         packages/contracts/src
 layer "i18n"              packages/i18n/src
