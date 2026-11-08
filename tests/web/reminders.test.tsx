@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { RemindersPage } from '../../apps/web/src/pages/reminders';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { setDateField } from './ui-helpers';
 import { renderPage, setting, stubApi } from './harness';
 
 /**
@@ -114,6 +113,16 @@ const page = () =>
   renderPage(<RemindersPage mayEdit denied={false} mayViewTemplates mayEditTemplates />);
 
 describe('the reminders screen', () => {
+  it('the head refresh re-reads the feature flags as well as the settings', async () => {
+    const { calls } = api();
+    page();
+    await screen.findByRole('heading', { name: t('web.reminders_expiry_title') });
+    const featureReads = () => calls.filter((c) => c.url.endsWith('/features')).length;
+    const before = featureReads();
+    fireEvent.click(screen.getByRole('button', { name: t('web.list_refresh') }));
+    await waitFor(() => expect(featureReads()).toBeGreaterThan(before));
+  });
+
   it('shows the four families and the usage thresholds as traffic REMAINING', async () => {
     api();
     page();
@@ -313,11 +322,14 @@ describe('the reminders screen', () => {
     expect(card).toHaveTextContent('23:00 ← 08:00');
     fireEvent.click(within(card).getByRole('button', { name: t('web.bx_rem_configure') }));
     const sheet = screen.getByRole('dialog', { name: t('web.reminders_quiet_title') });
-    const start = within(sheet).getByLabelText(t('web.reminders_quiet_start'));
-    const end = within(sheet).getByLabelText(t('web.reminders_quiet_end'));
-    // The fields are the shared 24-hour time field; the card above states their values.
-    expect(start).toHaveAttribute('aria-haspopup', 'dialog');
-    expect(end).toHaveAttribute('aria-haspopup', 'dialog');
+    // The fields are the shared Persian 24-hour picker (hour and minute selects), never a
+    // browser AM/PM input; the card above states their values.
+    const start = within(sheet).getByRole('group', { name: t('web.reminders_quiet_start') });
+    const end = within(sheet).getByRole('group', { name: t('web.reminders_quiet_end') });
+    expect(within(start).getAllByRole('combobox')).toHaveLength(2);
+    expect(within(end).getAllByRole('combobox')).toHaveLength(2);
+    expect(within(start).getByLabelText(/ساعت$/)).toHaveValue('23');
+    expect(sheet.querySelector('input[type="time"]')).toBeNull();
     // 23:00 to 08:00 crosses midnight, and the page says so in words.
     expect(screen.getByText(t('web.reminders_quiet_overnight'))).toBeInTheDocument();
   });
@@ -343,8 +355,9 @@ describe('the reminders screen', () => {
     const card = await screen.findByTestId('reminders-quiet');
     fireEvent.click(within(card).getByRole('button', { name: t('web.bx_rem_configure') }));
     const sheet = screen.getByRole('dialog', { name: t('web.reminders_quiet_title') });
-    const field = within(sheet).getByLabelText(t('web.reminders_quiet_start'));
-    setDateField(field, '22:30');
+    const field = within(sheet).getByRole('group', { name: t('web.reminders_quiet_start') });
+    fireEvent.change(within(field).getByLabelText(/ساعت$/), { target: { value: '22' } });
+    fireEvent.change(within(field).getByLabelText(/دقیقه$/), { target: { value: '30' } });
     fireEvent.click(field.closest('form')!.querySelector('button[type="submit"]')!);
 
     await waitFor(() =>

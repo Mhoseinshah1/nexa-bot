@@ -137,8 +137,8 @@ describe('B2: the bot-buttons builder between 761px and 1180px', () => {
 });
 
 describe('B4, B5: cards that sit side by side end level', () => {
-  it('stretches the referral footer cards to one height', () => {
-    expect(declarations('.referrals-foot')['align-items']).toBe('stretch');
+  it('stretches the cards of one row of the redesign kit to one height (the referral footer is one of them no more)', () => {
+    expect(declarations('.card-row')['align-items']).toBe('stretch');
   });
 
   it('runs the incident side column the height of the summary, its last card taking the rest', () => {

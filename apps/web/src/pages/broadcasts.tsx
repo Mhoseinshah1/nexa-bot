@@ -54,7 +54,14 @@ import {
   uploadBroadcastMedia,
 } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
-import { ListFilterBar } from '../ui/filter-bar';
+import { ListFreshness } from '../ui/list-search';
+import {
+  AttentionStrip,
+  CardRows,
+  KpiRow,
+  QuickFilters,
+  type QuickFilterItem,
+} from '../ui/redesign';
 import { jalaliDatesIn } from './editor-layout';
 import { FilePicker } from '../ui/file-picker';
 import { DateField } from '../ui/date-field';
@@ -70,7 +77,9 @@ import {
   ConfirmDialog,
   CursorPager,
   LIST_PAGE_SIZE,
+  CellMain,
   DataTable,
+  Disclosure,
   Empty,
   Field,
   KV,
@@ -79,7 +88,6 @@ import {
   Progress,
   StatCard,
   StateSwitch,
-  TwoColumn,
   useToast,
   useUnsavedChanges,
   type Column,
@@ -277,25 +285,30 @@ export function BroadcastsPage({
     {
       key: 'title',
       header: t('web.bc_title'),
+      // The kind of message sits under the name (the former «نوع» column, merged).
       render: (row) => (
-        <a href={`/broadcasts/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          {row.title}
-        </a>
+        <CellMain
+          primary={
+            <a
+              href={`/broadcasts/${encodeURIComponent(row.id)}`}
+              onClick={onLink}
+              className="strong"
+            >
+              {row.title}
+            </a>
+          }
+          secondary={
+            <Badge tone="neutral" outline>
+              {t(KIND_LABELS[row.contentKind])}
+            </Badge>
+          }
+        />
       ),
     },
     {
       key: 'state',
       header: t('web.bc_state'),
       render: (row) => <BroadcastStateBadge value={row.state} />,
-    },
-    {
-      key: 'kind',
-      header: t('web.bc_kind'),
-      render: (row) => (
-        <Badge tone="neutral" outline>
-          {t(KIND_LABELS[row.contentKind])}
-        </Badge>
-      ),
     },
     {
       key: 'recipients',
@@ -335,14 +348,16 @@ export function BroadcastsPage({
     <>
       <PageHead
         title={t('web.bc_page_title')}
-        subtitle={t('web.bc_page_intro')}
         actions={
-          maySend ? (
-            <a className="btn primary" href="/broadcasts/new" onClick={onLink}>
-              <Icon name="plus" />
-              {t('web.bc_new')}
-            </a>
-          ) : undefined
+          <>
+            <ListFreshness query={list} hidden={denied} />
+            {maySend ? (
+              <a className="btn primary" href="/broadcasts/new" onClick={onLink}>
+                <Icon name="plus" />
+                {t('web.bc_new')}
+              </a>
+            ) : undefined}
+          </>
         }
       />
       <Card className="bc-list">
@@ -369,6 +384,9 @@ export function BroadcastsPage({
             </>
           )}
         </StateSwitch>
+        <Disclosure size="sm" summary={t('web.bc_about_fold')}>
+          <p className="muted small">{t('web.bc_page_intro')}</p>
+        </Disclosure>
       </Card>
     </>
   );
@@ -1881,40 +1899,23 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
     }
     seenState.current = broadcastState;
   }, [broadcastState, client, id]);
+  const recipientItems: QuickFilterItem<BroadcastRecipientState | 'ALL'>[] = [
+    { key: 'ALL', label: t('web.aud_any') },
+    ...BROADCAST_RECIPIENT_STATES.map((option) => ({
+      key: option as BroadcastRecipientState | 'ALL',
+      label: t(RECIPIENT_LABELS[option]),
+    })),
+  ];
   return (
     <Card title={t('web.bc_recipients')}>
-      <ListFilterBar
-        label={t('web.bc_recipients')}
-        filters={[
-          {
-            key: 'state',
-            label: t('web.bc_state'),
-            active: state === '' ? null : t(RECIPIENT_LABELS[state]),
-            onClear: () => {
-              setState('');
-              setTrail([]);
-            },
-            control: (
-              <select
-                id="bc-r-state"
-                className="input sm"
-                aria-label={t('web.bc_state')}
-                value={state}
-                onChange={(event) => {
-                  setState(event.target.value as BroadcastRecipientState | '');
-                  setTrail([]);
-                }}
-              >
-                <option value="">{t('web.aud_any')}</option>
-                {BROADCAST_RECIPIENT_STATES.map((option) => (
-                  <option key={option} value={option}>
-                    {t(RECIPIENT_LABELS[option])}
-                  </option>
-                ))}
-              </select>
-            ),
-          },
-        ]}
+      <QuickFilters
+        label={t('web.bc_state')}
+        items={recipientItems}
+        value={state === '' ? 'ALL' : state}
+        onChange={(next) => {
+          setState(next === 'ALL' ? '' : next);
+          setTrail([]);
+        }}
       />
       <StateSwitch query={rows}>
         {rows.data === undefined ? null : (
@@ -2121,6 +2122,55 @@ export function BroadcastDetailPage({
               </span>
             }
           />
+          {record.state !== 'DRAFT' && (
+            <>
+              <AttentionStrip
+                items={[
+                  ...(record.state === 'PAUSED'
+                    ? [{ key: 'paused', label: t('web.bc_attn_paused') }]
+                    : []),
+                  ...(record.counts.failed > 0
+                    ? [
+                        {
+                          key: 'failed',
+                          label: t('web.bc_attn_failed'),
+                          count: record.counts.failed,
+                        },
+                      ]
+                    : []),
+                ]}
+              />
+              <KpiRow
+                items={[
+                  {
+                    key: 'recipients',
+                    label: t('web.bc_recipients'),
+                    value: (
+                      <span className="num">
+                        {record.recipientCount === null ? '—' : formatNumber(record.recipientCount)}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'progress',
+                    label: t('web.bc_progress'),
+                    value: (
+                      <span className="num">
+                        {record.progressPercent === null
+                          ? '—'
+                          : `${formatNumber(record.progressPercent)}%`}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'started',
+                    label: t('web.bc_started'),
+                    value: record.startedAt === null ? '—' : formatTimestamp(record.startedAt),
+                  },
+                ]}
+              />
+            </>
+          )}
           {record.state === 'DRAFT' ? (
             <>
               {maySend && (
@@ -2144,25 +2194,33 @@ export function BroadcastDetailPage({
               <HistoryCard id={record.id} broadcastState={record.state} version={record.version} />
             </>
           ) : (
-            <TwoColumn
-              main={
-                <>
-                  <ReportCard record={record} maySend={maySend} />
-                  <BotsCard id={record.id} broadcastState={record.state} />
-                  <FailuresCard id={record.id} broadcastState={record.state} />
-                  <RecipientsCard id={record.id} broadcastState={record.state} />
-                </>
-              }
-              side={
-                <>
-                  {summary}
-                  <HistoryCard
-                    id={record.id}
-                    broadcastState={record.state}
-                    version={record.version}
-                  />
-                </>
-              }
+            <CardRows
+              rows={[
+                {
+                  key: 'report',
+                  main: <ReportCard record={record} maySend={maySend} />,
+                  side: summary,
+                },
+                {
+                  key: 'bots',
+                  main: <BotsCard id={record.id} broadcastState={record.state} />,
+                  side: (
+                    <HistoryCard
+                      id={record.id}
+                      broadcastState={record.state}
+                      version={record.version}
+                    />
+                  ),
+                },
+                {
+                  key: 'failures',
+                  main: <FailuresCard id={record.id} broadcastState={record.state} />,
+                },
+                {
+                  key: 'recipients',
+                  main: <RecipientsCard id={record.id} broadcastState={record.state} />,
+                },
+              ]}
             />
           )}
         </>
