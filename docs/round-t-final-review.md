@@ -189,7 +189,7 @@ Owner column: who should fix it. No finding blocks the round.
 ### F-3 — LOW — "review the draft and publish again" is not the procedure
 
 - **Where:** `docs/deployment.md:1795-1799`, `apps/api/drizzle/0156_round_t_button_builder.sql:12-14`,
-  `packages/contracts/src/bot-menu-builder.ts:440-443`, `web.bb_superseded` (`web.fa.ts:5271`).
+  `packages/contracts/src/bot-menu-builder.ts:440-443`, `web.bb_superseded` (`web.fa/bot-2.ts:392`).
 - **Scenario:** after a superseding legacy write, a publish of the existing draft is refused
   with `control.version_conflict` (the durable baseline, P-5). The operator must first
   reseed from the live keyboard (and, to bring the explicit layout back, restore a revision)

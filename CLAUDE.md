@@ -24,10 +24,12 @@ verbatim — it is binding, not history to skim.**
 | Open owner questions                                                                                                      | `docs/open-questions.md`                                                  |
 
 Never read a file over 800 lines whole: `grep -n`, then read a range. The
-biggest: `apps/api/src/infrastructure/persistence/schema.ts` (~17k lines),
-`packages/contracts/src/templates.ts` (~13.6k), `apps/web/src/i18n/web.fa.ts`
-(~11k), the Telegram router `apps/api/src/surfaces/telegram/bot-runtime.ts`
-and its flows under `apps/api/src/surfaces/telegram/runtime/`. The full list in
+biggest: `packages/contracts/src/templates.ts` (~13.6k lines), the Telegram
+router `apps/api/src/surfaces/telegram/bot-runtime.ts` and its flows under
+`apps/api/src/surfaces/telegram/runtime/`. The schema is one file per module
+under `apps/api/src/infrastructure/persistence/schema/` and the Web Admin's text
+one slice per page group under `apps/web/src/i18n/web.fa/`; `schema.ts` and
+`web.fa.ts` only merge them. The full list in
 `nexa-code-navigation` is a snapshot; the 800-line rule binds. A bot handler's
 file: `bash scripts/claude/module-map.sh --bot <handler>`; `docs/telegram-runtime.md`.
 

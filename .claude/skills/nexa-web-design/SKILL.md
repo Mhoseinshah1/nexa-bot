@@ -42,8 +42,9 @@ carried over are in `references/redesign-status.md`; read it before any visual w
 - **Accessibility:** visible `:focus-visible` rings (base.css), reduced-motion
   honoured, real buttons/links, labelled inputs, dialogs via the kit (focus
   trap, portal). Keyboard reachability is part of done.
-- **Text:** every visible string is a key in `src/i18n/web.fa.ts` (or the shared
-  `@nexa/i18n` catalogue); `pnpm check:i18n`. No literals in pages.
+- **Text:** every visible string is a key in the page group's slice under
+  `src/i18n/web.fa/` (merged by `src/i18n/web.fa.ts`; a new slice gets a line
+  there), or the shared `@nexa/i18n` catalogue; `pnpm check:i18n`. No literals in pages.
 
 ## Behaviour a visual change must never alter
 

@@ -1,6 +1,6 @@
 ---
 name: nexa-migrations
-description: How to write, generate, renumber and verify a database migration in this repository. Use whenever changing apps/api/src/infrastructure/persistence/schema.ts, adding anything under apps/api/drizzle, or resolving a migration-number collision between PRs.
+description: How to write, generate, renumber and verify a database migration in this repository. Use whenever changing the schema (apps/api/src/infrastructure/persistence/schema/, re-exported by schema.ts), adding anything under apps/api/drizzle, or resolving a migration-number collision between PRs.
 ---
 
 # Migrations
@@ -11,7 +11,10 @@ renumber script's behaviour and manual fallback, and the worked examples.
 
 ## The normal path
 
-1. Edit `apps/api/src/infrastructure/persistence/schema.ts`.
+1. Edit the module's file under `apps/api/src/infrastructure/persistence/schema/`
+   (`schema.ts` is the index drizzle-kit reads: a new file gets an `export *` line
+   there). Part files import each other without a cycle; a table whose foreign key
+   would close one lives beside the table it points at.
 2. `pnpm db:generate` — named: `pnpm --filter @nexa/api exec drizzle-kit generate --name add_wallet_entries`.
 3. **Read the generated SQL.** It is the artifact under review.
 4. `pnpm db:migrate`, then the affected integration files through

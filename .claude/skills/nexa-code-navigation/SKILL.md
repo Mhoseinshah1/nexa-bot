@@ -12,9 +12,7 @@ lookup tips; `references/big-files.md` is the full >800-line list.
 **Never read a file over 800 lines whole** — `grep -n`, then `Read` with
 `offset`/`limit`; `wc -l <file>` when unsure. Biggest (2026-10-26):
 
-- `apps/api/src/infrastructure/persistence/schema.ts` ~17k;
-  `packages/contracts/src/templates.ts` ~13.6k; `apps/web/src/i18n/web.fa.ts`
-  ~11k; `apps/api/src/container.ts` ~8.8k;
+- `packages/contracts/src/templates.ts` ~13.6k; `apps/api/src/container.ts` ~8.8k;
   `packages/contracts/src/http.ts` ~7k
 - `apps/api/src/modules/commerce/payments/application/payment.service.ts` ~6k;
   `apps/web/src/api/client.ts` ~5.5k; `apps/web/src/i18n/templates.fa.ts` ~4k;
@@ -80,7 +78,10 @@ generic word (`payment`) returns noise.
 - Gateway webhooks: `apps/api/src/surfaces/gateway/`
 - Business rule, transaction: `apps/api/src/modules/<plane>/<context>/application/*.service.ts`
 - Pure decision: `.../domain/*.ts`; SQL: `.../infrastructure/*.ts`
-- A column: `grep -n "<table>" apps/api/src/infrastructure/persistence/schema.ts`, then ~60 lines
+- A column: `grep -n "'<sql_table>'" apps/api/src/infrastructure/persistence/schema/*.ts`, then
+  ~60 lines (one file per module; `schema.ts` only re-exports them)
+- A Web Admin string: `grep -n "'web.<key>'" apps/web/src/i18n/web.fa/*.ts` (one slice per page
+  group; `web.fa.ts` only merges them)
 - Shared shapes, permissions, states, events: `packages/contracts/src/<concept>.ts`
 - Persian text: `packages/i18n/src/*.fa.ts`, `apps/web/src/i18n/*.fa.ts`
 - Which process runs it: `apps/api/src/main*.ts`; topology: `deploy/compose.yml`, `deploy/bin/botctl`

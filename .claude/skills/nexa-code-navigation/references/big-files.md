@@ -9,7 +9,9 @@ git ls-files | grep -v -e '^docs/research' -e lock | xargs wc -l | awk '$1>800' 
 ```
 
 Left out: `apps/api/drizzle/meta/NNNN_snapshot.json` (37–41k lines each; never open
-one) and binary images under `docs/web-redesign/`. Lines, then path.
+one) and binary images under `docs/web-redesign/`. Lines, then path. `schema.ts` and
+`web.fa.ts` are no longer here: they were split into `persistence/schema/<module>.ts` and
+`i18n/web.fa/<group>.ts`, every part under 1,000 lines.
 
 ## apps/api — modules (80)
 
@@ -116,7 +118,6 @@ one) and binary images under `docs/web-redesign/`. Lines, then path.
 ## apps/api — other (7)
 
 ```text
- 17020 apps/api/src/infrastructure/persistence/schema.ts
   8777 apps/api/src/container.ts
   1611 apps/api/src/legacy-import.cli.ts
   1577 apps/api/src/infrastructure/telegram/send-message.ts
@@ -128,7 +129,6 @@ one) and binary images under `docs/web-redesign/`. Lines, then path.
 ## apps/web (54)
 
 ```text
- 11245 apps/web/src/i18n/web.fa.ts
   5516 apps/web/src/api/client.ts
   4051 apps/web/src/i18n/templates.fa.ts
   3302 apps/web/src/styles/kit.css
