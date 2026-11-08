@@ -407,6 +407,11 @@ describe('LayoutDnd keyboard flow', () => {
     // Without grabbing first, arrows do nothing.
     fireEvent.keyDown(items()[0] as HTMLElement, { key: 'ArrowLeft' });
     expect(items().map((i) => i.dataset['dndItem'])).toEqual(['a', 'b']);
+    // Moving between rows re-parents the item; focus follows it.
+    fireEvent.keyDown(items()[0] as HTMLElement, { key: 'Enter' });
+    fireEvent.keyDown(items()[0] as HTMLElement, { key: 'ArrowDown' });
+    expect(document.activeElement?.getAttribute('data-dnd-item')).toBe('a');
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
     // No up/down/left/right BUTTONS exist.
     expect(screen.queryByRole('button', { name: /بالا|پایین|جدا/ })).toBeNull();
   });

@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -247,6 +248,16 @@ export function LayoutDnd({
   const [announce, setAnnounce] = useState('');
   const dragRef = useRef(drag);
   dragRef.current = drag;
+  const root = useRef<HTMLDivElement>(null);
+  // A keyboard move can re-parent the item (another row, the free box), which remounts it and
+  // drops focus; a grabbed item gets its focus back after every layout change.
+  useEffect(() => {
+    if (grabbed === null) return;
+    const el = root.current?.querySelector<HTMLElement>(
+      `[data-dnd-item="${CSS.escape(grabbed.id)}"]`,
+    );
+    if (el !== null && el !== undefined && document.activeElement !== el) el.focus();
+  }, [layout, grabbed]);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>, id: string) => {
     if (disabled || fixed.includes(id) || event.button !== 0) return;
@@ -372,7 +383,7 @@ export function LayoutDnd({
   };
 
   return (
-    <div className="dnd-layout" role="group" aria-label={label}>
+    <div ref={root} className="dnd-layout" role="group" aria-label={label}>
       <span id="dnd-hint" className="visually-hidden">
         {t('web.kit_dnd_item_hint')}
       </span>
