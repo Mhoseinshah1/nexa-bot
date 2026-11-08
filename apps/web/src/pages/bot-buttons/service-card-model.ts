@@ -42,14 +42,6 @@ export function storedServiceCardRows(rows: ServiceCardRows): ServiceCardRows {
   return isDefaultServiceCardRows(rows) ? [] : rows;
 }
 
-function locate(rows: ServiceCardRows, button: ServiceCardButton) {
-  for (let r = 0; r < rows.length; r += 1) {
-    const c = (rows[r] ?? []).findIndex((entry) => entry.button === button);
-    if (c >= 0) return { r, c };
-  }
-  return null;
-}
-
 /** Show or hide one button. */
 export function setServiceCardEnabled(
   rows: ServiceCardRows,
@@ -61,87 +53,40 @@ export function setServiceCardEnabled(
   );
 }
 
-/** Swap a button with its neighbour in the same row (`delta` -1 earlier, +1 later). */
-export function moveServiceCardWithinRow(
-  rows: ServiceCardRows,
-  button: ServiceCardButton,
-  delta: -1 | 1,
-): ServiceCardRows {
-  const at = locate(rows, button);
-  if (at === null) return rows;
-  const target = at.c + delta;
-  const row = [...(rows[at.r] ?? [])];
-  if (target < 0 || target >= row.length) return rows;
-  [row[at.c], row[target]] = [row[target] as ServiceCardEntry, row[at.c] as ServiceCardEntry];
-  return rows.map((one, index) => (index === at.r ? row : one));
+/**
+ * The rows as the drag-and-drop layout holds them: the buttons that show, row by row, and the
+ * hidden ones as its free box («دکمه‌های حذف‌شده از منو»). A hidden button keeps no place.
+ */
+export function toDndLayout(rows: ServiceCardRows): {
+  readonly rows: string[][];
+  readonly free: string[];
+} {
+  return {
+    rows: rows
+      .map((row) => row.filter((entry) => entry.enabled).map((entry) => entry.button as string))
+      .filter((row) => row.length > 0),
+    free: rows.flatMap((row) =>
+      row.filter((entry) => !entry.enabled).map((entry) => entry.button as string),
+    ),
+  };
 }
 
 /**
- * Move a button to the row above (-1) or below (+1). Into a neighbouring row that has room;
- * past the first or last row it becomes a row of its own, but only if that leaves the row it
- * came from non-empty. A full target row refuses (the same rows come back).
+ * The rows to store after a drop: shown buttons in their rows, hidden ones (the free box) in
+ * trailing rows of up to three, so every button is named once and each row stays one to
+ * three long. `back to list` is not here: the bot always draws it last.
  */
-export function moveServiceCardAcrossRows(
-  rows: ServiceCardRows,
-  button: ServiceCardButton,
-  direction: -1 | 1,
-): ServiceCardRows {
-  const at = locate(rows, button);
-  if (at === null) return rows;
-  const entry = (rows[at.r] as readonly ServiceCardEntry[])[at.c] as ServiceCardEntry;
-  const sourceAlone = (rows[at.r] as readonly ServiceCardEntry[]).length === 1;
-  const targetIndex = at.r + direction;
-  const without = rows.map((row) => row.filter((one) => one.button !== button));
-  if (targetIndex < 0 || targetIndex >= rows.length) {
-    if (sourceAlone) return rows;
-    const next = [...without];
-    if (direction < 0) next.unshift([entry]);
-    else next.push([entry]);
-    return next;
-  }
-  const target = without[targetIndex] as readonly ServiceCardEntry[];
-  if (target.length >= SERVICE_CARD_ROW_MAX) return rows;
-  const merged = [...target];
-  if (direction < 0) merged.push(entry);
-  else merged.unshift(entry);
-  return without
-    .map((row, index) => (index === targetIndex ? merged : row))
-    .filter((row) => row.length > 0);
-}
-
-/** Take a button out of a shared row into a row of its own, just below. */
-export function splitServiceCardButton(
-  rows: ServiceCardRows,
-  button: ServiceCardButton,
-): ServiceCardRows {
-  const at = locate(rows, button);
-  if (at === null) return rows;
-  const row = rows[at.r] as readonly ServiceCardEntry[];
-  if (row.length === 1) return rows;
-  const entry = row[at.c] as ServiceCardEntry;
-  const next: (readonly ServiceCardEntry[])[] = [];
-  rows.forEach((one, index) => {
-    if (index !== at.r) next.push(one);
-    else {
-      next.push(one.filter((candidate) => candidate.button !== button));
-      next.push([entry]);
-    }
+export function fromDndLayout(next: {
+  readonly rows: readonly (readonly string[])[];
+  readonly free: readonly string[];
+}): ServiceCardRows {
+  const shown = next.rows
+    .filter((row) => row.length > 0)
+    .map((row) => row.map((button) => ({ button: button as ServiceCardButton, enabled: true })));
+  const hidden: ServiceCardEntry[][] = [];
+  next.free.forEach((button, index) => {
+    if (index % SERVICE_CARD_ROW_MAX === 0) hidden.push([]);
+    hidden[hidden.length - 1]?.push({ button: button as ServiceCardButton, enabled: false });
   });
-  return next;
-}
-
-/** Swap a whole row with its neighbour. */
-export function moveServiceCardRow(
-  rows: ServiceCardRows,
-  index: number,
-  delta: -1 | 1,
-): ServiceCardRows {
-  const target = index + delta;
-  if (index < 0 || index >= rows.length || target < 0 || target >= rows.length) return rows;
-  const next = [...rows];
-  [next[index], next[target]] = [
-    next[target] as readonly ServiceCardEntry[],
-    next[index] as readonly ServiceCardEntry[],
-  ];
-  return next;
+  return [...shown, ...hidden];
 }

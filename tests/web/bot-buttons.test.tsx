@@ -301,7 +301,7 @@ describe('«دکمه‌های ربات»', () => {
     api();
     renderPage(page());
     await waitFor(() => expect(chip('trial')).not.toBeNull());
-    const placed = [...document.querySelectorAll('.bb-row [data-chip]')].map((one) =>
+    const placed = [...document.querySelectorAll('.dnd-row [data-chip]')].map((one) =>
       one.getAttribute('data-chip'),
     );
     expect(placed).toEqual(MAIN_MENU_BUTTONS.map((button) => button.id));
@@ -315,7 +315,7 @@ describe('«دکمه‌های ربات»', () => {
     expect(
       within(chip('trial') as HTMLElement).getByText(t('web.bb_hidden_now')),
     ).toBeInTheDocument();
-    fireEvent.click(document.querySelector('[data-chip-button="trial"]') as HTMLElement);
+    fireEvent.focus(document.querySelector('[data-dnd-item="trial"]') as HTMLElement);
     const gate = within(screen.getByTestId('bb-gate'));
     expect(gate.getByText(t('web.bot_buttons_needs_trial_offer'))).toBeInTheDocument();
     expect(
@@ -323,13 +323,13 @@ describe('«دکمه‌های ربات»', () => {
     ).toBeInTheDocument();
     // The target is shown, read-only, as the command the button opens.
     expect(within(screen.getByTestId('bb-inspector')).getByText('/trial')).toBeInTheDocument();
-    fireEvent.click(document.querySelector('[data-chip-button="referral"]') as HTMLElement);
+    fireEvent.focus(document.querySelector('[data-dnd-item="referral"]') as HTMLElement);
     expect(
       within(screen.getByTestId('bb-gate')).getByText(t('web.bot_buttons_feature_off'), {
         exact: false,
       }),
     ).toBeInTheDocument();
-    fireEvent.click(document.querySelector('[data-chip-button="catalog"]') as HTMLElement);
+    fireEvent.focus(document.querySelector('[data-dnd-item="catalog"]') as HTMLElement);
     expect(screen.queryByTestId('bb-gate')).toBeNull();
     // The customer preview is the keyboard the bot would draw: no gated button while its
     // gate is shut.

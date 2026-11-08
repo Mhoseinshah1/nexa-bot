@@ -171,7 +171,7 @@ const render = (options: { mayViewCatalog?: boolean; mayEdit?: boolean } = {}) =
 
 const openStanding = async () => {
   await screen.findByText('Reza Reseller');
-  fireEvent.click(screen.getByRole('button', { name: t('web.reseller_standing_open') }));
+  fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
 };
 
 const openProducts = async () => {
@@ -537,7 +537,9 @@ describe('the allowed-products tab', () => {
     fireEvent.click(screen.getByRole('button', { name: t('web.rs_filter_denied') }));
     expect(chip('پلن ب')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'پلن الف' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: t('web.rs_filter_all') }));
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: t('web.rs_filter_all') }),
+    );
     expect(chip('پلن الف')).toBeInTheDocument();
   });
 

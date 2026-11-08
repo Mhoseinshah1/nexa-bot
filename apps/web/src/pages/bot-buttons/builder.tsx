@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   customerRowsOf,
@@ -45,32 +45,24 @@ import { ErrorReport } from '../settings';
 import { useReportDirty } from '../ops-b-layout';
 import { TelegramPhone } from '../telegram-phone';
 import {
-  EditableKeyboard,
   fill,
   labelOf,
-  Pool,
+  MenuDndCanvas,
   PreviewKeyboard,
   type ChipContext,
   type PreviewKey,
 } from './canvas';
-import { usePointerDrag, type DragSource, type DropTarget } from './dnd';
 import { HistoryDrawer, REVISIONS_QUERY_KEY } from './history';
 import { CustomButtonsPanel, CUSTOM_BUTTONS_QUERY_KEY } from './custom-buttons';
 import { Inspector } from './inspector';
 import {
-  applyDrop,
   customVisibleOf,
   diffLayouts,
   gateAnswersOf,
   lookOf,
-  moveEarlier,
-  moveLater,
-  moveToNextRow,
-  moveToPreviousRow,
-  placeInNewRow,
   positionOf,
-  removeToPool,
   rowLooksCramped,
+  withDroppedRows,
   withoutUnusableCustom,
   type ButtonChange,
 } from './model';
@@ -217,7 +209,6 @@ export function MenuBuilder({
     | null
   >(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const focusChip = useRef<MainMenuRowItem | null>(null);
   const publishRef = useRef<HTMLButtonElement>(null);
 
   const items = useMemo(
@@ -299,87 +290,18 @@ export function MenuBuilder({
   // --- edits ------------------------------------------------------------------------
 
   const registryItem = (id: MainMenuRowItem) => (isCustomMenuRef(id) ? undefined : items.get(id));
-  const describePlace = (next: ExplicitMainMenu, id: MainMenuRowItem): string => {
-    const label = labelOf(id, registryItem(id), customs.get(id));
-    const at = positionOf(next, id);
-    return at === null
-      ? fill(t('web.bb_announce_pool'), { label })
-      : fill(t('web.bb_announce_moved'), { label, row: at.row + 1, index: at.index + 1 });
-  };
-  const onMove = (id: MainMenuRowItem, op: (l: ExplicitMainMenu) => ExplicitMainMenu) => {
-    if (!editable) return;
-    const next = op(layout);
-    if (explicitMainMenusEqual(next, layout)) return;
-    setSeed({ basis: seed.basis, layout: next });
-    setSelected(id);
-    focusChip.current = id;
-    say(describePlace(next, id));
-  };
   const onChange = (op: (l: ExplicitMainMenu) => ExplicitMainMenu, text: string) => {
     if (!editable) return;
     setSeed({ basis: seed.basis, layout: op(layout) });
     say(text);
   };
 
-  // After a move the selected chip may have been re-mounted in another row, and the control
-  // pressed may now be disabled: focus goes back to the chip, never to the page body.
-  useEffect(() => {
-    const id = focusChip.current;
-    if (id === null) return;
-    focusChip.current = null;
-    const active = document.activeElement;
-    const lost =
-      active === null ||
-      active === document.body ||
-      (active instanceof HTMLButtonElement && active.disabled) ||
-      active.closest('[data-chip]') !== null;
-    if (lost) {
-      document.querySelector<HTMLElement>(`[data-chip-button="${id}"]`)?.focus();
-    }
-  });
-
-  /**
-   * A drop: the model's `applyDrop` decides what it does — the same primitives as every
-   * other move — and a drop that would change nothing (the same place, a row onto a key)
-   * changes nothing and says nothing.
-   */
-  const onDrop = (source: DragSource, target: DropTarget) => {
+  /** A drag, a drop or a keyboard move in the kit's layout: the draft takes its rows. */
+  const onRows = (rows: readonly (readonly MainMenuRowItem[])[]) => {
     if (!editable) return;
-    const next = applyDrop(layout, source, target);
-    if (next === null) return;
-    if (source.kind === 'row') {
-      setSeed({ basis: seed.basis, layout: next });
-      say(fill(t('web.bb_announce_row'), { from: source.row + 1 }));
-      return;
-    }
-    onMove(source.id, () => next);
-  };
-  const drag = usePointerDrag(editable, onDrop);
-
-  /**
-   * Keyboard moves on a focused button — the same primitives the Inspector calls. Alt with
-   * the arrows: up and down change row; the arrow pointing to the start of the line (right,
-   * in Persian) moves earlier. Delete takes the button back to the pool.
-   */
-  const onKey = (id: MainMenuRowItem, event: KeyboardEvent<HTMLButtonElement>) => {
-    if (!editable) return;
-    const rtl = document.documentElement.dir !== 'ltr';
-    const placed = positionOf(layout, id) !== null;
-    let op: ((l: ExplicitMainMenu) => ExplicitMainMenu) | null = null;
-    if (event.altKey && event.key === 'ArrowUp') op = (l) => moveToPreviousRow(l, id);
-    else if (event.altKey && event.key === 'ArrowDown') op = (l) => moveToNextRow(l, id);
-    else if (event.altKey && event.key === (rtl ? 'ArrowRight' : 'ArrowLeft')) {
-      op = (l) => moveEarlier(l, id);
-    } else if (event.altKey && event.key === (rtl ? 'ArrowLeft' : 'ArrowRight')) {
-      op = (l) => moveLater(l, id);
-    } else if (placed && (event.key === 'Delete' || event.key === 'Backspace')) {
-      op = (l) => removeToPool(l, id);
-    } else if (!placed && event.altKey && event.key === 'Enter') {
-      op = (l) => placeInNewRow(l, id, l.rows.length);
-    }
-    if (op === null) return;
-    event.preventDefault();
-    onMove(id, op);
+    const next = withDroppedRows(layout, rows);
+    if (explicitMainMenusEqual(next, layout)) return;
+    setSeed({ basis: seed.basis, layout: next });
   };
 
   const context: ChipContext = {
@@ -389,9 +311,8 @@ export function MenuBuilder({
     customMenuEnabled: view.customMenuEnabled,
     selected,
     editable,
-    drag,
     onSelect: (id) => setSelected(id),
-    onKey,
+    onRows,
   };
 
   // --- writes -----------------------------------------------------------------------
@@ -762,7 +683,6 @@ export function MenuBuilder({
       )}
 
       <div className="bb-workspace">
-        <Pool context={context} />
         <section className="bb-canvas" aria-labelledby="bb-canvas-title">
           <div className="bb-canvas-head">
             <h3 id="bb-canvas-title" className="bb-pane-title">
@@ -788,39 +708,40 @@ export function MenuBuilder({
               ))}
             </ButtonGroup>
           </div>
-          <TelegramPhone
-            title={phoneTitle}
-            keyboard={
-              mode === 'edit' ? (
-                <EditableKeyboard context={context} />
-              ) : mode === 'customer' ? (
-                <PreviewKeyboard
-                  rows={customerRows}
-                  label={t('web.bb_mode_customer')}
-                  testId="bb-customer-preview"
-                />
-              ) : (
-                <PreviewKeyboard
-                  rows={liveRows}
-                  label={t('web.bb_mode_live')}
-                  testId="bb-live-preview"
-                />
-              )
-            }
-          >
-            <p className="tg-phone-note">
-              {t(
-                mode === 'edit'
-                  ? 'web.bb_mode_edit_note'
-                  : mode === 'customer'
-                    ? 'web.bb_mode_customer_note'
-                    : 'web.bb_mode_live_note',
+          {mode === 'edit' && (
+            <>
+              <MenuDndCanvas context={context} />
+              <p className="muted small">{t('web.bb_mode_edit_note')}</p>
+              <p className="muted small">{t('web.bb_pool_hint')}</p>
+            </>
+          )}
+          {mode !== 'edit' && (
+            <TelegramPhone
+              title={phoneTitle}
+              keyboard={
+                mode === 'customer' ? (
+                  <PreviewKeyboard
+                    rows={customerRows}
+                    label={t('web.bb_mode_customer')}
+                    testId="bb-customer-preview"
+                  />
+                ) : (
+                  <PreviewKeyboard
+                    rows={liveRows}
+                    label={t('web.bb_mode_live')}
+                    testId="bb-live-preview"
+                  />
+                )
+              }
+            >
+              <p className="tg-phone-note">
+                {t(mode === 'customer' ? 'web.bb_mode_customer_note' : 'web.bb_mode_live_note')}
+              </p>
+              {mode === 'customer' && customerRows.length === 0 && (
+                <p className="tg-phone-note">{t('web.bot_buttons_preview_empty')}</p>
               )}
-            </p>
-            {mode === 'customer' && customerRows.length === 0 && (
-              <p className="tg-phone-note">{t('web.bot_buttons_preview_empty')}</p>
-            )}
-          </TelegramPhone>
+            </TelegramPhone>
+          )}
           {crampedRows.length > 0 && (
             <Banner tone="warn">
               {fill(t('web.bb_rows_cramped'), { rows: crampedRows.join(t('web.bb_sep')) })}
@@ -846,7 +767,6 @@ export function MenuBuilder({
           iconEligibility={view.iconEligibility}
           appearanceSlots={appearance.data?.slots ?? null}
           mayViewTemplates={mayViewTemplates}
-          onMove={onMove}
           onChange={onChange}
           onEditLabel={onEditLabel}
         />

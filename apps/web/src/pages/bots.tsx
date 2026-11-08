@@ -26,6 +26,7 @@ import {
   Banner,
   ConfirmDialog,
   Copyable,
+  Disclosure,
   Drawer,
   Empty,
   Field,
@@ -38,6 +39,7 @@ import {
   SecretInput,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ListFreshness } from '../ui/list-search';
 import { ErrorRef, ProviderText } from '../ui/technical-details';
 import { SummaryPill } from './editor-layout';
 
@@ -204,7 +206,11 @@ export function BotsPage({
 
   return (
     <>
-      <PageHead title={t('web.nav_bots')} subtitle={t('web.bots_subtitle')} />
+      <PageHead
+        title={t('web.nav_bots')}
+        {...(bots.data === undefined ? {} : { count: rows.length })}
+        actions={<ListFreshness query={bots} />}
+      />
 
       <StateSwitch
         query={bots}
@@ -227,6 +233,10 @@ export function BotsPage({
           />
         ))}
       </StateSwitch>
+
+      <Disclosure summary={t('web.bots_rules_fold')} className="bx-rules">
+        <p className="muted small">{t('web.bots_subtitle')}</p>
+      </Disclosure>
 
       <section className="bx-add" aria-labelledby="bots-add-title">
         <h2 id="bots-add-title" className="bx-add-h">

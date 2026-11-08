@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { ListFilterBar } from '../ui/filter-bar';
 import { Drawer, Modal } from '../ui/overlays';
-import { chipFilter } from './money-filters';
+import { QuickFilters } from '../ui/redesign';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import {
@@ -35,6 +35,7 @@ import {
   Banner,
   Card,
   CursorPager,
+  Disclosure,
   DataTable,
   Empty,
   Field,
@@ -51,8 +52,9 @@ import {
   type Tone,
   Num,
 } from '../ui/kit';
+import { formatTimestamp } from '../format';
 import { Icon } from '../ui/icons';
-import { listRouteKey, useDebouncedApply } from '../ui/list-search';
+import { ListFreshness, listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { SaveBar } from './editor-layout';
 import { ResellerStandingView } from './reseller-edit';
 import { usePolicyKeys } from './reseller-plans';
@@ -174,21 +176,35 @@ export function limitWire(limit: { amount: string; currency: CurrencyCode }): Mo
 }
 
 /** The name an operator recognises, falling back to the Telegram id that always exists. */
-export function ResellerCell({ reseller }: { reseller: ResellerSummaryResponse }) {
+export function ResellerCell({
+  reseller,
+  onOpen,
+}: {
+  reseller: ResellerSummaryResponse;
+  /** On the list: the name opens the standing; the customer page is a link beside the actions. */
+  onOpen?: () => void;
+}) {
   const onLink = useLinkHandler();
+  const name = reseller.displayName ?? <Ltr>{reseller.telegramUserId}</Ltr>;
   return (
     <div className="resellers-who">
       <span className="avatar" aria-hidden="true">
         {initialOf(reseller)}
       </span>
       <div>
-        <a
-          href={`/users/${encodeURIComponent(reseller.customerId)}`}
-          onClick={onLink}
-          className="strong"
-        >
-          {reseller.displayName ?? <Ltr>{reseller.telegramUserId}</Ltr>}
-        </a>
+        {onOpen === undefined ? (
+          <a
+            href={`/users/${encodeURIComponent(reseller.customerId)}`}
+            onClick={onLink}
+            className="strong"
+          >
+            {name}
+          </a>
+        ) : (
+          <button type="button" className="link strong" onClick={onOpen}>
+            {name}
+          </button>
+        )}
         {reseller.displayName !== null && (
           <div className="muted small">
             <Ltr>{reseller.telegramUserId}</Ltr>
@@ -366,11 +382,21 @@ export function ResellersPage({
     },
   });
 
+  /** The name opens the standing; moving to another reseller asks about unsaved edits first. */
+  const openStanding = (row: ResellerSummaryResponse) => {
+    const open = () => {
+      if (registerOpen) closeRegister();
+      setViewing(row.customerId);
+    };
+    if (viewing !== null && viewing !== row.customerId) discard.confirmDiscard(open);
+    else open();
+  };
+
   const columns: readonly Column<ResellerSummaryResponse>[] = [
     {
       key: 'reseller',
       header: t('web.reseller_customer'),
-      render: (row) => <ResellerCell reseller={row} />,
+      render: (row) => <ResellerCell reseller={row} onOpen={() => openStanding(row)} />,
     },
     {
       key: 'tier',
@@ -394,29 +420,30 @@ export function ResellersPage({
       ),
     },
     {
+      key: 'expiry',
+      header: t('web.rs_summary_expiry'),
+      render: (row) =>
+        row.expiresAt === null ? (
+          <span className="muted">{t('web.reseller_expiry_none')}</span>
+        ) : (
+          formatTimestamp(row.expiresAt)
+        ),
+    },
+    {
       key: 'actions',
       header: t('web.rule_actions'),
       align: 'end',
       // Nothing for a reader. The header stays, so two operators describe one table.
       render: (row) => (
         <RowActions>
-          <Button
-            size="sm"
-            variant="ghost"
-            icon="eye"
-            onClick={() => {
-              const open = () => {
-                if (registerOpen) closeRegister();
-                setViewing(row.customerId);
-              };
-              // The standing moves to another reseller and remounts: unsaved edits are asked about.
-              if (viewing !== null && viewing !== row.customerId) {
-                discard.confirmDiscard(open);
-              } else open();
-            }}
+          <a
+            className="btn sm ghost"
+            href={`/users/${encodeURIComponent(row.customerId)}`}
+            onClick={onLink}
           >
-            {t('web.reseller_standing_open')}
-          </Button>
+            <Icon name="user" size={14} />
+            {t('web.reseller_customer_page')}
+          </a>
           {mayEdit && (
             <Button
               size="sm"
@@ -444,9 +471,9 @@ export function ResellersPage({
     <>
       <PageHead
         title={t('web.resellers_title')}
-        subtitle={t('web.resellers_intro')}
         actions={
           <>
+            <ListFreshness query={resellers} hidden={denied} />
             <a className="btn" href="/reseller-tiers" onClick={onLink}>
               <Icon name="layers" />
               {t('web.nav_reseller_tiers')}
@@ -477,7 +504,40 @@ export function ResellersPage({
         }
       />
 
-      <Card title={t('web.resellers_list_title')} hint={t('web.resellers_list_hint')}>
+      <Disclosure size="sm" summary={t('web.resellers_scope_title')}>
+        <p className="muted small">{t('web.resellers_intro')}</p>
+        <p className="muted small">{t('web.resellers_list_hint')}</p>
+        <ul className="cb-notes">
+          <li>{t('web.resellers_rule_identity')}</li>
+          <li>{t('web.resellers_rule_credit')}</li>
+          <li>{t('web.resellers_rule_suspend')}</li>
+        </ul>
+        <p>
+          <a href="/reseller-tiers" onClick={onLink}>
+            {t('web.resellers_tiers_link')}
+          </a>
+          {t('web.list_separator')}
+          <a href="/reseller-plans" onClick={onLink}>
+            {t('web.reseller_plans_title')}
+          </a>
+        </p>
+      </Disclosure>
+
+      <Card>
+        <div hidden={!mayRequest(resellers, denied)}>
+          <QuickFilters
+            label={t('web.reseller_status_filter')}
+            items={[
+              { key: 'ALL', label: t('web.reseller_status_all') },
+              ...RESELLER_STATUSES.map((one) => ({
+                key: one as StatusFilter,
+                label: t(RESELLER_STATUS_LABELS[one]),
+              })),
+            ]}
+            value={status}
+            onChange={setStatus}
+          />
+        </div>
         {/* Hidden while the list cannot answer: a filter mints a request the server has
             just refused. */}
         <div className="cb-filters" hidden={!mayRequest(resellers, denied)}>
@@ -541,17 +601,6 @@ export function ResellersPage({
                   </select>
                 ),
               },
-              chipFilter({
-                key: 'status',
-                label: t('web.status'),
-                value: status === 'ALL' ? null : status,
-                allLabel: t('web.reseller_status_all'),
-                onChange: (next) => setStatus(next ?? 'ALL'),
-                items: RESELLER_STATUSES.map((one) => ({
-                  id: one,
-                  label: t(RESELLER_STATUS_LABELS[one]),
-                })),
-              }),
             ]}
           />
         </div>
@@ -670,24 +719,6 @@ export function ResellersPage({
         />
       </Modal>
 
-      <div className="resellers-foot">
-        <Card title={t('web.resellers_scope_title')} tone="muted">
-          <ul className="cb-notes">
-            <li>{t('web.resellers_rule_identity')}</li>
-            <li>{t('web.resellers_rule_credit')}</li>
-            <li>{t('web.resellers_rule_suspend')}</li>
-          </ul>
-          <p>
-            <a href="/reseller-tiers" onClick={onLink}>
-              {t('web.resellers_tiers_link')}
-            </a>
-            {t('web.list_separator')}
-            <a href="/reseller-plans" onClick={onLink}>
-              {t('web.reseller_plans_title')}
-            </a>
-          </p>
-        </Card>
-      </div>
       {discard.dialog}
     </>
   );

@@ -41,6 +41,7 @@ import {
   Badge,
   Banner,
   Card,
+  Disclosure,
   Checkbox,
   Copyable,
   DataTable,
@@ -57,6 +58,7 @@ import {
   useToast,
   type Column,
 } from '../ui/kit';
+import { ListFreshness } from '../ui/list-search';
 import { Icon } from '../ui/icons';
 import { SaveBar } from './editor-layout';
 import { Drawer } from '../ui/overlays';
@@ -388,7 +390,16 @@ export function ResellerTiersPage({
     {
       key: 'name',
       header: t('web.reseller_tier_name'),
-      render: (row) => <span className="strong">{row.name}</span>,
+      // The name is the way in: the edit drawer, or the read-only grants without the edit key.
+      render: (row) => (
+        <button
+          type="button"
+          className="link strong"
+          onClick={() => (mayEdit ? setEditingId(row.id) : setGrantsId(row.id))}
+        >
+          {row.name}
+        </button>
+      ),
     },
     {
       key: 'pricing',
@@ -440,9 +451,9 @@ export function ResellerTiersPage({
     <>
       <PageHead
         title={t('web.reseller_tiers_title')}
-        subtitle={t('web.reseller_tiers_intro')}
         actions={
           <>
+            <ListFreshness query={tiers} hidden={denied} />
             <a className="btn" href="/resellers" onClick={onLink}>
               <Icon name="resellers" />
               {t('web.nav_resellers')}
@@ -455,11 +466,23 @@ export function ResellerTiersPage({
         }
       />
 
-      <Card
-        className="tiers-list"
-        title={t('web.reseller_tiers_list_title')}
-        hint={t('web.reseller_tiers_list_hint')}
-      >
+      <Disclosure size="sm" summary={t('web.reseller_tiers_scope_title')}>
+        <p className="muted small">{t('web.reseller_tiers_intro')}</p>
+        <p className="muted small">{t('web.reseller_tiers_list_hint')}</p>
+        <ul className="cb-notes">
+          <li>{t('web.reseller_tiers_rule_deny')}</li>
+          <li>{t('web.reseller_tiers_rule_four')}</li>
+          <li>{t('web.reseller_tiers_rule_no_delete')}</li>
+          <li>{t('web.reseller_tiers_rule_future')}</li>
+        </ul>
+        <p>
+          <a href="/resellers" onClick={onLink}>
+            {t('web.reseller_tiers_resellers_link')}
+          </a>
+        </p>
+      </Disclosure>
+
+      <Card className="tiers-list">
         <StateSwitch
           query={tiers}
           denied={denied}
@@ -559,29 +582,13 @@ export function ResellerTiersPage({
         )}
       </Drawer>
 
-      <div className="grid-2 tiers-foot">
-        {denied ? null : !mayEdit ? (
-          <Card title={t('web.reseller_tier_new_title')}>
-            <Banner tone="info">{t('web.reseller_tier_edit_denied')}</Banner>
-          </Card>
-        ) : (
-          <TierForm onDone={() => undefined} onDirtyChange={discard.onDirtyChange} />
-        )}
-
-        <Card title={t('web.reseller_tiers_scope_title')} tone="muted">
-          <ul className="cb-notes">
-            <li>{t('web.reseller_tiers_rule_deny')}</li>
-            <li>{t('web.reseller_tiers_rule_four')}</li>
-            <li>{t('web.reseller_tiers_rule_no_delete')}</li>
-            <li>{t('web.reseller_tiers_rule_future')}</li>
-          </ul>
-          <p>
-            <a href="/resellers" onClick={onLink}>
-              {t('web.reseller_tiers_resellers_link')}
-            </a>
-          </p>
+      {denied ? null : !mayEdit ? (
+        <Card title={t('web.reseller_tier_new_title')}>
+          <Banner tone="info">{t('web.reseller_tier_edit_denied')}</Banner>
         </Card>
-      </div>
+      ) : (
+        <TierForm onDone={() => undefined} onDirtyChange={discard.onDirtyChange} />
+      )}
       {discard.dialog}
       {editGuard.dialog}
       {pricesGuard.dialog}

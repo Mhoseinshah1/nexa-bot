@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { QrTemplateSection } from '../../apps/web/src/pages/qr-template';
+import { moveSquare, resizeSquare } from '../../apps/web/src/pages/qr-placement';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, setting, stubApi } from './harness';
 import { buildPng, ihdr, pngFromChunks } from '../support/png-build';
@@ -88,6 +89,23 @@ const bytes = (buffer: Buffer): Uint8Array<ArrayBuffer> => Uint8Array.from(buffe
 function pick(file: File) {
   fireEvent.change(input('qrt-file'), { target: { files: [file] } });
 }
+
+describe('the placement square keeps inside the image', () => {
+  const bounds = { width: 800, height: 700 };
+  it('moves by the pointer distance and stops at every edge', () => {
+    const square = { x: 100, y: 100, size: 300 };
+    expect(moveSquare(square, 50, -20, bounds)).toEqual({ x: 150, y: 80, size: 300 });
+    expect(moveSquare(square, -999, -999, bounds)).toEqual({ x: 0, y: 0, size: 300 });
+    expect(moveSquare(square, 999, 999, bounds)).toEqual({ x: 500, y: 400, size: 300 });
+  });
+
+  it('resizes from the corner: never below the minimum side, never past the image', () => {
+    const square = { x: 600, y: 100, size: 150 };
+    expect(resizeSquare(square, 500, bounds)).toEqual({ x: 600, y: 100, size: 200 });
+    expect(resizeSquare(square, -500, bounds)).toEqual({ x: 600, y: 100, size: 128 });
+    expect(resizeSquare({ x: 0, y: 0, size: 200 }, 900, bounds).size).toBe(700);
+  });
+});
 
 describe('«پس‌زمینهٔ QR اشتراک»', () => {
   it('says the plain QR is in force by default, and shows the server preview', async () => {
@@ -337,5 +355,85 @@ describe('«پس‌زمینهٔ QR اشتراک»', () => {
     await waitFor(() => expect(first.closest('figure')?.getAttribute('aria-busy')).toBe('true'));
     expect(screen.getByTestId('qrt-preview')).toBe(first);
     expect(screen.queryByText(t('web.qrt_preview_loading'))).toBeNull();
+  });
+});
+
+describe('«جای QR روی پس‌زمینه» — the square on the preview', () => {
+  async function ready() {
+    const calls = api({ template: TEMPLATE, version: 4, media: MEDIA });
+    renderPage(<QrTemplateSection mayEdit />);
+    await waitFor(() => expect(screen.getByTestId('qrt-square')).toBeTruthy());
+    return calls;
+  }
+  const box = () =>
+    screen.getByTestId('qrt-square').querySelector('.qrt-square-box') as SVGRectElement;
+
+  it('draws the square where the numbers say, and the quiet-zone field stays beside it', async () => {
+    await ready();
+    expect(box().getAttribute('x')).toBe('150');
+    expect(box().getAttribute('y')).toBe('120');
+    expect(box().getAttribute('width')).toBe('420');
+    expect(screen.getByText(t('web.qrt_quiet'))).toBeTruthy();
+    expect(input('qrt-quiet').value).toBe('4');
+  });
+
+  it('dragging the square updates x and y, and stays inside the image', async () => {
+    await ready();
+    fireEvent.pointerDown(box(), { pointerId: 1, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(box(), { pointerId: 1, clientX: 40, clientY: 30 });
+    expect(input('qrt-x').value).toBe('180');
+    expect(input('qrt-y').value).toBe('140');
+    // Far past the edge: clamped (800 - 420 = 380, 700 - 420 = 280).
+    fireEvent.pointerMove(box(), { pointerId: 1, clientX: 5000, clientY: 5000 });
+    expect(input('qrt-x').value).toBe('380');
+    expect(input('qrt-y').value).toBe('280');
+    fireEvent.pointerUp(box(), { pointerId: 1 });
+    // Released: further movement does nothing.
+    fireEvent.pointerMove(box(), { pointerId: 1, clientX: 0, clientY: 0 });
+    expect(input('qrt-x').value).toBe('380');
+  });
+
+  it('dragging the corner handle resizes, never past the image or under the minimum', async () => {
+    await ready();
+    const handle = screen.getByTestId('qrt-handle');
+    fireEvent.pointerDown(handle, { pointerId: 2, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(handle, { pointerId: 2, clientX: -10, clientY: -30 });
+    expect(input('qrt-size').value).toBe('410');
+    fireEvent.pointerMove(handle, { pointerId: 2, clientX: 5000, clientY: 5000 });
+    // x = 150, y = 120: the room is min(800 - 150, 700 - 120) = 580.
+    expect(input('qrt-size').value).toBe('580');
+    fireEvent.pointerMove(handle, { pointerId: 2, clientX: -5000, clientY: -5000 });
+    expect(input('qrt-size').value).toBe('128');
+    fireEvent.pointerUp(handle, { pointerId: 2 });
+  });
+
+  it('moves and resizes from the keyboard, numbers in sync, saves the existing fields only', async () => {
+    const calls = await ready();
+    box().focus();
+    fireEvent.keyDown(box(), { key: 'ArrowRight' });
+    fireEvent.keyDown(box(), { key: 'ArrowDown', shiftKey: true });
+    fireEvent.keyDown(box(), { key: '+' });
+    expect(input('qrt-x').value).toBe('151');
+    expect(input('qrt-y').value).toBe('130');
+    expect(input('qrt-size').value).toBe('421');
+    fireEvent.click(screen.getByRole('button', { name: t('web.qrt_save') }));
+    await waitFor(() => expect(posts(calls, '/settings/delivery.qr_template')).toHaveLength(1));
+    expect(posts(calls, '/settings/delivery.qr_template')[0]?.body).toMatchObject({
+      value: { x: 151, y: 130, size: 421, quietZoneModules: 4 },
+    });
+  });
+
+  it('typing the numbers moves the square, and a viewer without settings.edit cannot drag it', async () => {
+    await ready();
+    fireEvent.change(input('qrt-x'), { target: { value: '200' } });
+    expect(box().getAttribute('x')).toBe('200');
+    cleanup();
+    api({ template: TEMPLATE, version: 4, media: MEDIA });
+    renderPage(<QrTemplateSection mayEdit={false} />);
+    await waitFor(() => expect(screen.getByTestId('qrt-square')).toBeTruthy());
+    expect(screen.queryByTestId('qrt-handle')).toBeNull();
+    fireEvent.pointerDown(box(), { pointerId: 1, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(box(), { pointerId: 1, clientX: 90, clientY: 90 });
+    expect(input('qrt-x').value).toBe('150');
   });
 });

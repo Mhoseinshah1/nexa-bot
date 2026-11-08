@@ -811,7 +811,10 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
 
   return (
     <>
-      <PageHead title={t('web.client_apps_title')} subtitle={t('web.client_apps_subtitle')} />
+      <PageHead title={t('web.client_apps_title')} />
+      <Disclosure size="sm" summary={t('web.client_apps_about_fold')}>
+        <p className="muted small">{t('web.client_apps_subtitle')}</p>
+      </Disclosure>
 
       <StateSwitch
         query={apps}

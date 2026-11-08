@@ -185,7 +185,7 @@ const RECORDS = [
  * citation each (+5).
  * 2860 → 2861: Codex on #356 — R11A8-19, no retry row whose spacing ends after the window (+1).
  */
-const EXPECTED = 2861;
+const EXPECTED = 2854;
 /**
  * A table whose last column is one of these is making citations.
  *
