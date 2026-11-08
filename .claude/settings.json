@@ -16,7 +16,7 @@
   },
   "enabledPlugins": {
     "security-guidance@claude-plugins-official": true,
-    "code-review@claude-plugins-official": true
+    "code-review@claude-plugins-official": false
   },
   "env": {
     "DATABASE_URL": "postgres://nexa:nexa@127.0.0.1:5432/nexa_dev",
