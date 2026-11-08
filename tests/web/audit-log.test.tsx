@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   AuditLogPage,
@@ -224,7 +225,7 @@ describe('the audit log page', () => {
       { path: '/audit-log', query: new URLSearchParams('actor=abc&result=DENIED') },
       ['audit.view'],
     );
-    renderPage(resolved.element);
+    renderPage(resolved.element as ReactElement);
     await waitFor(() => expect(window.location.pathname).toBe('/system'));
     const landed = new URLSearchParams(window.location.search);
     expect(landed.get('section')).toBe('audit');

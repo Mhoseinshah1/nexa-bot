@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { OPS_LOG_WORDS_FA } from '@nexa/i18n';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { pollUnlessFinal } from '../polling';
 import { keepPageWhileTurning } from '../ui/paging';
 import {
   NOTIFICATION_SUMMARY_REFRESH_MS,
@@ -483,7 +484,7 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
             : { before: here.alerts.at, beforeId: here.alerts.id }),
         }),
       enabled: withAlerts,
-      refetchInterval: NOTIFICATION_SUMMARY_REFRESH_MS,
+      refetchInterval: pollUnlessFinal(NOTIFICATION_SUMMARY_REFRESH_MS),
     }),
   );
   // Whether any alert is open, for the red strip: one row is enough to know.
@@ -491,7 +492,7 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
     queryKey: ['ops-log', 'management', 'open-probe'],
     queryFn: () => fetchOpsLog({ limit: 1, scope: 'MANAGEMENT_CONDITIONS', open: true }),
     enabled: mayAlerts,
-    refetchInterval: NOTIFICATION_SUMMARY_REFRESH_MS,
+    refetchInterval: pollUnlessFinal(NOTIFICATION_SUMMARY_REFRESH_MS),
   });
   const summary = useQuery({
     queryKey: ['inbox-summary'],
@@ -532,7 +533,15 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
           inbox: row,
           alert: undefined,
         }));
-  const next = merged !== null ? merged.hasNext : inbox.data?.nextCursor != null;
+  // «بعدی» on the unified list needs BOTH feeds' current pages: advancing while one is still loading
+  // (or failed) would record a cursor for a page that was never read, and skip its rows.
+  const feedsReady =
+    merged === null ||
+    (inbox.data !== undefined &&
+      alerts.data !== undefined &&
+      !inbox.isPlaceholderData &&
+      !alerts.isPlaceholderData);
+  const next = merged !== null ? merged.hasNext && feedsReady : inbox.data?.nextCursor != null;
   const goNext = () => {
     if (merged !== null) {
       const page: { inbox?: Cursor; alerts?: Cursor } = {};

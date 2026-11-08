@@ -591,7 +591,7 @@ function OpsGroupSettingsTab({ denied, mayManage }: { denied: boolean; mayManage
  * Each tab keeps the permission it always had: the group is read with `settings.view` and
  * changed with `settings.edit`; the delivery log is read with `opslog.view`, and its test sends
  * are `settings.edit`. An administrator holding only `opslog.view` therefore opens on the log
- * tab (the group tab is not offered to them). A page without `log` (no delivery capability at
+ * tab (the group tab is still listed, and shows its denied state without any request). A page without `log` (no delivery capability at
  * all) is the group alone.
  */
 export function OpsGroupPage({
