@@ -331,6 +331,13 @@ export const PLATFORM_ERROR_CODES = {
    */
   BACKUP_DISK_INSUFFICIENT: 'backup.disk_insufficient',
   /**
+   * The backup archive password is stored and does not decrypt (NEXA-FIX-RESTORE-SECRETS
+   * §2.7): its ciphertext fails authentication or names a key this installation does not hold.
+   * The run is refused before the dump with the owner's reason, not the generic decrypt text,
+   * because the remedy is to re-enter the password in «بکاپ و بازیابی».
+   */
+  BACKUP_PASSWORD_UNREADABLE: 'backup.password_unreadable',
+  /**
    * A restore was aimed at the database this installation is running on.
    *
    * The one refusal here that exists to prevent a catastrophe rather than to

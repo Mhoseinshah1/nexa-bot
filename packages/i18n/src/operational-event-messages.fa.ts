@@ -1,3 +1,5 @@
+import type { UnreadableSecretKind } from '@nexa/contracts';
+
 /**
  * Persian sentences for the operational events whose recorded `message` is an English log line.
  * Keyed by event CODE (the code is schema; this is only how it reads). Shown in the operations
@@ -68,6 +70,9 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
   'payments.gateway_charge_refunded':
     'تلگرام یک پرداخت ستاره را بازپرداخت کرد؛ پرداخت علامت خورد، سرویس و کیف پول تغییر نکرد و مدیر باید تصمیم بگیرد.',
   'internal.unhandled': 'یک درخواست API با خطای داخلی ناموفق شد.',
+  'secrets.read_failed':
+    'یک رمز ذخیره‌شده با کلید این نصب خوانده نمی‌شود؛ آن را در پنل مدیریت دوباره وارد کنید.',
+  'secrets.read_ok': 'رمز ذخیره‌شده دوباره با کلید این نصب خوانده می‌شود.',
   'settings.stored_value_invalid':
     'مقدار ذخیره‌شدهٔ یک تنظیم با تعریفش نمی‌خواند؛ مقدار پیش‌فرض اعمال است.',
   'settings.stored_value_valid': 'مقدار ذخیره‌شدهٔ تنظیم دوباره معتبر شد.',
@@ -161,6 +166,30 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
   'telegram.appearance_decoration_failed':
     'تلگرام ایموجی سفارشی این ربات را نپذیرفت؛ پیام بدون آن فرستاده شد.',
 };
+
+/**
+ * NEXA-FIX-RESTORE-SECRETS §2.6: what a `secrets.read_failed` condition says, per secret KIND
+ * (its `context.secretKind`), with the page where the owner re-enters it. The alerts page
+ * shows this in place of the code's generic sentence when the kind is known.
+ */
+export const UNREADABLE_SECRET_ALERTS_FA: Readonly<Record<UnreadableSecretKind, string>> = {
+  BOT_TOKEN: 'توکن ربات قابل خواندن نیست؛ آن را در صفحهٔ ربات‌ها دوباره وارد کنید.',
+  PANEL_CREDENTIALS:
+    'نام کاربری یا رمز پنل قابل خواندن نیست؛ آن را در صفحهٔ پنل‌ها دوباره وارد کنید.',
+  GATEWAY_KEYS:
+    'کلید درگاه پرداخت قابل خواندن نیست؛ آن را در صفحهٔ روش‌های پرداخت دوباره وارد کنید.',
+  BACKUP_PASSWORD: 'رمز بکاپ قابل خواندن نیست؛ آن را در «بکاپ و بازیابی» دوباره وارد کنید.',
+  SUPPORT_AI_KEY:
+    'کلید پشتیبانی هوشمند قابل خواندن نیست؛ آن را در صفحهٔ پشتیبانی هوشمند دوباره وارد کنید.',
+  OTHER: 'یک رمز ذخیره‌شده قابل خواندن نیست؛ آن را در پنل مدیریت دوباره وارد کنید.',
+};
+
+/** The per-kind sentence for a `secrets.read_failed` row's context, or null for any other. */
+export function unreadableSecretAlertFa(secretKind: unknown): string | null {
+  return typeof secretKind === 'string' && Object.hasOwn(UNREADABLE_SECRET_ALERTS_FA, secretKind)
+    ? UNREADABLE_SECRET_ALERTS_FA[secretKind as UnreadableSecretKind]
+    : null;
+}
 
 export function operationalEventMessageFa(code: string): string | null {
   return OPERATIONAL_EVENT_MESSAGES_FA[code] ?? null;

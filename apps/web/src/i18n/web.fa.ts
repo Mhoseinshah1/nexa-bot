@@ -10869,6 +10869,8 @@ export const WEB_FA = {
   'web.err_backup_memory_insufficient':
     'حافظهٔ آزاد سرور برای فشرده‌سازی بکاپ کافی نیست؛ بکاپ شروع نشد.',
   'web.err_backup_disk_insufficient': 'فضای دیسک برای بکاپ کافی نیست؛ بکاپ شروع نشد.',
+  'web.err_backup_password_unreadable':
+    'رمز بکاپ قابل خواندن نیست؛ آن را در «بکاپ و بازیابی» دوباره وارد کنید',
   'web.err_backup_unsafe_restore_target': 'بازیابی روی پایگاه‌دادهٔ در حال کار مجاز نیست.',
   'web.err_backup_verification_failed': 'آزمون بازیابی پشتیبان شکست خورد.',
   'web.err_bootstrap_already_completed': 'راه‌اندازی اولیه قبلاً انجام شده است.',
