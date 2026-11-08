@@ -256,7 +256,7 @@ label; Bot E's `custom_emoji_test_outcome` stays `SENT`.
 (`appearance/application/eligibility.ts`, `isCustomEmojiEligible`), so Bot I must be marked
 eligible for one message. The row's three test columns are tied by
 `bot_instances_custom_emoji_test_shape_check`: all null, or `tested_at` and `outcome` set with
-`(outcome = 'SENT') = (error_code IS NULL)` (`apps/api/src/infrastructure/persistence/schema.ts:579-584`,
+`(outcome = 'SENT') = (error_code IS NULL)` (`apps/api/src/infrastructure/persistence/schema/tenancy.ts:258-262`,
 migration `0151_premium_ui_appearance.sql:24`). Change and restore all three together.
 
 ```sql

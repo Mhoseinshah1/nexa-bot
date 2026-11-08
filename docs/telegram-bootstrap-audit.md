@@ -20,7 +20,7 @@ existed, and the step that makes one exist was never written.
 ## What the running system expects
 
 **`bot_instances` is the anchor for everything Telegram.**
-`apps/api/src/infrastructure/persistence/schema.ts:209-229` — `id`, `tenant_id`,
+`apps/api/src/infrastructure/persistence/schema/tenancy.ts:92-182` — `id`, `tenant_id`,
 `username`, `status` (`ACTIVE|STOPPED|DISABLED`, CHECK-constrained from the frozen
 `BOT_INSTANCE_STATUSES`), `token_ciphertext`, `token_key_id`. The comment on the
 ciphertext column is already the rule this workstream has to keep: _"Envelope-encrypted.

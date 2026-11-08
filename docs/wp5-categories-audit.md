@@ -28,7 +28,7 @@ contract: adding a key is a contract change that this package does not need to m
 
 ### 1.2 Products already have ordering, activation and visibility
 
-`apps/api/src/infrastructure/persistence/schema.ts:2589`:
+`apps/api/src/infrastructure/persistence/schema/catalogue.ts:187`:
 
 | column       | meaning                                                        |
 | ------------ | -------------------------------------------------------------- |
@@ -92,7 +92,7 @@ disagreeing the moment categories exist.
 
 ### 1.6 Historical orders are already snapshot-protected
 
-`schema.ts:2806-2823`. `orders.product_id` carries the comment _"Navigation only. The
+`schema/orders.ts:363-389`. `orders.product_id` carries the comment _"Navigation only. The
 snapshot below is the truth about this purchase"_, and the snapshot is
 `line_title`, `line_duration_days`, `line_traffic_bytes`, `line_device_limit`,
 `line_unit_price_amount`, `line_quantity`, plus `subtotal/discount/total/currency` and
@@ -157,7 +157,7 @@ has, and `ProductService` is the nearest template.
 | #   | gap                                                          | evidence                                                                     |
 | --- | ------------------------------------------------------------ | ---------------------------------------------------------------------------- |
 | G1  | no `product_categories` table                                | `schema.ts` has none; `grep -i categor` over the schema returns nothing      |
-| G2  | no category column on `products`                             | `schema.ts:2589-2622`                                                        |
+| G2  | no category column on `products`                             | `schema/catalogue.ts:187-341`                                                |
 | G3  | no category vocabulary in contracts                          | `catalog.ts` has `PRODUCT_STATUSES`/`PRODUCT_AUDIENCES` and no category type |
 | G4  | the customer catalogue is flat                               | `bot-runtime.ts:5970` — one button per product, no grouping                  |
 | G5  | the Web Admin products page has no category column or filter | `apps/web/src/pages/products.tsx`                                            |

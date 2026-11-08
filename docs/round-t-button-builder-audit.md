@@ -139,7 +139,7 @@ owner **CONFIRMED** the facts on 2026-10-01 (update to PR #133); they are no lon
 - Labels are templates `bot.menu.{catalog,services,wallet,help,trial,referral,apps,tickets}`
   (`templates.ts:229-276` and later entries), edited through the existing template endpoints,
   permission `templates.edit` (`apps/api/src/modules/control/templates/application/template-management.service.ts:48`).
-  Template history is `template_revisions` (`apps/api/src/infrastructure/persistence/schema.ts:1257-1300`).
+  Template history is `template_revisions` (`apps/api/src/infrastructure/persistence/schema/control-plane.ts:126-177`).
 - The page already embeds the texts screen's `TemplateCard` per button
   (`bot-buttons.tsx:159-205`), gated on `templates.view` / `templates.edit`
   (`apps/web/src/app.tsx:957-968`).
@@ -216,17 +216,17 @@ eligible bots" indicator; never fake custom-emoji art.
 
 ## 8. Audit and history today
 
-- `audit_logs` (`schema.ts:791-824`): action is a free machine code string
+- `audit_logs` (`schema/eventing.ts:135-169`): action is a free machine code string
   (`packages/contracts/src/ports.ts:177-186`; not an enumerated contract), before/after values,
   DENIED rows written too. Settings writes audit `settings.set` with before/after VALUES
   (`settings.service.ts:363-377`); the menu actions audit `bot_menu.sync` / `bot_menu.check`
   (`bot-menu.service.ts:140-163`).
 - Outbox: `SettingChanged` (in the closed `EVENT_TYPES`, `packages/contracts/src/events.ts:70`).
 - Settings have **no history table**: `setting_values` holds one row per key
-  (`schema.ts:1322-1344`); prior values exist only in `audit_logs.before/after`.
+  (`schema/control-plane.ts:191-224`); prior values exist only in `audit_logs.before/after`.
 - Precedent for content history: `template_revisions` — append-only by trigger
   (`apps/api/drizzle/0011_control_plane_guards.sql:19`), monotonic `revision` per key, "lives as
-  long as the tenant", written in the same transaction as the audit row (`schema.ts:1257-1300`).
+  long as the tenant", written in the same transaction as the audit row (`schema/control-plane.ts:126-177`).
 
 ## 9. Concurrency and version semantics of settings writes
 
@@ -442,7 +442,7 @@ otherwise make the projection and the published table disagree.
   audit `bot_menu.restored`. Publishing it creates a NEW revision carrying `restored_from`.
 - `GET revisions?before=<revision>&limit≤50` — newest first.
 - **Retention**: follow `template_revisions` — append-only by trigger, kept for the tenant's
-  life (`schema.ts:1265-1268`). Bounded by construction: ≤ 8 buttons per snapshot (a few
+  life (`schema/control-plane.ts:134-137`). Bounded by construction: ≤ 8 buttons per snapshot (a few
   hundred bytes) and one row per human publish. (OQ-T-3 if the owner wants a cap.)
 - Undo/redo: local web state only, never persisted.
 
