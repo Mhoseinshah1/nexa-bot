@@ -1,5 +1,5 @@
 {
-  "id": "45fa890c-e326-4295-bc5c-7e96d7c14df5",
+  "id": "efa61585-e5bb-4809-a0f1-9a717601ee3b",
   "prevId": "0cd6aa24-692a-40b1-9215-ac2c92c3c262",
   "version": "7",
   "dialect": "postgresql",
@@ -34083,6 +34083,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "entity_key": {
+          "name": "entity_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "recovery_request_id": {
           "name": "recovery_request_id",
           "type": "uuid",
@@ -34151,6 +34157,10 @@
         "secret_reentry_items_entity_table_check": {
           "name": "secret_reentry_items_entity_table_check",
           "value": "entity_table ~ '^[a-z_]{1,63}$'"
+        },
+        "secret_reentry_items_entity_key_check": {
+          "name": "secret_reentry_items_entity_key_check",
+          "value": "entity_key IS NULL OR char_length(entity_key) BETWEEN 1 AND 64"
         }
       },
       "isRLSEnabled": false

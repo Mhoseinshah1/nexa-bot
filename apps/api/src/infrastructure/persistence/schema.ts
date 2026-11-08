@@ -3619,6 +3619,11 @@ export const secretReentryItems = pgTable(
     purpose: text('purpose').notNull(),
     entityTable: text('entity_table').notNull(),
     entityId: uuid('entity_id').notNull(),
+    /**
+     * The entity's NATURAL key where clearing deleted a row the owner re-creates under a
+     * new id: a gateway credential's or a support-AI credential's provider. Null otherwise.
+     */
+    entityKey: text('entity_key'),
     /** The recovery that cleared it. Not a foreign key: that row is the outgoing install's. */
     recoveryRequestId: uuid('recovery_request_id').notNull(),
     clearedAt: timestamptz('cleared_at').notNull(),
@@ -3633,6 +3638,10 @@ export const secretReentryItems = pgTable(
     check(
       'secret_reentry_items_entity_table_check',
       sql`entity_table ~ '^[a-z_]{1,63}$'`,
+    ),
+    check(
+      'secret_reentry_items_entity_key_check',
+      sql`entity_key IS NULL OR char_length(entity_key) BETWEEN 1 AND 64`,
     ),
   ],
 );
