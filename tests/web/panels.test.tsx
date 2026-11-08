@@ -75,7 +75,7 @@ describe('the panel list', () => {
     await screen.findByText('Frankfurt A');
     expect(screen.getByText('Marzban')).toBeInTheDocument();
     expect(screen.getByText('سالم')).toBeInTheDocument();
-    expect(screen.getByText(/42/)).toBeInTheDocument();
+    expect(screen.getByText('42')).toBeInTheDocument();
   });
 
   it('shows staleness as its own fact rather than folding it into the state', async () => {
