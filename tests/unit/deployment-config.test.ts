@@ -181,6 +181,19 @@ describe('the production environment template', () => {
     }
   });
 
+  it('names a new installation key with a random suffix, inside the keyring grammar', () => {
+    const installer = readFileSync(join(__dirname, '../../deploy/install.sh'), 'utf8');
+    const line = /^\s*kek_id="(.*)"$/m.exec(installer)?.[1] ?? '';
+    expect(line, 'install.sh no longer sets kek_id').not.toBe('');
+    expect(line).toContain('date -u +%Y%m%d');
+    expect(line, 'the key id lost its random suffix').toContain('/dev/urandom');
+    // The shape it produces, against the keyring's own grammar. Old ids stay valid.
+    const grammar = /^[A-Za-z0-9._-]{1,64}$/;
+    for (const id of ['install-20261107', 'install-20261107-1a2b3c4d']) {
+      expect(id).toMatch(grammar);
+    }
+  });
+
   it('mints a webhook secret Telegram will actually accept', () => {
     /*
      * The alphabet is TELEGRAM'S, and the installer got it wrong.
