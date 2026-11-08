@@ -65,11 +65,24 @@ Program: `NEXA-WEB-REDESIGN` (owner brief). One session = at most two PRs.
 - Broadcast pause/resume/cancel stay in the report card with their own confirms (not moved to a head bar).
 - Campaign detail on a finished campaign draws an empty «مدیریت کمپین» group (cosmetic, from `QuickActionBar`; sweep PR-9).
 
-## Handoff (next: session 4 = PR-6 + PR-7)
+## Session 4 — PR-6 + PR-7
 
-- Start from latest `main`. PR-6 `feat/web-redesign-resellers-bot` (resellers +detail, tiers, plans, bots, bot buttons, appearance, content,
-  terms, client apps); PR-7 `feat/web-redesign-panels-settings` (panels +detail, panel health, providers, settings, features, ops group).
-- Opus diff review for money actions: reseller credit, tier prices, reseller plans.
-- Bot buttons: drag and drop only (`LayoutDnd`), keyboard reorder; Appearance QR drag/resize + `quietZoneModules`; panels/features rules in §2.5.
-- Settings pages use the sticky save bar; time inputs `TimeField24`.
-- Owner check list for PR-4/PR-5 is in the issue #358 comment.
+- **PR-6 #435 — resellers + bot group** (merge 2c5520196): resellers / tiers / plans (fold, status chips, name opens the drawer), bots, content, terms,
+  client apps (form fields untouched), bot buttons on `LayoutDnd` only (main menu + service layout, max 3 per row, keyboard reorder, no move buttons),
+  Appearance QR stage (drag + corner resize, `quietZoneModules` field). Opus money review of the reseller pages: SAFE. Codex P2 (read-only menu
+  items must stay keyboard-selectable) fixed with a test. CI fix: falsification rows for the replaced chip drag retired (EXPECTED 2861 → 2854).
+- **PR-7 #436 — panels, settings, features, ops group** (merge 15b2387fe): panels list (provider name only, health + error in one cell, no
+  sideways scroll), panel detail (action bar, KPI row, RickPanel/custom read-only provider rules), panel health, providers, settings (collapsible
+  sections + one sticky save bar over each row's own submit), features (own scroll panel), ops group (`TimeField24`). Opus review of the settings
+  save bar and panel activation display: SAFE. Codex clean. Inventories: `pr6-inventory-{a,b}.md`, `pr7-inventory-{a,b}.md`.
+
+### Decisions taken (session 4)
+
+- No `/resellers/:id` route exists: the reseller «detail» is the existing standing drawer (`reseller-edit.tsx`, unchanged).
+- Settings: an unchanged value can no longer be re-saved and Enter in a field no longer submits (the bar needs a real edit).
+- Docs for sessions 4–6 are committed on the session branch and shipped in one docs PR at the end of session 6.
+
+## Handoff (next: session 5 = PR-8 + PR-9, then session 6 = PR-10)
+
+- PR-8 `feat/web-redesign-system` (notification centre + alerts merge, notifications → ops-group tab «گزارش ارسال‌ها», audit log → System tab, incidents + «رخدادها» bug, bulk operations, system, recovery); PR-9 sweep; PR-10 follow-ups (§3.1).
+- Start from latest `main`.
