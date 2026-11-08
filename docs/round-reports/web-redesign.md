@@ -47,10 +47,29 @@ Program: `NEXA-WEB-REDESIGN` (owner brief). One session = at most two PRs.
 - Ticket close stays one-press (no confirm exists today). Support AI config form not converted to sticky-save sections (would touch form logic).
 - Non-blocking: a gateway absent from the attention response shows queue count 0 (`payments.tsx` ~812, pre-existing).
 
-## Handoff (next: session 3 = PR-4 + PR-5)
+## Session 3 — PR-4 + PR-5
 
-- Start from latest `main`. PR-4 `feat/web-redesign-products` (products, categories, custom service, extra packages, locations, trials);
-  PR-5 `feat/web-redesign-marketing` (discounts, campaigns +detail, broadcasts +detail, reminders, referrals, gift cards).
-- Opus diff review needed where a page has a money action (discounts/gift cards if they move money — check).
-- Time inputs (reminders, campaigns, trials) must use `TimeField24`.
-- Owner check list for PR-2/PR-3 is in the issue #358 comment.
+- **PR-4 #432 — products group** (merge c4301f4d2): products (list + detail with action bar, attention strip, KPI row), categories,
+  custom service, extra packages/devices, locations, trials. Row name opens the record; subtitles folded; chips with counts only
+  where the list is complete (categories, locations, trial panels). Codex clean. Inventory: `pr4-inventory.md`.
+- **PR-5 #433 — marketing group** (merge 02c53f7b0): discounts (tabs rules / cashback / preview), campaigns + detail, broadcasts + detail,
+  reminders, referrals, gift cards. Campaign and reminder time inputs now `TimeField24` (same HH:MM value). Opus money review: SAFE
+  (hooks, permissions, confirms, reasons unchanged). Codex P2 (reminders refresh re-read only settings, not flags) fixed in one commit
+  with a test that fails without it. Inventory: `pr5-inventory.md`.
+- `vitest --project web` 3763 pass (PR-5); `web:shots` clean for all routes of both PRs.
+- CI: #432's Deployment update smoke failed on an apt failure building the image; re-run once, green.
+
+### Decisions taken
+
+- No count chips where the API sends no server total (products, extra packages, all marketing lists).
+- Broadcast pause/resume/cancel stay in the report card with their own confirms (not moved to a head bar).
+- Campaign detail on a finished campaign draws an empty «مدیریت کمپین» group (cosmetic, from `QuickActionBar`; sweep PR-9).
+
+## Handoff (next: session 4 = PR-6 + PR-7)
+
+- Start from latest `main`. PR-6 `feat/web-redesign-resellers-bot` (resellers +detail, tiers, plans, bots, bot buttons, appearance, content,
+  terms, client apps); PR-7 `feat/web-redesign-panels-settings` (panels +detail, panel health, providers, settings, features, ops group).
+- Opus diff review for money actions: reseller credit, tier prices, reseller plans.
+- Bot buttons: drag and drop only (`LayoutDnd`), keyboard reorder; Appearance QR drag/resize + `quietZoneModules`; panels/features rules in §2.5.
+- Settings pages use the sticky save bar; time inputs `TimeField24`.
+- Owner check list for PR-4/PR-5 is in the issue #358 comment.
