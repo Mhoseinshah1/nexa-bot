@@ -1355,7 +1355,12 @@ export function resolve(
   if (route.path === '/incidents') {
     return {
       element: (
-        <IncidentsPage denied={!may('incidents.view')} mayManage={may('incidents.manage')} />
+        <IncidentsPage
+          denied={!may('incidents.view')}
+          mayManage={may('incidents.manage')}
+          mayNotify={may('incidents.notify')}
+          mayViewPanels={may('panels.view')}
+        />
       ),
       crumbs: [{ label: t('web.nav_incidents') }],
       title: t('web.nav_incidents'),
