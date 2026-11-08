@@ -304,7 +304,7 @@ export const WEB_FA_LEGACY = {
   'web.lmg_decisions_send': 'بارگذاری تصمیم‌ها',
   'web.lmg_yes': 'بله',
   'web.lmg_no': 'خیر',
-  'web.lmg_blocker_ack': 'منتظر تأیید هدف در محیط فرایند migration',
+  'web.lmg_blocker_ack': 'منتظر تأیید هدف در محیط فرایند مهاجرت',
   'web.lmg_blocker_approval': 'منتظر تأیید انتقال نهایی مالک برای همین هفت مقدار',
   'web.lmg_blocker_stop_sales': 'منتظر توقف فروش (گام 1 دستورالعمل انتقال)',
   'web.lmg_blocker_recovery':
@@ -380,7 +380,7 @@ export const WEB_FA_LEGACY = {
     '{count} سرویس از بکاپ قرنطینه می‌شود: خواندن پنل موفق بود، اما وجود یا نبود نام کاربری این سرویس‌ها روی پنل قطعی نشد. این سرویس‌ها به‌صورت سابقه و یک مورد باز در صف بازبینی سرویس‌های قدیمی نگه داشته می‌شوند و هیچ‌کدام خودکار به حسابی روی پنل وصل نمی‌شود؛ بعداً می‌توان هر کدام را بررسی و برای پذیرش (adopt) تأیید کرد. مشتریان، کیف پول‌ها، بدهی‌ها و سرویس‌های قطعی‌شده بدون تغییر وارد می‌شوند و این قرنطینه مانع تأیید نیست.',
   'web.mrz_digest_missing_title': 'اجرای آزمایشی چکیدهٔ برنامه را گزارش نکرده است',
   'web.mrz_digest_missing_body':
-    'این اجرای آزمایشی چکیدهٔ برنامه (plan digest) ندارد؛ بدون آن، واردکردن به برنامه‌ای که تأیید می‌کنید مقید نمی‌شود و روی مقصد شبیه محیط عملیاتی قابل تأیید نیست. این معمولاً اجرای آزمایشی‌ای است که نسخهٔ قبلی NEXA ساخته است. اجرای آزمایشی را دوباره درخواست کنید؛ بارگذاری دوبارهٔ فایل لازم نیست.',
+    'این اجرای آزمایشی چکیدهٔ برنامه ندارد؛ بدون آن، واردکردن به برنامه‌ای که تأیید می‌کنید مقید نمی‌شود و روی مقصد شبیه محیط عملیاتی قابل تأیید نیست. این معمولاً اجرای آزمایشی‌ای است که نسخهٔ قبلی NEXA ساخته است. اجرای آزمایشی را دوباره درخواست کنید؛ بارگذاری دوبارهٔ فایل لازم نیست.',
   'web.mrz_fault_target_ack':
     'تأیید مقصد با این نصب یکی نیست. صفحه را تازه کنید و دوباره تأیید کنید. چیزی تأیید نشد.',
   'web.mrz_fault_recovery_active':
@@ -400,8 +400,8 @@ export const WEB_FA_LEGACY = {
   'web.mrz_phase_bot_link': 'اتصال مشتریان به ربات فعال',
   'web.mrz_exact_title': 'گزارش تطابق دقیق',
   'web.mrz_exact_complete':
-    'تطابق کامل است: هیچ اختلاف بدون دلیلی نمانده و import کامل (COMPLETE) است.',
-  'web.mrz_exact_unexplained': 'اختلاف بدون دلیل؛ import تا رفع این‌ها کامل نیست. تعداد:',
+    'تطابق کامل است: هیچ اختلاف بدون دلیلی نمانده و واردکردن کامل (COMPLETE) است.',
+  'web.mrz_exact_unexplained': 'اختلاف بدون دلیل؛ واردکردن تا رفع این‌ها کامل نیست. تعداد:',
   'web.mrz_exact_col_table': 'جدول ربات قبلی → جدول NEXA',
   'web.mrz_exact_col_mirza_rows': 'ردیف در ربات قبلی',
   'web.mrz_exact_col_nexa_rows': 'ردیف در NEXA',
@@ -474,7 +474,7 @@ export const WEB_FA_LEGACY = {
   // Mirza invoice `Status`, verbatim values whose writer is documented (converter
   // docs/PANELS_AND_ADOPTION.md §2, docs/SOURCE_TABLES.md `invoice.Status`). As of the snapshot.
   'web.mrz_status_active': 'فعال (پرداخت و ساخته شده)',
-  'web.mrz_status_send_on_hold': 'در انتظار شروع (on hold)',
+  'web.mrz_status_send_on_hold': 'در انتظار شروع (معلق)',
   'web.mrz_status_end_of_time': 'هشدار پایان زمان',
   'web.mrz_status_end_of_volume': 'هشدار پایان حجم',
   'web.mrz_status_sendedwarn': 'هشدار انقضا فرستاده شده',
