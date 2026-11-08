@@ -88,6 +88,7 @@ describe('the split stylesheet', () => {
       './styles/pages/ops-a.css',
       './styles/pages/ops-b.css',
       './styles/ui.css',
+      './styles/redesign-kit.css',
       './styles/pages/w-customers.css',
       './styles/pages/w-money.css',
       './styles/pages/w-marketing.css',
