@@ -177,7 +177,7 @@ describe('services detail, as the demo draws it', () => {
       <ServiceDetailPage id={DETAIL_ID} denied={false} mayEdit mayTerminate mayGrant />,
     );
     await screen.findByText('saeed_d_1084', { selector: 'h1 *' });
-    expect(container.querySelector('.ca-stats .stat .val .ca-stat-when')).not.toBeNull();
+    expect(container.querySelector('.kpi-row .kpi-cell-value .ca-stat-when')).not.toBeNull();
   });
 });
 

@@ -1083,8 +1083,9 @@ describe('the order detail', () => {
     // Subtotal, discount and total all rendered — a page that showed only the total
     // could not answer "why this number".
     expect(screen.getByText('جمع')).toBeInTheDocument();
-    expect(screen.getByText('تخفیف')).toBeInTheDocument();
-    expect(screen.getByText('مبلغ نهایی')).toBeInTheDocument();
+    // The discount and the total are also key figures in the KPI row (redesign PR-1): twice each.
+    expect(screen.getAllByText('تخفیف')).toHaveLength(2);
+    expect(screen.getAllByText('مبلغ نهایی')).toHaveLength(2);
   });
 
   it('labels the product and customer links as navigation, not as the record', async () => {

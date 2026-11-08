@@ -43,6 +43,7 @@ import {
   StatCard,
   useToast,
 } from '../ui/kit';
+import { QuickAction } from '../ui/redesign';
 import { Drawer } from '../ui/overlays';
 import { useConfirmedClose, useReportDirty } from '../ui/unsaved';
 import { bulkMessage } from './bulk-operations';
@@ -805,19 +806,24 @@ export function grantMoveReasons({
   return reasons;
 }
 
-/** The id a disabled grant/move button is described by, or nothing when it is enabled. */
-function describedBy(
+const reasonProp = (reason: string | undefined) =>
+  reason === undefined ? {} : { disabledReason: reason };
+
+/**
+ * Why a disabled grant/move button is disabled — the same sentences the folded list carries,
+ * shown on hover and focus by the quick-action bar (redesign PR-1). Nothing when it is enabled.
+ */
+function disabledReasonOf(
   action: 'ADD_TRAFFIC' | 'ADD_TIME' | 'CHANGE_LOCATION',
   may: boolean,
   entry: ServiceActionAvailability | undefined,
-): { 'aria-describedby'?: string } {
-  if (!may) {
-    return {
-      'aria-describedby':
-        action === 'CHANGE_LOCATION' ? 'service-denied-move' : 'service-denied-grant',
-    };
-  }
-  return entry?.available === true ? {} : { 'aria-describedby': `service-blocker-${action}` };
+  blockerLabel: (blocker: ServiceActionBlocker) => string,
+): string | undefined {
+  if (!may) return t(action === 'CHANGE_LOCATION' ? 'web.soc_move_denied' : 'web.soc_grant_denied');
+  if (entry?.available === true) return undefined;
+  return entry?.blocker === null || entry?.blocker === undefined
+    ? t('web.soc_unavailable')
+    : blockerLabel(entry.blocker);
 }
 
 /**
@@ -833,12 +839,15 @@ export function ServiceGrantButton({
   entry,
   mayGrant,
   onActed,
+  blockerLabel = () => t('web.soc_unavailable'),
 }: {
   serviceId: string;
   kind: 'ADD_TRAFFIC' | 'ADD_TIME';
   entry: ServiceActionAvailability | undefined;
   mayGrant: boolean;
   onActed: () => void;
+  /** The sentence for a server blocker; absent, the generic «not possible now». */
+  blockerLabel?: (blocker: ServiceActionBlocker) => string;
 }) {
   const toast = useToast();
   const grantKey = useSubmissionKey();
@@ -881,13 +890,12 @@ export function ServiceGrantButton({
   const fieldId = kind === 'ADD_TRAFFIC' ? 'soc-grant-gb' : 'soc-grant-days';
   return (
     <>
-      <Button
+      <QuickAction
+        label={title}
         disabled={!mayGrant || entry?.available !== true}
-        {...describedBy(kind, mayGrant, entry)}
+        {...reasonProp(disabledReasonOf(kind, mayGrant, entry, blockerLabel))}
         onClick={() => setOpen(true)}
-      >
-        {title}
-      </Button>
+      />
       <Drawer open={open} onClose={requestClose} title={title}>
         <div className="stack-sm">
           <Field
@@ -945,11 +953,14 @@ export function ServiceMoveButton({
   entry,
   mayEdit,
   onActed,
+  blockerLabel = () => t('web.soc_unavailable'),
 }: {
   serviceId: string;
   entry: ServiceActionAvailability | undefined;
   mayEdit: boolean;
   onActed: () => void;
+  /** The sentence for a server blocker; absent, the generic «not possible now». */
+  blockerLabel?: (blocker: ServiceActionBlocker) => string;
 }) {
   const toast = useToast();
   const moveKey = useSubmissionKey();
@@ -983,13 +994,12 @@ export function ServiceMoveButton({
   });
   return (
     <>
-      <Button
+      <QuickAction
+        label={t('web.service_action_change_location')}
         disabled={!mayEdit || entry?.available !== true}
-        {...describedBy('CHANGE_LOCATION', mayEdit, entry)}
+        {...reasonProp(disabledReasonOf('CHANGE_LOCATION', mayEdit, entry, blockerLabel))}
         onClick={() => setOpen(true)}
-      >
-        {t('web.service_action_change_location')}
-      </Button>
+      />
       <Drawer open={open} onClose={requestClose} title={t('web.service_action_change_location')}>
         <div className="stack-sm">
           {targets.data?.current !== null && targets.data?.current !== undefined && (

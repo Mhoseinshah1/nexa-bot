@@ -30,7 +30,16 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
-import { RowExportBar, selectColumn, useRowSelection, type ExportColumn } from '../ui/row-export';
+import {
+  CSV_EXPORT_MAX_ROWS,
+  downloadCsv,
+  selectColumn,
+  toCsv,
+  useRowSelection,
+  type ExportColumn,
+  type RowSelection,
+} from '../ui/row-export';
+import { AttentionStrip, CardRows, KpiRow, QuickFilters, SelectionBar } from '../ui/redesign';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
@@ -64,10 +73,11 @@ import {
 import { PRICE_LAYER_LABELS, PRICE_LAYER_STEPS } from './resellers';
 import { CUSTOM_SERVICE_LEVEL_LABELS } from './custom-service';
 import { OrderPlacement } from './order-placement';
-import { BalancedColumns, ChipGroup, useListClearAll } from './commerce-parts';
+import { ChipGroup, useListClearAll } from './commerce-parts';
 import {
   Badge,
   Banner,
+  Button,
   Card,
   Copyable,
   CursorPager,
@@ -272,29 +282,26 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
     },
   ];
 
+  /*
+   * Redesign PR-1: the order's code sits under its name, and the expiry under the creation, so
+   * the table fits at 1440px without sideways scroll. Every field is still drawn.
+   */
   const columns: readonly Column<OrderSummaryResponse>[] = [
     {
       key: 'title',
-      header: t('web.order_line'),
+      header: t('web.orders_col_order'),
       render: (row) => (
-        <a href={`/orders/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          {/* The SNAPSHOT title, not a lookup. What the customer bought. */}
-          {row.lineTitle}
-        </a>
+        <div className="cell-stack">
+          <a href={`/orders/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+            {/* The SNAPSHOT title, not a lookup. What the customer bought. */}
+            {row.lineTitle}
+          </a>
+          {/* PR-C: the order's short public code, never its uuid. */}
+          <span className="muted small">
+            <RecordLink href={recordHref.order(row.id)} id={row.id} code={row.code} />
+          </span>
+        </div>
       ),
-    },
-    {
-      // PR-C: the order's short public code, never its uuid.
-      key: 'code',
-      header: t('web.record_code'),
-      render: (row) => <RecordLink href={recordHref.order(row.id)} id={row.id} code={row.code} />,
-    },
-    { key: 'state', header: t('web.status'), render: (row) => <StateBadge value={row.state} /> },
-    {
-      key: 'total',
-      header: t('web.order_total'),
-      align: 'end',
-      render: (row) => <Money value={{ amountMinor: row.totalAmount, currency: row.currency }} />,
     },
     {
       key: 'customer',
@@ -309,20 +316,25 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
         />
       ),
     },
+    { key: 'state', header: t('web.status'), render: (row) => <StateBadge value={row.state} /> },
     {
-      key: 'created',
-      header: t('web.order_created_at'),
-      render: (row) => <span className="nowrap">{formatTimestampNumeric(row.createdAt)}</span>,
+      key: 'total',
+      header: t('web.order_total'),
+      align: 'end',
+      render: (row) => <Money value={{ amountMinor: row.totalAmount, currency: row.currency }} />,
     },
     {
-      key: 'expires',
-      header: t('web.order_expires_at'),
-      render: (row) =>
-        row.expiresAt === null ? (
-          <Dash />
-        ) : (
-          <span className="nowrap">{formatTimestampNumeric(row.expiresAt)}</span>
-        ),
+      key: 'created',
+      header: t('web.orders_col_dates'),
+      render: (row) => (
+        <div className="cell-stack">
+          <span className="nowrap">{formatTimestampNumeric(row.createdAt)}</span>
+          <span className="muted small nowrap">
+            {t('web.order_expires_at')}{' '}
+            {row.expiresAt === null ? <Dash /> : formatTimestampNumeric(row.expiresAt)}
+          </span>
+        </div>
+      ),
     },
     selectColumn(selection, orderKey),
   ];
@@ -356,11 +368,24 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
     <>
       <PageHead
         title={t('web.orders_title')}
-        subtitle={t('web.orders_intro')}
+        // Redesign PR-1: no count chip — `GET /orders` sends a keyset page and no total.
         actions={<ListFreshness query={orders} hidden={toolbarHidden} />}
       />
 
       <Card className="ca-list">
+        {/* The state as quick-filter chips (no counts: the list has no totals); the same
+            `state` query key as the filter below, which keeps its removable chip. */}
+        {!denied && (
+          <QuickFilters
+            label={t('web.status')}
+            value={appliedState ?? 'ALL'}
+            onChange={(next) => setQuery(route, 'state', next === 'ALL' ? null : next)}
+            items={[
+              { key: 'ALL' as const, label: t('web.users_filter_all') },
+              ...ORDER_STATES.map((state) => ({ key: state, label: t(STATE_LABELS[state]) })),
+            ]}
+          />
+        )}
         <div hidden={toolbarHidden}>
           <ListFilterBar
             first="search"
@@ -421,12 +446,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
             dense
             sticky
             toolbar={
-              <RowExportBar
-                selection={selection}
-                columns={exportColumns}
-                filename="orders"
-                allowed={!denied}
-              />
+              <OrderSelection selection={selection} columns={exportColumns} allowed={!denied} />
             }
           />
         </StateSwitch>
@@ -448,6 +468,47 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
           />
         )}
       </Card>
+    </>
+  );
+}
+
+/**
+ * R12 F3 item 8, redesigned (PR-1): a select-the-page tick above the rows, and the selection bar —
+ * count, the CSV export, the cap, clear — only while rows are ticked. The export itself is what
+ * `RowExportBar` did: the ticked rows as the columns print them.
+ */
+function OrderSelection({
+  selection,
+  columns,
+  allowed,
+}: {
+  selection: RowSelection<OrderSummaryResponse>;
+  columns: readonly ExportColumn<OrderSummaryResponse>[];
+  allowed: boolean;
+}) {
+  if (!allowed || selection.rows.length === 0) return null;
+  const count = selection.chosen.length;
+  return (
+    <>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={count > 0 && count === Math.min(selection.rows.length, CSV_EXPORT_MAX_ROWS)}
+          onChange={selection.toggleAll}
+        />
+        <span>{t('web.export_select_all')}</span>
+      </label>
+      <SelectionBar count={count} onClear={selection.clear}>
+        <Button
+          size="sm"
+          onClick={() => downloadCsv('orders.csv', toCsv(selection.chosen, columns))}
+        >
+          {t('web.export_csv')}
+        </Button>
+        <span className="muted small">
+          {t('web.export_cap')} {CSV_EXPORT_MAX_ROWS}
+        </span>
+      </SelectionBar>
     </>
   );
 }
@@ -486,14 +547,42 @@ export function OrderDetailPage({
       ) : (
         <PageHead
           title={row.lineTitle}
-          badge={<StateBadge value={row.state} />}
-          subtitle={
-            <span className="ca-subline">
-              <span>{t('web.order_detail')}</span>
-              <span className="record-ref">
-                <CodeText code={row.code} />
-                {row.code !== null && <CopyCodeButton code={row.code} />}
+          badge={
+            <span className="ca-badges">
+              <StateBadge value={row.state} />
+              <Badge tone="neutral">{t(ORDER_PURPOSE_LABELS[row.purpose])}</Badge>
+            </span>
+          }
+          meta={
+            <span className="meta-links">
+              <span>
+                {t('web.order_customer')}{' '}
+                <CustomerIdentityLink
+                  customerId={row.customerId}
+                  telegramUserId={row.customerTelegramUserId}
+                  username={row.customerUsername}
+                  onLink={onLink}
+                />
               </span>
+              <span>
+                {t('web.record_code')}{' '}
+                <span className="record-ref">
+                  <CodeText code={row.code} />
+                  {row.code !== null && <CopyCodeButton code={row.code} />}
+                </span>
+              </span>
+              <span>
+                {t('web.order_product')}{' '}
+                {row.productId === null ? (
+                  <span className="muted">{t('web.purpose_custom_service')}</span>
+                ) : (
+                  <ProductLink id={row.productId} code={row.productCode} title={row.productTitle} />
+                )}
+              </span>
+              <span>
+                {t('web.product_panel')} <PanelLink id={row.panelId} name={row.panelName} />
+              </span>
+              <span>{formatTimestampNumeric(row.createdAt)}</span>
             </span>
           }
         />
@@ -509,9 +598,9 @@ export function OrderDetailPage({
                * waiting for money and nothing on this page can take any. Saying so is
                * the alternative to a button that would pretend.
                */
-              <Banner tone="info" title={t('web.order_awaiting_banner_title')}>
-                {t('web.order_awaiting_banner_body')}
-              </Banner>
+              <AttentionStrip title={t('web.order_awaiting_banner_title')}>
+                <span className="attn-item">{t('web.order_awaiting_banner_body')}</span>
+              </AttentionStrip>
             )}
 
             {row.state === 'REFUNDED' && (
@@ -524,183 +613,224 @@ export function OrderDetailPage({
               </Banner>
             )}
 
-            <BalancedColumns
-              main={
-                <>
-                  {/*
+            <KpiRow
+              items={[
+                {
+                  key: 'total',
+                  label: t('web.order_total'),
+                  value: <Money value={{ amountMinor: row.totalAmount, currency: row.currency }} />,
+                },
+                {
+                  key: 'discount',
+                  label: t('web.order_discount'),
+                  value: (
+                    <Money value={{ amountMinor: row.discountAmount, currency: row.currency }} />
+                  ),
+                },
+                {
+                  key: 'quantity',
+                  label: t('web.order_quantity'),
+                  value: <Num value={row.lineQuantity} />,
+                },
+                {
+                  key: 'expires',
+                  label: t('web.order_expires_at'),
+                  value: row.expiresAt === null ? <Dash /> : formatTimestampNumeric(row.expiresAt),
+                },
+              ]}
+            />
+
+            <CardRows
+              rows={[
+                {
+                  key: 'line',
+                  main: (
+                    <>
+                      {/*
                     The SNAPSHOT, and only the snapshot: every `line*` field was copied
                     at checkout, so a product renamed or withdrawn since cannot change
                     what this order says was bought (owner revision 6).
                   */}
-                  <Card title={t('web.order_line_title')} hint={t('web.order_snapshot_hint')}>
-                    <KV
-                      items={[
-                        [t('web.order_purpose'), t(ORDER_PURPOSE_LABELS[row.purpose])],
-                        [t('web.product_title'), row.lineTitle],
-                        [
-                          t('web.order_category'),
-                          row.lineCategoryName === null ? (
-                            <span key="cat" className="muted">
-                              {t('web.order_category_unknown')}
-                            </span>
-                          ) : (
-                            <span key="cat">
-                              {row.lineCategoryEmoji === null
-                                ? row.lineCategoryName
-                                : `${row.lineCategoryEmoji} ${row.lineCategoryName}`}
-                            </span>
-                          ),
-                        ],
-                        [
-                          t('web.product_duration'),
-                          <Duration key="d" days={row.lineDurationDays} />,
-                        ],
-                        [
-                          t('web.product_traffic'),
-                          <Traffic key="tr" bytes={row.lineTrafficBytes} />,
-                        ],
-                        [
-                          t('web.product_device_limit'),
-                          row.lineDeviceLimit === null ? (
-                            <span key="dl">{t('web.product_devices_provider_default')}</span>
-                          ) : (
-                            <Num key="dl" value={row.lineDeviceLimit} />
-                          ),
-                        ],
-                        [
-                          t('web.order_unit_price'),
-                          <Money
-                            key="up"
-                            value={{ amountMinor: row.lineUnitPriceAmount, currency: row.currency }}
-                          />,
-                        ],
-                        [t('web.order_quantity'), <Num key="q" value={row.lineQuantity} />],
-                      ]}
-                    />
-                    <h3 className="ca-subhead">{t('web.order_totals_title')}</h3>
-                    <dl className="ca-totals">
-                      <div>
-                        <dt>{t('web.order_subtotal')}</dt>
-                        <dd>
-                          <Money
-                            value={{ amountMinor: row.subtotalAmount, currency: row.currency }}
-                          />
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>{t('web.order_discount')}</dt>
-                        <dd>
-                          <Money
-                            value={{ amountMinor: row.discountAmount, currency: row.currency }}
-                          />
-                        </dd>
-                      </div>
-                      <div className="total">
-                        <dt>{t('web.order_total')}</dt>
-                        <dd>
-                          <Money value={{ amountMinor: row.totalAmount, currency: row.currency }} />
-                        </dd>
-                      </div>
-                    </dl>
-                  </Card>
-                </>
-              }
-              side={
-                <>
-                  <Card title={t('web.order_lifecycle_title')}>
-                    <KV
-                      items={[
-                        // The state itself is the badge beside the page title.
-                        [t('web.order_created_at'), formatTimestampNumeric(row.createdAt)],
-                        [
-                          t('web.order_expires_at'),
-                          row.expiresAt === null ? (
-                            <Dash key="e" />
-                          ) : (
-                            formatTimestampNumeric(row.expiresAt)
-                          ),
-                        ],
-                        [
-                          t('web.order_confirmed_at'),
-                          row.confirmedAt === null ? (
-                            <Dash key="c" />
-                          ) : (
-                            formatTimestampNumeric(row.confirmedAt)
-                          ),
-                        ],
-                        [
-                          t('web.order_settled_at'),
-                          row.settledAt === null ? (
-                            <Dash key="st" />
-                          ) : (
-                            formatTimestampNumeric(row.settledAt)
-                          ),
-                        ],
-                        [t('web.updated_at'), formatTimestampNumeric(row.updatedAt)],
-                      ]}
-                    />
-                  </Card>
+                      <Card title={t('web.order_line_title')} hint={t('web.order_snapshot_hint')}>
+                        <KV
+                          items={[
+                            [t('web.order_purpose'), t(ORDER_PURPOSE_LABELS[row.purpose])],
+                            [t('web.product_title'), row.lineTitle],
+                            [
+                              t('web.order_category'),
+                              row.lineCategoryName === null ? (
+                                <span key="cat" className="muted">
+                                  {t('web.order_category_unknown')}
+                                </span>
+                              ) : (
+                                <span key="cat">
+                                  {row.lineCategoryEmoji === null
+                                    ? row.lineCategoryName
+                                    : `${row.lineCategoryEmoji} ${row.lineCategoryName}`}
+                                </span>
+                              ),
+                            ],
+                            [
+                              t('web.product_duration'),
+                              <Duration key="d" days={row.lineDurationDays} />,
+                            ],
+                            [
+                              t('web.product_traffic'),
+                              <Traffic key="tr" bytes={row.lineTrafficBytes} />,
+                            ],
+                            [
+                              t('web.product_device_limit'),
+                              row.lineDeviceLimit === null ? (
+                                <span key="dl">{t('web.product_devices_provider_default')}</span>
+                              ) : (
+                                <Num key="dl" value={row.lineDeviceLimit} />
+                              ),
+                            ],
+                            [
+                              t('web.order_unit_price'),
+                              <Money
+                                key="up"
+                                value={{
+                                  amountMinor: row.lineUnitPriceAmount,
+                                  currency: row.currency,
+                                }}
+                              />,
+                            ],
+                            [t('web.order_quantity'), <Num key="q" value={row.lineQuantity} />],
+                          ]}
+                        />
+                        <h3 className="ca-subhead">{t('web.order_totals_title')}</h3>
+                        <dl className="ca-totals">
+                          <div>
+                            <dt>{t('web.order_subtotal')}</dt>
+                            <dd>
+                              <Money
+                                value={{ amountMinor: row.subtotalAmount, currency: row.currency }}
+                              />
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>{t('web.order_discount')}</dt>
+                            <dd>
+                              <Money
+                                value={{ amountMinor: row.discountAmount, currency: row.currency }}
+                              />
+                            </dd>
+                          </div>
+                          <div className="total">
+                            <dt>{t('web.order_total')}</dt>
+                            <dd>
+                              <Money
+                                value={{ amountMinor: row.totalAmount, currency: row.currency }}
+                              />
+                            </dd>
+                          </div>
+                        </dl>
+                      </Card>
+                    </>
+                  ),
+                  side: (
+                    <Card title={t('web.order_lifecycle_title')}>
+                      <KV
+                        items={[
+                          // The state itself is the badge beside the page title.
+                          [t('web.order_created_at'), formatTimestampNumeric(row.createdAt)],
+                          [
+                            t('web.order_expires_at'),
+                            row.expiresAt === null ? (
+                              <Dash key="e" />
+                            ) : (
+                              formatTimestampNumeric(row.expiresAt)
+                            ),
+                          ],
+                          [
+                            t('web.order_confirmed_at'),
+                            row.confirmedAt === null ? (
+                              <Dash key="c" />
+                            ) : (
+                              formatTimestampNumeric(row.confirmedAt)
+                            ),
+                          ],
+                          [
+                            t('web.order_settled_at'),
+                            row.settledAt === null ? (
+                              <Dash key="st" />
+                            ) : (
+                              formatTimestampNumeric(row.settledAt)
+                            ),
+                          ],
+                          [t('web.updated_at'), formatTimestampNumeric(row.updatedAt)],
+                        ]}
+                      />
+                    </Card>
+                  ),
+                },
+                {
+                  key: 'payments',
+                  main: <OrderPayments orderId={row.id} mayView={mayViewPayments} />,
+                  side: (
+                    <Card
+                      title={t('web.order_references_title')}
+                      hint={t('web.order_references_hint')}
+                    >
+                      <KV
+                        items={[
+                          [
+                            t('web.order_customer'),
+                            <span key="cu" className="nowrap record-ref">
+                              <CustomerIdentityLink
+                                customerId={row.customerId}
+                                telegramUserId={row.customerTelegramUserId}
+                                username={row.customerUsername}
+                                onLink={onLink}
+                              />
+                              <CopyIdButton id={row.customerId} />
+                            </span>,
+                          ],
+                          [
+                            t('web.order_product'),
+                            row.productId === null ? (
+                              <span key="pr" className="muted">
+                                {t('web.purpose_custom_service')}
+                              </span>
+                            ) : (
+                              <ProductLink
+                                key="pr"
+                                id={row.productId}
+                                code={row.productCode}
+                                title={row.productTitle}
+                              />
+                            ),
+                          ],
+                          [
+                            t('web.product_panel'),
+                            <PanelLink key="pa" id={row.panelId} name={row.panelName} />,
+                          ],
+                        ]}
+                      />
+                    </Card>
+                  ),
+                },
+                {
+                  /*
+                   * W4: the cards that made the main column run on alone are full-width rows
+                   * under the two above (the demo's order page).
+                   */
+                  key: 'tail',
+                  main: (
+                    <div className="stack">
+                      {row.purpose === 'CUSTOM_SERVICE' && <OrderCustomService orderId={row.id} />}
 
-                  <Card
-                    title={t('web.order_references_title')}
-                    hint={t('web.order_references_hint')}
-                  >
-                    <KV
-                      items={[
-                        [
-                          t('web.order_customer'),
-                          <span key="cu" className="nowrap record-ref">
-                            <CustomerIdentityLink
-                              customerId={row.customerId}
-                              telegramUserId={row.customerTelegramUserId}
-                              username={row.customerUsername}
-                              onLink={onLink}
-                            />
-                            <CopyIdButton id={row.customerId} />
-                          </span>,
-                        ],
-                        [
-                          t('web.order_product'),
-                          row.productId === null ? (
-                            <span key="pr" className="muted">
-                              {t('web.purpose_custom_service')}
-                            </span>
-                          ) : (
-                            <ProductLink
-                              key="pr"
-                              id={row.productId}
-                              code={row.productCode}
-                              title={row.productTitle}
-                            />
-                          ),
-                        ],
-                        [
-                          t('web.product_panel'),
-                          <PanelLink key="pa" id={row.panelId} name={row.panelName} />,
-                        ],
-                      ]}
-                    />
-                  </Card>
+                      {/* Phase C3: why the new account landed on its panel. */}
+                      {row.purpose === 'NEW_SERVICE' && <OrderPlacement orderId={row.id} />}
 
-                  <OrderPayments orderId={row.id} mayView={mayViewPayments} />
-                </>
-              }
-              /*
-               * W4: the cards that made the main column run on alone are full-width rows
-               * under the two columns (the demo's order page).
-               */
-              tail={
-                <>
-                  {row.purpose === 'CUSTOM_SERVICE' && <OrderCustomService orderId={row.id} />}
+                      <OrderPricing orderId={row.id} />
 
-                  {/* Phase C3: why the new account landed on its panel. */}
-                  {row.purpose === 'NEW_SERVICE' && <OrderPlacement orderId={row.id} />}
-
-                  <OrderPricing orderId={row.id} />
-
-                  <OrderService orderId={row.id} mayView={mayViewServices} />
-                </>
-              }
+                      <OrderService orderId={row.id} mayView={mayViewServices} />
+                    </div>
+                  ),
+                },
+              ]}
             />
           </>
         )}

@@ -55,7 +55,8 @@ export const WEB_FA_SERVICES = {
 
   // --- Orders (Phase 4B) ---------------------------------------------------
   'web.orders_title': 'سفارش‌ها',
-  'web.orders_intro': 'آنچه مشتری خواسته است، و مبلغی که به او اعلام شده.',
+  'web.orders_col_order': 'سفارش / کد',
+  'web.orders_col_dates': 'ثبت / مهلت پرداخت',
   'web.orders_empty': 'هنوز سفارشی ثبت نشده است.',
   'web.orders_empty_hint': 'وقتی مشتری از فهرست ربات چیزی انتخاب کند، اینجا دیده می‌شود.',
   'web.orders_filter_empty': 'سفارشی با این مشخصات پیدا نشد.',
@@ -159,8 +160,11 @@ export const WEB_FA_SERVICES = {
    * cannot find the link needs to know it is withheld rather than missing.
    */
   'web.services_title': 'سرویس‌ها',
-  'web.services_intro': 'سرویس‌هایی که ساخته شده‌اند، و آنهایی که هنوز نشده‌اند.',
   'web.services_empty': 'هنوز سرویسی ساخته نشده است.',
+  'web.services_col_service': 'سرویس / کد',
+  'web.services_col_panel': 'پنل / لوکیشن',
+  'web.services_col_state': 'وضعیت / تحویل',
+  'web.services_col_dates': 'انقضا / شروع',
   'web.services_tab_live': 'فعال',
   'web.services_tab_ended': 'پایان‌یافته',
   'web.services_tab_all': 'همه',
@@ -355,7 +359,6 @@ export const WEB_FA_SERVICES = {
   'web.service_action_change_location': 'تغییر لوکیشن',
   'web.service_blocker_unlimited': 'این سرویس در این مورد محدودیتی ندارد که به آن افزوده شود.',
   'web.service_blocker_no_target': 'لوکیشن دیگری برای این سرویس تنظیم نشده است.',
-  'web.soc_location': 'لوکیشن',
   'web.soc_filter_panel': 'پنل',
   'web.soc_filter_product': 'محصول',
   'web.soc_filter_location': 'لوکیشن',

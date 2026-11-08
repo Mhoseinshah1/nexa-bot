@@ -441,7 +441,8 @@ describe('the service detail', () => {
     );
     await screen.findAllByText('nx-7f3a91');
     expect(container.querySelector('a[href^="/products/"]')).toBeNull();
-    expect(screen.getByText('سرویس دلخواه')).toBeInTheDocument();
+    // Once in the header's link line and once in the identity card.
+    expect(screen.getAllByText('سرویس دلخواه').length).toBeGreaterThan(0);
   });
 
   /** The same prohibition as on the list, on the screen that shows one service. */
@@ -578,9 +579,17 @@ describe('the service detail', () => {
     await screen.findAllByText('nx-7f3a91');
 
     expect(screen.getByRole('button', { name: 'موقتاً غیرفعال کن' })).toBeDisabled();
-    expect(screen.getByText(/نوع پنل این سرویس چنین کاری را پشتیبانی نمی‌کند/)).toBeInTheDocument();
-    expect(screen.getByText(/پنل این سرویس در حال حاضر قابل استفاده نیست/)).toBeInTheDocument();
-    expect(screen.getByText(/یک عملیات از همین نوع در جریان است/)).toBeInTheDocument();
+    // The reason is on the button itself (hover and focus) and in the folded list.
+    expect(screen.getByRole('button', { name: 'موقتاً غیرفعال کن' })).toHaveAccessibleDescription(
+      /نوع پنل این سرویس چنین کاری را پشتیبانی نمی‌کند/,
+    );
+    expect(
+      screen.getAllByText(/نوع پنل این سرویس چنین کاری را پشتیبانی نمی‌کند/).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/پنل این سرویس در حال حاضر قابل استفاده نیست/).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText(/یک عملیات از همین نوع در جریان است/).length).toBeGreaterThan(0);
   });
 
   it('posts the action the button names, with an idempotency key', async () => {
@@ -649,13 +658,17 @@ describe('the service detail', () => {
     );
     await screen.findAllByText('nx-7f3a91');
 
-    expect(screen.getByText(/به دسترسی «ویرایش سرویس» نیاز دارید/)).toBeInTheDocument();
+    expect(screen.getAllByText(/به دسترسی «ویرایش سرویس» نیاز دارید/).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'موقتاً غیرفعال کن' })).toBeDisabled();
     expect(api.calls.map((call) => call.method)).toEqual(['GET', 'GET']);
   });
 
-  /* PR #285 review, A4: «چرا N دکمه غیرفعال است؟» counts the disabled BUTTONS, not reasons. */
-  it('counts the disabled buttons in «چرا N دکمه غیرفعال است؟», not the reasons', async () => {
+  /*
+   * PR #285 review, A4, redesigned (PR-1): the folded list no longer counts buttons — every
+   * disabled button now carries its own reason on hover and focus, which is the stronger check:
+   * no disabled button is left without a sentence.
+   */
+  it('gives every disabled action button its reason, and folds the sentences without a button', async () => {
     // Every action available to the SERVICE; the session lacks services.edit.
     const everything = Object.fromEntries(
       SERVICE_OPERATOR_ACTIONS.map((action) => [action, 'AVAILABLE' as const]),
@@ -665,15 +678,16 @@ describe('the service detail', () => {
       <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit={false} mayTerminate={false} />,
     );
     await screen.findAllByText('nx-7f3a91');
-    const panel = screen.getByRole('region', { name: t('web.service_action_panel_title') });
-    const disabled = panel.querySelectorAll('.action-group-buttons button:disabled').length;
-    const why = panel.querySelector('details.action-panel-why') as HTMLElement;
-    const reasons = within(why).getAllByRole('listitem').length;
-    // One «no edit permission» sentence covers every ordinary button: the two differ.
-    expect(disabled).toBeGreaterThan(reasons);
-    expect(why.querySelector('summary')).toHaveTextContent(
-      t('web.action_panel_why').replace('{n}', formatNumber(disabled)),
-    );
+    const bar = screen.getByRole('toolbar', { name: t('web.service_action_panel_title') });
+    const disabled = [...bar.querySelectorAll('button:disabled')] as HTMLElement[];
+    expect(disabled.length).toBeGreaterThan(0);
+    for (const button of disabled) {
+      expect(button, button.textContent ?? '').toHaveAccessibleDescription(/.+/);
+    }
+    // The terminate sentence has no button (no permission): it stays in the fold.
+    const why = document.querySelector('details.action-panel-why') as HTMLElement;
+    expect(within(why).getAllByRole('listitem').length).toBeGreaterThan(0);
+    expect(within(why).getByText(t('web.service_action_denied_terminate'))).toBeInTheDocument();
   });
 
   it('separates the terminate permission from the other six', async () => {
@@ -938,7 +952,7 @@ describe('the service action panel', () => {
     stubApi(detail({ actions: actionsWith({ SUSPEND: 'AVAILABLE', TERMINATE: 'AVAILABLE' }) }));
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate mayGrant />);
     await screen.findAllByText('nx-7f3a91');
-    const panel = screen.getByRole('region', { name: t('web.service_action_panel_title') });
+    const panel = screen.getByRole('toolbar', { name: t('web.service_action_panel_title') });
     const group = (key: WebKey) => within(panel).getByRole('group', { name: t(key) });
     expect(
       within(group('web.service_group_panel')).getByRole('button', {
@@ -993,8 +1007,9 @@ describe('the service action panel', () => {
       <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />,
     );
     await screen.findAllByText('nx-7f3a91');
-    const pair = container.querySelector('.wb-balance');
+    const pair = container.querySelector('.card-row');
     expect(pair).not.toBeNull();
+    // One grid ROW, so the two cards share a height (redesign PR-1: CardRows).
     expect(within(pair as HTMLElement).getByText(t('web.service_identity_title'))).toBeTruthy();
     expect(within(pair as HTMLElement).getByText(t('web.service_delivery'))).toBeTruthy();
   });
@@ -1086,6 +1101,9 @@ describe('rows imported from Mirza', () => {
  * mass action selects.
  */
 describe('the lifecycle tabs', () => {
+  const lifecycleChips = () => screen.getByRole('group', { name: t('web.services_title') });
+  const chipNamed = (name: string) => within(lifecycleChips()).getByRole('button', { name });
+
   const listParams = (calls: readonly { url: string; method: string }[]) =>
     calls
       .filter((call) => call.method === 'GET' && /\/services(\?|$)/.test(call.url))
@@ -1097,9 +1115,10 @@ describe('the lifecycle tabs', () => {
     await screen.findAllByText('nx-7f3a91');
 
     expect(listParams(api.calls).map((params) => params.get('lifecycle'))).toEqual(['LIVE']);
-    const tabs = screen.getAllByRole('tab');
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['فعال', 'پایان‌یافته', 'همه']);
-    expect(screen.getByRole('tab', { name: 'فعال' }).getAttribute('aria-selected')).toBe('true');
+    // Redesign PR-1: the tabs became quick-filter chips (no counts: the list has no totals).
+    const chips = within(lifecycleChips()).getAllByRole('button');
+    expect(chips.map((chip) => chip.textContent)).toEqual(['فعال', 'پایان‌یافته', 'همه']);
+    expect(chipNamed('فعال').getAttribute('aria-pressed')).toBe('true');
   });
 
   /*
@@ -1130,9 +1149,11 @@ describe('the lifecycle tabs', () => {
         sent.map((params) => params.get('lifecycle')),
         JSON.stringify(query),
       ).toEqual([tab]);
-      expect(screen.getByRole('tab', { selected: true }).textContent).toBe(
-        { LIVE: 'فعال', ENDED: 'پایان‌یافته', ALL: 'همه' }[tab],
-      );
+      expect(
+        within(lifecycleChips())
+          .getAllByRole('button', { pressed: true })
+          .map((chip) => chip.textContent),
+      ).toEqual([{ LIVE: 'فعال', ENDED: 'پایان‌یافته', ALL: 'همه' }[tab]]);
       unmount();
     }
   });
@@ -1165,7 +1186,7 @@ describe('the lifecycle tabs', () => {
       />,
     );
     await screen.findAllByText('nx-7f3a91');
-    fireEvent.click(screen.getByRole('tab', { name: 'پایان‌یافته' }));
+    fireEvent.click(chipNamed('پایان‌یافته'));
     await waitFor(() =>
       expect(new URLSearchParams(window.location.search).get('lifecycle')).toBe('ENDED'),
     );
@@ -1186,7 +1207,7 @@ describe('the lifecycle tabs', () => {
       />,
     );
     await screen.findAllByText('nx-7f3a91');
-    fireEvent.click(screen.getByRole('tab', { name: 'فعال' }));
+    fireEvent.click(chipNamed('فعال'));
     await waitFor(() => expect(window.location.search).toBe(''));
   });
 
@@ -1229,7 +1250,8 @@ describe('the lifecycle tabs', () => {
     expect(bodyRows.findIndex((text) => text.includes('nx-first'))).toBeLessThan(
       bodyRows.findIndex((text) => text.includes('nx-second')),
     );
-    expect(screen.getByRole('columnheader', { name: 'تاریخ خرید' })).toBeTruthy();
+    // Five merged columns: the original purchase sits under the expiry in the dates column.
+    expect(screen.getByRole('columnheader', { name: t('web.services_col_dates') })).toBeTruthy();
     const first = bodyRows.find((text) => text.includes('nx-first')) ?? '';
     expect(first).toContain(formatTimestampNumeric('2025-01-01T09:00:00.000Z'));
     expect(first).not.toContain(formatTimestampNumeric('2026-10-18T09:00:00.000Z'));
