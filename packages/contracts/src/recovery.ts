@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SECRET_PURPOSES } from './secrets.js';
 import type { StateMachineDefinition } from './state-machine.js';
 
 /**
@@ -352,6 +353,15 @@ export const RECOVERY_FAILURE_CODES = [
    * credentials. Import the Recovery Kit of the installation that wrote it.
    */
   'recovery.candidate_keys_missing',
+  /**
+   * The restored database holds secrets this installation cannot actually READ: a
+   * trial decryption of every stored secret failed authentication for at least one
+   * row, with every key held (configured, imported, and the keys the archive itself
+   * carried). Unlike `candidate_keys_missing` this is decided by decrypting, not by
+   * comparing key ids — two installations can name different keys the same way.
+   * The per-purpose counts are on the request's `restoreTest.unreadableSecrets`.
+   */
+  'recovery.candidate_secrets_unreadable',
   /** Anything this vocabulary does not name. Logged in full, reported as this. */
   'recovery.internal',
 ] as const;
@@ -524,6 +534,33 @@ export const recoveryRestoreTestSchema = z.object({
   expectedMigrations: z.number().int().nonnegative(),
   /** Whether this candidate could be cut over to as it stands. */
   cutoverPermitted: z.boolean(),
+  /**
+   * The trial decryption's failures, per kind of secret: how many stored values of
+   * that purpose did not decrypt with any key held. Present (possibly empty) once
+   * the trial ran; absent on rows written before it existed. Counts only — never an
+   * id, a key or a value.
+   */
+  unreadableSecrets: z
+    .array(
+      z.object({
+        purpose: z.enum(SECRET_PURPOSES),
+        count: z.number().int().positive(),
+      }),
+    )
+    .optional(),
+  /**
+   * Whether importing the old installation's Recovery Kit could help: true when the
+   * archive carried NO key bundle (an archive from before self-contained backups, or
+   * a keyring `.nxb`), so the old server's keys are not in it.
+   */
+  canUploadKit: z.boolean().optional(),
+  /** How many keys the archive itself carried, wrapped under its backup password. */
+  bundledKeys: z.number().int().nonnegative().optional(),
+  /**
+   * How many stored secrets the executor re-encrypted under this installation's
+   * active key in the candidate, before the cutover. Set by the executor only.
+   */
+  secretsRewrapped: z.number().int().nonnegative().optional(),
 });
 export type RecoveryRestoreTest = z.infer<typeof recoveryRestoreTestSchema>;
 
