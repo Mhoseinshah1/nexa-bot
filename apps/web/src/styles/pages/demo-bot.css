@@ -172,8 +172,12 @@
   position: sticky;
   inset-block-start: 16px;
 }
+/* The list is its own scroll panel, so choosing a category never scrolls the whole page. */
 .feature-pane-body {
   min-width: 0;
+  max-block-size: max(360px, calc(100dvh - 250px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .feature-meta {
   display: flex;
@@ -200,6 +204,10 @@
 @media (max-width: 860px) {
   .feature-split {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .feature-pane-body {
+    max-block-size: none;
+    overflow-y: visible;
   }
   .feature-split > .tabs.boxed {
     position: static;

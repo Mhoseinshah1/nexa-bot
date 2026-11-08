@@ -170,7 +170,7 @@ describe('the settings page', () => {
   it('draws every setting with its Persian title, description, value in force and save button', async () => {
     stubApi(ROUTES);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByRole('tablist', { name: t('web.ob_sections') });
+    await settingsTabs();
 
     let group: string | null = null;
     const byGroup = [...VISIBLE_KEYS].sort((a, b) =>
@@ -193,12 +193,11 @@ describe('the settings page', () => {
       expect(
         within(card).getByText(`${t('web.settings_current_value')}:`, { exact: false }),
       ).toBeInTheDocument();
-      expect(within(card).getByRole('button', { name: t('web.save') })).toBeInTheDocument();
+      // PR-7: a row has no save button of its own; the page's one sticky bar saves.
+      expect(within(card).queryByRole('button', { name: t('web.save') }), key).toBeNull();
     }
-    // Hidden tabs included: every group stays mounted.
-    expect(screen.getAllByRole('button', { name: t('web.save'), hidden: true })).toHaveLength(
-      VISIBLE_KEYS.length,
-    );
+    // Closed sections included: every group stays mounted, and nothing is unsaved yet.
+    expect(screen.queryAllByRole('button', { name: t('web.save'), hidden: true })).toHaveLength(0);
     // WP-A4: the keys the ops group panel owns are not drawn here at all; nor, since R1,
     // the main menu's arrangement, which the «دکمه‌های ربات» page edits; nor, since F5, a
     // retired key.
@@ -231,12 +230,13 @@ describe('the settings page', () => {
   it('groups the settings under Persian headings', async () => {
     stubApi(ROUTES);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    // One tab per group, each opening its Persian heading.
-    const tabs = await settingsTabs();
+    // One collapsible section per group, each headed by its Persian title; a closed one opens.
+    const heads = await settingsTabs();
     for (const title of Object.values(SETTING_GROUP_TITLES)) {
-      const tab = tabs.find((one) => (one.textContent ?? '').startsWith(t(title)));
-      expect(tab, t(title)).toBeDefined();
-      fireEvent.click(tab!);
+      const head = heads.find((one) => (one.textContent ?? '').startsWith(t(title)));
+      expect(head, t(title)).toBeDefined();
+      if (head!.getAttribute('aria-expanded') !== 'true') fireEvent.click(head!);
+      expect(head).toHaveAttribute('aria-expanded', 'true');
       expect(screen.getByRole('heading', { name: t(title) })).toBeInTheDocument();
     }
   });
@@ -488,9 +488,7 @@ describe('the settings page', () => {
       `${t('web.amount_minor')} — ${t('web.setting_topup_maximum')}`,
     );
     fireEvent.change(amount, { target: { value: '۲۰٬۰۰۰' } });
-    const heading = screen.getByRole('heading', { name: t('web.setting_topup_maximum') });
-    const card = heading.closest('article') as HTMLElement;
-    fireEvent.click(within(card).getByRole('button', { name: t('web.save') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
     await waitFor(() => {
       const write = api.calls.find((call) => call.method === 'POST');
       expect(write?.body).toMatchObject({ value: { amountMinor: '20000', currency: 'IRT' } });
@@ -683,7 +681,9 @@ describe('the settings page', () => {
       },
     ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByLabelText(t('web.setting_reminders_expiry_first_days'));
+    fireEvent.change(await screen.findByLabelText(t('web.setting_reminders_expiry_first_days')), {
+      target: { value: '4' },
+    });
     fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
     expect(await screen.findByText(refusal)).toBeInTheDocument();
   });
@@ -726,7 +726,7 @@ describe('the settings page', () => {
       },
     ]);
     const { container } = renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByLabelText(t(label));
+    fireEvent.change(await screen.findByLabelText(t(label)), { target: { value: '4' } });
     fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
     expect(await screen.findByText(t('web.settings_invalid_value'))).toBeInTheDocument();
     expect(visibleText(container)).not.toContain(message);

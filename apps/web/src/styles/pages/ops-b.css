@@ -23,6 +23,12 @@
  */
 .settings-group {
   scroll-margin-top: 16px;
+  margin-block-end: 12px;
+}
+/* PR-7: the setting folds run edge to edge inside their collapsible section. */
+.settings-group .settings-section-body > .settings-rows,
+.settings-group .settings-section-body > .set-fold {
+  margin-inline: -16px;
 }
 .set-fold {
   border-bottom: 1px solid var(--line);

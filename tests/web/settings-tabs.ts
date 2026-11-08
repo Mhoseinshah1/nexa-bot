@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import type { SettingKey } from '@nexa/contracts';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import {
@@ -7,24 +7,20 @@ import {
 } from '../../apps/web/src/settings-presentation';
 
 /**
- * W2: the settings page shows one group at a time, as tabs. A test that reaches a row
- * outside the first group opens that row's tab first, exactly as an operator does.
+ * PR-7: the settings page is a list of collapsible sections, one per group (the first starts
+ * open). A test that reaches a row outside the first group opens that row's section first,
+ * exactly as an operator does.
  */
 export async function openSettingsGroupOf(key: SettingKey): Promise<void> {
-  // A selector rather than a role query over the whole page: the settings page is large.
-  const tabs = await waitFor(() => {
-    const strip = document.querySelector<HTMLElement>(
-      `[role="tablist"][aria-label="${t('web.ob_sections')}"]`,
-    );
-    if (strip === null) throw new Error('no settings tab strip yet');
-    return strip;
-  });
   const title = t(SETTING_GROUP_TITLES[SETTING_PRESENTATION[key].group]);
-  const tab = within(tabs)
-    .getAllByRole('tab')
-    .find((one) => (one.textContent ?? '').startsWith(title));
-  if (tab === undefined) throw new Error(`no settings tab for ${key}`);
-  fireEvent.click(tab);
+  const head = await waitFor(() => {
+    const found = [
+      ...document.querySelectorAll<HTMLButtonElement>('.settings-section-head button'),
+    ].find((one) => (one.textContent ?? '').startsWith(title));
+    if (found === undefined) throw new Error(`no settings section for ${key}`);
+    return found;
+  });
+  if (head.getAttribute('aria-expanded') !== 'true') fireEvent.click(head);
   // R11: each setting is an accordion (the first starts open). A test that reads rows opens
   // them, as an operator would, before it looks inside one.
   for (const fold of document.querySelectorAll<HTMLDetailsElement>('details.set-fold')) {
@@ -32,8 +28,13 @@ export async function openSettingsGroupOf(key: SettingKey): Promise<void> {
   }
 }
 
-/** Every group's tab, in order. */
+/** Every group's section head, in order. */
 export async function settingsTabs(): Promise<HTMLElement[]> {
-  const tabs = await screen.findByRole('tablist', { name: t('web.ob_sections') });
-  return within(tabs).getAllByRole('tab');
+  await screen.findByRole('heading', { name: t('web.settings_title') });
+  await waitFor(() => {
+    if (document.querySelectorAll('.settings-section-head button').length === 0) {
+      throw new Error('no settings section yet');
+    }
+  });
+  return [...document.querySelectorAll<HTMLElement>('.settings-section-head button')];
 }

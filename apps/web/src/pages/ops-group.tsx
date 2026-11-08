@@ -47,6 +47,7 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { ListFilterBar } from '../ui/filter-bar';
+import { ListFreshness } from '../ui/list-search';
 import { ErrorRef } from '../ui/technical-details';
 
 /**
@@ -263,7 +264,11 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
 
   return (
     <>
-      <PageHead title={t('web.opsgroup_title')} subtitle={t('web.opsgroup_subtitle')} />
+      <PageHead
+        title={t('web.opsgroup_title')}
+        subtitle={t('web.opsgroup_subtitle')}
+        actions={<ListFreshness query={status} />}
+      />
 
       <StateSwitch query={status} denied={denied} isEmpty={false}>
         {view !== undefined && (

@@ -1,0 +1,45 @@
+# PR-7 (part B): before/after inventory — Settings, Features, OpsGroup
+
+Presentation only: every query, mutation, permission prop, confirm dialog, validation, version and idempotency key is the
+page's own, unchanged. No endpoint was added. No count chip is drawn on any of these pages: none of their endpoints returns a
+server total.
+
+## `/settings` — `pages/settings.tsx`
+
+| Before                                                                                                                                                                         | After                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Group tabs (`SectionTabs`, one group visible, others `hidden`) with an unsaved dot on a tab                                                                                    | One collapsible `SettingsSection` per group (the first open). A closed section is `hidden`, still mounted, so drafts survive; the section title shows the count of its unsaved settings                                                                                  |
+| «N تغییر ذخیره‌نشده» badge beside the title                                                                                                                                    | The sticky bar's «N تغییر ذخیره‌نشده — ذخیره / لغو» (kit `StickySaveBar`), shown only with an unsaved row and only with `settings.edit`                                                                                                                                  |
+| Each row's own «ذخیره» button                                                                                                                                                  | Removed. The bar's «ذخیره» calls every unsaved row's own save: the same `settingDraftProblems` check, the same selling-currency confirm, the same `saveSetting` request with the version the row was read at and its own idempotency key. One request per row, as before |
+| Per-row «ذخیره‌نشده» badge and «دور انداختن»                                                                                                                                   | Kept in the row. The bar's «لغو» discards every unsaved row (each back to the value it was read at)                                                                                                                                                                      |
+| A row's refusal / conflict / «changed elsewhere» / validation banners, «ثبت شد» result, technical disclosure, current value, `PLANNED` / restart badges, off-currency warnings | Unchanged, inside the row. The bar adds «N مورد ذخیره نشد؛ …» while an unsaved row's save failed or its draft is invalid, so a failure in a closed section is not missed                                                                                                 |
+| Focus returned to the row's Save after a confirmed currency write                                                                                                              | Returned to the row's first control (the bar has gone by then)                                                                                                                                                                                                           |
+| Leave guard (`useUnsavedChanges`), accordion row per setting with its current value, auto-delete preview above the services group, retired / managed-elsewhere keys not drawn  | Unchanged                                                                                                                                                                                                                                                                |
+| Subtitle `settings_intro` (one muted line)                                                                                                                                     | Unchanged (it does not restate the page name)                                                                                                                                                                                                                            |
+
+Decisions and records:
+
+- Each setting stays an accordion row (`SettingFold`) holding its existing editor: the editors (money, channel list, topup presets, handle list, raw JSON…) are
+  not switches, and each carries its own banners, so the kit's `SettingRow` / `SwitchSettingRow` were not forced onto them.
+- No area kept its own save button. A setting can no longer be re-saved while unchanged (the bar appears only for a real edit); pressing Enter in a
+  field no longer submits it (there is no per-row submit button).
+- Time inputs: no setting drawn on this page is a time of day. `backup.daily_time` is edited on the backup page and `ops.log.nightly_report_time` on the ops-group
+  page; the latter now uses `TimeField24` (below). The backup page is not in this PR's scope.
+
+## `/features` — `pages/features.tsx`
+
+| Before                                                                                                                                | After                                                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Categories as a sticky vertical `Tabs` column beside the pane (model 1)                                                               | Unchanged                                                                                                                                                                            |
+| The pane grew with the list, so the page scrolled                                                                                     | The pane is its own scroll panel (`max-block-size`, `overflow-y: auto`; below 860px the page scrolls as before); it scrolls to its top on a category change and when a search starts |
+| Search, on/off filter chips, category counts «on/total», flag rows (switch + confirm dialogs, related settings, unknown-flag details) | Unchanged. Related-setting values already use the shared `Value` formatter (raw-JSON fix of #419 kept)                                                                               |
+| (none)                                                                                                                                | «زمان خواندن» + refresh (`ListFreshness`) in the head                                                                                                                                |
+
+## `/ops-group` — `pages/ops-group.tsx`, `ops-log-types.tsx`
+
+| Before                                                                                                           | After                                                                                                                       |
+| ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Stat cards, connection card beside topics/queue (equal height), connect card, log-type switches, manual fallback | Unchanged (already on the kit's patterns)                                                                                   |
+| Nightly report time: free text input (`HH:MM`)                                                                   | `TimeField24`: same `HH:MM` string, same row save, same request; a stored minute off the 5-minute grid is kept as an option |
+| (none)                                                                                                           | «زمان خواندن» + refresh in the head                                                                                         |
+| The «اعلان‌ها» delivery log tab and the rename to «گروه لاگ»                                                     | Not done here — PR-8                                                                                                        |

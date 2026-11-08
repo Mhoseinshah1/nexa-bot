@@ -137,4 +137,31 @@ describe('the per-type switches of the operations log group', () => {
       expect((control as HTMLButtonElement).disabled).toBe(true);
     }
   });
+
+  it('picks the nightly report time on the Persian 24-hour field and saves the same HH:MM', async () => {
+    const api = stubApi([
+      ...rows(),
+      {
+        url: '/settings/ops.log.nightly_report_time',
+        method: 'POST',
+        body: {
+          setting: setting({ key: 'ops.log.nightly_report_time', value: '21:59' }),
+          changed: true,
+        },
+      },
+    ]);
+    renderPage(<OpsLogTypeSwitches mayManage />);
+    await screen.findByTestId('ops-log-types');
+    const hour = screen.getByLabelText(
+      `${t('web.opslog_report_time')} — ${t('web.kit_time_hour')}`,
+    );
+    expect((hour as HTMLSelectElement).value).toBe('23');
+    fireEvent.change(hour, { target: { value: '21' } });
+    const field = hour.closest('.field-row') as HTMLElement;
+    fireEvent.click(within(field).getByRole('button', { name: t('web.save') }));
+    await waitFor(() => expect(api.calls.some((call) => call.method === 'POST')).toBe(true));
+    expect(api.calls.find((call) => call.method === 'POST')!.body).toMatchObject({
+      value: '21:59',
+    });
+  });
 });

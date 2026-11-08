@@ -1,4 +1,13 @@
-import { useRef, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   COMMERCE_ERROR_CODES,
@@ -44,14 +53,8 @@ import {
   useUnsavedChanges,
   Value,
 } from '../ui/kit';
-import {
-  DirtyScope,
-  SectionTabs,
-  UnsavedCount,
-  sameValue,
-  useDirtySet,
-  useReportDirty,
-} from './ops-b-layout';
+import { DirtyScope, sameValue, useDirtySet, useReportDirty } from './ops-b-layout';
+import { SettingsSection, StickySaveBar } from '../ui/redesign';
 import { ApiErrorReport, ErrorRef, TechnicalDetails } from '../ui/technical-details';
 import { AutoDeletePreview } from './auto-delete-preview';
 
@@ -101,76 +104,115 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
   );
   const sections = grouped(rows);
 
-  // Every row keeps its own draft and its own Save (each writes one registry row at the
-  // version it was read at); the page adds the sum of them and one leave guard.
+  // Every row keeps its own draft and writes one registry row at the version it was read at;
+  // the page adds the sum of them, ONE leave guard and ONE sticky save bar. The bar's «ذخیره»
+  // runs each unsaved row's own save (same validation, confirm, request, version and
+  // idempotency key as before), so a row can still be refused or conflict on its own.
   const { dirty, report } = useDirtySet();
   useUnsavedChanges(dirty.size > 0);
-  // W2: one group at a time, as tabs; every group stays mounted (hidden) so drafts survive.
-  const [tab, setTab] = useState<string>('');
-  const activeTab = sections.some((section) => section.group === tab)
-    ? tab
-    : (sections[0]?.group ?? '');
+  const handles = useRef(new Map<string, MutableRefObject<RowHandle>>());
+  const [flags, setFlags] = useState<{ failed: ReadonlySet<string>; saving: ReadonlySet<string> }>({
+    failed: new Set(),
+    saving: new Set(),
+  });
+  const bar = useRef<BarApi>({
+    register: (key, handle) => {
+      if (handle === null) handles.current.delete(key);
+      else handles.current.set(key, handle);
+    },
+    flag: (name, key, on) =>
+      setFlags((current) => {
+        if (current[name].has(key) === on) return current;
+        const next = new Set(current[name]);
+        if (on) next.add(key);
+        else next.delete(key);
+        return { ...current, [name]: next };
+      }),
+  });
+  const dirtyKeys = rows.map((row) => row.key).filter((key) => dirty.has(key));
+  const failedCount = dirtyKeys.filter((key) => flags.failed.has(key)).length;
+  const saveAll = () => {
+    for (const key of dirtyKeys) handles.current.get(key)?.current.submit();
+  };
+  const cancelAll = () => {
+    for (const key of dirtyKeys) handles.current.get(key)?.current.discard();
+  };
 
   return (
     <>
-      <PageHead
-        title={t('web.settings_title')}
-        subtitle={t('web.settings_intro')}
-        badge={<UnsavedCount count={dirty.size} />}
-      />
+      <PageHead title={t('web.settings_title')} subtitle={t('web.settings_intro')} />
 
       <StateSwitch query={settings} denied={denied} isEmpty={rows.length === 0}>
         <DirtyScope report={report}>
-          <SectionTabs
-            label={t('web.ob_sections')}
-            panelId="settings"
-            value={activeTab}
-            onChange={setTab}
-            items={sections.map(({ group, title, members }) => ({
-              id: group,
-              label: t(title),
-              count: members.length,
-              unsaved: members.some((member) => dirty.has(member.key)),
-            }))}
-          />
-          {sections.map(({ group, title, members }) => (
-            <section
-              key={group}
-              id={`settings-${group}`}
-              role="tabpanel"
-              aria-labelledby={`settings-tab-${group}`}
-              hidden={group !== activeTab}
-              className="card settings-group"
-            >
-              <header className="card-head">
-                <div className="titles">
-                  <h2 id={`settings-${group}-title`}>{t(title)}</h2>
-                </div>
-              </header>
-              {/* PR-3: the automatic deletion's preview sits above its own settings. */}
-              {group === 'services' &&
-                members.some((member) => member.key.startsWith('service.auto_delete.')) && (
-                  <AutoDeletePreview enabled={!denied} />
-                )}
-              <div className="settings-rows">
-                {members.map((setting, index) => (
-                  <SettingFold
-                    key={setting.key}
-                    setting={setting}
-                    first={index === 0}
-                    unsaved={dirty.has(setting.key)}
-                  >
-                    <SettingRow setting={setting} mayEdit={mayEdit} salesCurrency={salesCurrency} />
-                  </SettingFold>
-                ))}
+          <BarContext.Provider value={bar.current}>
+            {/* One group at a time is no longer a tab: each group is a collapsible section,
+                every one stays mounted (a closed one is `hidden`) so drafts survive. */}
+            {sections.map(({ group, title, members }, sectionIndex) => (
+              <div key={group} id={`settings-${group}`} className="settings-group">
+                <SettingsSection
+                  title={t(title)}
+                  defaultOpen={sectionIndex === 0}
+                  changed={members.filter((member) => dirty.has(member.key)).length}
+                >
+                  {/* PR-3: the automatic deletion's preview sits above its own settings. */}
+                  {group === 'services' &&
+                    members.some((member) => member.key.startsWith('service.auto_delete.')) && (
+                      <AutoDeletePreview enabled={!denied} />
+                    )}
+                  <div className="settings-rows">
+                    {members.map((setting, index) => (
+                      <SettingFold
+                        key={setting.key}
+                        setting={setting}
+                        first={index === 0}
+                        unsaved={dirty.has(setting.key)}
+                      >
+                        <SettingRow
+                          setting={setting}
+                          mayEdit={mayEdit}
+                          salesCurrency={salesCurrency}
+                        />
+                      </SettingFold>
+                    ))}
+                  </div>
+                </SettingsSection>
               </div>
-            </section>
-          ))}
+            ))}
+            {mayEdit && (
+              <StickySaveBar
+                changes={dirty.size}
+                onSave={saveAll}
+                onCancel={cancelAll}
+                saving={flags.saving.size > 0}
+                error={
+                  failedCount > 0
+                    ? t('web.settings_bar_failed').replace('{n}', formatNumber(failedCount))
+                    : undefined
+                }
+              />
+            )}
+          </BarContext.Provider>
         </DirtyScope>
       </StateSwitch>
     </>
   );
 }
+
+/** What the page's sticky bar can ask of one unsaved row. */
+interface RowHandle {
+  /** The row's own save: validation, the currency question, then the unchanged request. */
+  readonly submit: () => void;
+  /** Back to the value the row was read at. */
+  readonly discard: () => void;
+}
+
+interface BarApi {
+  readonly register: (key: string, handle: MutableRefObject<RowHandle> | null) => void;
+  readonly flag: (name: 'failed' | 'saving', key: string, on: boolean) => void;
+}
+
+/** Null outside the settings page: a row drawn elsewhere reports to nobody. */
+const BarContext = createContext<BarApi | null>(null);
 
 /**
  * One setting as an accordion (R11): a tab of ten editors is no longer a ten-screen wall. The
@@ -421,12 +463,16 @@ function SettingRow({
   });
 
   /*
-   * The currency question is opened by this row's Save, and confirming it starts a write
+   * The currency question is opened by the page's Save, and confirming it starts a write
    * that disables that Save — so the dialog's hand-back lands on a disabled button and
-   * focus falls to the page body. Focus comes back to Save once the write has settled.
+   * focus falls to the page body. Focus comes back to this row's first control once the
+   * write has settled.
    */
-  const saveButton = useRef<HTMLButtonElement>(null);
-  const armFocusRestore = useFocusAfterWrite(save.isPending, () => saveButton.current);
+  const rowRef = useRef<HTMLElement>(null);
+  const firstControl = () =>
+    rowRef.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled)') ??
+    null;
+  const armFocusRestore = useFocusAfterWrite(save.isPending, firstControl);
 
   /**
    * Not while OUR OWN write is settling.
@@ -447,8 +493,7 @@ function SettingRow({
     save.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
-  const onSubmit = (event: FormEvent) => {
-    event.preventDefault();
+  const submit = () => {
     // Snapshotted HERE, at the click, so the retry cannot see a later edit.
     const command = { value: draft, expectedVersion: basis.version };
     const problems = settingDraftProblems(setting.key, presentation?.control ?? null, draft);
@@ -466,11 +511,37 @@ function SettingRow({
     }
     send(command);
   };
+  const onSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    submit();
+  };
+
+  // The page's sticky bar saves and cancels through these; the row stays the one that
+  // validates, asks and sends.
+  const bar = useContext(BarContext);
+  const handle = useRef<RowHandle>({ submit, discard: () => adopt(basis) });
+  handle.current = { submit, discard: () => adopt(basis) };
+  useEffect(() => {
+    if (bar === null) return undefined;
+    bar.register(setting.key, handle);
+    return () => bar.register(setting.key, null);
+  }, [bar, setting.key]);
+  const failed = save.isError || draftProblems.length > 0;
+  useEffect(() => {
+    if (bar === null) return undefined;
+    bar.flag('failed', setting.key, failed);
+    return () => bar.flag('failed', setting.key, false);
+  }, [bar, setting.key, failed]);
+  useEffect(() => {
+    if (bar === null) return undefined;
+    bar.flag('saving', setting.key, save.isPending);
+    return () => bar.flag('saving', setting.key, false);
+  }, [bar, setting.key, save.isPending]);
 
   return (
     // An article per setting: the row is the unit a reader (and a test) finds by its
     // heading. Not labelled by it — a labelled container would share the input's name.
-    <article className="set-row">
+    <article className="set-row" ref={rowRef}>
       {/* `noValidate`: the server's schema decides what is acceptable and its refusal is
           shown in Persian below. A browser's own validation bubble would speak the
           browser's language and a range the server does not own. */}
@@ -531,16 +602,6 @@ function SettingRow({
                     </button>
                   </>
                 )}
-                {/* Primary only while there is something to save: a column of identical
-                    blue buttons reads as a column of pending work. */}
-                <button
-                  ref={saveButton}
-                  type="submit"
-                  className={unsaved ? 'btn primary sm' : 'btn sm'}
-                  disabled={save.isPending}
-                >
-                  {save.isPending ? t('web.saving') : t('web.save')}
-                </button>
               </div>
             )}
           </div>
@@ -639,7 +700,7 @@ function SettingRow({
             send(command);
           }}
           onCancel={() => setAsking(null)}
-          returnFocusTo={() => saveButton.current}
+          returnFocusTo={firstControl}
         />
       )}
     </article>
