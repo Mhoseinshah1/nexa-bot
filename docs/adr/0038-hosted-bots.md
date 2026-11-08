@@ -115,6 +115,14 @@ Admin session in the hosted tenant marked `impersonatedBy` that (D5) writes no r
 tenant's audit log, carries the owner's actor reference for the installation's log, cannot change
 that tenant's admins or credentials, and ends with the section session.
 
+## Backups (Phase 6B / D7)
+
+The creator sets the backup password for every hosted bot; hosted-bot owners cannot change it
+(existing rule, unchanged). The self-contained backup format (keys wrapped with the backup
+password inside the archive, rewrapped under the target server's active key on restore) must
+work per tenant later, so the wrap/unwrap code is tenant-agnostic: password and keys in,
+document out. Per-tenant backups are NOT built in this fix.
+
 ## Open
 
 - Purge closes the tenant for good (sessions revoked, bots disabled, `PURGED`); the physical

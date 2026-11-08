@@ -33,6 +33,7 @@ describe('the backup password card (E4)', () => {
       },
     ]);
     renderPage(<BackupPasswordCard status={STATUS} mayEdit />);
+    expect(screen.getByText(t('web.backup_password_change_note'))).toBeInTheDocument();
     const save = screen.getByRole('button', { name: t('web.backup_password_save') });
     expect(save).toBeDisabled();
     fireEvent.change(screen.getByLabelText(t('web.backup_password_new')), {
