@@ -122,6 +122,7 @@ export function BackupPasswordCard({
               onChange={(event) => setPassword(event.currentTarget.value)}
             />
           </label>
+          <p className="muted small">{t('web.backup_password_change_note')}</p>
           <label className="field">
             <span className="field-label">{t('web.backup_password_again')}</span>
             <SecretInput

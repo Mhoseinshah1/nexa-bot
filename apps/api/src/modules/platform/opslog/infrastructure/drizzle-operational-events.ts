@@ -65,6 +65,56 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
       recoversCode: event.recoversCode ?? null,
     };
 
+    // A recovery of a LISTED condition decides under the failure row's lock whether there is
+    // anything left to recover from (`recoversListed`): read entries are removed, and only an
+    // emptied list lets the recovery be written and the row resolved.
+    const listed = event.recoversListed;
+    const recoversKey = event.recoversDedupeKey;
+    if (listed !== undefined && event.recoversCode !== undefined && recoversKey !== undefined) {
+      const recoversCode = event.recoversCode;
+      const withList = async (tx: Executor): Promise<RecordedOperationalEvent> => {
+        const [open] = await tx
+          .select()
+          .from(operationalEvents)
+          .where(
+            and(
+              eq(operationalEvents.dedupeScope, values.dedupeScope),
+              eq(operationalEvents.dedupeKey, recoversKey),
+              eq(operationalEvents.code, recoversCode),
+              isNull(operationalEvents.resolvedAt),
+            ),
+          )
+          .limit(1)
+          .for('update');
+        if (open !== undefined) {
+          const read = new Set(listed.read);
+          const left = stringList(open.context, listed.key).filter((item) => !read.has(item));
+          if (left.length > 0) {
+            await tx
+              .update(operationalEvents)
+              .set({ context: { ...(open.context ?? {}), [listed.key]: left } })
+              .where(eq(operationalEvents.id, open.id));
+            return { ...view(open), isNew: false, reopened: false, withheld: true };
+          }
+        }
+        const [inserted] = await tx.insert(operationalEvents).values(values).returning();
+        if (inserted === undefined) throw new Error('operational_events write returned no row.');
+        await tx
+          .update(operationalEvents)
+          .set({ resolvedAt: now, resolvedByEventId: inserted.id })
+          .where(
+            and(
+              eq(operationalEvents.dedupeScope, values.dedupeScope),
+              eq(operationalEvents.code, recoversCode),
+              eq(operationalEvents.dedupeKey, recoversKey),
+              isNull(operationalEvents.resolvedAt),
+            ),
+          );
+        return { ...view(inserted), isNew: true, reopened: false };
+      };
+      return caller ? withList(caller) : this.db.transaction(withList);
+    }
+
     let row: typeof operationalEvents.$inferSelect | undefined;
     let isNew: boolean;
     let reopened = false;
@@ -92,7 +142,11 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
       const dedupe = async (tx: Executor) => {
         const lockExisting = async () => {
           const [found] = await tx
-            .select({ id: operationalEvents.id, resolvedAt: operationalEvents.resolvedAt })
+            .select({
+              id: operationalEvents.id,
+              resolvedAt: operationalEvents.resolvedAt,
+              context: operationalEvents.context,
+            })
             .from(operationalEvents)
             .where(
               and(
@@ -135,7 +189,21 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
             occurrenceCount: sql`${operationalEvents.occurrenceCount} + 1`,
             lastSeenAt: now,
             correlationId: values.correlationId,
-            context: values.context,
+            // `mergeList`: the list is the union of the stored one and this report's, taken
+            // under the row lock above, so a concurrent report of another subject is kept. A
+            // resolved row reopening starts afresh: what it listed was recovered.
+            context:
+              event.mergeList === undefined || existing.resolvedAt !== null
+                ? values.context
+                : {
+                    ...(values.context ?? {}),
+                    [event.mergeList]: [
+                      ...new Set([
+                        ...stringList(existing.context, event.mergeList),
+                        ...stringList(values.context, event.mergeList),
+                      ]),
+                    ].sort(),
+                  },
             // The condition is happening again, so it is not resolved any more.
             // The recovery event that said it had cleared stays in the table:
             // this reopens the row, it does not erase the history.
@@ -183,16 +251,27 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
         );
     }
 
-    return {
-      id: row.id,
-      code: row.code,
-      severity: row.severity as OperationalSeverity,
-      message: row.message,
-      occurrenceCount: row.occurrenceCount,
-      firstSeenAt: row.firstSeenAt,
-      lastSeenAt: row.lastSeenAt,
-      isNew,
-      reopened,
-    };
+    return { ...view(row), isNew, reopened };
   }
+}
+
+function view(
+  row: typeof operationalEvents.$inferSelect,
+): Omit<RecordedOperationalEvent, 'isNew' | 'reopened'> {
+  return {
+    id: row.id,
+    code: row.code,
+    severity: row.severity as OperationalSeverity,
+    message: row.message,
+    occurrenceCount: row.occurrenceCount,
+    firstSeenAt: row.firstSeenAt,
+    lastSeenAt: row.lastSeenAt,
+  };
+}
+
+/** The strings of one list in a stored context; anything else reads as empty. */
+function stringList(context: unknown, key: string): string[] {
+  if (context === null || typeof context !== 'object') return [];
+  const list = (context as Record<string, unknown>)[key];
+  return Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string') : [];
 }

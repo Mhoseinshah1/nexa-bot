@@ -278,20 +278,58 @@ describe('the Recovery Kit key lifecycle', () => {
       expect(await auditText()).not.toContain(old.toString('base64url'));
     });
 
-    it('REFUSES an attempt to replace the active key, and writes nothing', async () => {
-      // A kit claiming the active key's id with different bytes: honoured, this
-      // would silently swap the key every new secret is sealed with.
+    it('imports a different key under the ACTIVE id decrypt-only, and never swaps the active key', async () => {
+      // A kit naming the active key's id with different bytes: two installations
+      // made on the same day both called their key `install-<date>`, and the old
+      // server's kit is how its secrets become readable here. Held as a SECOND
+      // candidate for the id — the configured key still answers to the name and
+      // is still what every new secret is sealed with.
+      const other = randomBytes(32);
       const response = await importKit(
         await kitOf([
           { keyId: 'harmless-1', material: randomBytes(32) },
-          { keyId: 'test-1', material: randomBytes(32) },
+          { keyId: 'test-1', material: other },
         ]),
       );
-      expect(response.statusCode).toBe(409);
-      expect(response.json().error.code).toBe(PLATFORM_ERROR_CODES.RECOVERY_KIT_KEY_COLLISION);
-      expect(await api.container.installationKeyRepository.all()).toHaveLength(0);
+      expect(response.statusCode).toBe(201);
+      expect(
+        (await api.container.installationKeyRepository.all()).map((r) => r.keyId).sort(),
+      ).toEqual(['harmless-1', 'test-1']);
       expect(api.container.keyring.keys.get('test-1')?.equals(activeKey)).toBe(true);
-      expect(api.container.keyring.keys.has('harmless-1')).toBe(false);
+      expect(api.container.keyring.activeKeyId).toBe('test-1');
+      expect(api.container.keyring.candidatesFor('test-1').map((k) => k.equals(other))).toEqual([
+        false,
+        true,
+      ]);
+      // A new secret is sealed under the CONFIGURED bytes.
+      const context = {
+        purpose: 'bot_instance.token' as const,
+        tenantId: tenantA.tenantId,
+        entityId: randomUUID(),
+      };
+      const sealed = api.container.cipher.encrypt('x', context);
+      expect(
+        new AesGcmSecretCipher(
+          { activeKeyId: 'test-1', format: 'canonical', keys: new Map([['test-1', activeKey]]) },
+          false,
+        ).decrypt(sealed, context),
+      ).toBe('x');
+      // Listed as an imported key, beside the configured one.
+      const listed = await keys();
+      expect(
+        listed
+          .filter((k) => k.keyId === 'test-1')
+          .map((k) => k.origin)
+          .sort(),
+      ).toEqual(['CONFIGURED_ACTIVE', 'IMPORTED']);
+    });
+
+    it('still refuses the same bytes as the active key under its id as already held, not imported', async () => {
+      const response = await importKit(
+        await kitOf([{ keyId: 'test-1', material: Buffer.from(activeKey) }]),
+      );
+      expect(response.statusCode).toBe(201);
+      expect(await api.container.installationKeyRepository.all()).toHaveLength(0);
     });
 
     it('refuses a COLLISION with an already-imported key, whole', async () => {

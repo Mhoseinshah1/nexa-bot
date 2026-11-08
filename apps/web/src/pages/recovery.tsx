@@ -57,6 +57,11 @@ import { phaseRows } from '../backup-phases';
 import { CodeName } from './code-name';
 import { RecoveryKitSection } from './recovery-kit';
 import {
+  RestoreSecretsSummary,
+  UnreadableSecretsPanel,
+  secretsOutcomeText,
+} from './recovery-secrets';
+import {
   BACKUP_RUN_STATE_LABELS,
   RECOVERY_MIGRATION_VERDICT_LABELS,
   RECOVERY_STAGE_LABELS,
@@ -891,6 +896,17 @@ function RecoveryOperations({
             </Banner>
           )}
 
+          <UnreadableSecretsPanel
+            recovery={current}
+            mayRestore={mayRestore}
+            sevenZip={uploadedSevenZip}
+            onUpdated={(next) => {
+              setCurrent(next);
+              onChanged();
+            }}
+          />
+          <RestoreSecretsSummary recovery={current} />
+
           {current.state === 'UPLOADED' && (
             <>
               <p className="muted small">{t('web.recovery_verify_hint')}</p>
@@ -1228,7 +1244,7 @@ function recoveryColumns(): readonly Column<RecoveryRequestSummary>[] {
       // The failure in words, with the code under it for whoever reads the server log.
       render: (row) =>
         row.failureCode === null ? (
-          '—'
+          (secretsOutcomeText(row) ?? '—')
         ) : (
           <>
             {recoveryFailureText(row.failureCode)}

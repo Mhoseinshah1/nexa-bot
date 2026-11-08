@@ -11,7 +11,11 @@ import {
   type AuditWriter,
   type Clock,
   type IdGenerator,
+  type IdempotencyStore,
   type PermissionKey,
+  type RecoveryAcknowledgeUnreadableRequest,
+  type RecoveryRetestRequest,
+  type SecretPurpose,
   type RecoveryFailureCode,
   type RecoveryMigrationVerdict,
   type RecoveryRestoreTest,
@@ -22,6 +26,9 @@ import {
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import { recordMutationDenial } from '../../access/application/authorized-mutation.js';
 import type { BackupArchiver, BackupManifest } from '../../backup/application/ports.js';
+import { unreadableCounts } from '../../../../infrastructure/crypto/secret-trial.js';
+import { UNCLEARABLE_PURPOSES } from '../../../../infrastructure/crypto/secret-clearing.js';
+import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import {
   compareMigrations,
   type ExpectedMigration,
@@ -36,6 +43,7 @@ import type {
   RestoreEngine,
 } from './ports.js';
 import type { RecoveryKeyCoverage } from './installation-key.ports.js';
+import type { ExtraKey } from '../../../../infrastructure/crypto/keyring.js';
 
 /**
  * The operator's half of a recovery: everything that happens BEFORE the
@@ -88,6 +96,8 @@ export interface RecoveryServiceDeps {
   readonly keys: RecoveryKeyCoverage;
   readonly guard: PermissionGuard;
   readonly audit: AuditWriter;
+  /** §2.3: replays of a re-test or an acknowledgment answer with the first result. */
+  readonly idempotency: IdempotencyStore;
   readonly opsLog: { record(scope: ScopeContext, event: unknown): Promise<unknown> };
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -267,6 +277,21 @@ export class RecoveryService {
       entityType: 'Recovery',
       entityId: id,
     });
+    return this.runVerifyAndTest(scope, id, input, null);
+  }
+
+  /**
+   * The verification and restore test, from UPLOADED. `kept` is a re-test's: the keys
+   * the archive carried, recovered from the workspace where the first verification
+   * sealed them (the archive itself was re-sealed under the keyring by then, so opening
+   * it again yields no bundle).
+   */
+  private async runVerifyAndTest(
+    scope: TenantContext,
+    id: string,
+    input: { readonly archivePassword?: string },
+    kept: readonly ExtraKey[] | null,
+  ): Promise<RecoveryStepOutcome> {
     const request = await this.require(scope, id);
     if (request.workspacePath === null) {
       throw this.refuse('recovery.upload_rejected', 'This recovery has no uploaded archive.');
@@ -286,9 +311,24 @@ export class RecoveryService {
     }
 
     const workspace = this.deps.workspaces.open(request.workspacePath);
-    const verified = await this.decryptAndCheck(scope, id, workspace, input.archivePassword);
-    if (verified.failureCode !== null) return verified;
-    return this.restoreTest(scope, id, workspace);
+    // The keys a self-contained archive carried, unwrapped with its password: held in
+    // THIS call's memory for the restore test, and zeroed when it returns whatever
+    // happened. Never written anywhere in the clear and never added to the keyring.
+    const bundle: { keys: readonly ExtraKey[] | null } = { keys: kept };
+    try {
+      const verified = await this.decryptAndCheck(
+        scope,
+        id,
+        workspace,
+        input.archivePassword,
+        bundle,
+      );
+      if (verified.failureCode !== null) return verified;
+      return await this.restoreTest(scope, id, workspace, bundle.keys);
+    } finally {
+      for (const key of bundle.keys ?? []) key.material.fill(0);
+      for (const key of kept ?? []) key.material.fill(0);
+    }
   }
 
   /** DECRYPT, CHECKSUM and MANIFEST, over the real restore path. */
@@ -297,6 +337,7 @@ export class RecoveryService {
     id: string,
     workspace: RecoveryWorkspace,
     archivePassword: string | undefined,
+    bundle: { keys: readonly ExtraKey[] | null },
   ): Promise<RecoveryStepOutcome> {
     let verification: RecoveryVerification;
     try {
@@ -313,7 +354,12 @@ export class RecoveryService {
         // A 7-Zip upload (E4): the operator's password first; without one, this
         // installation's own stored passwords (an archive it sealed itself).
         ...(archivePassword === undefined ? {} : { passwords: [archivePassword] }),
+        // A self-contained archive's keys, unwrapped with the same password.
+        withBundledKeys: true,
       });
+      // A re-test's archive is the keyring re-seal, which carries no bundle: the keys the
+      // first verification kept in the workspace stand in for it.
+      bundle.keys = opened.bundledKeys ?? bundle.keys;
       const matches = opened.dumpChecksum === opened.manifest.checksum;
       verification = {
         formatVersion: 1,
@@ -372,6 +418,12 @@ export class RecoveryService {
           verification,
         });
       }
+      if (bundle.keys !== null) {
+        // For the EXECUTOR, another process, which never sees the password: the
+        // bundled keys wait in this recovery's workspace sealed under this
+        // installation's configured active key, bound to this recovery's id.
+        await workspace.writeBundledKeys(this.deps.keys.sealForExecutor(id, bundle.keys));
+      }
       if (opened.format === 'SEVEN_ZIP') {
         // Verified: re-seal the SAME dump under the keyring, in place, so the executor
         // opens what was verified without the operator's password ever being stored.
@@ -419,6 +471,8 @@ export class RecoveryService {
     scope: TenantContext,
     id: string,
     workspace: RecoveryWorkspace,
+    /** The keys the archive carried; null when it carried none (an old archive, an `.nxb`). */
+    bundledKeys: readonly ExtraKey[] | null,
   ): Promise<RecoveryStepOutcome> {
     await this.deps.requests.transition({
       id,
@@ -465,24 +519,37 @@ export class RecoveryService {
           failure = 'recovery.migration_incompatible';
         } else {
           /*
-           * The restored database's SECRETS, as well as its archive.
+           * The restored database's SECRETS, as well as its archive — DECRYPTED.
            *
            * The archive opened, so its own key is held. That says nothing about
            * the bot tokens and panel credentials inside it, which are sealed
            * under whatever key the old installation was using when it wrote
-           * them — possibly a rotation-era key the archive's key never touched.
-           * Cutting over to a database this installation cannot read the
-           * credentials of is a restore that "succeeds" into an outage, so it is
-           * refused HERE, before the operator is asked to confirm anything, and
-           * again by the executor before the renames.
+           * them. And a key held by NAME proves nothing either: two installations
+           * made on the same day both called their key `install-<date>`, the old
+           * id-only check found the name, cut over, and every secret then failed
+           * authentication. So every stored secret is trial-decrypted here, with
+           * every key held plus the keys the archive itself carried, and any
+           * failure refuses BEFORE the operator is asked to confirm anything —
+           * and again in the executor before the renames.
            */
-          const missing = await this.deps.keys.missingFrom(scratch);
-          if (missing.length > 0) {
+          const trial = await this.deps.keys.trialDecrypt(scratch, bundledKeys ?? []);
+          const unreadable = unreadableCounts(trial);
+          restoreTest = {
+            ...restoreTest,
+            unreadableSecrets: unreadable,
+            // Only an archive with no bundle can be helped by the old server's kit:
+            // a bundle already carried every key its secrets were sealed under.
+            canUploadKit: bundledKeys === null,
+            bundledKeys: bundledKeys?.length ?? 0,
+          };
+          if (trial.unreadableTotal > 0) {
+            // Counts per kind of secret only: never an id, a key or a value.
             this.deps.logger.error(
-              { recoveryId: id, missingKeyIds: missing },
-              'a restored database names keys this installation does not hold',
+              { recoveryId: id, unreadable },
+              'a restored database holds secrets this installation cannot decrypt',
             );
-            failure = 'recovery.candidate_keys_missing';
+            restoreTest = { ...restoreTest, cutoverPermitted: false };
+            failure = 'recovery.candidate_secrets_unreadable';
           }
         }
       }
@@ -526,6 +593,252 @@ export class RecoveryService {
       patch: { stage: 'AWAIT_CONFIRMATION', restoreTest },
     });
     return { request: await this.require(scope, id), failureCode: null };
+  }
+
+  // --- After a refused restore test (NEXA-FIX-RESTORE-SECRETS §2.3) ---------
+
+  /**
+   * Choice 1: the owner imported the old server's Recovery Kit (its own endpoint) and
+   * runs the verification and restore test AGAIN on this request, from its kept upload.
+   *
+   * Only from FAILED with `recovery.candidate_secrets_unreadable` and the upload still
+   * there — a conditional UPDATE naming both — on the CRITICAL `recovery.restore`,
+   * audited, idempotent: a replay of the key answers with the request as it is now.
+   */
+  async retest(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: RecoveryRetestRequest,
+  ): Promise<RecoveryStepOutcome> {
+    await this.authorize(scope, actor, RECOVERY_RESTORE, {
+      action: 'recovery.retest',
+      entityType: 'Recovery',
+      entityId: id,
+    });
+    const request = await this.require(scope, id);
+    const requestHash = digest(`retest\n${actor.id}\n${id}`);
+    const found = await this.deps.idempotency.find<{ recoveryId: string }>(
+      scope,
+      'WEB',
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (found !== null) return { request, failureCode: request.failureCode };
+    this.assertRefusedForSecrets(request);
+
+    const workspace = this.deps.workspaces.open(request.workspacePath as string);
+    let kept: ExtraKey[] | null = null;
+    const sealed = await workspace.readBundledKeys();
+    if (sealed !== null) {
+      try {
+        kept = this.deps.keys.openForExecutor(id, sealed);
+      } catch {
+        throw this.refuse(
+          'recovery.upload_rejected',
+          'The keys this upload carried can no longer be opened. Upload the archive again.',
+        );
+      }
+    }
+    try {
+      const moved = await this.deps.exclusive(async (tx) => {
+        const now = this.deps.clock.now();
+        const won = await this.deps.requests.transition(
+          {
+            id,
+            from: ['FAILED'],
+            to: 'UPLOADED',
+            now,
+            failedWith: 'recovery.candidate_secrets_unreadable',
+            patch: {
+              stage: 'RECEIVE_UPLOAD',
+              failureCode: null,
+              verification: null,
+              verifiedAt: null,
+              restoreTest: null,
+            },
+          },
+          tx,
+        );
+        if (!won) return false;
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'recovery.retest',
+            entityType: 'Recovery',
+            entityId: id,
+            before: { state: 'FAILED', failureCode: request.failureCode },
+            after: { state: 'UPLOADED', idempotencyKey: input.idempotencyKey },
+            reason: 'An administrator re-ran a restore test refused for unreadable secrets.',
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          'WEB',
+          input.idempotencyKey,
+          requestHash,
+          { recoveryId: id },
+          tx,
+        );
+        return true;
+      });
+      if (!moved) {
+        const now = await this.require(scope, id);
+        return { request: now, failureCode: now.failureCode };
+      }
+      const outcome = await this.runVerifyAndTest(
+        scope,
+        id,
+        input.archivePassword === undefined ? {} : { archivePassword: input.archivePassword },
+        kept,
+      );
+      kept = null; // zeroed by the run
+      return outcome;
+    } finally {
+      for (const key of kept ?? []) key.material.fill(0);
+    }
+  }
+
+  /**
+   * Choice 2 («ادامه؛ این‌ها را دوباره وارد می‌کنم»): the owner accepts that the listed
+   * secrets are lost and will re-enter them. The list must be EXACTLY the one the test
+   * recorded — same purposes, same counts, nothing extra or missing — or it is refused:
+   * an acknowledgment of something other than what was found acknowledges nothing.
+   *
+   * Moves the request to RESTORE_TEST_PASSED with `clearUnreadable` and the list; the
+   * ordinary typed confirmation follows, and the executor clears at most these values
+   * in the candidate before the renames. Refused outright for a purpose no restore may
+   * clear (a refund's sealed card: clearing it would change a refund).
+   */
+  async acknowledgeUnreadable(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: RecoveryAcknowledgeUnreadableRequest,
+  ): Promise<RecoveryRequestRow> {
+    await this.authorize(scope, actor, RECOVERY_RESTORE, {
+      action: 'recovery.unreadable_acknowledged',
+      entityType: 'Recovery',
+      entityId: id,
+    });
+    const request = await this.require(scope, id);
+    const acknowledged = normalisedUnreadable(input.unreadable);
+    const requestHash = digest(`acknowledge\n${actor.id}\n${id}\n${JSON.stringify(acknowledged)}`);
+    const found = await this.deps.idempotency.find<{ recoveryId: string }>(
+      scope,
+      'WEB',
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (found !== null) return request;
+    this.assertRefusedForSecrets(request);
+
+    const test = request.restoreTest;
+    const recorded = normalisedUnreadable(test?.unreadableSecrets ?? []);
+    if (test === null || recorded.length === 0 || !test.restored) {
+      throw this.refuse(
+        'recovery.candidate_secrets_unreadable',
+        'This recovery has no recorded list of unreadable secrets to acknowledge.',
+      );
+    }
+    if (!sameUnreadable(acknowledged, recorded)) {
+      throw this.confirmationRefused(
+        'The acknowledged list is not the list of unreadable secrets this restore test found.',
+      );
+    }
+    if (!cutoverPermitted(test.migrationVerdict) && test.migrationVerdict !== 'BEHIND') {
+      throw this.refuse(
+        'recovery.migration_incompatible',
+        'This artifact cannot be cut over to whatever is acknowledged.',
+      );
+    }
+    const unclearable = recorded.filter((entry) => UNCLEARABLE_PURPOSES.includes(entry.purpose));
+    if (unclearable.length > 0) {
+      throw this.refuse(
+        'recovery.candidate_secrets_unreadable',
+        "A refund card cannot be cleared by a restore. Import the old server's Recovery Kit.",
+      );
+    }
+
+    const restoreTest: RecoveryRestoreTest = {
+      ...test,
+      cutoverPermitted: true,
+      clearUnreadable: true,
+      acknowledgedUnreadable: recorded,
+    };
+    const moved = await this.deps.exclusive(async (tx) => {
+      const won = await this.deps.requests.transition(
+        {
+          id,
+          from: ['FAILED'],
+          to: 'RESTORE_TEST_PASSED',
+          now: this.deps.clock.now(),
+          failedWith: 'recovery.candidate_secrets_unreadable',
+          patch: { stage: 'AWAIT_CONFIRMATION', failureCode: null, restoreTest },
+        },
+        tx,
+      );
+      if (!won) return false;
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'recovery.unreadable_acknowledged',
+          entityType: 'Recovery',
+          entityId: id,
+          before: { state: 'FAILED', unreadableSecrets: recorded },
+          after: {
+            state: 'RESTORE_TEST_PASSED',
+            clearUnreadable: true,
+            acknowledgedUnreadable: recorded,
+            idempotencyKey: input.idempotencyKey,
+          },
+          reason:
+            'An administrator chose to re-enter the secrets this restore could not read; ' +
+            'they are cleared before the cut-over.',
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      await rememberOnce(
+        this.deps.idempotency,
+        scope,
+        'WEB',
+        input.idempotencyKey,
+        requestHash,
+        { recoveryId: id },
+        tx,
+      );
+      return true;
+    });
+    if (!moved) {
+      throw this.confirmationRefused(
+        'This recovery is no longer waiting on unreadable secrets. Nothing was changed.',
+      );
+    }
+    return this.require(scope, id);
+  }
+
+  /** FAILED for unreadable secrets, with its upload kept — or a refusal saying which. */
+  private assertRefusedForSecrets(request: RecoveryRequestRow): void {
+    if (
+      request.state !== 'FAILED' ||
+      request.failureCode !== 'recovery.candidate_secrets_unreadable'
+    ) {
+      throw this.confirmationRefused(
+        'This recovery was not refused for unreadable secrets, so there is nothing to continue.',
+      );
+    }
+    if (request.workspacePath === null) {
+      throw this.refuse(
+        'recovery.upload_rejected',
+        'This recovery no longer holds its upload. Upload the archive again.',
+      );
+    }
   }
 
   // --- Confirmation --------------------------------------------------------
@@ -783,7 +1096,11 @@ export class RecoveryService {
     from: 'VERIFYING' | 'RESTORE_TESTING',
     patch?: { verification?: RecoveryVerification; restoreTest?: RecoveryRestoreTest },
   ): Promise<RecoveryStepOutcome> {
-    await this.clearWorkspace(id, workspace.directory);
+    // §2.3: the one refusal the owner can act on for THIS request — import the old
+    // server's kit and re-test, or acknowledge and re-enter — keeps its upload (the
+    // ENCRYPTED archive and its sealed bundle; the plaintext dump is already gone).
+    const keepUpload = failureCode === 'recovery.candidate_secrets_unreadable';
+    if (!keepUpload) await this.clearWorkspace(id, workspace.directory);
     await this.deps.requests.transition({
       id,
       from: [from],
@@ -794,7 +1111,7 @@ export class RecoveryService {
         failureCode,
         // The workspace is gone, so its path must not stay on the row: a path
         // that no longer exists reads as debris somebody should go and find.
-        workspacePath: null,
+        ...(keepUpload ? {} : { workspacePath: null }),
         ...(patch?.verification === undefined ? {} : { verification: patch.verification }),
         ...(patch?.restoreTest === undefined ? {} : { restoreTest: patch.restoreTest }),
       },
@@ -921,6 +1238,36 @@ function constantTimeEqual(a: string, b: string): boolean {
     difference |= a.charCodeAt(index) ^ b.charCodeAt(index);
   }
   return difference === 0;
+}
+
+function digest(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+/** One entry per purpose, sorted by purpose: the form two lists are compared in. */
+export function normalisedUnreadable(
+  list: readonly { purpose: SecretPurpose; count: number }[],
+): { purpose: SecretPurpose; count: number }[] {
+  return [...list]
+    .map((entry) => ({ purpose: entry.purpose, count: entry.count }))
+    .sort((a, b) => (a.purpose < b.purpose ? -1 : a.purpose > b.purpose ? 1 : 0));
+}
+
+/**
+ * Strict equality of two NORMALISED lists: same length, and the same purpose with the
+ * same count at every position. A duplicated purpose never equals a recorded list (the
+ * recorded one has one entry per purpose), so a split count cannot pass.
+ */
+export function sameUnreadable(
+  a: readonly { purpose: SecretPurpose; count: number }[],
+  b: readonly { purpose: SecretPurpose; count: number }[],
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (entry, index) => entry.purpose === b[index]?.purpose && entry.count === b[index]?.count,
+    )
+  );
 }
 
 /** The digest of the bytes as received, computed by the server. */

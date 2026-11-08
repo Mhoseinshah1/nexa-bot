@@ -329,14 +329,31 @@ describe('an imported key is decrypt-only', () => {
     expect(keyring.keys.has('kek-1')).toBe(true);
   });
 
-  it('refuses an imported key that claims the ACTIVE key id, and keeps the configured bytes', () => {
+  it('holds a different key under the ACTIVE id only as a decrypt candidate, never as the active key', () => {
     const active = key();
-    const impostor = key();
+    const other = key();
     const keyring = new InstallationKeyring(configured({ 'kek-2': active }, 'kek-2'));
-    const refused = keyring.replaceImported(new Map([['kek-2', impostor]]));
-    expect(refused).toEqual(['kek-2']);
+    // Two installations named their keys alike (the incident): held, tried AFTER.
+    expect(keyring.replaceImported(new Map([['kek-2', other]]))).toEqual([]);
     expect(keyring.keys.get('kek-2')?.equals(active)).toBe(true);
     expect(keyring.activeKeyId).toBe('kek-2');
+    expect(keyring.candidatesFor('kek-2').map((k) => k.equals(active))).toEqual([true, false]);
+    const context = { purpose: 'bot_instance.token' as const, tenantId: 't', entityId: 'e' };
+    const sealed = new AesGcmSecretCipher(keyring, false).encrypt('new', context);
+    // Sealed under the CONFIGURED bytes: it opens with them alone.
+    expect(
+      new AesGcmSecretCipher(configured({ 'kek-2': active }, 'kek-2'), false).decrypt(
+        sealed,
+        context,
+      ),
+    ).toBe('new');
+  });
+
+  it('refuses an imported key that IS the configured key (same id, same bytes): never held twice', () => {
+    const active = key();
+    const keyring = new InstallationKeyring(configured({ 'kek-2': active }, 'kek-2'));
+    expect(keyring.replaceImported(new Map([['kek-2', Buffer.from(active)]]))).toEqual(['kek-2']);
+    expect(keyring.candidatesFor('kek-2')).toHaveLength(1);
   });
 
   it('encrypts under the configured key and decrypts under the imported one', () => {

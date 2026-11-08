@@ -35,15 +35,21 @@ retention jobs below keep only their window.
 `SecretCipher` as purpose `backup.archive_password`), every backup is a **7z archive**:
 `pg_dump -Fc --compress=0` (so LZMA2, not gzip, compresses), then 7-Zip with **LZMA2
 `-mx=9`**, **AES-256** and **encrypted headers** (`-mhe=on`), non-solid, holding two
-entries: `manifest.json` (identity, versions, the dump's SHA-256) and the dump. It opens
-in **7-Zip on Windows with the password alone** — no keyring, no Recovery Kit. Without a
+entries: `manifest.json` (identity, versions, the dump's SHA-256) and the dump, plus a
+third, `keys.json`: every keyring key that a secret in the dumped database is sealed under,
+each **wrapped with a key derived from the backup password** (never in plaintext). It opens
+in **7-Zip on Windows with the password alone** — no keyring, no Recovery Kit — and it
+**restores on any server with only the file and that password** (see Encryption below). Without a
 password the archive stays the keyring `.nxb` it always was. Both are opened by the same
 `DualFormatBackupArchiver.open`, chosen by the file's magic bytes, for the pipeline's
 VERIFY_RESTORE, the Web Admin recovery, the recovery executor and the CLI.
 
 The password reaches 7-Zip on **stdin**, never as `-p<secret>` in argv (which any user on
 the host could read in `/proc`). A replaced password is superseded, not deleted, so older
-archives on this server still open. Keep it somewhere other than the operations group: the
+archives on this server still open. **Changing the password affects future backups only**: an
+older archive still needs the password it was made with. Because `keys.json` carries this server's own key
+(wrapped), an archive **and** its password together expose that key as well as the data: if both
+leak, rotate the key (`SECRETS_KEYS`, then `botctl secrets rewrap`) as well as the password. Keep it somewhere other than the operations group: the
 group holds the parts, and the parts plus the password are the whole database.
 
 **Parts.** An archive above **45 MiB** (`BACKUP_PART_MAX_BYTES`, under Telegram's 50 MiB bot
@@ -531,6 +537,19 @@ have deleted is not recoverable from that message.
 Nothing about the key reaches the Telegram caption, the manifest, the run row,
 the log, or an error message.
 
+**A backup made with a backup password is self-contained.** Its bundled keys are wrapped with
+the password inside the archive (a distinct label that binds the backup id, key id and
+fingerprint, so it can never be confused with a Recovery Kit). On restore the password opens the
+archive, the bundled keys are used decrypt-only for that recovery alone (never stored), and
+before the cutover every secret in the restored database is rewrapped under the NEW server's
+active key; the summary says "rewrapped N secrets under <key id>". This holds even when the
+other server's key has the **same id** with different material: ids alone are never trusted,
+the secrets are actually decrypted before anything is cut over. Only an **old archive**
+(made before this existed, no `keys.json`) or a keyring-only **`.nxb`** (no backup password)
+still needs the old server's Recovery Kit.
+
+New installations name their key `install-<YYYYMMDD>-<8 hex>`; existing ids are unchanged.
+
 ## What this does NOT do
 
 Stated because ADR-0011 required these and V1 does not have them.
@@ -842,12 +861,32 @@ does not have. Without its **Recovery Kit** the upload fails as
    new secret and backup is sealed with.
 3. Upload the old `.nxb`, verify, confirm — the ordinary restore above.
 
-The restore-test also checks the secrets INSIDE the backup (bot tokens, panel
-credentials): if any is sealed under a key neither this server nor the kit
-holds, it refuses with `recovery.candidate_keys_missing` before anything is
-confirmed. The executor carries the imported keys into the restored database
-before the cutover, so they survive it. Details: ADR-0032 and
-`docs/recovery-kit-format.md`.
+**When is the kit needed?** Only for an old archive or a keyring-only `.nxb`. A 7z archive
+made with a backup password carries its own keys: upload it and enter the password.
+
+The restore-test tries to decrypt the secrets INSIDE the backup (bot tokens, panel
+credentials, payment-gateway keys, the backup password itself) with every key it can hold.
+If any cannot be read it refuses with `recovery.candidate_secrets_unreadable` before anything
+is confirmed, listing each kind and how many (the older `recovery.candidate_keys_missing`
+only appears on old rows). You then have two choices:
+
+1. **Import the Recovery Kit** of the server the backup came from (offered only when the
+   archive carries no keys of its own), then re-run the restore test.
+2. **«ادامه؛ این‌ها را دوباره وارد می‌کنم»** — continue anyway. You confirm the exact list;
+   the unreadable values are cleared in the restored database and listed as items to re-enter
+   (bots, panels, payment methods, backup, AI support) on the pages where they live. Nothing
+   is cut over into unreadable secrets silently. The executor carries the imported keys into the restored database
+   before the cutover, so they survive it. Details: ADR-0032 and
+   `docs/recovery-kit-format.md`.
+
+   Three consequences of choosing 2: a payment gateway's **refund card cannot be cleared**
+   (clearing it would change a refund), so a backup whose list contains one must be restored
+   with the old Recovery Kit; a **bot whose token was cleared is stopped** until its token is
+   entered again; and until every cleared value is re-entered the Web Admin shows an
+   **attention strip** (`GET /secret-reentry`, `backup.view`) above every page, one row per
+   value with a link to the page where it is entered. A row disappears as soon as its value
+   is set again; the strip hides when none are left. After a restore the row in the history
+   reports how many secrets were re-encrypted under this server's key and how many cleared.
 
 ### What the Web path does NOT do
 
@@ -892,6 +931,16 @@ recovery executor closes every unfinished import created before it (`CANCELLED`,
 ticks as a backstop. Nothing is re-imported, and later restores and uploads are not blocked.
 
 ## The Recovery Kit — keep one, apart from the backups
+
+A Recovery Kit holds this server's keys. It is what opens **old archives** and keyring-only
+`.nxb` backups on another server; a password-protected backup made now does not need it. Keep
+one anyway for those.
+
+**If the kit is lost**, the old archives that depend on it cannot be read. Restore with
+whichever archive can be read (a newer password-protected one is best), choose
+«ادامه؛ این‌ها را دوباره وارد می‌کنم» for the secrets that stay unreadable, re-enter them, and
+take a fresh backup. `botctl secrets verify` (read-only) lists, per kind, what is readable and
+what is not, and where to re-enter it.
 
 **A `.nxb` alone is not enough to restore on a new server.** Export a Recovery
 Kit from the Web Admin (owner, account password, a passphrase of at least 12

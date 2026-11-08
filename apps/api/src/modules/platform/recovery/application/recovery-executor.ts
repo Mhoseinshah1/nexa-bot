@@ -8,14 +8,17 @@ import {
   type AuditWriter,
   type Clock,
   type CorrelationId,
+  type IdGenerator,
   type OperationalEventRecorder,
   type RecoveryFailureCode,
+  type RecoveryRestoreTest,
   type ScopeContext,
   type TenantId,
 } from '@nexa/contracts';
 import type { BackupService } from '../../backup/application/backup.service.js';
 import { CutoverJournalUnreadable, isCutoverFailure } from './ports.js';
 import type {
+  CandidateCompatibility,
   CutoverJournal,
   DatabaseInspection,
   RecoveryRequestRepository,
@@ -28,6 +31,26 @@ import type { RecoveryKeyCoverage } from './installation-key.ports.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 import { isTenantForeignKeyViolation } from '../../../../infrastructure/lifecycle/installation-tenant-guard.js';
 import { runBoundedWrite } from './recovery-write-retry.js';
+import type { ExtraKey } from '../../../../infrastructure/crypto/keyring.js';
+import {
+  exemptRows,
+  unreadableCounts,
+  type SecretExemption,
+  type SecretTrialReport,
+} from '../../../../infrastructure/crypto/secret-trial.js';
+import type { SecretClearingReport } from '../../../../infrastructure/crypto/secret-clearing.js';
+
+/**
+ * Whether every purpose unreadable now was acknowledged, with no more values than the
+ * owner accepted. Fewer is fine (a kit imported since); more, or another purpose, is not.
+ */
+export function withinAcknowledged(
+  now: readonly { purpose: string; count: number }[],
+  acknowledged: readonly { purpose: string; count: number }[],
+): boolean {
+  const accepted = new Map(acknowledged.map((entry) => [entry.purpose, entry.count]));
+  return now.every((entry) => entry.count <= (accepted.get(entry.purpose) ?? 0));
+}
 
 /**
  * The destructive half of a recovery, in its own process.
@@ -91,6 +114,11 @@ export interface RecoveryExecutorDeps {
    */
   readonly supersedeLegacyImports?: (cutoverAt: Date) => Promise<readonly string[]>;
   readonly clock: Clock;
+  /**
+   * Ids for the `secret_reentry_items` rows a §2.3 clearing writes. Optional only for
+   * tests that never reach it; without it an acknowledged clearing aborts.
+   */
+  readonly ids?: IdGenerator;
   readonly opsLog: OperationalEventRecorder;
   readonly scope: () => ScopeContext | null;
   /**
@@ -1205,29 +1233,149 @@ export class RecoveryExecutor {
         error,
       );
     }
-    const missing = await this.deps.keys.missingFrom(candidate);
-    if (missing.length > 0) {
-      throw new RecoveryAbort(
-        'recovery.candidate_keys_missing',
-        `The candidate's secrets need keys this installation does not hold: ${missing.join(', ')}.`,
-      );
+    /*
+     * THE SECRETS, decrypted, then MOVED onto this installation's own key.
+     *
+     * 1. The trial again, authoritatively, on the candidate: every stored secret
+     *    must decrypt with a key held here — configured, imported, or one the
+     *    archive itself carried (sealed into the workspace at verification). A key
+     *    held by NAME is not enough: that is the incident this replaced.
+     * 2. Every secret is re-encrypted under the ACTIVE key, in the candidate, and
+     *    then must read under the active key ALONE. After this nothing in the
+     *    database that is about to be served depends on an archive's key or an
+     *    imported key — which is what lets the archive's keys be dropped here.
+     *
+     * Both before the renames: any failure costs a candidate, never production.
+     */
+    const sealedBundle = await workspace.readBundledKeys();
+    let bundledKeys: ExtraKey[] = [];
+    let secretsRewrapped: number;
+    let secretsCleared = 0;
+    try {
+      if (sealedBundle !== null) {
+        try {
+          bundledKeys = this.deps.keys.openForExecutor(id, sealedBundle);
+        } catch (error) {
+          throw new RecoveryAbort(
+            'recovery.candidate_validation_failed',
+            "The archive's bundled keys could not be opened for the executor.",
+            error,
+          );
+        }
+      }
+      const trial = await this.deps.keys.trialDecrypt(candidate, bundledKeys);
+      let exempt: SecretExemption | undefined;
+      if (trial.unreadableTotal > 0) {
+        /*
+         * §2.3 choice 2: the owner acknowledged an exact list and chose to re-enter
+         * those values. Honoured ONLY when what is unreadable NOW is within it, purpose
+         * by purpose (a key imported since may have made some readable; nothing may
+         * have become unreadable that the owner did not see). Then the values are
+         * cleared in the candidate, in one transaction with their re-entry records —
+         * never a silent cut-over into secrets that fail authentication.
+         */
+        const acknowledged = request.restoreTest?.acknowledgedUnreadable;
+        const within =
+          request.restoreTest?.clearUnreadable === true &&
+          acknowledged !== undefined &&
+          withinAcknowledged(unreadableCounts(trial), acknowledged);
+        if (!within) {
+          await this.recordUnreadable(
+            id,
+            inspection.tableCount,
+            compatibility,
+            trial,
+            sealedBundle,
+          );
+          throw new RecoveryAbort(
+            'recovery.candidate_secrets_unreadable',
+            `The candidate holds ${String(trial.unreadableTotal)} secret(s) no key held here decrypts.`,
+          );
+        }
+        if (this.deps.ids === undefined) {
+          throw new RecoveryAbort(
+            'recovery.internal',
+            'This executor cannot mint ids, so it cannot record what it would clear.',
+          );
+        }
+        const ids = this.deps.ids;
+        let clearing: SecretClearingReport;
+        try {
+          clearing = await this.deps.keys.clearUnreadable(candidate, {
+            unreadable: trial.unreadable,
+            recoveryId: id,
+            now: this.deps.clock.now(),
+            newId: () => ids.uuid(),
+          });
+        } catch (error) {
+          throw new RecoveryAbort(
+            'recovery.candidate_secrets_unreadable',
+            'The unreadable secrets could not be cleared in the candidate.',
+            error,
+          );
+        }
+        secretsCleared = clearing.cleared;
+        exempt = exemptRows(clearing.kept);
+        // The trial once more: everything still unreadable must be a row the clearing
+        // deliberately left (a stopped bot's token), and nothing else.
+        const after = await this.deps.keys.trialDecrypt(candidate, bundledKeys);
+        if (after.unreadable.some((row) => !(exempt as SecretExemption)(row))) {
+          throw new RecoveryAbort(
+            'recovery.candidate_secrets_unreadable',
+            'Secrets are still unreadable in the candidate after clearing.',
+          );
+        }
+        this.deps.logger.warn(
+          { recoveryId: id, cleared: clearing.cleared, kept: clearing.kept.length },
+          'cleared the acknowledged unreadable secrets in the candidate for re-entry',
+        );
+      }
+      try {
+        const rewrap = await this.deps.keys.rewrapUnderActiveKey(candidate, bundledKeys, exempt);
+        secretsRewrapped = rewrap.rewrapped;
+      } catch (error) {
+        throw new RecoveryAbort(
+          'recovery.candidate_secrets_unreadable',
+          "The candidate's secrets could not all be moved onto this installation's active key.",
+          error,
+        );
+      }
+    } finally {
+      for (const key of bundledKeys) key.material.fill(0);
+      const left = await workspace.discardBundledKeys();
+      if (left.length > 0) {
+        this.deps.logger.error(
+          { recoveryId: id, leftovers: left },
+          "a recovery could not remove its archive's sealed keys",
+        );
+      }
     }
+    this.deps.logger.info(
+      { recoveryId: id, secretsRewrapped, bundledKeys: sealedBundle === null ? 0 : 'present' },
+      "the candidate's secrets were re-encrypted under this installation's active key",
+    );
 
+    // The recovery summary: what the validation found and how many secrets were
+    // moved onto this installation's key. Carried into the RESTORED database's row
+    // too (below), since that is the row an operator reads after the cutover.
+    const validated: RecoveryRestoreTest = {
+      ...(request.restoreTest ?? {}),
+      restored: true,
+      tableCount: inspection.tableCount,
+      migrationVerdict: compatibility.verdict,
+      appliedMigrations: compatibility.applied,
+      expectedMigrations: compatibility.expected,
+      cutoverPermitted: true,
+      unreadableSecrets: [],
+      secretsRewrapped,
+      ...(secretsCleared > 0 ? { secretsCleared } : {}),
+    };
     await this.deps.requests.progress({
       id,
       stage: 'VALIDATE_CANDIDATE',
       leaseOwner: this.deps.leaseOwner,
       now: this.deps.clock.now(),
-      patch: {
-        restoreTest: {
-          restored: true,
-          tableCount: inspection.tableCount,
-          migrationVerdict: compatibility.verdict,
-          appliedMigrations: compatibility.applied,
-          expectedMigrations: compatibility.expected,
-          cutoverPermitted: true,
-        },
-      },
+      patch: { restoreTest: validated },
     });
 
     // ---- CUT OVER --------------------------------------------------------
@@ -1328,6 +1476,7 @@ export class RecoveryExecutor {
       cutoverAt: done.cutoverAt,
       finishedAt: null,
       failureCode: null,
+      restoreTest: validated,
     };
     if (
       !(await this.writeRequestRow(id, () => ({
@@ -1436,6 +1585,51 @@ export class RecoveryExecutor {
         error,
       );
     }
+  }
+
+  /**
+   * Records the trial's failures on the request before the abort, so the Web Admin
+   * can say which kinds of secret failed and whether a Recovery Kit could help — the
+   * same fields the restore test writes. Counts only; best effort (the abort that
+   * follows is the authoritative outcome).
+   */
+  private async recordUnreadable(
+    id: string,
+    tableCount: number,
+    compatibility: Pick<CandidateCompatibility, 'verdict' | 'applied' | 'expected'>,
+    trial: SecretTrialReport,
+    sealedBundle: string | null,
+  ): Promise<void> {
+    const unreadable = unreadableCounts(trial);
+    this.deps.logger.error(
+      { recoveryId: id, unreadable },
+      'the candidate holds secrets this installation cannot decrypt; not cutting over',
+    );
+    await this.deps.requests
+      .progress({
+        id,
+        stage: 'VALIDATE_CANDIDATE',
+        leaseOwner: this.deps.leaseOwner,
+        now: this.deps.clock.now(),
+        patch: {
+          restoreTest: {
+            restored: true,
+            tableCount,
+            migrationVerdict: compatibility.verdict,
+            appliedMigrations: compatibility.applied,
+            expectedMigrations: compatibility.expected,
+            cutoverPermitted: false,
+            unreadableSecrets: unreadable,
+            canUploadKit: sealedBundle === null,
+          },
+        },
+      })
+      .catch((error: unknown) =>
+        this.deps.logger.error(
+          { recoveryId: id, err: rootMessage(error) },
+          'could not record which secrets the candidate cannot decrypt',
+        ),
+      );
   }
 
   private async advance(

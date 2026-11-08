@@ -41,9 +41,89 @@ export type KeyringFormat = 'canonical' | 'legacy';
 
 export interface SecretKeyring {
   readonly activeKeyId: string;
-  /** Every key this installation can decrypt with, including the active one. */
+  /**
+   * One key per id: the one an id RESOLVES to for encryption and for display — the
+   * configured key when one is configured under that id. Decryption does not read
+   * this map directly: it asks `heldKeysFor`, because an id can name more than one
+   * held key (below).
+   */
   readonly keys: ReadonlyMap<string, Buffer>;
   readonly format: KeyringFormat;
+  /**
+   * EVERY held key answering to `keyId`, in the order decryption tries them: the
+   * configured key first, then imported decrypt-only keys, then keys held for one
+   * recovery only. Absent on a plain configured keyring, where an id names one key.
+   *
+   * Why an id can name several: key ids are labels, and two installations made on
+   * the same day were both labelled `install-<date>` with DIFFERENT material. A
+   * backup of one restored on the other names a key this side holds by name and not
+   * by bytes. Authenticated decryption is what tells which key is the right one, so
+   * every candidate is tried and only an authenticated success is ever returned.
+   */
+  candidatesFor?(keyId: string): readonly Buffer[];
+}
+
+/**
+ * Every held key a ciphertext naming `keyId` may have been sealed under, in trial
+ * order (see `SecretKeyring.candidatesFor`). Empty when none is held.
+ */
+export function heldKeysFor(keyring: SecretKeyring, keyId: string): readonly Buffer[] {
+  if (keyring.candidatesFor !== undefined) return keyring.candidatesFor(keyId);
+  const key = keyring.keys.get(keyId);
+  return key === undefined ? [] : [key];
+}
+
+/** One extra decrypt-only key: an id and its 32 bytes. */
+export interface ExtraKey {
+  readonly keyId: string;
+  readonly material: Buffer;
+}
+
+/**
+ * `base`, plus `extra` decrypt-only keys tried AFTER every key `base` holds under the
+ * same id. For one recovery's lifetime: the keys a self-contained archive carried.
+ *
+ * Decrypt-only by construction, exactly as `InstallationKeyring` is: `activeKeyId`
+ * is `base`'s and `keys` resolves an id to `base`'s key whenever `base` holds one,
+ * so the active key — the only key anything encrypts with — can never be an extra.
+ * The extras are not copied: the caller owns their buffers and zeroes them.
+ */
+export function withExtraKeys(base: SecretKeyring, extra: readonly ExtraKey[]): SecretKeyring {
+  if (extra.length === 0) return base;
+  const keys = new Map(base.keys);
+  for (const key of extra) if (!keys.has(key.keyId)) keys.set(key.keyId, key.material);
+  return {
+    get activeKeyId() {
+      return base.activeKeyId;
+    },
+    get format() {
+      return base.format;
+    },
+    keys,
+    candidatesFor(keyId: string): readonly Buffer[] {
+      const held = [...heldKeysFor(base, keyId)];
+      for (const key of extra) {
+        if (key.keyId !== keyId) continue;
+        if (held.some((candidate) => candidate.equals(key.material))) continue;
+        held.push(key.material);
+      }
+      return held;
+    },
+  };
+}
+
+/**
+ * A keyring holding exactly one key — `keyring`'s ACTIVE key — and nothing else.
+ *
+ * For the proof after a pre-cutover rewrap: every secret in the candidate must read
+ * under the active key ALONE, or something still depends on a key that will be
+ * gone once the recovery's extra keys are dropped.
+ */
+export function activeKeyOnly(keyring: SecretKeyring): SecretKeyring {
+  const active = keyring.keys.get(keyring.activeKeyId);
+  const keys = new Map<string, Buffer>();
+  if (active !== undefined) keys.set(keyring.activeKeyId, active);
+  return { activeKeyId: keyring.activeKeyId, format: keyring.format, keys };
 }
 
 export interface KeyringInput {

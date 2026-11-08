@@ -6,6 +6,7 @@ import {
   forEachLoopTenant,
   type LoopTenantScope,
 } from '../../../../infrastructure/lifecycle/tenant-pass.js';
+import { isUnreadableSecretError } from '../../../../infrastructure/lifecycle/unreadable-secret.js';
 
 /**
  * The timer that drives the customer notification lane, and the readiness it earns.
@@ -166,7 +167,10 @@ export class CustomerNotificationLoop {
        * progress so readiness goes stale if every pass keeps failing. Those two together
        * are what make the heartbeat honest.
        */
-      this.options.logger.error({ err: error }, 'customer notification pass failed');
+      // An unreadable bot token is reported once (`UnreadableSecretReporter`), not per pass.
+      if (!isUnreadableSecretError(error)) {
+        this.options.logger.error({ err: error }, 'customer notification pass failed');
+      }
     } finally {
       this.running = false;
     }

@@ -49,6 +49,13 @@ export interface SecretColumn {
   readonly table: string;
   readonly ciphertextColumn: string;
   readonly keyIdColumn: string;
+  /**
+   * The physical column holding the ENTITY the AEAD context names (`entityId`) —
+   * the row's own `id`, except on `panel_credentials`, where it is the panel's.
+   * The tenant is `tenant_id` on every table here. Used by the trial decryption,
+   * which reads rows by physical name so it can run against a restored database.
+   */
+  readonly entityIdColumn: string;
 
   /** Every stored envelope and its recorded key id. For counting, never decrypting. */
   all(db: Database): Promise<{ ciphertext: string; keyId: string }[]>;
@@ -77,6 +84,7 @@ const botInstanceToken: SecretColumn = {
   table: 'bot_instances',
   ciphertextColumn: 'token_ciphertext',
   keyIdColumn: 'token_key_id',
+  entityIdColumn: 'id',
 
   async all(db) {
     return db
@@ -164,6 +172,7 @@ function panelCredentialColumn(
     table: 'panel_credentials',
     ciphertextColumn: columns.ciphertextName,
     keyIdColumn: columns.keyIdName,
+    entityIdColumn: 'panel_id',
 
     async all(db) {
       const rows = await db
@@ -263,6 +272,7 @@ const paymentGatewayApiKey: SecretColumn = {
   table: 'payment_gateway_credentials',
   ciphertextColumn: 'api_key_ciphertext',
   keyIdColumn: 'api_key_key_id',
+  entityIdColumn: 'id',
 
   async all(db) {
     return db
@@ -324,6 +334,7 @@ const paymentGatewayWebhookSecret: SecretColumn = {
   table: 'payment_gateway_credentials',
   ciphertextColumn: 'webhook_secret_ciphertext',
   keyIdColumn: 'webhook_secret_key_id',
+  entityIdColumn: 'id',
 
   async all(db) {
     const rows = await db
@@ -400,6 +411,7 @@ const paymentGatewayVerifyKey: SecretColumn = {
   table: 'payment_gateway_credentials',
   ciphertextColumn: 'verify_key_ciphertext',
   keyIdColumn: 'verify_key_key_id',
+  entityIdColumn: 'id',
 
   async all(db) {
     const rows = await db
@@ -476,6 +488,7 @@ const paymentGatewayRefundCard: SecretColumn = {
   table: 'gateway_provider_requests',
   ciphertextColumn: 'refund_card_ciphertext',
   keyIdColumn: 'refund_card_key_id',
+  entityIdColumn: 'id',
 
   async all(db) {
     const rows = await db
@@ -551,6 +564,7 @@ const adminTotpSecret: SecretColumn = {
   table: 'admin_totp_factors',
   ciphertextColumn: 'totp_secret_ciphertext',
   keyIdColumn: 'totp_secret_key_id',
+  entityIdColumn: 'id',
 
   async all(db) {
     return db
@@ -610,6 +624,7 @@ const hostingTotpSecret: SecretColumn = {
   table: 'hosting_totp_factors',
   ciphertextColumn: 'totp_secret_ciphertext',
   keyIdColumn: 'totp_secret_key_id',
+  entityIdColumn: 'id',
 
   async all(db) {
     return db
@@ -666,6 +681,7 @@ const supportAiProviderApiKey: SecretColumn = {
   table: 'support_ai_provider_credentials',
   ciphertextColumn: 'api_key_ciphertext',
   keyIdColumn: 'api_key_key_id',
+  entityIdColumn: 'id',
 
   async all(db) {
     return db
@@ -722,6 +738,7 @@ const legacyNxpkgPackageKey: SecretColumn = {
   table: 'legacy_nxpkg_imports',
   ciphertextColumn: 'key_ciphertext',
   keyIdColumn: 'key_key_id',
+  entityIdColumn: 'id',
 
   async all(db) {
     const rows = await db
@@ -786,6 +803,7 @@ const backupArchivePassword: SecretColumn = {
   table: 'backup_archive_passwords',
   ciphertextColumn: 'password_ciphertext',
   keyIdColumn: 'password_key_id',
+  entityIdColumn: 'id',
 
   async all(db) {
     return db
@@ -847,6 +865,7 @@ const giftCardBatchExport: SecretColumn = {
   table: 'gift_card_batches',
   ciphertextColumn: 'export_ciphertext',
   keyIdColumn: 'export_key_id',
+  entityIdColumn: 'id',
 
   async all(db) {
     const rows = await db

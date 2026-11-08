@@ -6,6 +6,7 @@ import {
   forEachLoopTenant,
   type LoopTenantScope,
 } from '../../../../infrastructure/lifecycle/tenant-pass.js';
+import { isUnreadableSecretError } from '../../../../infrastructure/lifecycle/unreadable-secret.js';
 
 /**
  * How often the worker looks at the operations log group. A group that was just bound is
@@ -87,7 +88,11 @@ export class OpsGroupMaintainer {
       });
       this.progress.record(this.options.now());
     } catch (error: unknown) {
-      this.options.logger.error({ err: error }, 'operations log group pass failed');
+      // The bot token this pass needs may be the secret that cannot be read: reported ONCE,
+      // on the Web Admin, by `UnreadableSecretReporter` — not a stack trace every 15 s.
+      if (!isUnreadableSecretError(error)) {
+        this.options.logger.error({ err: error }, 'operations log group pass failed');
+      }
     } finally {
       this.running = false;
     }

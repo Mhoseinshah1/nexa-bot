@@ -408,6 +408,8 @@ import {
   GIFT_CARD_REJECTIONS,
   // R11 A4: «نوع بارکد».
   PANEL_QR_KINDS,
+  // NEXA-FIX-RESTORE-SECRETS §2.3: a cleared secret's purpose.
+  SECRET_PURPOSES,
 } from '@nexa/contracts';
 
 /**
@@ -3592,6 +3594,52 @@ export const recoveryRequests = pgTable(
 );
 
 /**
+ * NEXA-FIX-RESTORE-SECRETS §2.3, choice 2 («ادامه؛ این‌ها را دوباره وارد می‌کنم»): one
+ * row per secret a restore CLEARED because this installation could not read it.
+ *
+ * Written by the recovery executor INTO THE CANDIDATE, before the renames, in the same
+ * transaction as the clearing — so it arrives with the database that is served, and a
+ * clearing that rolled back left no item. Append-only in practice: nothing updates or
+ * deletes it. Whether an item still needs attention is NOT stored: the Web Admin strip
+ * asks the entity's column at read time, so re-entering the value through its ordinary
+ * page removes the item without any write path knowing this table exists.
+ *
+ * `entity_table`/`entity_id` name what the owner re-enters it on: the bot, the panel,
+ * the gateway credential row, the support-AI credential row, the backup password row —
+ * and for a two-factor secret the ADMIN, because its factor row is deleted and a new
+ * enrolment mints a new id. Never a value, a ciphertext or a key id.
+ */
+export const secretReentryItems = pgTable(
+  'secret_reentry_items',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    purpose: text('purpose').notNull(),
+    entityTable: text('entity_table').notNull(),
+    entityId: uuid('entity_id').notNull(),
+    /**
+     * The entity's NATURAL key where clearing deleted a row the owner re-creates under a
+     * new id: a gateway credential's or a support-AI credential's provider. Null otherwise.
+     */
+    entityKey: text('entity_key'),
+    /** The recovery that cleared it. Not a foreign key: that row is the outgoing install's. */
+    recoveryRequestId: uuid('recovery_request_id').notNull(),
+    clearedAt: timestamptz('cleared_at').notNull(),
+  },
+  (table) => [
+    index('secret_reentry_items_tenant_cleared_idx').on(table.tenantId, table.clearedAt, table.id),
+    check('secret_reentry_items_purpose_check', enumCheck('purpose', SECRET_PURPOSES)),
+    check('secret_reentry_items_entity_table_check', sql`entity_table ~ '^[a-z_]{1,63}$'`),
+    check(
+      'secret_reentry_items_entity_key_check',
+      sql`entity_key IS NULL OR char_length(entity_key) BETWEEN 1 AND 64`,
+    ),
+  ],
+);
+
+/**
  * Decrypt-only key-encryption keys imported from a Recovery Kit (ADR-0032).
  *
  * INSTALLATION-WIDE, and the one table here with neither `tenant_id` nor a
@@ -3616,7 +3664,12 @@ export const installationKeys = pgTable(
   'installation_keys',
   {
     id: uuid('id').primaryKey(),
-    /** The key's label, unique across the installation. Never a configured key's id. */
+    /**
+     * The key's label, unique across this table. MAY equal a configured key's id when
+     * the bytes differ (another installation named its key alike): such a key is held
+     * as a second decrypt-only candidate for that id, wrapped under the configured key
+     * of the same name. The same id with the same bytes is never stored.
+     */
     keyId: text('key_id').notNull(),
     /** `kekFingerprint` of the key. Safe to show; compared on every unwrap. */
     fingerprint: text('fingerprint').notNull(),
@@ -3651,9 +3704,12 @@ export const installationKeys = pgTable(
     check('installation_keys_source_check', enumCheck('source', INSTALLATION_KEY_SOURCES)),
     check('installation_keys_key_id_check', sql`key_id ~ '^[A-Za-z0-9._-]{1,64}$'`),
     check('installation_keys_fingerprint_check', sql`fingerprint ~ '^[0-9a-f]{32}$'`),
+    // `wrapped_under_key_id` may equal `key_id`: the configured key of that name
+    // wraps an imported key that shares the name (the wrap's AAD binds both ids,
+    // and the unwrap tries every held key under the wrapping id).
     check(
       'installation_keys_wrapped_under_check',
-      sql`wrapped_under_key_id IS NULL OR (wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id)`,
+      sql`wrapped_under_key_id IS NULL OR wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$'`,
     ),
     /** A live row has its wrap; a tombstone has neither half of it. Both directions. */
     check(

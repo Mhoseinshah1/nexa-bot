@@ -97,6 +97,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'bot_menu.published_readable': 'BOT',
   'settings.stored_value_invalid': 'SYSTEM',
   'settings.stored_value_valid': 'SYSTEM',
+  'secrets.read_failed': 'SYSTEM',
+  'secrets.read_ok': 'SYSTEM',
   'access.permission_denied': 'SECURITY',
   'auth.login_locked_out': 'SECURITY',
   'auth.login_new_ip': 'SECURITY',

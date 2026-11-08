@@ -37,6 +37,16 @@ import { diskInsufficientReason } from './backup-disk.js';
 import { backupPartCaption, backupSummaryMessage } from './backup-caption.js';
 import type { BackupOrphanSweepResult } from './backup-orphan-sweep.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import { isUnreadableSecretError } from '../../../../infrastructure/lifecycle/unreadable-secret.js';
+
+/**
+ * NEXA-FIX-RESTORE-SECRETS §2.7: the reason a run gives when the stored backup password does
+ * not decrypt, word for word as the owner specified. The Web Admin renders the CODE
+ * (`backup.password_unreadable`, `web.err_backup_password_unreadable`); this is the run's
+ * recorded `failureMessage` and the log's reason.
+ */
+export const BACKUP_PASSWORD_UNREADABLE_REASON =
+  'رمز بکاپ قابل خواندن نیست؛ آن را در «بکاپ و بازیابی» دوباره وارد کنید';
 
 /**
  * The backup pipeline.
@@ -449,9 +459,12 @@ export class BackupService {
       workspace = await this.deps.workspaces.create(id);
       this.activeWorkspace = workspace;
       // E4: a 7-Zip archive compresses the dump itself, so the dump is written uncompressed.
-      const plannedFormat = (await this.deps.archiver.nextFormat?.()) ?? 'NXB';
+      // Both read the stored backup password: one that does not decrypt refuses the run HERE,
+      // before the dump, with the owner's reason rather than the cipher's (§2.7).
+      const plannedFormat =
+        (await this.passwordReadable(() => this.deps.archiver.nextFormat?.())) ?? 'NXB';
       // A host that cannot compress is refused now, before an hour of dumping (Round 5B).
-      await this.deps.archiver.preflight?.();
+      await this.passwordReadable(() => this.deps.archiver.preflight?.());
       await this.assertDiskRoom();
       const dump = await this.deps.tools.dump(workspace.dumpPath, {
         uncompressed: plannedFormat === 'SEVEN_ZIP',
@@ -1352,6 +1365,25 @@ export class BackupService {
       message: diskInsufficientReason(state.freeBytes, state.requiredBytes),
       details: { freeBytes: state.freeBytes, requiredBytes: state.requiredBytes },
     });
+  }
+
+  /**
+   * Runs a step that decrypts the stored backup password, turning "it does not decrypt" into
+   * `backup.password_unreadable` with the owner's reason. The cause is not attached: the
+   * cipher's error says nothing the code does not, and nothing about a secret belongs in the
+   * run's row.
+   */
+  private async passwordReadable<T>(step: () => Promise<T> | undefined): Promise<T | undefined> {
+    try {
+      return await step();
+    } catch (error) {
+      if (!isUnreadableSecretError(error)) throw error;
+      throw new NexaError({
+        kind: 'CONFIGURATION',
+        code: PLATFORM_ERROR_CODES.BACKUP_PASSWORD_UNREADABLE,
+        message: BACKUP_PASSWORD_UNREADABLE_REASON,
+      });
+    }
   }
 
   private async isOpen(code: string): Promise<boolean> {

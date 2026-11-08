@@ -297,6 +297,12 @@ export const MANAGEMENT_CONDITION_FAILURE_CODES = [
    * collapsing them onto one row would hide the second.
    */
   'recovery.run_failed',
+  /**
+   * A stored secret this installation cannot read (NEXA-FIX-RESTORE-SECRETS §2.6), one
+   * condition per tenant and secret kind. Here because the Web Admin is the one place it can
+   * be heard when the unreadable secret is the bot token the operations group needs.
+   */
+  'secrets.read_failed',
 ] as const;
 
 /**
@@ -336,6 +342,8 @@ export const MANAGEMENT_CONDITION_RECOVERY_CODES = [
    * this code could report as a success.
    */
   'recovery.run_ok',
+  /** The kind reads again (the value was re-entered), closing `secrets.read_failed`. */
+  'secrets.read_ok',
 ] as const;
 
 /**
@@ -558,6 +566,20 @@ export interface OperationalEventInput {
    * conditions, where the broad behaviour is the correct one.
    */
   readonly recoversDedupeKey?: string;
+  /**
+   * A context key holding a list of strings that is UNIONED with the stored row's list under
+   * the row's lock, instead of replaced with the rest of the context. A deduped failure only;
+   * a resolved row that reopens starts its list afresh. Two processes reporting two subjects
+   * of one condition at once both stay listed (NEXA-FIX-RESTORE-SECRETS §2.6, Codex on #424).
+   */
+  readonly mergeList?: string;
+  /**
+   * A recovery of ONE subject's listed condition (with `recoversDedupeKey`): under the failure
+   * row's lock, `read` is removed from its `key` list, and only when the list is then empty is
+   * the recovery recorded and the row resolved. Otherwise nothing is recorded, the row keeps
+   * the shorter list, and the result is the failure row with `withheld: true`.
+   */
+  readonly recoversListed?: { readonly key: string; readonly read: readonly string[] };
 }
 
 /**
@@ -582,6 +604,8 @@ export interface RecordedOperationalEvent {
   readonly lastSeenAt: Date;
   readonly isNew: boolean;
   readonly reopened: boolean;
+  /** A `recoversListed` recovery withheld because something is still listed. */
+  readonly withheld?: boolean;
 }
 
 export interface OperationalEventRecorder {

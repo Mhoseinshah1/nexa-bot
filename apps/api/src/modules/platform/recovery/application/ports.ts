@@ -132,6 +132,14 @@ export interface RecoveryWorkspace {
   readonly dumpPath: string;
   /** Removes the plaintext dump alone, keeping the archive. */
   discardPlaintext(): Promise<readonly string[]>;
+  /**
+   * The keys a self-contained archive carried, as `RecoveryKeyCoverage.sealForExecutor`
+   * sealed them (ciphertext, never key material). Written at verification, read by the
+   * executor, removed once the candidate is rewrapped. Null when none was written.
+   */
+  writeBundledKeys(sealed: string): Promise<void>;
+  readBundledKeys(): Promise<string | null>;
+  discardBundledKeys(): Promise<readonly string[]>;
   /** Removes the whole directory. Returns what it could not remove. */
   discard(): Promise<readonly string[]>;
 }
@@ -347,6 +355,12 @@ export interface RecoveryRequestRepository {
       readonly finished?: boolean;
       /** Guards the write on the lease, for executor-owned transitions. */
       readonly leaseOwner?: string;
+      /**
+       * NEXA-FIX-RESTORE-SECRETS §2.3: guards a transition OUT OF FAILED on the code it
+       * failed with, and on its upload still being kept — the only FAILED rows that may
+       * be re-tested or acknowledged.
+       */
+      readonly failedWith?: RecoveryFailureCode;
     },
     tx?: unknown,
   ): Promise<boolean>;

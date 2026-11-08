@@ -179,7 +179,10 @@ export class InstallationKeyService {
       });
     }
     for (const row of rows) {
-      if (keyring.isConfigured(row.keyId)) continue;
+      // A row that IS a configured key is listed once, as configured. A different
+      // key sharing a configured id is its own entry: an imported key.
+      const configured = keyring.configuredKeys.get(row.keyId);
+      if (configured !== undefined && kekFingerprint(configured) === row.fingerprint) continue;
       const counts = dependencies(row.keyId, row.importedAt);
       summaries.push({
         keyId: row.keyId,
@@ -419,11 +422,12 @@ export class InstallationKeyService {
         const collisions: string[] = [];
         const storedById = new Map(stored.map((row) => [row.keyId, row]));
         for (const key of opened.keys) {
-          const held = this.deps.keyring.keys.get(key.keyId);
+          // EVERY held key under the id, configured first: the same bytes under the
+          // same id are already held, whichever slot holds them.
+          const held = this.deps.keyring.candidatesFor(key.keyId);
           const row = storedById.get(key.keyId);
-          if (held !== undefined) {
-            if (sameKey(held, key.material)) alreadyHeld.push(key);
-            else collisions.push(key.keyId);
+          if (held.some((candidate) => sameKey(candidate, key.material))) {
+            alreadyHeld.push(key);
           } else if (row !== undefined && isLive(row)) {
             // A stored row this process could not unwrap. The same key is the
             // same key; a different one under that id is a collision.
@@ -434,6 +438,13 @@ export class InstallationKeyService {
             // removal is undone by the same explicit, audited act that would
             // have added it. Bytes already held under ANOTHER id are imported
             // under this one too: a kit's name for a key must resolve here.
+            //
+            // And DIFFERENT bytes under a CONFIGURED id are imported too, as a
+            // decrypt-only second candidate for that id: two installations made
+            // on the same day both named their key `install-<date>`, and the old
+            // server's kit is the only way to read its secrets here. The
+            // configured key still answers to the name and still encrypts; the
+            // imported one is tried after it, and the GCM tags decide.
             imported.push(key);
           }
         }

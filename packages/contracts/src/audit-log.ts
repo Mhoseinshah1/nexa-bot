@@ -84,6 +84,10 @@ export const AUDIT_CRITICAL_ACTIONS: Readonly<Record<string, readonly Permission
   'backup.archive_password_set': ['backup.download'],
   'recovery.confirm': ['recovery.restore'],
   'recovery.confirmed': ['recovery.restore'],
+  // NEXA-FIX-RESTORE-SECRETS §2.3: re-running a refused restore test, and accepting to
+  // lose (and re-enter) the secrets it could not read — both on the CRITICAL key.
+  'recovery.retest': ['recovery.restore'],
+  'recovery.unreadable_acknowledged': ['recovery.restore'],
   'recovery_kit.exported': ['recovery.kit.export'],
   'recovery_kit.imported': ['recovery.kit.import'],
   'installation_key.removed': ['recovery.key.remove'],

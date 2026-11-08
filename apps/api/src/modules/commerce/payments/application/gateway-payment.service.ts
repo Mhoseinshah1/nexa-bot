@@ -106,6 +106,7 @@ import {
   lateCreditPollingOpen,
   type LateCreditPolicy,
 } from '../domain/late-credit.js';
+import { isUnreadableSecretError } from '../../../../infrastructure/lifecycle/unreadable-secret.js';
 
 /**
  * Operational codes this lane raises. Declared beside their producer, and each is part
@@ -1131,10 +1132,13 @@ export class GatewayPaymentService {
     } catch (error: unknown) {
       // Counted apart from a row's failure: this one withholds the pass's progress.
       report.laneFailures += 1;
-      this.deps.logger.error(
-        { tenantId: String(scope.tenantId), lane, ...errorFacts(error) },
-        'gateway payment lane failed; the pass continues with the next lane',
-      );
+      // An unreadable gateway key is reported once per kind (`UnreadableSecretReporter`).
+      if (!isUnreadableSecretError(error)) {
+        this.deps.logger.error(
+          { tenantId: String(scope.tenantId), lane, ...errorFacts(error) },
+          'gateway payment lane failed; the pass continues with the next lane',
+        );
+      }
     }
   }
 
@@ -1170,6 +1174,13 @@ export class GatewayPaymentService {
         'gateway payment row could not be backed off; its lease will run out',
       );
     }
+    /*
+     * NEXA-FIX-RESTORE-SECRETS §2.6: a gateway key that cannot be read is ONE alert for the
+     * kind (`secrets.read_failed`, raised by `UnreadableSecretReporter`), not a log line and a
+     * row condition per payment. The row is still backed off above, and processes again once
+     * the key is re-entered.
+     */
+    if (isUnreadableSecretError(error)) return;
     this.deps.logger.error(
       {
         tenantId: String(scope.tenantId),

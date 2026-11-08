@@ -1,4 +1,5 @@
 import type { OperationalSeverity } from './ports.js';
+import type { SecretPurpose } from './secrets.js';
 // BEGIN phase 6A PR-2: capacity guards
 import {
   CAPACITY_BOT_LIMIT_PRESSURE_CODE,
@@ -358,6 +359,65 @@ export const BACKUP_OFFSITE_OK_CODE = 'backup.offsite_ok';
  */
 export const INSTALLATION_TENANT_VANISHED_CODE = 'tenancy.cached_tenant_vanished';
 
+/**
+ * NEXA-FIX-RESTORE-SECRETS §2.6: a stored secret this installation can no longer read — its
+ * ciphertext failed authenticated decryption (`platform.secret_auth_failed`) or names a key
+ * this installation does not hold (`platform.secret_key_unknown`). The v0.9.9 incident: a
+ * restore onto a server whose key had the same id and different material left every secret
+ * unreadable, and the only signal was a worker log line every 15 seconds.
+ *
+ * ONE condition per tenant and secret KIND (`secretUnreadableConditionKey`), not per row: the
+ * owner re-enters a kind on one page, and seven unreadable gateway keys are one thing to do.
+ * Closed by `SECRET_READ_OK_CODE` when the kind reads again (the value was re-entered).
+ * Raised on the Web Admin alerts page from the process that met it — never only through the
+ * operations group, which may itself depend on the unreadable bot token.
+ */
+export const SECRET_READ_FAILED_CODE = 'secrets.read_failed';
+export const SECRET_READ_OK_CODE = 'secrets.read_ok';
+
+/**
+ * The kinds an unreadable secret is reported as: one per place the owner re-enters it
+ * (ربات‌ها، پنل‌ها، روش‌های پرداخت، بکاپ و بازیابی، پشتیبانی هوشمند), and `OTHER` for the
+ * purposes no page re-enters (a TOTP factor, an import key, a sealed export).
+ */
+export const UNREADABLE_SECRET_KINDS = [
+  'BOT_TOKEN',
+  'PANEL_CREDENTIALS',
+  'GATEWAY_KEYS',
+  'BACKUP_PASSWORD',
+  'SUPPORT_AI_KEY',
+  'OTHER',
+] as const;
+export type UnreadableSecretKind = (typeof UNREADABLE_SECRET_KINDS)[number];
+
+/** The kind a purpose is reported under. Total over `SECRET_PURPOSES`. */
+export function unreadableSecretKindOf(purpose: SecretPurpose): UnreadableSecretKind {
+  switch (purpose) {
+    case 'bot_instance.token':
+      return 'BOT_TOKEN';
+    case 'panel.username':
+    case 'panel.password':
+    case 'panel.api_token':
+      return 'PANEL_CREDENTIALS';
+    case 'payment_gateway.api_key':
+    case 'payment_gateway.webhook_secret':
+    case 'payment_gateway.verify_key':
+    case 'payment_gateway.refund_card':
+      return 'GATEWAY_KEYS';
+    case 'backup.archive_password':
+      return 'BACKUP_PASSWORD';
+    case 'support_ai_provider.api_key':
+      return 'SUPPORT_AI_KEY';
+    default:
+      return 'OTHER';
+  }
+}
+
+/** The dedupe key of one kind's `SECRET_READ_FAILED_CODE` condition. */
+export function secretUnreadableConditionKey(kind: UnreadableSecretKind): string {
+  return `${SECRET_READ_FAILED_CODE}:${kind}`;
+}
+
 // ---------------------------------------------------------------------------
 // The catalogue
 // ---------------------------------------------------------------------------
@@ -540,6 +600,10 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   recovery('bot_menu.published_readable', 'BOT_SETUP', 'bot_menu.published_unreadable'),
   failure('settings.stored_value_invalid', 'SYSTEM', 'CONDITION'),
   recovery('settings.stored_value_valid', 'SYSTEM', 'settings.stored_value_invalid'),
+  // NEXA-FIX-RESTORE-SECRETS §2.6: a stored secret that no longer decrypts. One condition per
+  // tenant and kind; re-entering the value closes it.
+  failure(SECRET_READ_FAILED_CODE, 'SYSTEM', 'CONDITION'),
+  recovery(SECRET_READ_OK_CODE, 'SYSTEM', SECRET_READ_FAILED_CODE),
 
   // --- Security: denials, lock-outs, administrator changes --------------------------------
   failure('access.permission_denied', 'SECURITY', 'PER_OCCURRENCE', { eventClass: 'SECURITY' }),

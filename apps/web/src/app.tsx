@@ -36,6 +36,7 @@ import { AlertsPage, NotificationsPage } from './pages/alerts';
 // Phase B3: the notification center and its top-bar bell.
 import { NotificationBell, NotificationCenterPage } from './pages/notification-center';
 import { IncidentBanner, IncidentDetailPage, IncidentsPage } from './pages/incidents';
+import { SecretReentryStrip } from './pages/recovery-secrets';
 import { AuditLogPage, auditLogFirstScreen } from './pages/audit-log';
 import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
@@ -2070,6 +2071,8 @@ function SignedIn({
           <div className="content-inner">
             {/* Phase E3: every administrator sees an ACTIVE incident that asked to be seen. */}
             <IncidentBanner mayView={permissions.includes('incidents.view')} />
+            {/* NEXA-FIX-RESTORE-SECRETS: secrets a restore cleared and nobody re-entered yet. */}
+            <SecretReentryStrip mayView={permissions.includes('backup.view')} />
             {/* X1: the page header's breadcrumb, derived from the navigation, for every page. */}
             <PageTrailContext.Provider value={trail}>{resolved.element}</PageTrailContext.Provider>
           </div>

@@ -31,6 +31,11 @@ export {
 export {
   OPERATIONAL_EVENT_MESSAGES_FA,
   operationalEventMessageFa,
+  UNREADABLE_SECRET_ALERTS_FA,
+  unreadableSecretAlertFa,
+  UNREADABLE_SECRET_KIND_LABELS_FA,
+  secretKindLabelFa,
+  secretReentryPlaceFa,
 } from './operational-event-messages.fa.js';
 export {
   LOOP_LABELS_FA,

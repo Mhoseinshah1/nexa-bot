@@ -13,7 +13,7 @@ import {
   type BackupArchiveHeader,
   type BackupManifest,
 } from '@nexa/contracts';
-import type { SecretKeyring } from '../../../../infrastructure/crypto/keyring.js';
+import { heldKeysFor, type SecretKeyring } from '../../../../infrastructure/crypto/keyring.js';
 
 /**
  * The encrypted backup archive: a streaming, authenticated container for a
@@ -134,17 +134,29 @@ function archiveMalformed(detail: string): NexaError {
 
 function keyFor(keyring: SecretKeyring, keyId: string): Buffer {
   const key = keyring.keys.get(keyId);
-  if (key === undefined) {
-    throw new NexaError({
-      kind: 'CONFIGURATION',
-      code: PLATFORM_ERROR_CODES.SECRET_KEY_UNKNOWN,
-      message:
-        `A backup archive names key "${keyId}", which this installation does not hold. Add it to ` +
-        'SECRETS_KEYS — an archive outlives the key rotation that retired its key.',
-      details: { requiredKeyId: keyId, configuredKeyIds: [...keyring.keys.keys()] },
-    });
-  }
+  if (key === undefined) throw unknownArchiveKey(keyring, keyId);
   return key;
+}
+
+/**
+ * Every held key the archive's header id may mean, configured first. An id is a
+ * label; which of the keys under it sealed this archive is for the wrap's tag to say.
+ */
+function keysFor(keyring: SecretKeyring, keyId: string): readonly Buffer[] {
+  const held = heldKeysFor(keyring, keyId);
+  if (held.length === 0) throw unknownArchiveKey(keyring, keyId);
+  return held;
+}
+
+function unknownArchiveKey(keyring: SecretKeyring, keyId: string): NexaError {
+  return new NexaError({
+    kind: 'CONFIGURATION',
+    code: PLATFORM_ERROR_CODES.SECRET_KEY_UNKNOWN,
+    message:
+      `A backup archive names key "${keyId}", which this installation does not hold. Add it to ` +
+      'SECRETS_KEYS — an archive outlives the key rotation that retired its key.',
+    details: { requiredKeyId: keyId, configuredKeyIds: [...keyring.keys.keys()] },
+  });
 }
 
 export interface SealResult {
@@ -327,7 +339,7 @@ export async function openArchive(input: {
   const { archivePath, dumpPath, keyring } = input;
   const { header, preamble, payloadOffset, archiveBytes } = await readArchiveHeader(archivePath);
 
-  const kek = keyFor(keyring, header.keyId);
+  const keks = keysFor(keyring, header.keyId);
   const tagOffset = archiveBytes - GCM_TAG_BYTES;
 
   const handle = await open(archivePath, 'r');
@@ -340,15 +352,21 @@ export async function openArchive(input: {
     await handle.close();
   }
 
-  let dataKey: Buffer;
-  try {
-    const unwrap = createDecipheriv('aes-256-gcm', kek, unb64(header.wrapIv));
-    unwrap.setAAD(wrapAad(header.backupId, header.keyId));
-    unwrap.setAuthTag(unb64(header.wrapTag));
-    dataKey = Buffer.concat([unwrap.update(unb64(header.wrappedKey)), unwrap.final()]);
-  } catch {
-    throw archiveAuthFailed('the data key did not unwrap under this key');
+  // The first held key under the header's id whose wrap authenticates. Every
+  // failure stays the one uniform answer.
+  let dataKey: Buffer | null = null;
+  for (const kek of keks) {
+    try {
+      const unwrap = createDecipheriv('aes-256-gcm', kek, unb64(header.wrapIv));
+      unwrap.setAAD(wrapAad(header.backupId, header.keyId));
+      unwrap.setAuthTag(unb64(header.wrapTag));
+      dataKey = Buffer.concat([unwrap.update(unb64(header.wrappedKey)), unwrap.final()]);
+      break;
+    } catch {
+      // Not this candidate.
+    }
   }
+  if (dataKey === null) throw archiveAuthFailed('the data key did not unwrap under this key');
 
   try {
     const decipher = createDecipheriv('aes-256-gcm', dataKey, unb64(header.iv));

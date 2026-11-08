@@ -19,10 +19,15 @@ import { kekFingerprint } from './recovery-kit.js';
  * `sealArchive`) take the key by `activeKeyId`, so an imported key can be
  * HELD and never USED for new material.
  *
- * A CONFIGURED ID ALWAYS WINS. An imported key whose id collides with a
- * configured one is not loaded: import refuses that collision, but a restored
- * database can carry a row the current configuration contradicts, and the
- * configuration is the authority over what this installation's keys are.
+ * A CONFIGURED ID ALWAYS WINS THE NAME. `keys.get(id)` answers with the
+ * configured key whenever one is configured under that id. But an imported key
+ * may SHARE an id with a configured one and hold different bytes — two
+ * installations made on the same day both named their key `install-<date>` —
+ * and a backup of the other one is sealed under that other key. So such a key is
+ * held as a second CANDIDATE for its id (`candidatesFor`): decryption tries the
+ * configured key first, then the imported one, and authenticated decryption
+ * decides. An imported key with the same id AND the same bytes as a configured
+ * one is a duplicate and is not held twice.
  */
 export class InstallationKeyring implements SecretKeyring {
   private merged: Map<string, Buffer>;
@@ -59,8 +64,26 @@ export class InstallationKeyring implements SecretKeyring {
     return this.configured.keys.has(keyId);
   }
 
+  /** Every held key answering to `keyId`: configured first, then imported. */
+  candidatesFor(keyId: string): readonly Buffer[] {
+    const held: Buffer[] = [];
+    const configured = this.configured.candidatesFor?.(keyId) ?? [];
+    const own = this.configured.keys.get(keyId);
+    for (const key of own === undefined ? configured : [own, ...configured]) {
+      if (!held.some((candidate) => candidate.equals(key))) held.push(key);
+    }
+    const imported = this.imported.get(keyId);
+    if (imported !== undefined && !held.some((candidate) => candidate.equals(imported))) {
+      held.push(imported);
+    }
+    return held;
+  }
+
   /**
-   * Replaces the imported set, wholesale. Returns the ids it refused.
+   * Replaces the imported set, wholesale. Returns the ids it refused: an imported
+   * key that is byte-for-byte a configured key under the same id (a duplicate,
+   * never held twice). A DIFFERENT key under a configured id is held, as a second
+   * candidate for that id (see the class comment).
    *
    * Wholesale rather than incremental so a key REMOVED from the store leaves
    * the keyring at the next load, and a process never holds a key nobody can
@@ -70,7 +93,8 @@ export class InstallationKeyring implements SecretKeyring {
     const refused: string[] = [];
     const imported = new Map<string, Buffer>();
     for (const [keyId, material] of next) {
-      if (this.configured.keys.has(keyId)) {
+      const configured = this.configured.keys.get(keyId);
+      if (configured !== undefined && configured.equals(material)) {
         refused.push(keyId);
         continue;
       }
@@ -83,7 +107,9 @@ export class InstallationKeyring implements SecretKeyring {
       );
     }
     const merged = new Map(this.configured.keys);
-    for (const [keyId, material] of imported) merged.set(keyId, material);
+    // The configured key keeps the NAME; an imported key under a configured id is
+    // reachable through `candidatesFor` only.
+    for (const [keyId, material] of imported) if (!merged.has(keyId)) merged.set(keyId, material);
     this.imported = imported;
     this.merged = merged;
     /*
@@ -161,31 +187,36 @@ export function unwrapInstallationKey(input: {
   readonly keyId: string;
   readonly wrapped: string;
   readonly fingerprint: string;
-  readonly keys: ReadonlyMap<string, Buffer>;
+  /** The wrapping keys by id; or, to try every held key under an id, a candidate list. */
+  readonly keys: ReadonlyMap<string, Buffer | readonly Buffer[]>;
 }): Buffer | null {
   const parts = input.wrapped.split('.');
   if (parts.length !== 5 || parts[0] !== WRAP_VERSION) return null;
   const [, wrappingKeyId, iv, ciphertext, tag] = parts as [string, string, string, string, string];
-  const wrappingKey = input.keys.get(wrappingKeyId);
-  if (wrappingKey === undefined) return null;
-  try {
-    const decipher = createDecipheriv('aes-256-gcm', wrappingKey, Buffer.from(iv, 'base64url'), {
-      authTagLength: 16,
-    });
-    decipher.setAAD(wrapAad(input.keyId, wrappingKeyId));
-    decipher.setAuthTag(Buffer.from(tag, 'base64url'));
-    const material = Buffer.concat([
-      decipher.update(Buffer.from(ciphertext, 'base64url')),
-      decipher.final(),
-    ]);
-    if (material.length !== 32 || kekFingerprint(material) !== input.fingerprint) {
-      material.fill(0);
-      return null;
+  const held = input.keys.get(wrappingKeyId);
+  if (held === undefined) return null;
+  // Every held key under the wrapping id: the tag says which one wrapped it.
+  for (const wrappingKey of Buffer.isBuffer(held) ? [held] : held) {
+    try {
+      const decipher = createDecipheriv('aes-256-gcm', wrappingKey, Buffer.from(iv, 'base64url'), {
+        authTagLength: 16,
+      });
+      decipher.setAAD(wrapAad(input.keyId, wrappingKeyId));
+      decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+      const material = Buffer.concat([
+        decipher.update(Buffer.from(ciphertext, 'base64url')),
+        decipher.final(),
+      ]);
+      if (material.length !== 32 || kekFingerprint(material) !== input.fingerprint) {
+        material.fill(0);
+        return null;
+      }
+      return material;
+    } catch {
+      // Not this candidate.
     }
-    return material;
-  } catch {
-    return null;
   }
+  return null;
 }
 
 /** A stored imported key, as the loader needs it. */
@@ -210,11 +241,24 @@ export function resolveStoredKeys(
   configured: ReadonlyMap<string, Buffer>,
 ): { readonly resolved: Map<string, Buffer>; readonly unavailable: readonly string[] } {
   const resolved = new Map<string, Buffer>();
-  const pending = rows.filter((row) => !configured.has(row.keyId) && row.wrappedMaterial !== null);
+  // A row that IS a configured key (same id, same bytes) is a duplicate and is
+  // skipped. A row under a configured id with a DIFFERENT fingerprint is another
+  // key that happens to share the label, and is resolved like any other.
+  const pending = rows.filter((row) => {
+    if (row.wrappedMaterial === null) return false;
+    const own = configured.get(row.keyId);
+    return own === undefined || kekFingerprint(own) !== row.fingerprint;
+  });
   let progressed = true;
   while (progressed && pending.length > 0) {
     progressed = false;
-    const available = new Map([...configured, ...resolved]);
+    // Every held key per id, configured first: a wrapping id can name both a
+    // configured key and an imported one.
+    const available = new Map<string, Buffer[]>();
+    for (const [keyId, material] of configured) available.set(keyId, [material]);
+    for (const [keyId, material] of resolved) {
+      available.set(keyId, [...(available.get(keyId) ?? []), material]);
+    }
     for (let index = pending.length - 1; index >= 0; index -= 1) {
       const row = pending[index]!;
       const material = unwrapInstallationKey({

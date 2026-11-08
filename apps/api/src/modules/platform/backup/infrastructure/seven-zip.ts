@@ -25,6 +25,10 @@ import {
   type CpuLimitProvider,
 } from './cpu-quota.js';
 import { killedBySignal, toolOomKilled, wrapLowPriority } from './tool-process.js';
+import {
+  KEY_BUNDLE_ENTRY,
+  KEY_BUNDLE_MAX_BYTES,
+} from '../../../../infrastructure/crypto/key-bundle.js';
 
 /**
  * The 7-Zip backup archive (Round 4 PR-E, E4).
@@ -36,12 +40,16 @@ import { killedBySignal, toolOomKilled, wrapLowPriority } from './tool-process.j
  * a 7z would need a 7-Zip fork to open. The measurement that chose LZMA2 over
  * `zstd -19 --long` is in `docs/backup.md` § Compression.
  *
- * WHAT IS INSIDE. Exactly two entries, both with fixed names:
+ * WHAT IS INSIDE. Two entries with fixed names, and a third since self-contained backups:
  *
  *   manifest.json     the run's `BackupManifest`: identity, versions, and the SHA-256 of
  *                     the dump, so a restore checks the bytes against the archive's own claim
  *   <dump file>       the `pg_dump` custom-format archive, written with `-Z0` so that LZMA2
  *                     — not gzip — does the compressing
+ *   keys.json         (optional) the key bundle (`key-bundle.ts`): the keyring keys the
+ *                     dump's secrets are sealed under, each wrapped AGAIN under a key
+ *                     derived from the backup password — so a restore needs only the file
+ *                     and the password. An archive without it restores as before.
  *
  * NON-SOLID (`-ms=off`), so the manifest can be read without decompressing the dump.
  *
@@ -256,6 +264,7 @@ export function sealArgs(
   level: SevenZipLevel,
   archivePath: string,
   dumpName: string,
+  extraEntries: readonly string[] = [],
 ): readonly string[] {
   return [
     'a',
@@ -274,6 +283,7 @@ export function sealArgs(
     archivePath,
     MANIFEST_ENTRY,
     dumpName,
+    ...extraEntries,
   ];
 }
 
@@ -334,17 +344,25 @@ export async function sealSevenZip(input: {
   readonly manifest: BackupManifest;
   readonly password: string;
   readonly options: SevenZipOptions;
+  /** The sealed key bundle (`sealKeyBundle`), added as `keys.json`. Ciphertext only. */
+  readonly keyBundle?: Buffer;
 }): Promise<{ readonly archiveBytes: number }> {
   const directory = dirname(input.dumpPath);
   const manifestPath = join(directory, MANIFEST_ENTRY);
+  const bundlePath = join(directory, KEY_BUNDLE_ENTRY);
   const dumpName = basename(input.dumpPath);
-  if (dumpName === MANIFEST_ENTRY) throw malformed('the dump cannot be named like the manifest');
+  if (dumpName === MANIFEST_ENTRY || dumpName === KEY_BUNDLE_ENTRY) {
+    throw malformed('the dump cannot be named like the manifest or the key bundle');
+  }
   // BEFORE anything is written or spawned: a level that does not fit is refused here, not
   // discovered when the kernel kills 7-Zip half way through the archive.
   const level = await pickLevel(input.options);
   await rm(input.archivePath, { force: true });
   await writeFile(manifestPath, JSON.stringify(input.manifest), { mode: 0o600, flag: 'w' });
   try {
+    if (input.keyBundle !== undefined) {
+      await writeFile(bundlePath, input.keyBundle, { mode: 0o600, flag: 'w' });
+    }
     const result = await run7z({
       binary: input.options.binary,
       cwd: directory,
@@ -352,7 +370,12 @@ export async function sealSevenZip(input: {
       timeoutMs: input.options.sealTimeoutMs,
       lowPriorityPrefix: input.options.lowPriorityPrefix,
       cpuLimit: input.options.cpuLimit,
-      args: sealArgs(level, input.archivePath, dumpName),
+      args: sealArgs(
+        level,
+        input.archivePath,
+        dumpName,
+        input.keyBundle === undefined ? [] : [KEY_BUNDLE_ENTRY],
+      ),
     });
     if (killedBySignal(result.code, result.signal)) {
       throw toolOomKilled('7-Zip', result.code, result.signal);
@@ -367,6 +390,7 @@ export async function sealSevenZip(input: {
     }
   } finally {
     await rm(manifestPath, { force: true });
+    await rm(bundlePath, { force: true });
   }
   const { size } = await stat(input.archivePath);
   return { archiveBytes: size };
@@ -432,6 +456,8 @@ export async function openSevenZip(input: {
   readonly dumpBytes: number;
   /** Which of `passwords` opened it (its index). */
   readonly passwordIndex: number;
+  /** The archive's `keys.json` (still sealed under the password), or null: none in it. */
+  readonly keyBundle: Buffer | null;
 }> {
   if (input.passwords.length === 0) throw authFailed();
   let listing: Listing | null = null;
@@ -446,9 +472,14 @@ export async function openSevenZip(input: {
   if (listing === null || passwordIndex < 0) throw authFailed();
   const password = input.passwords[passwordIndex] ?? '';
 
-  const dumpEntries = listing.entries.filter((entry) => entry !== MANIFEST_ENTRY);
+  const dumpEntries = listing.entries.filter(
+    (entry) => entry !== MANIFEST_ENTRY && entry !== KEY_BUNDLE_ENTRY,
+  );
   if (!listing.entries.includes(MANIFEST_ENTRY) || dumpEntries.length !== 1) {
     throw malformed('it does not hold exactly one manifest and one dump');
+  }
+  if (listing.entries.filter((entry) => entry === KEY_BUNDLE_ENTRY).length > 1) {
+    throw malformed('it holds more than one key bundle');
   }
   const dumpEntry = dumpEntries[0] ?? '';
   if (dumpEntry.includes('/') || dumpEntry.includes('\\') || dumpEntry.startsWith('.')) {
@@ -486,6 +517,33 @@ export async function openSevenZip(input: {
   const manifest = backupManifestSchema.safeParse(parsed);
   if (!manifest.success) {
     throw malformed('the manifest does not match the schema this release reads');
+  }
+
+  let keyBundle: Buffer | null = null;
+  if (listing.entries.includes(KEY_BUNDLE_ENTRY)) {
+    const bundleRun = await run7z({
+      binary: input.options.binary,
+      password,
+      timeoutMs: input.options.openTimeoutMs,
+      maxStdout: KEY_BUNDLE_MAX_BYTES,
+      lowPriorityPrefix: input.options.lowPriorityPrefix,
+      cpuLimit: input.options.cpuLimit,
+      args: [
+        'x',
+        '-so',
+        '-bd',
+        '-mmt=1',
+        typeSwitch(input.archivePath),
+        '--',
+        input.archivePath,
+        KEY_BUNDLE_ENTRY,
+      ],
+    });
+    if (killedBySignal(bundleRun.code, bundleRun.signal)) {
+      throw toolOomKilled('7-Zip', bundleRun.code, bundleRun.signal);
+    }
+    if (bundleRun.code !== 0) throw authFailed();
+    keyBundle = bundleRun.stdout;
   }
 
   const digest = createHash('sha256');
@@ -534,5 +592,6 @@ export async function openSevenZip(input: {
     dumpChecksum: digest.digest('hex'),
     dumpBytes: bytes,
     passwordIndex,
+    keyBundle,
   };
 }

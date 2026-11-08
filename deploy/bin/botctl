@@ -127,7 +127,8 @@ botctl — operate a Nexa installation
   botctl telegram status     the local registration AND Telegram's own webhook state
   botctl telegram register   reconcile the webhook with Telegram (keeps queued updates)
 
-  botctl secrets status                    configuration, envelope versions and key ids in use
+  botctl secrets status                    configuration, held keys, versions, key ids, unreadable rows
+  botctl secrets verify                    decrypt every stored secret; per kind readable/unreadable
   botctl secrets rewrap [--batch N] [--max N]
                                            re-encrypt secrets under the active key
   botctl secrets retire-check --key ID     whether a key can leave the keyring
@@ -2377,15 +2378,15 @@ cmd_secrets() {
       cmd_secrets_disable_v1 "$@"
       return
       ;;
-    status | rewrap | retire-check | shutdown-check) ;;
+    status | verify | rewrap | retire-check | shutdown-check) ;;
     *)
-      nexa_die "usage: botctl secrets <status|rewrap|retire-check|shutdown-check|migrate-config|disable-v1> [--batch N] [--max N] [--key ID]"
+      nexa_die "usage: botctl secrets <status|verify|rewrap|retire-check|shutdown-check|migrate-config|disable-v1> [--batch N] [--max N] [--key ID]"
       ;;
   esac
 
   # rewrap WRITES, so it takes the same exclusive lock an update takes: a
   # re-encryption interleaved with a migration is two writers on one database.
-  # status, retire-check and shutdown-check only read.
+  # status, verify, retire-check and shutdown-check only read.
   if [ "$action" = "rewrap" ]; then
     botctl_long_command secrets-rewrap
     nexa_acquire_lock 0

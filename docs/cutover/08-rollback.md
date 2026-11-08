@@ -54,7 +54,10 @@ Resolve or cancel the MAINTENANCE incident in «رخدادها و نگهداری
 **`OWNER ONLY — separate explicit approval`**
 
 Restore the protective backup (`preImportBackupRunId`) in «بکاپ و بازیابی ← عملیات بازیابی»
-(«تأیید بازیابی»). The displaced database is kept. Otherwise leave Nexa as it is: nobody can
+(«تأیید بازیابی»). The displaced database is kept. The protective backup is a password-protected 7z archive made on this same server, so the file and
+the backup password are enough; if the restore test refuses with
+`recovery.candidate_secrets_unreadable`, see `docs/backup.md` (Recovery Kit; «ادامه؛ این‌ها را
+دوباره وارد می‌کنم»). Otherwise leave Nexa as it is: nobody can
 reach it.
 
 **Step 4 — record** the time and the reason in [`11-records.md`](11-records.md).

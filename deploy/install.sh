@@ -823,7 +823,10 @@ generate_secrets() {
   # Telegram's alphabet, not ours — see `random_webhook_secret`.
   webhook_secret="$(random_webhook_secret)"
   kek="$(random_base64)"
-  kek_id="install-$(date -u +%Y%m%d)"
+  # The date alone named two installations made on the same day identically,
+  # with different material; a backup restored onto the other one then looked
+  # covered by id. The random suffix keeps ids unique. Grammar: [A-Za-z0-9._-]{1,64}.
+  kek_id="install-$(date -u +%Y%m%d)-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
   # Written by redirection, never echoed. Nothing below prints a value. Each
   # file lands complete or not at all — no half-written secret is ever readable.

@@ -15,7 +15,16 @@ import { SECRET_COLUMNS, type SecretColumn } from './infrastructure/crypto/secre
 import {
   unwrapInstallationKey,
   wrapInstallationKey,
+  type InstallationKeyring,
 } from './infrastructure/crypto/installation-keyring.js';
+import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
+import { kekFingerprint } from './infrastructure/crypto/recovery-kit.js';
+import {
+  trialDecryptSecrets,
+  type SecretRowQueryable,
+  type SecretTrialReport,
+} from './infrastructure/crypto/secret-trial.js';
+import { secretKindLabelFa, secretReentryPlaceFa } from '@nexa/i18n';
 
 /**
  * `secrets status` and `secrets rewrap` — cryptographic maintenance.
@@ -31,7 +40,7 @@ import {
  */
 
 interface Args {
-  readonly command: 'status' | 'rewrap' | 'retire-check' | 'shutdown-check';
+  readonly command: 'status' | 'rewrap' | 'retire-check' | 'shutdown-check' | 'verify';
   readonly batch: number;
   readonly max: number;
   readonly keyId: string | null;
@@ -47,10 +56,11 @@ function parseArgs(argv: readonly string[]): Args {
     command !== 'status' &&
     command !== 'rewrap' &&
     command !== 'retire-check' &&
-    command !== 'shutdown-check'
+    command !== 'shutdown-check' &&
+    command !== 'verify'
   ) {
     throw new UsageError(
-      'usage: secrets <status|rewrap|retire-check|shutdown-check> [--batch N] [--max N] [--key ID]',
+      'usage: secrets <status|verify|rewrap|retire-check|shutdown-check> [--batch N] [--max N] [--key ID]',
     );
   }
   const value = (flag: string): string | null => {
@@ -141,7 +151,15 @@ function configurationLines(
   ];
 }
 
-function report(statuses: readonly ColumnStatus[]): { text: string; healthy: boolean } {
+function report(
+  statuses: readonly ColumnStatus[],
+  /**
+   * NEXA-FIX-RESTORE-SECRETS §2.5: the trial decryption of the same rows. Counting by
+   * key id said "fine" while every row failed authentication; this line says whether
+   * they actually READ. Absent only for callers that did not run it.
+   */
+  trial?: SecretTrialReport,
+): { text: string; healthy: boolean } {
   const lines: string[] = [];
   let healthy = true;
   for (const status of statuses) {
@@ -149,6 +167,17 @@ function report(statuses: readonly ColumnStatus[]): { text: string; healthy: boo
       `${status.column.purpose}  (${status.column.table}.${status.column.ciphertextColumn})`,
     );
     lines.push(`  rows        ${status.rowCount}`);
+    const read = trial?.byPurpose.find((entry) => entry.purpose === status.column.purpose);
+    if (read !== undefined) {
+      lines.push(`  unreadable  ${read.unreadable}`);
+      if (read.unreadable > 0) {
+        healthy = false;
+        lines.push(
+          `  UNREADABLE  ${read.unreadable} row(s) do not decrypt with any key held here. ` +
+            `Re-enter in the Web Admin: ${secretReentryPlaceFa(status.column.purpose)}`,
+        );
+      }
+    }
     const versions = [...status.byVersion.entries()].sort(([a], [b]) => a.localeCompare(b));
     lines.push(`  versions    ${versions.map(([v, n]) => `${v}=${n}`).join('  ') || '-'}`);
     const keys = [...status.byKeyId.entries()].sort(([a], [b]) => a.localeCompare(b));
@@ -289,12 +318,34 @@ function dependenciesOn(statuses: readonly ColumnStatus[], keyId: string): numbe
  * idempotent because a row already v2 under the active key is skipped before
  * anything is decrypted.
  */
+function readsUnderActiveKey(
+  activeOnly: AesGcmSecretCipher,
+  column: SecretColumn,
+  row: { id: string; tenantId: string; ciphertext: string; keyId: string },
+): boolean {
+  try {
+    activeOnly.decrypt(
+      { keyId: row.keyId, ciphertext: row.ciphertext },
+      { purpose: column.purpose, tenantId: row.tenantId, entityId: row.id },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function rewrapColumn(
   container: Container,
   column: SecretColumn,
   args: Args,
   activeKeyId: string,
 ): Promise<{ scanned: number; rewrapped: number; skipped: number }> {
+  if (!(container.cipher instanceof AesGcmSecretCipher)) {
+    throw new Error(
+      'secrets rewrap needs the AES-GCM cipher to tell a current row by its key bytes',
+    );
+  }
+  const activeOnly = container.cipher.activeKeyOnly();
   let cursor: string | null = null;
   let scanned = 0;
   let rewrapped = 0;
@@ -316,7 +367,17 @@ async function rewrapColumn(
         // The skip predicate. Without it a converged run rewrites every row on
         // every invocation, which is not idempotence but churn — and it would
         // make "run it again until it reports zero" meaningless.
-        if (envelopeVersion(row.ciphertext) === 'v2' && row.keyId === activeKeyId) return false;
+        // Current only if it AUTHENTICATES under the active key's bytes. The id alone is
+        // a label: a row restored from another server can name the active key's id and be
+        // sealed under different bytes (NEXA-FIX-RESTORE-SECRETS §1), and skipping it by
+        // id left it unreadable for ever.
+        if (
+          envelopeVersion(row.ciphertext) === 'v2' &&
+          row.keyId === activeKeyId &&
+          readsUnderActiveKey(activeOnly, column, row)
+        ) {
+          return false;
+        }
 
         const scope: TenantContext = {
           tenantId: row.tenantId as TenantId,
@@ -377,6 +438,59 @@ async function rewrapColumn(
  * run changes nothing, and an audit row naming ids and never bytes. Without it,
  * retiring the key that wraps them would strand every imported key.
  */
+/**
+ * `secrets verify` (§2.5): every stored secret, DECRYPTED, per kind — readable N and
+ * unreadable N, with the Persian place to re-enter an unreadable one. Read-only. Exit 0
+ * only when nothing is unreadable.
+ */
+export function verifyReport(trial: SecretTrialReport): { text: string; exitCode: number } {
+  const lines: string[] = [];
+  for (const entry of trial.byPurpose) {
+    lines.push(`${entry.purpose}  (${secretKindLabelFa(entry.purpose)})`);
+    lines.push(`  readable    ${entry.readable}`);
+    lines.push(`  unreadable  ${entry.unreadable}`);
+    if (entry.unreadable > 0) {
+      lines.push(`  دوباره وارد کنید در: ${secretReentryPlaceFa(entry.purpose)}`);
+    }
+  }
+  lines.push('');
+  lines.push(
+    trial.unreadableTotal === 0
+      ? `همهٔ ${trial.readableTotal} رمز ذخیره‌شده قابل خواندن است.`
+      : `${trial.unreadableTotal} رمز ذخیره‌شده قابل خواندن نیست؛ آن‌ها را در جاهای گفته‌شده ` +
+          'دوباره وارد کنید و سپس دوباره `botctl secrets verify` را اجرا کنید.',
+  );
+  return { text: `${lines.join('\n')}\n`, exitCode: trial.unreadableTotal === 0 ? 0 : 1 };
+}
+
+/** Every key this installation holds: id, fingerprint, where it came from, whether active. */
+export function heldKeyLines(keyring: InstallationKeyring): string[] {
+  const lines = ['held keys      id  fingerprint  source  active'];
+  const row = (keyId: string, material: Buffer, source: string): string =>
+    `  ${keyId}  ${kekFingerprint(material)}  ${source}  ${
+      source === 'configured' && keyId === keyring.activeKeyId ? 'active' : '-'
+    }`;
+  for (const [keyId, material] of [...keyring.configuredKeys].sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    lines.push(row(keyId, material, 'configured'));
+  }
+  for (const [keyId, material] of [...keyring.importedKeys].sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    lines.push(row(keyId, material, 'imported'));
+  }
+  return [...lines, ''];
+}
+
+/** The trial on the live database, with every key held (configured and imported). */
+export async function trialOf(container: Container): Promise<SecretTrialReport> {
+  return trialDecryptSecrets(
+    container.database.pool as unknown as SecretRowQueryable,
+    container.cipher,
+  );
+}
+
 async function rewrapInstallationKeys(
   container: Container,
   activeKeyId: string,
@@ -468,14 +582,24 @@ async function main(): Promise<void> {
     const activeKeyId = keyring.activeKeyId;
     const statuses: ColumnStatus[] = [];
     for (const column of SECRET_COLUMNS) statuses.push(await statusOf(container, column));
-    const { text, healthy } = report(statuses);
+
+    if (args.command === 'verify') {
+      const verified = verifyReport(await trialOf(container));
+      process.stdout.write(verified.text);
+      process.exitCode = verified.exitCode;
+      return;
+    }
+    // `status` decrypts as well as counts (§2.5); the other verbs keep the id counts.
+    const trial = args.command === 'status' ? await trialOf(container) : undefined;
+    const { text, healthy } = report(statuses, trial);
     const imported = [...wrappedKeys.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([keyId, count]) => `${keyId}=${String(count)}`)
       .join('  ');
     const preamble =
       configurationLines(keyring, config).join('\n') +
-      `imported keys  (decrypt-only, from Recovery Kits) wrapped under: ${imported || '-'}\n\n`;
+      `imported keys  (decrypt-only, from Recovery Kits) wrapped under: ${imported || '-'}\n\n` +
+      heldKeyLines(container.keyring).join('\n');
 
     if (args.command === 'status') {
       if (args.json) {
@@ -492,6 +616,7 @@ async function main(): Promise<void> {
             v1Rows,
             rows,
             mismatched,
+            unreadable: trial?.unreadableTotal ?? 0,
           })}\n`,
         );
         if (!healthy) process.exitCode = 1;

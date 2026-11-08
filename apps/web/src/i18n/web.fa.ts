@@ -1264,6 +1264,8 @@ export const WEB_FA = {
     'تا رمزی تنظیم نشود، بکاپ‌ها به قالب قبلی ‎.nxb و با کلید سرور رمزگذاری می‌شوند و فقط روی همین نصب (یا با کیت بازیابی) باز می‌شوند.',
   'web.backup_password_owner_only': 'تنظیم رمز فایل بکاپ فقط برای مالک است.',
   'web.backup_password_new': 'رمز تازه‌ی فایل بکاپ',
+  'web.backup_password_change_note':
+    'تغییر رمز فقط روی بکاپ‌های بعدی اثر می‌گذارد؛ بکاپ قدیمی همچنان با همان رمزی باز می‌شود که با آن ساخته شده است. بکاپی که با رمز ساخته شده باشد، روی هر سرور دیگری هم فقط با خودِ فایل و همان رمز بازیابی می‌شود.',
   'web.backup_password_again': 'تکرار رمز',
   'web.backup_password_short': 'رمز باید دست‌کم 12 نویسه باشد.',
   'web.backup_password_mismatch': 'دو رمز یکسان نیستند.',
@@ -1450,6 +1452,8 @@ export const WEB_FA = {
     'این فایل پشتیبان روی سرور دیگری ساخته شده و کلید باز کردن آن روی این سرور نیست. کیت بازیابی همان سرور را در بخش «کیت بازیابی» همین صفحه وارد کنید و سپس فایل پشتیبان را دوباره بارگذاری کنید.',
   'web.recovery_failure_keys_missing':
     'فایل پشتیبان باز شد، اما بخشی از اطلاعات محرمانه‌ی داخل آن (مثل توکن ربات یا رمز پنل‌ها) با کلیدی قفل شده که روی این سرور نیست. کیت بازیابی کامل سرور قبلی را وارد کنید و دوباره امتحان کنید. هیچ تغییری در این سرور داده نشد.',
+  'web.recovery_failure_secrets_unreadable':
+    'فایل پشتیبان باز شد، اما بخشی از اطلاعات محرمانه‌ی داخل آن (مثل توکن ربات، رمز پنل، کلید درگاه یا رمز بکاپ) با کلیدهای این سرور خوانده نمی‌شود. بازیابی انجام نشد و هیچ تغییری در این سرور داده نشد.',
   'web.recovery_failure_auth':
     'فایل پشتیبان باز نشد: یا آسیب دیده است یا با کلیدی ساخته شده که با کلیدهای این سرور جور نیست.',
   // FIX-12 / C5.9: every recovery failure code in words an operator can act on. The raw code
@@ -1521,6 +1525,53 @@ export const WEB_FA = {
   'web.recovery_confirm_button': 'تأیید و شروع بازیابی',
   'web.recovery_confirm_wrong': 'عبارت تأیید مطابقت ندارد.',
   'web.recovery_confirmed': 'بازیابی تأیید شد و در صف اجراست.',
+  // NEXA-FIX-RESTORE-SECRETS §2.3: a restore refused because some stored secrets cannot be
+  // read with this server's keys, and the strip that follows a restore that cleared some.
+  'web.secret_purpose_bot_instance_token': 'توکن ربات',
+  'web.secret_purpose_panel_username': 'نام کاربری پنل',
+  'web.secret_purpose_panel_password': 'رمز پنل',
+  'web.secret_purpose_panel_api_token': 'توکن API پنل',
+  'web.secret_purpose_gateway_api_key': 'کلید API درگاه پرداخت',
+  'web.secret_purpose_gateway_webhook_secret': 'رمز وب‌هوک درگاه پرداخت',
+  'web.secret_purpose_gateway_verify_key': 'کلید تأیید درگاه پرداخت',
+  'web.secret_purpose_gateway_refund_card': 'کارت بازپرداخت درگاه',
+  'web.secret_purpose_admin_totp': 'رمز ورود دومرحله‌ای مدیر',
+  'web.secret_purpose_support_ai_key': 'کلید پشتیبانی هوشمند',
+  'web.secret_purpose_legacy_package_key': 'کلید بستهٔ انتقال از ربات قبلی',
+  'web.secret_purpose_backup_password': 'رمز بکاپ',
+  'web.secret_purpose_gift_card_export': 'کلید خروجی کارت هدیه',
+  'web.secret_purpose_hosting_totp': 'رمز ورود دومرحله‌ای پنل سازندگان',
+  'web.secret_unreadable_title':
+    'بخشی از اطلاعات محرمانهٔ این بکاپ با کلیدهای این سرور خوانده نمی‌شود',
+  'web.secret_unreadable_intro':
+    'بازیابی هنوز انجام نشده و هیچ تغییری در این سرور داده نشده است. موارد زیر خوانده نشدند (تعداد هر مورد کنارش آمده). یکی از دو راه را انتخاب کنید.',
+  'web.secret_unreadable_count': 'تعداد',
+  'web.secret_unreadable_kit_choice': 'بارگذاری کیت بازیابی سرور قبلی',
+  'web.secret_unreadable_kit_hint':
+    'کیت بازیابی همان سرور را در بخش «کیت بازیابی» بالای همین صفحه وارد کنید، سپس دکمهٔ زیر را بزنید تا همین فایل دوباره آزموده شود. نیازی به بارگذاری دوبارهٔ بکاپ نیست.',
+  'web.secret_unreadable_retest': 'آزمون دوباره با کیت وارد‌شده',
+  'web.secret_unreadable_retesting': 'در حال آزمون…',
+  'web.secret_unreadable_continue': 'ادامه؛ این‌ها را دوباره وارد می‌کنم',
+  'web.secret_unreadable_continue_hint':
+    'بازیابی بدون این مقدارها انجام می‌شود و بعد از آن باید خودتان آن‌ها را دوباره وارد کنید.',
+  'web.secret_unreadable_dialog_title': 'ادامه بدون این مقدارها؟',
+  'web.secret_unreadable_dialog_question':
+    'این مقدارها پس از بازیابی پاک می‌شوند و باید دوباره وارد شوند. تا آن زمان کارهایی که به آن‌ها نیاز دارند کار نمی‌کنند.',
+  'web.secret_unreadable_dialog_bots':
+    'رباتی که توکنش خوانده نمی‌شود تا وارد کردن دوبارهٔ توکن متوقف می‌ماند.',
+  'web.secret_unreadable_dialog_confirm': 'می‌پذیرم، ادامه بده',
+  'web.secret_unreadable_dialog_cancel': 'انصراف',
+  'web.secret_unreadable_acknowledged':
+    'فهرست پذیرفته شد. برای شروع بازیابی عبارت تأیید را بنویسید.',
+  'web.secret_unreadable_refund_card':
+    'کارت بازپرداخت درگاه با این بازیابی پاک نمی‌شود، چون پاک کردنش بازپرداخت‌ها را تغییر می‌دهد. برای این بکاپ باید کیت بازیابی سرور قبلی را وارد کنید.',
+  'web.secret_unreadable_password_label': 'رمز فایل 7-Zip',
+  'web.secret_unreadable_no_permission': 'شما اجازهٔ بازگرداندن این نصب را ندارید.',
+  'web.secret_summary_rewrapped': 'رمز زیر کلید این سرور دوباره رمزگذاری شد',
+  'web.secret_summary_cleared': 'رمز پاک شد و باید دوباره وارد شود',
+  'web.secret_reentry_label': 'اطلاعات محرمانه‌ای که باید دوباره وارد شود',
+  'web.secret_reentry_title': 'این مقدارها هنگام بازیابی پاک شدند و هنوز دوباره وارد نشده‌اند',
+  'web.secret_reentry_open': 'وارد کردن',
   'web.recovery_confirm_expires': 'اعتبار تأیید',
   'web.recovery_no_permission_restore':
     'شما اجازه‌ی بازگرداندن این نصب را ندارید. راستی‌آزمایی آرشیو همچنان ممکن است.',
@@ -10869,6 +10920,8 @@ export const WEB_FA = {
   'web.err_backup_memory_insufficient':
     'حافظهٔ آزاد سرور برای فشرده‌سازی بکاپ کافی نیست؛ بکاپ شروع نشد.',
   'web.err_backup_disk_insufficient': 'فضای دیسک برای بکاپ کافی نیست؛ بکاپ شروع نشد.',
+  'web.err_backup_password_unreadable':
+    'رمز بکاپ قابل خواندن نیست؛ آن را در «بکاپ و بازیابی» دوباره وارد کنید',
   'web.err_backup_unsafe_restore_target': 'بازیابی روی پایگاه‌دادهٔ در حال کار مجاز نیست.',
   'web.err_backup_verification_failed': 'آزمون بازیابی پشتیبان شکست خورد.',
   'web.err_bootstrap_already_completed': 'راه‌اندازی اولیه قبلاً انجام شده است.',

@@ -1,3 +1,9 @@
+import {
+  unreadableSecretKindOf,
+  type SecretPurpose,
+  type UnreadableSecretKind,
+} from '@nexa/contracts';
+
 /**
  * Persian sentences for the operational events whose recorded `message` is an English log line.
  * Keyed by event CODE (the code is schema; this is only how it reads). Shown in the operations
@@ -68,6 +74,9 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
   'payments.gateway_charge_refunded':
     'تلگرام یک پرداخت ستاره را بازپرداخت کرد؛ پرداخت علامت خورد، سرویس و کیف پول تغییر نکرد و مدیر باید تصمیم بگیرد.',
   'internal.unhandled': 'یک درخواست API با خطای داخلی ناموفق شد.',
+  'secrets.read_failed':
+    'یک رمز ذخیره‌شده با کلید این نصب خوانده نمی‌شود؛ آن را در پنل مدیریت دوباره وارد کنید.',
+  'secrets.read_ok': 'رمز ذخیره‌شده دوباره با کلید این نصب خوانده می‌شود.',
   'settings.stored_value_invalid':
     'مقدار ذخیره‌شدهٔ یک تنظیم با تعریفش نمی‌خواند؛ مقدار پیش‌فرض اعمال است.',
   'settings.stored_value_valid': 'مقدار ذخیره‌شدهٔ تنظیم دوباره معتبر شد.',
@@ -161,6 +170,82 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
   'telegram.appearance_decoration_failed':
     'تلگرام ایموجی سفارشی این ربات را نپذیرفت؛ پیام بدون آن فرستاده شد.',
 };
+
+/**
+ * NEXA-FIX-RESTORE-SECRETS §2.6: what a `secrets.read_failed` condition says, per secret KIND
+ * (its `context.kind`), with the page where the owner re-enters it. The alerts page
+ * shows this in place of the code's generic sentence when the kind is known.
+ */
+export const UNREADABLE_SECRET_ALERTS_FA: Readonly<Record<UnreadableSecretKind, string>> = {
+  BOT_TOKEN: 'توکن ربات قابل خواندن نیست؛ آن را در صفحهٔ ربات‌ها دوباره وارد کنید.',
+  PANEL_CREDENTIALS:
+    'نام کاربری یا رمز پنل قابل خواندن نیست؛ آن را در صفحهٔ پنل‌ها دوباره وارد کنید.',
+  GATEWAY_KEYS:
+    'کلید درگاه پرداخت قابل خواندن نیست؛ آن را در صفحهٔ روش‌های پرداخت دوباره وارد کنید.',
+  BACKUP_PASSWORD: 'رمز بکاپ قابل خواندن نیست؛ آن را در «بکاپ و بازیابی» دوباره وارد کنید.',
+  SUPPORT_AI_KEY:
+    'کلید پشتیبانی هوشمند قابل خواندن نیست؛ آن را در صفحهٔ پشتیبانی هوشمند دوباره وارد کنید.',
+  OTHER: 'یک رمز ذخیره‌شده قابل خواندن نیست؛ آن را در پنل مدیریت دوباره وارد کنید.',
+};
+
+/**
+ * NEXA-FIX-RESTORE-SECRETS §2.3/§2.5: what each kind of secret is called, and where in the
+ * Web Admin it is entered again — for `botctl secrets verify` and `botctl restore`.
+ */
+export const UNREADABLE_SECRET_KIND_LABELS_FA: Readonly<Record<UnreadableSecretKind, string>> = {
+  BOT_TOKEN: 'توکن ربات',
+  PANEL_CREDENTIALS: 'نام کاربری و رمز پنل',
+  GATEWAY_KEYS: 'کلید درگاه پرداخت',
+  BACKUP_PASSWORD: 'رمز بکاپ',
+  SUPPORT_AI_KEY: 'کلید پشتیبانی هوشمند',
+  OTHER: 'سایر رمزها',
+};
+
+const REENTRY_PLACES_FA: Readonly<Record<UnreadableSecretKind, string>> = {
+  BOT_TOKEN: 'ربات‌ها',
+  PANEL_CREDENTIALS: 'پنل‌ها',
+  GATEWAY_KEYS: 'روش‌های پرداخت',
+  BACKUP_PASSWORD: 'بکاپ و بازیابی',
+  SUPPORT_AI_KEY: 'پشتیبانی هوشمند',
+  OTHER: 'پنل مدیریت',
+};
+
+/** The purposes of kind `OTHER`, each with its own place. */
+const REENTRY_PLACE_BY_PURPOSE_FA: Readonly<Partial<Record<SecretPurpose, string>>> = {
+  'payment_gateway.refund_card': 'بازپرداخت‌ها (فقط با کیت بازیابی سرور قبلی)',
+  'admin.totp_secret': 'حساب کاربری (ورود دومرحله‌ای را دوباره فعال کنید)',
+  'hosting.totp_secret': 'میزبانی ربات‌ها (ورود دومرحله‌ای را دوباره فعال کنید)',
+  'legacy_migration.package_key': 'انتقال از میرزا (بسته را دوباره بارگذاری کنید)',
+  'gift_card.batch_export': 'کارت‌های هدیه (خروجی را دوباره بسازید)',
+};
+
+/** Where a secret of `purpose` is entered again, in Persian. */
+export function secretReentryPlaceFa(purpose: SecretPurpose): string {
+  return REENTRY_PLACE_BY_PURPOSE_FA[purpose] ?? REENTRY_PLACES_FA[unreadableSecretKindOf(purpose)];
+}
+
+const KIND_LABEL_BY_PURPOSE_FA: Readonly<Partial<Record<SecretPurpose, string>>> = {
+  'payment_gateway.refund_card': 'کارت مقصد بازپرداخت',
+  'admin.totp_secret': 'کلید ورود دومرحله‌ای',
+  'hosting.totp_secret': 'کلید ورود دومرحله‌ای میزبانی',
+  'legacy_migration.package_key': 'کلید بستهٔ میرزا',
+  'gift_card.batch_export': 'خروجی کارت‌های هدیه',
+};
+
+/** What a secret of `purpose` is called, in Persian. */
+export function secretKindLabelFa(purpose: SecretPurpose): string {
+  return (
+    KIND_LABEL_BY_PURPOSE_FA[purpose] ??
+    UNREADABLE_SECRET_KIND_LABELS_FA[unreadableSecretKindOf(purpose)]
+  );
+}
+
+/** The per-kind sentence for a `secrets.read_failed` row's context, or null for any other. */
+export function unreadableSecretAlertFa(secretKind: unknown): string | null {
+  return typeof secretKind === 'string' && Object.hasOwn(UNREADABLE_SECRET_ALERTS_FA, secretKind)
+    ? UNREADABLE_SECRET_ALERTS_FA[secretKind as UnreadableSecretKind]
+    : null;
+}
 
 export function operationalEventMessageFa(code: string): string | null {
   return OPERATIONAL_EVENT_MESSAGES_FA[code] ?? null;

@@ -1,3 +1,5 @@
+import { isUnreadableSecretError } from './unreadable-secret.js';
+
 /**
  * The one way a background loop's timer runs its tick.
  *
@@ -64,6 +66,8 @@ export function guardedTick(
 }
 
 function reportFailure(name: string, count: number, error: unknown, logger: LoopGuardLogger): void {
+  // Counted above; not logged per tick. `UnreadableSecretReporter` said it once (§2.6).
+  if (isUnreadableSecretError(error)) return;
   try {
     // The error OBJECT, so the redacting logger renders its message, stack and cause.
     logger.error({ loop: name, failures: count, err: error }, 'background loop tick threw');

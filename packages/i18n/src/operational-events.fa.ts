@@ -144,6 +144,8 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'service.panel_account_missing': 'حساب سرویس در پنل پیدا نشد',
   'settings.stored_value_invalid': 'مقدار ذخیره‌شدهٔ یک تنظیم نامعتبر است',
   'settings.stored_value_valid': 'مقدار تنظیم دوباره معتبر است',
+  'secrets.read_failed': 'یک رمز ذخیره‌شده قابل خواندن نیست',
+  'secrets.read_ok': 'رمز ذخیره‌شده دوباره خوانده می‌شود',
   'support.ai_provider.available': 'دستیار هوشمند در دسترس است',
   'support.ai_provider.credential_accepted': 'کلید دستیار هوشمند پذیرفته شد',
   'support.ai_provider.credential_rejected': 'کلید دستیار هوشمند رد شد',

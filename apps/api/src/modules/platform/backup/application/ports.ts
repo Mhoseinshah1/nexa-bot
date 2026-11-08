@@ -573,6 +573,13 @@ export interface BackupRunRepository {
  * by decrypting through a route nobody restores through. That is the whole
  * reason it is one method on one port rather than two conveniences.
  */
+/** One key a self-contained archive carried. 32 bytes the receiver must zero. */
+export interface BundledKeyMaterial {
+  readonly keyId: string;
+  readonly fingerprint: string;
+  readonly material: Buffer;
+}
+
 export interface BackupArchiver {
   /**
    * Seals the dump. With an owner-set backup password stored, a `SEVEN_ZIP` archive at
@@ -599,11 +606,25 @@ export interface BackupArchiver {
     readonly archivePath: string;
     readonly dumpPath: string;
     readonly passwords?: readonly string[];
+    /**
+     * Return the keys the archive carries (a 7z's key bundle), unwrapped with the
+     * password that opened it. Without it a bundle is still opened — so verifying an
+     * archive proves its keys open too — and its keys are zeroed at once.
+     */
+    readonly withBundledKeys?: boolean;
   }): Promise<{
     readonly manifest: BackupManifest;
     readonly dumpChecksum: string;
     readonly dumpBytes: number;
     readonly format?: BackupArchiveFormat;
+    /**
+     * Null (or absent): the archive carries no key bundle — a keyring `.nxb`, or a 7z
+     * from before self-contained backups. Otherwise the bundle's keys, only when
+     * `withBundledKeys` was asked for, and the CALLER zeroes every `material`.
+     */
+    readonly bundledKeys?: readonly BundledKeyMaterial[] | null;
+    /** Whether the archive carried a key bundle (whether or not its keys were returned). */
+    readonly hadKeyBundle?: boolean;
   }>;
   /** SHA-256 over a file, streamed. What the manifest's checksum is taken with. */
   checksum(path: string): Promise<{ readonly checksum: string; readonly bytes: number }>;

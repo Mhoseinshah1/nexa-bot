@@ -155,6 +155,8 @@ import { PROVIDER_RULES } from './modules/platform/providers/infrastructure/prov
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
+import { SecretReentryService } from './modules/platform/recovery/application/secret-reentry.service.js';
+import { DrizzleSecretReentryReader } from './modules/platform/recovery/infrastructure/drizzle-secret-reentry.reader.js';
 import { hostname } from 'node:os';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import { InstallationKeyring } from './infrastructure/crypto/installation-keyring.js';
@@ -251,6 +253,10 @@ import {
 } from './modules/platform/identity/infrastructure/drizzle-second-factor.repository.js';
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
+import {
+  ReportingSecretCipher,
+  UnreadableSecretReporter,
+} from './modules/platform/opslog/application/unreadable-secret-reporter.js';
 import {
   DrizzleOperationalConditionReader,
   DrizzleOperationalEventReader,
@@ -1838,6 +1844,8 @@ export interface Container {
   readonly recoveryQuiesced: () => Promise<boolean>;
   /** Disaster recovery: the operator's service, and the destructive executor. */
   readonly recoveryService: RecoveryService;
+  /** NEXA-FIX-RESTORE-SECRETS §2.3: the attention strip of secrets to re-enter. */
+  readonly secretReentry: SecretReentryService;
   readonly backupAdmin: BackupAdminService;
   readonly recoveryExecutor: RecoveryExecutor;
   readonly recoveryRequests: DrizzleRecoveryRequestRepository;
@@ -1881,6 +1889,12 @@ export interface Container {
    */
   readonly keyring: InstallationKeyring;
   readonly installationKeyLoader: InstallationKeyLoader;
+  /**
+   * What a recovery asks about keys: the trial decryption and the pre-cutover rewrap
+   * of a NON-live database. Exposed for `backup restore`, which does the same to its
+   * explicit target.
+   */
+  readonly recoveryKeyCoverage: KeyringRecoveryKeyCoverage;
   /**
    * Keeps this role's cached installation tenant true after the database under it is
    * replaced by a restore. Started by `resolveInstallationTenant`, stopped by `shutdown`.
@@ -2145,7 +2159,6 @@ export function createContainer(
   };
   const uow = new DrizzleUnitOfWork(database.db, writeGate);
   const tenants = new DrizzleTenantRepository(database.db);
-  const botInstances = new DrizzleBotInstanceRepository(database.db, cipher);
 
   const outbox = new OutboxWriter(ids, clock);
   const audit = new DrizzleAuditWriter(database.db, ids, clock);
@@ -2167,6 +2180,22 @@ export function createContainer(
     // transaction survived that transaction rolling back.
     record: (scope, event, tx) => opsLogRef.current.record(scope, event, tx),
   };
+  /*
+   * NEXA-FIX-RESTORE-SECRETS §2.6: the cipher every credential the background lanes read
+   * goes through — bot tokens, panel credentials, gateway keys, the backup password, the
+   * support AI key. The same cipher, with each decrypt reported: a secret that stops
+   * decrypting is ONE log line and ONE Web Admin alert per kind (`secrets.read_failed`),
+   * closed when it reads again, instead of a stack trace on every tick of every loop. The
+   * keyring, recovery and CLI paths keep the bare cipher: their failures are their own.
+   */
+  const unreadableSecrets = new UnreadableSecretReporter({
+    recorder: opsLog,
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    clock,
+    logger,
+  });
+  const credentialCipher = new ReportingSecretCipher(cipher, unreadableSecrets);
+  const botInstances = new DrizzleBotInstanceRepository(database.db, credentialCipher);
   /*
    * WP20: the one anti-spam counter. Shared by the bot runtime and by the webhook's
    * `/ping` branch, which answers before the runtime runs: an interaction the runtime
@@ -3893,10 +3922,12 @@ export function createContainer(
   const gatewayCardTransferRepository = new DrizzleGatewayCardTransferRepository(database.db);
   // Round 6: cancels, refunds and the provider's latest word on what the customer owes.
   const gatewayProviderRequestRepository = new DrizzleGatewayProviderRequestRepository(database.db);
-  const refundCardSealer = new SecretCipherRefundCardSealer(cipher);
+  const refundCardSealer = new SecretCipherRefundCardSealer(credentialCipher);
   const gatewayInvoiceRepository = new DrizzleGatewayInvoiceRepository(database.db);
-  const gatewayCredentialStore = new DrizzleGatewayCredentialStore(database.db, cipher, () =>
-    ids.uuid(),
+  const gatewayCredentialStore = new DrizzleGatewayCredentialStore(
+    database.db,
+    credentialCipher,
+    () => ids.uuid(),
   );
   const publicOrigins = new DrizzlePublicOriginReader(database.db);
   const gatewayCallbackUrlFor = async (
@@ -4730,7 +4761,7 @@ export function createContainer(
   // environment.
   const urlPolicy = panelUrlPolicy(config, outboundAllowList);
 
-  const panelCredentials = new DrizzlePanelCredentialStore(database.db, cipher);
+  const panelCredentials = new DrizzlePanelCredentialStore(database.db, credentialCipher);
 
   const panelHttp = new SafeHttpClient({
     ...urlPolicy,
@@ -7575,8 +7606,10 @@ export function createContainer(
     ['ANTHROPIC', new AnthropicAdapter()],
     ['ZAI', new ZaiAdapter()],
   ]);
-  const supportAiCredentials = new DrizzleSupportAiCredentialStore(database.db, cipher, () =>
-    ids.uuid(),
+  const supportAiCredentials = new DrizzleSupportAiCredentialStore(
+    database.db,
+    credentialCipher,
+    () => ids.uuid(),
   );
   const supportAiConfigs = new DrizzleSupportAiConfigRepository(database.db);
   const supportAiRuns = new DrizzleSupportAiRunRecorder(database.db);
@@ -8381,7 +8414,7 @@ export function createContainer(
    * E4: the password that seals 7-Zip archives, read on the INSTALLATION tenant (a backup
    * is the whole database). With none stored, archives stay the keyring `NXB` they were.
    */
-  const backupPasswordStore = new DrizzleBackupPasswordStore(database.db, cipher, () =>
+  const backupPasswordStore = new DrizzleBackupPasswordStore(database.db, credentialCipher, () =>
     installationTenantId === null ? null : { tenantId: installationTenantId, botInstanceId: null },
   );
   const backupArchiver = new DualFormatBackupArchiver(
@@ -8397,6 +8430,30 @@ export function createContainer(
       readAvailableMb: readMemAvailableMb,
       sealTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
       openTimeoutMs: config.BACKUP_RESTORE_TIMEOUT_MS,
+    },
+    /*
+     * Self-contained backups: a 7z carries the keys its secrets are sealed under,
+     * wrapped under the backup password, so a restore needs only the file and the
+     * password. Which keys: every held key under every id a stored secret names
+     * (an id can name several — the incident), and the active key whatever the
+     * count says, since anything written after the count is sealed under it. COPIES:
+     * the archiver zeroes what it is given, and these buffers are the keyring's.
+     */
+    {
+      profile: config.PASSWORD_HASH_PROFILE === 'fast' ? FAST_KIT_KDF : PRODUCTION_KIT_KDF,
+      keys: async () => {
+        const ids = new Set([
+          keyring.activeKeyId,
+          ...(await installationKeyRepository.secretCountsByKeyId()).keys(),
+        ]);
+        const keys: { keyId: string; material: Buffer }[] = [];
+        for (const keyId of [...ids].sort()) {
+          for (const material of keyring.candidatesFor(keyId)) {
+            keys.push({ keyId, material: Buffer.from(material) });
+          }
+        }
+        return keys;
+      },
     },
   );
   /**
@@ -8597,6 +8654,7 @@ export function createContainer(
     installationKeyLoader,
     installationKeyRepository,
     new PgCandidateKeyStore(config.DATABASE_URL, backupTools.liveDatabase),
+    acceptsV1(config, configuredKeyring),
   );
   const installationKeys = new InstallationKeyService({
     ownerAlerts,
@@ -8619,8 +8677,15 @@ export function createContainer(
     verifyStepUp: (scope, actor, stepUp, context, action) =>
       adminManagement.verifyStepUp(scope, actor, stepUp, context, action),
   });
+  const secretReentry = new SecretReentryService({
+    reader: new DrizzleSecretReentryReader(database.db, cipher),
+    guard,
+    audit,
+    opsLog,
+  });
   const recoveryService = new RecoveryService({
     requests: recoveryRequests,
+    idempotency,
     workspaces: recoveryWorkspaces,
     // The SAME archiver the backup pipeline seals with, so one keyring and one
     // `openArchive`. A recovery that decrypted through its own route would be
@@ -8829,6 +8894,8 @@ export function createContainer(
 
   const recoveryExecutor = new RecoveryExecutor({
     requests: recoveryRequests,
+    // §2.3: ids for the re-entry records a clearing writes into the candidate.
+    ids,
     recovery: recoveryService,
     engine: backupTools,
     workspaces: recoveryWorkspaces,
@@ -9968,6 +10035,7 @@ export function createContainer(
     dataCompactionLoop,
     backupTools,
     recoveryService,
+    secretReentry,
     backupAdmin,
     recoveryExecutor,
     recoveryRequests,
@@ -9978,6 +10046,7 @@ export function createContainer(
     migrationWorkspaces,
     keyring,
     installationKeyLoader,
+    recoveryKeyCoverage,
     outboundAllowList,
     installationKeyRepository,
     installationKeys,

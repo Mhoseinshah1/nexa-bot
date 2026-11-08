@@ -7244,6 +7244,13 @@ export const RECOVERY_ROUTES = {
   fromRun: '/recoveries/from-run',
   detail: (id: string) => `/recoveries/${encodeURIComponent(id)}`,
   confirm: (id: string) => `/recoveries/${encodeURIComponent(id)}/confirm`,
+  /** NEXA-FIX-RESTORE-SECRETS §2.3: the same request's restore test, again. */
+  retest: (id: string) => `/recoveries/${encodeURIComponent(id)}/retest`,
+  /** §2.3 «ادامه؛ این‌ها را دوباره وارد می‌کنم». */
+  acknowledgeUnreadable: (id: string) =>
+    `/recoveries/${encodeURIComponent(id)}/acknowledge-unreadable`,
+  /** The Web Admin's attention strip: secrets a restore cleared and not yet re-entered. */
+  secretReentry: '/secret-reentry',
 } as const;
 
 // --- Trials: the override, the reset and the operator's view (WP6-B) --------
