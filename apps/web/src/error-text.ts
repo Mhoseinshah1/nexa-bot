@@ -697,6 +697,7 @@ export const ERROR_TEXT = {
  */
 export const API_LOCAL_ERROR_TEXT = {
   'business_chats.connection_unusable': 'web.bchat_fault_connection',
+  'business_chats.history_cursor_invalid': 'web.bchat_fault_history_cursor',
   'business_chats.idempotency_payload_mismatch': 'web.bchat_fault_retry',
   'business_chats.not_found': 'web.bchat_fault_not_found',
   'business_chats.not_in_state': 'web.bchat_fault_not_in_state',

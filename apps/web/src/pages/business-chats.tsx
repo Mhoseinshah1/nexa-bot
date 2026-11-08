@@ -1,6 +1,7 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  BUSINESS_CHAT_HISTORY_QUERY_MAX,
   BUSINESS_CONVERSATION_STATES,
   BUSINESS_MESSAGE_TEXT_MAX,
   businessHandoffReasonOf,
@@ -22,6 +23,7 @@ import {
 import {
   ApiError,
   fetchBusinessChat,
+  fetchBusinessChatHistory,
   fetchBusinessChats,
   fetchBusinessConnections,
   resumeAllBusinessChats,
@@ -47,6 +49,7 @@ import {
   DetailHead,
   Disclosure,
   Empty,
+  ErrorState,
   Field,
   IdentityCell,
   KV,
@@ -64,7 +67,7 @@ import { Icon, type IconName } from '../ui/icons';
 import { AssistCard } from './support-assist';
 import { ProposeKnowledgeButton } from './support-knowledge';
 import { FailureDiagnosticView } from './support-ai-failure';
-import { ListFreshness } from '../ui/list-search';
+import { LIST_SEARCH_DEBOUNCE_MS, ListFreshness } from '../ui/list-search';
 import {
   AttentionStrip,
   CardRows,
@@ -75,12 +78,18 @@ import {
 } from '../ui/redesign';
 import {
   THREAD_FILTERS,
+  THREAD_FILTER_SENDER,
   THREAD_PAGE_SIZE,
+  historyHasMore,
   layoutThread,
+  mergeMessages,
+  oldestMessageId,
+  searchEntries,
   threadEntries,
   visibleEntries,
   type ThreadEscalation,
   type ThreadFilter,
+  type ThreadMessage,
 } from './business-chat-thread-model';
 import { ErrorRef } from '../ui/technical-details';
 /**
@@ -1053,15 +1062,73 @@ function TranscriptCard({
     `${t('web.bchat_event_handoff')} ${t(
       HANDOFF_LABELS[businessHandoffReasonOf(escalation.reason, escalation.reasonDetail)],
     )}`;
-  // Oldest first, handoffs in their place; a poll that changes nothing keeps the same array.
-  const entries = useMemo(
-    () => threadEntries(detail.messages, detail.escalations),
-    [detail.messages, detail.escalations],
-  );
+  const conversationId = detail.conversation.id;
   const [filter, setFilter] = useState<ThreadFilter>('all');
   const [query, setQueryText] = useState('');
   const [shown, setShown] = useState(THREAD_PAGE_SIZE);
   const [atBottom, setAtBottom] = useState(true);
+
+  // PR-10 — older than the detail's window: the history, a page at a time from the oldest
+  // message held when «older» first needed the server. From then on every detail poll is kept
+  // too (`pinned`), so a burst of new messages sliding the window cannot open a gap between
+  // the window and the pages read.
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<readonly ThreadMessage[]>([]);
+  useEffect(() => {
+    if (anchor !== null) setPinned((held) => mergeMessages(detail.messages, held));
+  }, [anchor, detail.messages]);
+  const older = useInfiniteQuery({
+    queryKey: ['business-chat-history', conversationId, 'older', anchor],
+    queryFn: ({ pageParam }) => fetchBusinessChatHistory(conversationId, { before: pageParam }),
+    initialPageParam: anchor ?? '',
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    enabled: anchor !== null,
+  });
+  const olderPages = anchor === null ? null : (older.data?.pages ?? null);
+  const messages = useMemo(
+    () =>
+      olderPages === null
+        ? detail.messages
+        : mergeMessages(detail.messages, [...pinned, ...olderPages.flatMap((one) => one.messages)]),
+    [detail.messages, pinned, olderPages],
+  );
+  const more =
+    anchor === null
+      ? historyHasMore(detail.messages.length, null)
+      : older.isPending || older.isFetchingNextPage || historyHasMore(0, olderPages ?? []);
+
+  // PR-10 — a search asks the server, which searches the whole conversation by the words and by
+  // the filter's speaker. Debounced: one request per pause in typing, not per key.
+  const typed = query.trim().slice(0, BUSINESS_CHAT_HISTORY_QUERY_MAX);
+  const searching = typed !== '';
+  const [term, setTerm] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setTerm(typed), LIST_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [typed]);
+  const sender = THREAD_FILTER_SENDER[filter];
+  const askServer = term !== '' && filter !== 'events';
+  const hits = useInfiniteQuery({
+    queryKey: ['business-chat-history', conversationId, 'search', term, sender],
+    queryFn: ({ pageParam }) =>
+      fetchBusinessChatHistory(conversationId, {
+        q: term,
+        ...(sender === null ? {} : { sender }),
+        ...(pageParam === '' ? {} : { before: pageParam }),
+      }),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    enabled: askServer,
+  });
+  // The first page of a search failed: its error card, with «retry», in place of the hits.
+  const searchFailed = askServer && hits.isError && hits.data === undefined;
+  const settled = term === typed && (!askServer || hits.data !== undefined) && !searchFailed;
+
+  // Oldest first, handoffs in their place; a poll that changes nothing keeps the same array.
+  const entries = useMemo(
+    () => threadEntries(messages, detail.escalations),
+    [messages, detail.escalations],
+  );
   const box = useRef<HTMLDivElement>(null);
   // Follow the newest message while the reader is at the bottom; leave them alone when they
   // have scrolled up to read.
@@ -1069,17 +1136,39 @@ function TranscriptCard({
   const revealedFrom = useRef<number | null>(null);
 
   // A poll that adds entries while the reader is scrolled up must not push the oldest visible
-  // entry out of the window: grow it by what arrived, so what is being read stays on screen.
-  const loadedCount = useRef(entries.length);
-  const arrived = entries.length - loadedCount.current;
-  if (arrived !== 0) {
-    loadedCount.current = entries.length;
+  // entry out of the window: grow it by what arrived BELOW the newest, so what is being read
+  // stays on screen. An older page arriving above changes nothing here.
+  const newestHeld = useRef(entries[entries.length - 1]?.id);
+  const newestNow = entries[entries.length - 1]?.id;
+  if (newestNow !== newestHeld.current) {
+    const index = entries.findIndex((entry) => entry.id === newestHeld.current);
+    newestHeld.current = newestNow;
+    const arrived = index === -1 ? 0 : entries.length - 1 - index;
     if (arrived > 0 && !stick.current) setShown((count) => count + arrived);
   }
 
-  const view = visibleEntries(entries, { filter, query, shown, eventText: handoffText });
+  const searched = searching
+    ? searchEntries(
+        settled && askServer ? (hits.data?.pages.flatMap((one) => one.messages) ?? []) : [],
+        detail.escalations,
+        { filter, query: typed, eventText: handoffText },
+      )
+    : null;
+  const view =
+    searched === null
+      ? visibleEntries(entries, { filter, shown, more })
+      : {
+          entries: searched,
+          older: 0,
+          canLoadOlder: settled && askServer && hits.hasNextPage,
+          nextCount: THREAD_PAGE_SIZE,
+        };
+  const searchMore = searched !== null && askServer && hits.hasNextPage;
   const rows = layoutThread(view.entries, formatDate);
   const newest = view.entries[view.entries.length - 1]?.id ?? '';
+  const loadingOlder =
+    searched === null ? anchor !== null && older.isFetching : hits.isFetchingNextPage;
+  const failed = searched === null ? anchor !== null && older.isError : hits.isError;
 
   useLayoutEffect(() => {
     const el = box.current;
@@ -1108,7 +1197,24 @@ function TranscriptCard({
   const revealOlder = () => {
     revealedFrom.current = box.current?.scrollHeight ?? 0;
     stick.current = false;
+    if (searched !== null) {
+      if (failed) void hits.refetch();
+      else if (!hits.isFetchingNextPage) void hits.fetchNextPage();
+      return;
+    }
     setShown(shown + THREAD_PAGE_SIZE);
+    // What is held covers the press: nothing to ask.
+    if (view.older >= THREAD_PAGE_SIZE || !more) return;
+    if (anchor === null) {
+      const from = oldestMessageId(detail.messages);
+      if (from === null) return;
+      setPinned(detail.messages);
+      setAnchor(from);
+    } else if (failed) {
+      void older.refetch();
+    } else if (older.hasNextPage && !older.isFetchingNextPage) {
+      void older.fetchNextPage();
+    }
   };
   const onScroll = () => {
     const el = box.current;
@@ -1131,6 +1237,7 @@ function TranscriptCard({
               className="input sm bchat-search"
               aria-label={t('web.bchat_thread_search')}
               placeholder={t('web.bchat_thread_search')}
+              maxLength={BUSINESS_CHAT_HISTORY_QUERY_MAX}
               value={query}
               onChange={(event) => {
                 setQueryText(event.target.value);
@@ -1146,11 +1253,20 @@ function TranscriptCard({
               }}
               items={THREAD_FILTERS.map((key) => ({ key, label: t(THREAD_FILTER_LABELS[key]) }))}
             />
-            {view.hits !== null && (
-              <span className="muted small" aria-live="polite">
-                {t('web.bchat_thread_hits').replace('{n}', formatNumber(view.hits))}
-              </span>
-            )}
+            {searched !== null &&
+              !searchFailed &&
+              (settled ? (
+                <span className="muted small" aria-live="polite">
+                  {t(searchMore ? 'web.bchat_thread_hits_more' : 'web.bchat_thread_hits').replace(
+                    '{n}',
+                    formatNumber(searched.length),
+                  )}
+                </span>
+              ) : (
+                <span className="muted small" role="status">
+                  {t('web.loading')}
+                </span>
+              ))}
           </div>
           <div className="bchat-scroll-wrap">
             <div
@@ -1161,16 +1277,28 @@ function TranscriptCard({
               aria-label={t('web.bchat_transcript')}
               onScroll={onScroll}
             >
-              {view.older > 0 && (
-                <button type="button" className="btn sm bchat-older" onClick={revealOlder}>
-                  {t('web.bchat_thread_older').replace(
-                    '{n}',
-                    formatNumber(Math.min(THREAD_PAGE_SIZE, view.older)),
-                  )}
+              {view.canLoadOlder && (
+                <button
+                  type="button"
+                  className="btn sm bchat-older"
+                  onClick={revealOlder}
+                  disabled={loadingOlder}
+                  aria-busy={loadingOlder}
+                >
+                  {t('web.bchat_thread_older').replace('{n}', formatNumber(view.nextCount))}
                 </button>
               )}
-              {rows.length === 0 ? (
-                <p className="muted small bchat-none">{t('web.bchat_thread_none')}</p>
+              {failed && !searchFailed && (
+                <p className="muted small" role="alert">
+                  {t('web.bchat_thread_older_failed')}
+                </p>
+              )}
+              {searched !== null && searchFailed ? (
+                <ErrorState query={hits} />
+              ) : rows.length === 0 ? (
+                (searched === null || settled) && (
+                  <p className="muted small bchat-none">{t('web.bchat_thread_none')}</p>
+                )
               ) : (
                 <ol className="bchat-thread" aria-label={t('web.bchat_transcript')}>
                   {rows.map((row) => {
@@ -1203,7 +1331,7 @@ function TranscriptCard({
                     return (
                       <li
                         key={row.key}
-                        className={`bchat-message origin-${message.origin.toLowerCase().replace('_', '-')}${row.showWho ? '' : ' same-sender'}${view.hits === null ? '' : ' hit'}`}
+                        className={`bchat-message origin-${message.origin.toLowerCase().replace('_', '-')}${row.showWho ? '' : ' same-sender'}${searched === null ? '' : ' hit'}`}
                         data-origin={message.origin}
                       >
                         {row.showWho && (
