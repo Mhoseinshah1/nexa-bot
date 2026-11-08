@@ -809,7 +809,7 @@ describe('the button builder — banners and permissions', () => {
       expect(screen.queryByRole('button', { name: t(name) })).toBeNull();
     }
     // Nothing can be grabbed: no item is in the tab order, and a drop changes nothing.
-    expect(document.querySelector('[data-dnd-item][tabindex="0"]')).toBeNull();
+    expect(document.querySelector('[data-dnd-item]:not([aria-disabled="true"])')).toBeNull();
     toPool('help');
     select('help');
     expect(
@@ -902,7 +902,7 @@ describe('the button builder — review of PR #134', () => {
     // In flight: the controls are off and the keyboard moves nothing.
     toPool('catalog');
     expect(drawnRows().flat()).toContain('catalog');
-    expect(document.querySelector('[data-dnd-item][tabindex="0"]')).toBeNull();
+    expect(document.querySelector('[data-dnd-item]:not([aria-disabled="true"])')).toBeNull();
     held.release();
     await waitFor(() => expect(state()).toBe('differs'));
     expect(draftPuts(api)).toHaveLength(1);

@@ -268,8 +268,9 @@ export function LayoutDnd({
   }, [layout, grabbed]);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>, id: string) => {
-    if (disabled || fixed.includes(id) || event.button !== 0) return;
+    if (fixed.includes(id) || event.button !== 0) return;
     onSelect?.(id);
+    if (disabled) return;
     press.current = { id, x: event.clientX, y: event.clientY };
     const move = (e: PointerEvent) => {
       const start = press.current;
@@ -318,7 +319,14 @@ export function LayoutDnd({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>, id: string) => {
-    if (disabled || fixed.includes(id)) return;
+    if (fixed.includes(id)) return;
+    if (disabled) {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        onSelect?.(id);
+      }
+      return;
+    }
     if (grabbed === null) {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
@@ -380,8 +388,9 @@ export function LayoutDnd({
         data-dnd-item={id}
         className={cls}
         role="button"
-        tabIndex={isFixed || disabled ? -1 : 0}
+        tabIndex={isFixed ? -1 : 0}
         aria-pressed={grabbed?.id === id}
+        aria-disabled={disabled && !isFixed ? true : undefined}
         aria-describedby={isFixed ? undefined : hintId}
         onPointerDown={(e) => onPointerDown(e, id)}
         onFocus={() => onSelect?.(id)}

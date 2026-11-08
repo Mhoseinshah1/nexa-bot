@@ -231,7 +231,8 @@ describe('«چیدمان صفحهٔ سرویس»', () => {
     await loaded();
     expect(screen.getByRole('button', { name: t('web.scl_save') })).toBeDisabled();
     for (const item of document.querySelectorAll('[data-dnd-item]')) {
-      expect(item.getAttribute('tabindex')).toBe('-1');
+      if (item.getAttribute('tabindex') === '0')
+        expect(item.getAttribute('aria-disabled')).toBe('true');
     }
     drag('service.link', freeBox);
     expect(drawnRows().flat()).toContain('service.link');
@@ -314,7 +315,7 @@ describe('«چیدمان صفحهٔ سرویس» — review fixes', () => {
     drag('service.refresh', newRow);
     fireEvent.click(screen.getByRole('button', { name: t('web.scl_save') }));
     await waitFor(() =>
-      expect(document.querySelector('[data-dnd-item]')?.getAttribute('tabindex')).toBe('-1'),
+      expect(document.querySelector('[data-dnd-item]')?.getAttribute('aria-disabled')).toBe('true'),
     );
     // In flight: a drop changes nothing.
     const during = drawnRows();

@@ -40,7 +40,7 @@ turned into a new page, because that would move money actions and their confirms
 
 | Before                                                                                                         | After                                                               |
 | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Subtitle `reseller_plans_intro`                                                                                | Fold «حداقل فروش ماهانه چگونه حساب می‌شود» holding the intro                       |
+| Subtitle `reseller_plans_intro`                                                                                | Fold «حداقل فروش ماهانه چگونه حساب می‌شود» holding the intro        |
 | Bottom muted rules card (five minimum rules + links to features, settings, resellers)                          | Moved into the same fold, no text deleted                           |
 | Head links, none freshness                                                                                     | Same links; «زمان خواندن» + refresh added                           |
 | Name (plain text)                                                                                              | Link-styled button opening the tier's products / permissions drawer |
