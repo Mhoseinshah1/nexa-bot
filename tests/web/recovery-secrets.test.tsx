@@ -8,6 +8,7 @@ import {
   RECOVERY_ROUTES,
   type PermissionKey,
 } from '@nexa/contracts';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { RecoveryPage } from '../../apps/web/src/pages/recovery';
 import { SecretReentryStrip } from '../../apps/web/src/pages/recovery-secrets';
 import { NEXA_ARCHIVE_BYTES, renderPage, stubApi } from './harness';
@@ -165,6 +166,8 @@ const ACK_URL = `${API_PREFIX}${RECOVERY_ROUTES.acknowledgeUnreadable(RECOVERY_I
 async function reachRefusal(
   extra: readonly { url: string; body: unknown; status?: number }[],
   answer: Record<string, unknown> = refused(),
+  permissions: PermissionKey[] = ALL,
+  file: File = new File([NEXA_ARCHIVE_BYTES], 'old.nxb'),
 ) {
   const api = stubApi([
     ...routes(),
@@ -172,9 +175,9 @@ async function reachRefusal(
     { url: VERIFY_URL, body: { recovery: answer } },
     ...extra,
   ]);
-  renderPage(<RecoveryPage route={route} permissions={ALL} />);
+  renderPage(<RecoveryPage route={route} permissions={permissions} />);
   fireEvent.change(await screen.findByLabelText('انتخاب فایل'), {
-    target: { files: [new File([NEXA_ARCHIVE_BYTES], 'old.nxb')] },
+    target: { files: [file] },
   });
   const send = screen.getByRole('button', { name: 'بارگذاری' });
   await waitFor(() => expect(send).toBeEnabled());
@@ -201,6 +204,48 @@ describe('a restore refused for unreadable secrets', () => {
     expect(
       panel.getByRole('button', { name: 'ادامه؛ این‌ها را دوباره وارد می‌کنم' }),
     ).toBeEnabled();
+  });
+
+  it('draws the kit import inside the kit choice card, with the same form as the kit card', async () => {
+    await reachRefusal([], refused(), [...ALL, 'recovery.kit.import']);
+    const choice = within(
+      screen.getByRole('region', { name: t('web.secret_unreadable_kit_choice') }),
+    );
+    const card = within(screen.getByTestId('unreadable-kit-import'));
+    expect(
+      within(screen.getByTestId('unreadable-secrets')).getByTestId('unreadable-kit-import'),
+    ).toBeTruthy();
+    expect(choice.getByTestId('unreadable-kit-import')).toBeTruthy();
+    expect(card.getByText(t('web.kit_import_passphrase'))).toBeTruthy();
+    expect(card.getByText(t('web.kit_account_password'))).toBeTruthy();
+    expect(card.getByRole('button', { name: t('web.kit_import_button') })).toBeDisabled();
+    // The retest button stays next to it.
+    expect(choice.getByRole('button', { name: t('web.secret_unreadable_retest') })).toBeEnabled();
+  });
+
+  it('draws no kit form in the choice without recovery.kit.import, and says why', async () => {
+    await reachRefusal([]);
+    expect(screen.queryByTestId('unreadable-kit-import')).toBeNull();
+    const choice = within(
+      screen.getByRole('region', { name: t('web.secret_unreadable_kit_choice') }),
+    );
+    expect(choice.getByText(t('web.kit_no_permission_import'))).toBeTruthy();
+  });
+
+  it('labels the archive password so it is not confused with the kit password', async () => {
+    const sevenZip = new File(
+      [new Uint8Array([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0, 4, 1, 2, 3, 4])],
+      'old.7z',
+    );
+    await reachRefusal([], refused(), [...ALL, 'recovery.kit.import'], sevenZip);
+    const choice = within(
+      screen.getByRole('region', { name: t('web.secret_unreadable_kit_choice') }),
+    );
+    expect(t('web.secret_unreadable_archive_password_label')).toBe(
+      'رمز فایل بکاپ (همان رمزی که بکاپ با آن گرفته شده)',
+    );
+    expect(choice.getByText(t('web.secret_unreadable_archive_password_label'))).toBeTruthy();
+    expect(choice.getByText(t('web.kit_import_passphrase'))).toBeTruthy();
   });
 
   it('tests again on the same request with a fresh key', async () => {

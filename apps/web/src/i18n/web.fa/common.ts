@@ -360,7 +360,6 @@ export const WEB_FA_COMMON = {
   'web.account_cancel': 'انصراف',
 
   // --- Phase D1: the audit log ---------------------------------------------------
-  'web.nav_audit_log': 'گزارش ممیزی',
   // Phase E3: incidents and maintenance.
   'web.nav_incidents': 'رخدادها و نگهداری',
   // TB4: the support AI's settings (ADR-0034 §8).

@@ -30,7 +30,6 @@ const BEFORE: readonly [
 ][] = [
   ['alerts', '/alerts', 'web.nav_alerts', 'alertOctagon', 'opslog.view', false],
   ['appearance', '/appearance', 'web.nav_appearance', 'palette', 'settings.view', false],
-  ['audit-log', '/audit-log', 'web.nav_audit_log', 'clock', 'audit.view', false],
   ['bot-buttons', '/bot-buttons', 'web.nav_bot_buttons', 'keyboard', 'settings.view', false],
   ['bots', '/bots', 'web.nav_bots', 'bots', 'settings.view', false],
   ['broadcasts', '/broadcasts', 'web.nav_broadcasts', 'send', 'broadcasts.view', false],
@@ -259,7 +258,6 @@ const GROUPS: readonly [string, readonly string[]][] = [
       'notifications',
       'alerts',
       'incidents',
-      'audit-log',
       'bulk-operations',
       'system',
       'recovery',
@@ -318,11 +316,11 @@ const drawnHrefs = () =>
 const head = (group: string) => navGroupHeader(group) as HTMLButtonElement;
 
 describe('the navigation’s information architecture', () => {
-  it('keeps all 53 entries exactly once, each with its path, label, icon and permission', () => {
-    // 50 after the redesign, R10 D4's «کارت‌های هدیه», and phase 6A's «میزبانی‌ها».
-    expect(NAV).toHaveLength(53);
-    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(53);
-    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(53);
+  it('keeps all 52 entries exactly once, each with its path, label, icon and permission', () => {
+    // 50 after the redesign, R10 D4's «کارت‌های هدیه», and phase 6A's «میزبانی‌ها». Minus «گزارش ممیزی», now the System page's audit tab.
+    expect(NAV).toHaveLength(52);
+    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(52);
+    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(52);
     const now = [...NAV]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((entry) => [
@@ -523,7 +521,7 @@ describe('the single-open accordion', () => {
   it('keeps every icon in the collapsed rail, where a header has no room for its label', () => {
     sidebar('/', ALL, OWNER, { collapsed: true });
     expect(document.querySelectorAll('.nav-group-head')).toHaveLength(0);
-    expect(drawnHrefs()).toHaveLength(53);
+    expect(drawnHrefs()).toHaveLength(52);
   });
 });
 

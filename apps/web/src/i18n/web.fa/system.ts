@@ -280,7 +280,7 @@ export const WEB_FA_SYSTEM = {
   'web.secret_unreadable_count': 'تعداد',
   'web.secret_unreadable_kit_choice': 'بارگذاری کیت بازیابی سرور قبلی',
   'web.secret_unreadable_kit_hint':
-    'کیت بازیابی همان سرور را در بخش «کیت بازیابی» بالای همین صفحه وارد کنید، سپس دکمهٔ زیر را بزنید تا همین فایل دوباره آزموده شود. نیازی به بارگذاری دوبارهٔ بکاپ نیست.',
+    'کیت بازیابی همان سرور را همین‌جا، در فرم زیر وارد کنید (رمز کیت جدا از رمز فایل بکاپ است)، سپس دکمهٔ آزمون دوباره را بزنید تا همین فایل دوباره آزموده شود. نیازی به بارگذاری دوبارهٔ بکاپ نیست.',
   'web.secret_unreadable_retest': 'آزمون دوباره با کیت وارد‌شده',
   'web.secret_unreadable_retesting': 'در حال آزمون…',
   'web.secret_unreadable_continue': 'ادامه؛ این‌ها را دوباره وارد می‌کنم',
@@ -297,7 +297,8 @@ export const WEB_FA_SYSTEM = {
     'فهرست پذیرفته شد. برای شروع بازیابی عبارت تأیید را بنویسید.',
   'web.secret_unreadable_refund_card':
     'کارت بازپرداخت درگاه با این بازیابی پاک نمی‌شود، چون پاک کردنش بازپرداخت‌ها را تغییر می‌دهد. برای این بکاپ باید کیت بازیابی سرور قبلی را وارد کنید.',
-  'web.secret_unreadable_password_label': 'رمز فایل 7-Zip',
+  'web.secret_unreadable_archive_password_label':
+    'رمز فایل بکاپ (همان رمزی که بکاپ با آن گرفته شده)',
   'web.secret_unreadable_no_permission': 'شما اجازهٔ بازگرداندن این نصب را ندارید.',
   'web.secret_summary_rewrapped': 'رمز زیر کلید این سرور دوباره رمزگذاری شد',
   'web.secret_summary_cleared': 'رمز پاک شد و باید دوباره وارد شود',
@@ -347,6 +348,8 @@ export const WEB_FA_SYSTEM = {
   'web.system_title': 'سامانه و عملیات',
   'web.system_intro': 'وضعیت اجرا، نسخهٔ در حال اجرا، مدیران، و پیکربندی پایش.',
   'web.system_tab_status': 'وضعیت',
+  'web.system_about_fold': 'دربارهٔ این صفحه',
+  'web.system_tab_audit': 'تاریخچهٔ تغییرات',
   'web.system_tab_monitor': 'پایش',
   'web.system_tab_admins': 'مدیران',
   'web.system_status_hint': 'زنده‌بودن و آماده‌بودن دو چیز جدا هستند.',
