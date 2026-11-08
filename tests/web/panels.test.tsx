@@ -171,12 +171,12 @@ describe('the panel list', () => {
    */
   it('withdraws the archive filter from an actor who may not read the fleet', async () => {
     stubApi(list([]));
-    const { container } = renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit={false} denied />);
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit={false} denied />);
     await screen.findByText('شما به این بخش دسترسی ندارید.');
 
-    const toolbar = container.querySelector('.toolbar');
-    expect(toolbar, 'the toolbar is still rendered, just not shown').not.toBeNull();
-    expect((toolbar as HTMLElement).hasAttribute('hidden')).toBe(true);
+    // The quick-filter chips are not drawn at all while the list cannot be read.
+    expect(screen.queryByRole('button', { name: t('web.panels_archived') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.panels_live') })).toBeNull();
   });
 
   /**
@@ -232,14 +232,14 @@ describe('the panel list', () => {
         status: 403,
       },
     ]);
-    const { container } = renderPage(
+    renderPage(
       // NOT denied: the permission list still says yes, the server says no.
       <PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />,
     );
     await screen.findByText('شما به این بخش دسترسی ندارید.');
 
-    const toolbar = container.querySelector('.toolbar');
-    expect((toolbar as HTMLElement).hasAttribute('hidden')).toBe(true);
+    expect(screen.queryByRole('button', { name: t('web.panels_archived') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.panels_live') })).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.page_older') })).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.page_newer') })).toBeNull();
     expect(screen.queryByText('نمایش')).toBeNull();
@@ -299,6 +299,33 @@ describe('the panel list', () => {
     await screen.findByText('هنوز پنلی ثبت نشده است.');
     expect(screen.getByText('نمایش')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: t('web.page_older') })).toBeInTheDocument();
+  });
+
+  it('PR-7: draws the provider name only, and the health and the error type in one cell', async () => {
+    stubApi(
+      list([
+        panel({
+          id: 'p1',
+          name: 'Frankfurt A',
+          health: {
+            ...(panel().health as object),
+            state: 'UNREACHABLE',
+            failure: 'TIMEOUT',
+            providerVersion: '1.2.3',
+          },
+        }),
+      ]),
+    );
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
+    await screen.findByText('Frankfurt A');
+    expect(screen.queryByText('1.2.3')).toBeNull();
+    const healthCell = screen.getByText(t('web.health_unreachable')).closest('td');
+    expect(healthCell).not.toBeNull();
+    expect(
+      within(healthCell as HTMLElement).getByText(t('web.failure_short_timeout')),
+    ).toBeTruthy();
+    // The separate «نوع خطا» column is gone.
+    expect(screen.queryByRole('columnheader', { name: t('web.panel_failure') })).toBeNull();
   });
 
   it('distinguishes an empty fleet from a failed request', async () => {
@@ -1394,7 +1421,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
     fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_confirm') }));
     await waitFor(() => {
       const write = api.calls.find((call) => call.url.includes('/status'));
@@ -1531,6 +1558,30 @@ describe('the panel detail', () => {
     expect(await screen.findByText(t('web.panel_workload_no_services'))).toBeTruthy();
   });
 
+  it('PR-7: RickPanel shows the provider rules read-only, with no protocol boxes and no incomplete warning', async () => {
+    stubApi([...detail({ providerType: 'rickpanel', providerName: 'RickPanel' }), advancedRoute()]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    // The rules, stated read-only (protocols, inbounds and the subscription link).
+    expect(await screen.findByText(t('web.prule_protocols_panel_assigned'))).toBeTruthy();
+    expect(screen.getByText(t('web.prule_subscription_link_panel_issued'))).toBeTruthy();
+    // No protocol checkboxes, no domain or inbound field, no activation-state row or warning.
+    expect(screen.queryByLabelText(t('web.panel_subscription_domain'))).toBeNull();
+    expect(screen.queryByLabelText(t('web.panel_inbound_id'))).toBeNull();
+    expect(screen.queryByText(t('web.panel_proxy_protocols'))).toBeNull();
+    expect(screen.queryByText(t('web.panel_activation_state'), { selector: 'dt' })).toBeNull();
+    expect(screen.queryByText(t('web.panel_activation_missing'))).toBeNull();
+  });
+
+  it('PR-7: Marzban keeps its protocol boxes and no rules note', async () => {
+    stubApi([...detail({ providerType: 'marzban', providerName: 'Marzban' }), advancedRoute()]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    expect(screen.getByText(t('web.panel_proxy_protocols'))).toBeTruthy();
+    expect(screen.getByText(t('web.panel_activation_state'), { selector: 'dt' })).toBeTruthy();
+    expect(screen.queryByText(t('web.prule_protocols_panel_assigned'))).toBeNull();
+  });
+
   it('W3: draws the lifecycle buttons in the page head, on every tab', async () => {
     stubApi([...detail(), ...workload([], [])]);
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
@@ -1539,7 +1590,7 @@ describe('the panel detail', () => {
       screen.queryByRole('heading', { name: /* former web.panel_lifecycle */ 'چرخهٔ عمر' }),
     ).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: t('web.panel_tab_workload') }));
-    const archive = screen.getByRole('button', { name: t('web.panel_archive') });
+    const archive = screen.getByRole('button', { name: `${t('web.panel_archive')}…` });
     // Above the tab strip, not inside the overview it used to sit in.
     expect(archive.closest('[role="tabpanel"]')).toBeNull();
     expect(screen.getByRole('button', { name: t('web.panel_disable') })).toHaveAttribute(
@@ -1558,7 +1609,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
 
     expect(await screen.findByText(t('web.panel_archive_confirm_title'))).toBeTruthy();
     expect(api.calls.some((call) => call.url.includes('/status'))).toBe(false);
@@ -1575,7 +1626,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
     // W3: the confirmation is a dialog now.
     const confirmation = await screen.findByRole('dialog', {
       name: t('web.panel_archive_confirm_title'),
@@ -1593,7 +1644,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
     fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_confirm') }));
 
     await waitFor(() => {
@@ -1607,7 +1658,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
     fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_cancel') }));
 
     await waitFor(() => {
@@ -1640,7 +1691,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
     fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_confirm') }));
 
     await waitFor(() => {
@@ -1660,7 +1711,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    expect(screen.queryByRole('button', { name: 'بایگانی' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'بایگانی…' })).toBeNull();
     fireEvent.click(restoreButton());
     await waitFor(() => {
       const write = api.calls.find((call) => call.url.includes('/status'));
@@ -2446,7 +2497,7 @@ describe('the panel detail', () => {
     stubApi(detail());
     renderPage(<PanelDetailPage id="p1" mayEdit={false} mayRotate={false} denied={false} />);
     await screen.findByText('Frankfurt A');
-    expect(screen.queryByRole('button', { name: 'بایگانی' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'بایگانی…' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'بازگردانی از بایگانی' })).toBeNull();
   });
 

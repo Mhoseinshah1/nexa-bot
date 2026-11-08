@@ -38,7 +38,7 @@ import {
   PageHead,
   Quantity,
   RefLink,
-  StatCard,
+  Disclosure,
   StateSwitch,
   Textarea,
   useToast,
@@ -46,6 +46,8 @@ import {
   LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { Modal } from '../ui/overlays';
+import { ListFreshness } from '../ui/list-search';
+import { KpiRow } from '../ui/redesign';
 import { hasOpsCodeLabel, opsCodeLabel } from '../ops-code-labels';
 import { CodeLabel, ErrorRef } from '../ui/technical-details';
 
@@ -127,28 +129,42 @@ export function PanelHealthPage({
 
   return (
     <>
-      <PageHead title={t('web.nav_panel_health')} subtitle={t('web.ph_subtitle')} />
+      <PageHead
+        title={t('web.nav_panel_health')}
+        actions={<ListFreshness query={health} hidden={denied} />}
+      />
+      <Disclosure size="sm" summary={t('web.ph_rules_fold')}>
+        <p className="muted small">{t('web.ph_subtitle')}</p>
+        <p className="muted small">{t('web.ph_page_note')}</p>
+      </Disclosure>
       <StateSwitch
         query={health}
         denied={denied}
         isEmpty={rows.length === 0 && cursors.length === 0}
         empty={<Empty title={t('web.ph_empty')} />}
       >
-        <div className="ph-summary" aria-label={t('web.ph_summary_label')}>
-          {HEALTH_GROUPS.map((group) => {
-            const count = rows.filter((row) =>
-              group.states.includes(row.panel.health.state),
-            ).length;
-            return (
-              <StatCard key={group.key} label={t(group.label)} value={<Num value={count} />} />
-            );
-          })}
-          <StatCard
-            label={t('web.ph_sum_draining')}
-            value={<Num value={rows.filter((row) => row.panel.drain.draining).length} />}
+        <div role="group" aria-label={t('web.ph_summary_label')}>
+          <KpiRow
+            items={[
+              ...HEALTH_GROUPS.map((group) => ({
+                key: group.key,
+                label: t(group.label),
+                value: (
+                  <Num
+                    value={
+                      rows.filter((row) => group.states.includes(row.panel.health.state)).length
+                    }
+                  />
+                ),
+              })),
+              {
+                key: 'draining',
+                label: t('web.ph_sum_draining'),
+                value: <Num value={rows.filter((row) => row.panel.drain.draining).length} />,
+              },
+            ]}
           />
         </div>
-        <p className="muted small">{t('web.ph_page_note')}</p>
         <div className="ph-cards">
           {rows.map((row) => (
             <PanelHealthCard
