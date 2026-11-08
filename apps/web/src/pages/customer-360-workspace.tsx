@@ -17,6 +17,7 @@ import {
   Card,
   DataTable,
   Empty,
+  ErrorState,
   Ltr,
   Money,
   Num,
@@ -64,6 +65,8 @@ export function CustomerAttentionStrip({ customerId }: { customerId: string }) {
   const onLink = useLinkHandler();
   const workspace = useCustomerWorkspace(customerId);
   const data = workspace.data?.workspace;
+  // A failed read is said, never drawn as «nothing waits».
+  if (workspace.isError) return <ErrorState query={workspace} />;
   if (data === undefined) return null;
   const items = customerAttentionItems(customerId, data);
   const withheld = workspaceWithheld(data);

@@ -24,7 +24,12 @@ import {
   fetchServiceOperations,
   fetchServices,
 } from '../api/client';
-import { currencyLabel, formatTimestampNumeric, formatTrafficGbText } from '../format';
+import {
+  currencyLabel,
+  formatNumber,
+  formatTimestampNumeric,
+  formatTrafficGbText,
+} from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
@@ -506,7 +511,7 @@ function OrderSelection({
           {t('web.export_csv')}
         </Button>
         <span className="muted small">
-          {t('web.export_cap')} {CSV_EXPORT_MAX_ROWS}
+          {t('web.export_cap')} {formatNumber(CSV_EXPORT_MAX_ROWS)}
         </span>
       </SelectionBar>
     </>
