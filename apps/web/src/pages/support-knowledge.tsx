@@ -32,6 +32,7 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
+import { QuickFilters } from '../ui/redesign';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
@@ -41,11 +42,11 @@ import {
   Card,
   CellMain,
   DataTable,
+  Disclosure,
   Drawer,
   Empty,
   Field,
   PageHead,
-  Pills,
   RowActions,
   Select,
   StateSwitch,
@@ -523,16 +524,27 @@ export function SupportKnowledgePage({
 
   return (
     <>
-      <PageHead
-        title={t('web.sk_title')}
-        subtitle={t('web.sk_subtitle')}
-        actions={mayReview ? newButton : undefined}
-      />
+      <PageHead title={t('web.sk_title')} actions={mayReview ? newButton : undefined} />
       <Banner tone="info" slim>
         {t('web.sk_only_approved')}
       </Banner>
       {/* Demo parity (DIFFS support-knowledge #1): the filter line in a bordered card of its own. */}
       <Card tight className="sk-filters">
+        {/* The state as quick-filter chips (the same filter as the panel's select, one state). */}
+        <div className="sk-quick">
+          <QuickFilters
+            label={t('web.sk_col_state')}
+            value={state}
+            onChange={setState}
+            items={[
+              { key: 'ALL' as const, label: t('web.sk_all') },
+              ...SUPPORT_KNOWLEDGE_ARTICLE_STATES.map((value) => ({
+                key: value,
+                label: t(KNOWLEDGE_STATE_LABELS[value]),
+              })),
+            ]}
+          />
+        </div>
         <ListFilterBar
           label={t('web.sk_title')}
           filters={[
@@ -607,6 +619,9 @@ export function SupportKnowledgePage({
             caption={t('web.sk_title')}
           />
           {paging.pager}
+          <Disclosure size="sm" summary={t('web.sk_about_fold')}>
+            <p className="muted small">{t('web.sk_subtitle')}</p>
+          </Disclosure>
         </Card>
       </StateSwitch>
 
@@ -877,17 +892,18 @@ export function LearningCandidatesPage({
 
   return (
     <>
-      <PageHead title={t('web.sk_cand_title')} subtitle={t('web.sk_cand_subtitle')} />
+      <PageHead title={t('web.sk_cand_title')} />
       <Banner tone="info">{t('web.sk_cand_nothing_active')}</Banner>
       {/* The shared toolbar pattern (no demo page here): the state pills in a bordered card
           of their own, as the knowledge list's filter line beside it. */}
       <Card tight className="sk-filters">
-        <div className="sk-pills">
-          <Pills
+        <div className="sk-quick">
+          <QuickFilters
+            label={t('web.sk_cand_state')}
             value={state}
             onChange={setState}
             items={SUPPORT_LEARNING_CANDIDATE_STATES.map((value) => ({
-              id: value,
+              key: value,
               label: t(CANDIDATE_STATE_LABELS[value]),
             }))}
           />
@@ -913,6 +929,9 @@ export function LearningCandidatesPage({
             caption={t('web.sk_cand_title')}
           />
           {paging.pager}
+          <Disclosure size="sm" summary={t('web.sk_about_fold')}>
+            <p className="muted small">{t('web.sk_cand_subtitle')}</p>
+          </Disclosure>
         </Card>
       </StateSwitch>
 

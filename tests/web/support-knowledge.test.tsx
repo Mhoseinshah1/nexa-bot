@@ -143,7 +143,7 @@ describe('the knowledge page', () => {
     fireEvent.change(screen.getByLabelText(t('web.sk_col_source')), {
       target: { value: 'NEXA_BUILD' },
     });
-    fireEvent.change(screen.getByLabelText(t('web.sk_col_state')), {
+    fireEvent.change(screen.getByLabelText(t('web.sk_col_state'), { selector: 'select' }), {
       target: { value: 'RETIRED' },
     });
     await waitFor(() =>
@@ -456,5 +456,19 @@ describe('navigation', () => {
     const element = resolve({ path: '/support-learning', query: new URLSearchParams() }, view)
       .element as { props: { denied: boolean; mayReview: boolean } };
     expect(element.props).toMatchObject({ denied: false, mayReview: false });
+  });
+});
+
+describe('PR-3: the state is a row of quick-filter chips', () => {
+  it('sends the chosen state to the server from a chip, and keeps the intro in a fold', async () => {
+    const api = stubApi([
+      { url: '/support-knowledge/articles', method: 'GET', body: { articles: [article()] } },
+    ]);
+    renderPage(<SupportKnowledgePage denied={false} mayReview />);
+    await screen.findByText('چطور لینک را وارد کنم؟');
+    expect(screen.getByText(t('web.sk_about_fold'))).toBeInTheDocument();
+    const chips = screen.getByRole('group', { name: t('web.sk_col_state') });
+    fireEvent.click(within(chips).getByRole('button', { name: t('web.sk_state_retired') }));
+    await waitFor(() => expect(calls(api, 'GET', 'state=RETIRED')).toHaveLength(1));
   });
 });

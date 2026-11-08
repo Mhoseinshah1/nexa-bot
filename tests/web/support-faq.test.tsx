@@ -284,3 +284,14 @@ describe('the support page', () => {
     expect(api.calls).toHaveLength(0);
   });
 });
+
+describe('PR-3: the list and the way to reach support are one row, the intro a fold', () => {
+  it('draws the destination beside the list at one height, with no restating subtitle', async () => {
+    stubApi([listAndRow([faq()], faq())]);
+    renderPage(<SupportPage denied={false} mayEdit={false} />);
+    await screen.findByText('آیا آی‌پی ثابت است؟');
+    const row = screen.getByText(t('web.support_destination_title')).closest('.card-row');
+    expect(row?.textContent).toContain('آیا آی‌پی ثابت است؟');
+    expect(screen.getByText(t('web.support_about_fold'))).toBeInTheDocument();
+  });
+});

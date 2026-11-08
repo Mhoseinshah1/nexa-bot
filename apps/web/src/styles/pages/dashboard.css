@@ -66,7 +66,6 @@
 
 .dash-updated {
   display: inline-block;
-  margin-inline-start: 8px;
   color: var(--fg-3);
   font-size: var(--fs-xs);
 }
@@ -87,10 +86,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-}
-.dash-seg button {
-  height: 30px;
-  font-size: var(--fs-ui);
 }
 /* «مقایسه با دورهٔ قبل»: a capsule holding a real switch and its label. */
 .dash-toggle {

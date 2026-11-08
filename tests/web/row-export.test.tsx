@@ -90,13 +90,14 @@ describe('the export bar', () => {
       clicked.push(this.download);
     };
     render(<Harness rows={rows} allowed />);
-    const exportButton = screen.getByRole('button', { name: t('web.export_csv') });
-    expect((exportButton as HTMLButtonElement).disabled).toBe(true);
+    // The selection bar (count, export, clear) exists only while rows are ticked.
+    expect(screen.queryByRole('button', { name: t('web.export_csv') })).toBeNull();
     // Select the whole page: capped at CSV_EXPORT_MAX_ROWS of the 300 shown.
     fireEvent.click(screen.getByLabelText(t('web.export_select_all')));
     expect(
-      screen.getByText(`${t('web.export_selected')} ${String(CSV_EXPORT_MAX_ROWS)}`),
+      screen.getByText(t('web.kit_selected_count').replace('{n}', String(CSV_EXPORT_MAX_ROWS))),
     ).toBeTruthy();
+    const exportButton = screen.getByRole('button', { name: t('web.export_csv') });
     expect((exportButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(exportButton);
     expect(clicked).toEqual(['list.csv']);

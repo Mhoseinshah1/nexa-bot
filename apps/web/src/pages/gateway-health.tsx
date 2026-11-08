@@ -404,11 +404,9 @@ export function PaymentGatewaysTabbedPage({
   if (denied && mayViewCards) {
     return (
       <>
-        <PageHead
-          title={t('web.payment_gateways_title')}
-          subtitle={t('web.payment_gateways_subtitle')}
-        />
+        <PageHead title={t('web.payment_gateways_title')} />
         <Card title={t('web.payment_gateway_provider_manual_transfer')}>
+          <p className="muted small">{t('web.payment_gateways_subtitle')}</p>
           <p className="muted small">{t('web.payment_method_cards_only_hint')}</p>
           <div className="form-actions">
             <a className="btn primary" href={CARD_TO_CARD_PATH} onClick={onLink}>
@@ -450,12 +448,10 @@ export function PaymentGatewaysTabbedPage({
   // The same head as the configuration tab, so the tab strip does not move between them.
   return (
     <>
-      <PageHead
-        title={t('web.payment_gateways_title')}
-        subtitle={t('web.payment_gateways_subtitle')}
-      />
+      <PageHead title={t('web.payment_gateways_title')} />
       {tabs}
       <TabPanel id="gateways-panel" labelledBy="gateways-panel-tab-health">
+        <p className="muted small">{t('web.payment_gateways_subtitle')}</p>
         <GatewayHealthPanel route={route} denied={denied} />
       </TabPanel>
     </>

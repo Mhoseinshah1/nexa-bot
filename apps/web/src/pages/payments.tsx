@@ -55,8 +55,8 @@ import { formatDecimalText, formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState, staleAfterError } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
-import { setQuery, useLinkHandler, type Route } from '../router';
-import { ListSearchBox, appliedListSearch } from '../ui/list-search';
+import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 import {
   CopyCodeButton,
@@ -69,6 +69,15 @@ import { messageFor } from './settings';
 import { PaymentTimelineCard } from './payment-timeline';
 import { ReceiptReviewCard } from './payment-receipt-review';
 import { RowExportBar, selectColumn, useRowSelection, type ExportColumn } from '../ui/row-export';
+import {
+  AttentionStrip,
+  CardRows,
+  KpiRow,
+  QuickAction,
+  QuickActionBar,
+  QuickFilters,
+  type QuickActionGroup,
+} from '../ui/redesign';
 import { Modal } from '../ui/overlays';
 import { CodeName } from './code-name';
 import { queryChipFilter } from './money-filters';
@@ -548,24 +557,29 @@ function present(items: [ReactNode, ReactNode | null | undefined][]): [ReactNode
 }
 
 /**
- * The first thing the page says: how much, in what state, through which route, for whom, when
- * and for which order. The customer is named here once and nowhere else on the page.
+ * The payment's header card (redesign PR-2): its state and route as chips, a meta line of links —
+ * the customer (named here once and nowhere else on the page), the order, when it was made — and
+ * the grouped quick-action bar. The bar only JUMPS to the card that holds the action: the
+ * receipt review, the reconcile, the late-payment decision and the refund form keep their own
+ * hooks, permissions, confirmations and reason fields where they always were.
  */
-function PaymentSummary({
+function PaymentHeaderCard({
   row,
   onLink,
+  groups,
 }: {
   row: PaymentDetailResponse;
   onLink: ReturnType<typeof useLinkHandler>;
+  groups: readonly QuickActionGroup[];
 }) {
   return (
-    <Card className="pay-summary">
-      <div className="pay-summary-main">
-        <span className="pay-summary-amount">
-          <Money value={{ amountMinor: row.amount, currency: row.currency }} />
-        </span>
+    <Card className="pay-head">
+      <div className="pay-head-chips">
         <StateBadge value={row.state} />
-        <span className="muted">
+        {inProviderReview(row) && (
+          <Badge tone="info">{t('web.payment_provider_review_badge')}</Badge>
+        )}
+        <Badge tone="neutral">
           {t(METHOD_LABELS[row.method])}
           {row.gatewayProvider === null || row.gatewayProvider === 'MANUAL_TRANSFER' ? null : (
             <>
@@ -573,12 +587,12 @@ function PaymentSummary({
               <GatewayName provider={row.gatewayProvider} />
             </>
           )}
-        </span>
+        </Badge>
       </div>
-      <dl className="pay-summary-facts kv inline">
-        <div>
-          <dt>{t('web.payment_customer')}</dt>
-          <dd className="nowrap record-ref">
+      <span className="meta-links muted small">
+        <span>
+          {t('web.payment_customer')}{' '}
+          <span className="nowrap record-ref">
             <CustomerIdentityLink
               customerId={row.customerId}
               telegramUserId={row.customerTelegramUserId}
@@ -586,27 +600,25 @@ function PaymentSummary({
               onLink={onLink}
             />
             <CopyIdButton id={row.customerId} />
-          </dd>
-        </div>
-        <div>
-          <dt>{t('web.payment_created_at')}</dt>
-          <dd>{formatTimestamp(row.createdAt)}</dd>
-        </div>
-        <div>
-          <dt>{t('web.payment_order')}</dt>
-          <dd>
-            {row.orderId === null ? (
-              <span className="muted small">{t('web.payment_topup')}</span>
-            ) : (
-              <RecordLink
-                href={recordHref.order(row.orderId)}
-                id={row.orderId}
-                code={row.orderCode}
-              />
-            )}
-          </dd>
-        </div>
-      </dl>
+          </span>
+        </span>
+        <span>
+          {t('web.payment_order')}{' '}
+          {row.orderId === null ? (
+            <span className="muted small">{t('web.payment_topup')}</span>
+          ) : (
+            <RecordLink
+              href={recordHref.order(row.orderId)}
+              id={row.orderId}
+              code={row.orderCode}
+            />
+          )}
+        </span>
+        <span>
+          {t('web.payment_created_at')} {formatTimestamp(row.createdAt)}
+        </span>
+      </span>
+      <QuickActionBar label={t('web.pay_qa_label')} groups={groups} />
     </Card>
   );
 }
@@ -1017,44 +1029,38 @@ export function PaymentsPage({
       ),
     },
     {
+      /*
+       * Redesign PR-2: the state, the server's situation (roadmap E1) and how the receipt left
+       * review (WP10 follow-up §5) are ONE cell, one badge each, so the table fits at 1440
+       * without a sideways scroll. The situation is beside the state and never instead of it.
+       */
       key: 'state',
       header: t('web.payment_state'),
+      wrap: true,
       render: (row) => (
-        <>
+        <span className="pay-state-cell">
           <StateBadge value={row.state} />
           {inProviderReview(row) && (
-            <>
-              {' '}
-              <Badge tone="info">{t('web.payment_provider_review_badge')}</Badge>
-            </>
+            <Badge tone="info">{t('web.payment_provider_review_badge')}</Badge>
           )}
-        </>
+          <SituationBadge value={row.situation} />
+          <DispositionBadge value={row.receiptDisposition} />
+        </span>
       ),
     },
     {
-      // Roadmap E1: the server's situation, beside the state and never instead of it.
-      key: 'situation',
-      header: t('web.payment_situation_column'),
-      render: (row) => <SituationBadge value={row.situation} />,
-    },
-    {
-      /*
-       * How the receipt left review, beside the state rather than instead of it: the state
-       * is the payment's, this is the receipt's (WP10 follow-up §5).
-       */
-      key: 'disposition',
-      header: t('web.payment_disposition'),
-      render: (row) => <DispositionBadge value={row.receiptDisposition} />,
-    },
-    {
+      // Method and gateway in one cell: the route, then the provider under it.
       key: 'method',
       header: t('web.payment_method'),
-      render: (row) => t(METHOD_LABELS[row.method]),
-    },
-    {
-      key: 'gateway',
-      header: t('web.payment_gateway'),
-      render: (row) => <GatewayName provider={row.gatewayProvider} />,
+      wrap: true,
+      render: (row) => (
+        <span className="pay-route-cell">
+          <span>{t(METHOD_LABELS[row.method])}</span>
+          <span className="muted small">
+            <GatewayName provider={row.gatewayProvider} />
+          </span>
+        </span>
+      ),
     },
     {
       // What the gateway last said (program §10): the provider's word, never Nexa's state.
@@ -1157,11 +1163,6 @@ export function PaymentsPage({
           ],
         ]}
       />
-      <span className="row-actions">
-        <a className="btn sm" href={`/payments/${encodeURIComponent(row.id)}`} onClick={onLink}>
-          {t('web.payment_ops_open')}
-        </a>
-      </span>
     </div>
   );
 
@@ -1171,9 +1172,38 @@ export function PaymentsPage({
 
   return (
     <>
-      <PageHead title={t('web.payment_ops_title')} subtitle={t('web.payment_ops_intro')} />
+      <PageHead
+        title={t('web.payment_ops_title')}
+        // Redesign PR-2: no count chip — `GET /payments` sends a keyset page and no total (the
+        // queue counts below are per queue, not the list's). The intro moved into a fold.
+        actions={<ListFreshness query={payments} hidden={toolbarHidden} />}
+      />
 
       <Card className="ca-list">
+        {/* The queue as quick-filter chips with the server's own counts (`/payment-operations/
+            attention`); the same `queue` query key as the filter below, which keeps its chip. */}
+        {!denied && (
+          <div hidden={toolbarHidden}>
+            <QuickFilters
+              label={t('web.payment_ops_queue')}
+              value={queue ?? 'ALL'}
+              onChange={(next) =>
+                setQueries(route, [
+                  ['queue', next === 'ALL' ? null : next],
+                  ['cursor', null],
+                ])
+              }
+              items={[
+                { key: 'ALL' as const, label: t('web.payment_ops_queue_all') },
+                ...QUEUE_ORDER.map((one) => ({
+                  key: one,
+                  label: t(QUEUE_LABELS[one]),
+                  ...(counts === null ? {} : { count: counts[one] }),
+                })),
+              ]}
+            />
+          </div>
+        )}
         <div hidden={toolbarHidden}>
           <ListFilterBar
             first="search"
@@ -1289,6 +1319,9 @@ export function PaymentsPage({
                 }
                 detail={{ label: t('web.payment_row_detail'), render: rowDetail }}
               />
+              <Disclosure size="sm" summary={t('web.payments_about_fold')}>
+                <p className="muted small">{t('web.payment_ops_intro')}</p>
+              </Disclosure>
               {/* An ascending keyset (created_at, id) with the cursor in the URL: "newer" is
                   the next page, and "older" returns to the first. */}
               <CursorPager
@@ -2131,6 +2164,70 @@ export function PaymentDetailPage({
     (row.method === 'MANUAL_TRANSFER' ||
       (row.gatewayInvoice !== null &&
         (row.gatewayInvoice.cardSeq !== null || row.gatewayInvoice.receiptSubmissions.length > 0)));
+  const hasReview =
+    mayReviewReceipts && row?.state === 'PENDING' && row.method === 'MANUAL_TRANSFER';
+  const hasLateDecision = mayReconcile && (row?.situation?.actions ?? []).includes('LATE_DELIVER');
+  const jumpTo = (anchor: string) =>
+    document.getElementById(anchor)?.scrollIntoView?.({ block: 'start' });
+  const actionGroups: readonly QuickActionGroup[] =
+    row === undefined
+      ? []
+      : [
+          {
+            key: 'receipt',
+            label: t('web.pay_qa_group_receipt'),
+            actions: [
+              mayViewReceipts && usesReceipts ? (
+                <QuickAction
+                  key="view"
+                  label={t('web.pay_qa_view_receipts')}
+                  onClick={() => jumpTo('pay-card-receipts')}
+                />
+              ) : null,
+              hasReview ? (
+                <QuickAction
+                  key="review"
+                  label={t('web.pay_qa_review')}
+                  onClick={() => jumpTo('pay-card-review')}
+                />
+              ) : null,
+            ],
+          },
+          {
+            key: 'gateway',
+            label: t('web.pay_qa_group_gateway'),
+            actions: [
+              mayReconcile && row.state === 'UNKNOWN' && row.method === 'GATEWAY' ? (
+                <QuickAction
+                  key="reconcile"
+                  label={t('web.pay_qa_reconcile')}
+                  onClick={() => jumpTo('pay-card-reconcile')}
+                />
+              ) : null,
+              hasLateDecision ? (
+                <QuickAction
+                  key="late"
+                  label={t('web.pay_qa_late')}
+                  onClick={() => jumpTo('pay-card-late')}
+                />
+              ) : null,
+            ],
+          },
+          {
+            key: 'refund',
+            label: t('web.pay_qa_group_refund'),
+            actions: [
+              mayViewRefunds && mayIssueRefunds ? (
+                <QuickAction
+                  key="refund"
+                  danger
+                  label={t('web.pay_qa_refund')}
+                  onClick={() => jumpTo('pay-card-refunds')}
+                />
+              ) : null,
+            ],
+          },
+        ];
 
   return (
     <>
@@ -2150,8 +2247,32 @@ export function PaymentDetailPage({
       <StateSwitch query={payment} denied={denied}>
         {row === undefined ? null : (
           <>
-            {row.state === 'UNKNOWN' && (
-              <Banner tone="warn">{t('web.payment_unknown_banner')}</Banner>
+            <PaymentHeaderCard row={row} onLink={onLink} groups={actionGroups} />
+            {(row.state === 'UNKNOWN' || hasReview || hasLateDecision) && (
+              /* The yellow strip (redesign PR-2): what waits for a decision on this payment. */
+              <AttentionStrip>
+                {row.state === 'UNKNOWN' && (
+                  <span className="attn-item">{t('web.payment_unknown_banner')}</span>
+                )}
+                {hasReview && (
+                  <button
+                    type="button"
+                    className="attn-item"
+                    onClick={() => jumpTo('pay-card-review')}
+                  >
+                    {t('web.pay_attn_review')}
+                  </button>
+                )}
+                {hasLateDecision && (
+                  <button
+                    type="button"
+                    className="attn-item"
+                    onClick={() => jumpTo('pay-card-late')}
+                  >
+                    {t('web.pay_attn_late')}
+                  </button>
+                )}
+              </AttentionStrip>
             )}
             {inProviderReview(row) && row.providerReviewUntil !== null && (
               <Banner tone="info">
@@ -2159,52 +2280,104 @@ export function PaymentDetailPage({
                 <strong>{formatTimestamp(row.providerReviewUntil)}</strong>
               </Banner>
             )}
-            {/*
-              W4: no holes. The situation and the payment's own facts sit beside the side
-              cards, whose last card stretches to the row's height; every later card of the
-              tall column runs full width below, so neither column leaves an empty tail.
-              A payment with no side card draws its head full width.
-            */}
-            <PaymentSummary row={row} onLink={onLink} />
+            <KpiRow
+              items={[
+                {
+                  key: 'amount',
+                  label: t('web.payment_amount'),
+                  value: <Money value={{ amountMinor: row.amount, currency: row.currency }} />,
+                },
+                ...(row.customerFee === null
+                  ? []
+                  : [
+                      {
+                        key: 'payable',
+                        label: t('web.payment_transfer_payable'),
+                        value: (
+                          <Money
+                            value={{ amountMinor: row.customerFee.payable, currency: row.currency }}
+                          />
+                        ),
+                      },
+                    ]),
+                ...(row.receiptDisposition === null
+                  ? []
+                  : [
+                      {
+                        key: 'disposition',
+                        label: t('web.payment_disposition'),
+                        value: <DispositionBadge value={row.receiptDisposition} />,
+                      },
+                    ]),
+                {
+                  key: 'updated',
+                  label: t('web.payment_updated_at'),
+                  value: formatTimestamp(row.updatedAt),
+                },
+                ...(row.expiresAt === null
+                  ? []
+                  : [
+                      {
+                        key: 'expires',
+                        label: t('web.payment_expires_at'),
+                        value: formatTimestamp(row.expiresAt),
+                      },
+                    ]),
+              ]}
+            />
             <SituationCard value={row.situation} />
             {(() => {
               // The receipts card exists only where receipts are part of the method or one was
               // sent. Anywhere else it is gone, not an empty state: it then draws nothing at all
               // until a receipt is read, and sits in the full-width stack rather than the side.
               const showReceipts = mayViewReceipts && usesReceipts;
-              const sideCards = (
-                <>
-                  {/*
+              const sideItems: readonly (readonly [string, ReactNode])[] = [
+                /*
               An UNKNOWN gateway payment (TonPays Telegram §9.6.4): resolved from the
               provider's RECORDED answer, never from the operator's choice.
-            */}
-                  {row.state === 'UNKNOWN' && row.method === 'GATEWAY' && (
-                    <ReconcileCard payment={row} mayReconcile={mayReconcile} />
-                  )}
-                  {/*
+            */
+                [
+                  'reconcile',
+                  row.state === 'UNKNOWN' && row.method === 'GATEWAY' && (
+                    <div id="pay-card-reconcile" className="pay-anchor">
+                      <ReconcileCard payment={row} mayReconcile={mayReconcile} />
+                    </div>
+                  ),
+                ],
+                /*
               NEXA-OWNER-BATCH-1 PR-5: a late completion on a route with a late-payment
               policy — deliver the service, or credit the wallet; each once, re-decided on the
               server under the payment's lock from the provider's recorded approval.
-            */}
-                  {(row.situation?.actions ?? []).includes('LATE_DELIVER') && (
-                    <LateDecisionCard payment={row} mayDecide={mayReconcile} />
-                  )}
-                  {/*
+            */
+                [
+                  'late',
+                  (row.situation?.actions ?? []).includes('LATE_DELIVER') && (
+                    <div id="pay-card-late" className="pay-anchor">
+                      <LateDecisionCard payment={row} mayDecide={mayReconcile} />
+                    </div>
+                  ),
+                ],
+                /*
               Card-to-card review (R12 F3 item 8): approve, reject and credit-to-wallet are
               also decided here, through the SAME services as the Telegram panel; the card
               asks first and draws only the controls the viewer's permissions allow.
-            */}
-                  {row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER' && (
-                    <ReceiptReviewCard
-                      paymentId={row.id}
-                      amountMinor={row.amount}
-                      payableMinor={row.customerFee?.payable ?? null}
-                      currency={row.currency}
-                      mayReview={mayReviewReceipts}
-                      mayCredit={mayCreditWallet}
-                    />
-                  )}
-                  {/*
+            */
+                [
+                  'review',
+                  row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER' && (
+                    <div id="pay-card-review" className="pay-anchor">
+                      <ReceiptReviewCard
+                        paymentId={row.id}
+                        amountMinor={row.amount}
+                        payableMinor={row.customerFee?.payable ?? null}
+                        currency={row.currency}
+                        mayReview={mayReviewReceipts}
+                        mayCredit={mayCreditWallet}
+                      />
+                    </div>
+                  ),
+                ],
+                /*
               WHERE the customer was told to send it.
               Its own card because it is neither the payment nor the evidence: it is
               what the instructions SAID, frozen when the reference was issued, so it
@@ -2218,8 +2391,10 @@ export function PaymentDetailPage({
 
               Four digits, never sixteen. `paymentDestinationViewSchema` is what stops
               the rest reaching this bundle at all.
-            */}
-                  {row.destination !== null && (
+            */
+                [
+                  'destination',
+                  row.destination !== null && (
                     <Card title={t('web.payment_destination')}>
                       <p className="muted small">{t('web.payment_destination_last_hint')}</p>
                       <KV
@@ -2246,388 +2421,377 @@ export function PaymentDetailPage({
                         ]}
                       />
                     </Card>
-                  )}
-                  {/*
+                  ),
+                ],
+                /*
               The top-up gift this payment promised (Payment File 02 §17, D5): the
               percentage SNAPSHOTTED from its route when it was created. Null for anything
               that is not a top-up, which is why the card is absent rather than dashed.
-            */}
-                  {row.topupCashbackPercent !== null && (
+            */
+                [
+                  'topup',
+                  row.topupCashbackPercent !== null && (
                     <Card title={t('web.payment_topup_gift')}>
                       <p className="strong">
                         <Num value={`${String(row.topupCashbackPercent)}%`} />
                       </p>
                       <p className="muted small">{t('web.payment_topup_gift_hint')}</p>
                     </Card>
-                  )}
-                  {/*
+                  ),
+                ],
+                /*
               What the customer sent, when they sent anything.
               Its own card and its own permission: `receipts.view` reads the evidence,
               `receipts.review` decides. A reader who may see a payment does not
               automatically get to open a customer's bank screenshot.
-            */}
-                  {showReceipts && <ReceiptsCard paymentId={id} usesReceipts />}
-                </>
-              );
-              const hasSide =
-                (row.state === 'UNKNOWN' && row.method === 'GATEWAY') ||
-                (row.situation?.actions ?? []).includes('LATE_DELIVER') ||
-                (row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER') ||
-                row.destination !== null ||
-                row.topupCashbackPercent !== null ||
-                showReceipts;
-              return (
-                <div className={hasSide ? 'two-col pay-balance' : 'pay-balance solo'}>
-                  <div className="stack">
-                    <Card title={t('web.payment_detail')}>
+            */
+                [
+                  'receipts',
+                  showReceipts && (
+                    <div id="pay-card-receipts" className="pay-anchor">
+                      <ReceiptsCard paymentId={id} usesReceipts />
+                    </div>
+                  ),
+                ],
+              ];
+              const mainItems: readonly (readonly [string, ReactNode])[] = [
+                [
+                  'detail',
+                  <Card title={t('web.payment_detail')}>
+                    <KV
+                      columns
+                      items={present([
+                        /*
+                         * The amount, what the customer had to TRANSFER (R6 item 4, from the
+                         * payment's frozen snapshot), the receipt result, the last change and the
+                         * expiry are the KPI row above (redesign PR-2); the facts below are
+                         * what that row does not say.
+                         */
+                        [
+                          t('web.payment_external_reference'),
+                          row.externalReference === null ? null : (
+                            <Copyable key="x" value={row.externalReference} />
+                          ),
+                        ],
+                        [t('web.payment_created_at'), formatTimestamp(row.createdAt)],
+                        [
+                          t('web.payment_customer_signalled'),
+                          row.customerSignalledAt === null ? (
+                            // A SENTENCE, not a dash. "The customer has said nothing" is the
+                            // answer here rather than a missing value, and it is the half of
+                            // the picture a reviewer weighs before opening their bank.
+                            <span key="cs" className="muted small">
+                              {t('web.payment_customer_signalled_none')}
+                            </span>
+                          ) : (
+                            formatTimestamp(row.customerSignalledAt)
+                          ),
+                        ],
+                      ])}
+                    />
+                    {row.customerSignalledAt !== null && (
+                      <p className="muted small">{t('web.payment_customer_signalled_hint')}</p>
+                    )}
+                  </Card>,
+                ],
+                [
+                  'evidence',
+                  (row.evidenceKind !== null ||
+                    row.evidenceNote !== null ||
+                    row.confirmedByAdminId !== null ||
+                    row.confirmedAt !== null) && (
+                    <Card title={t('web.payment_evidence_kind')}>
                       <KV
                         columns
                         items={present([
                           [
-                            t('web.payment_disposition'),
-                            row.receiptDisposition === null ? null : (
-                              <DispositionBadge key="d" value={row.receiptDisposition} />
-                            ),
-                          ],
-                          [
-                            t('web.payment_amount'),
-                            <Money
-                              key="a"
-                              value={{ amountMinor: row.amount, currency: row.currency }}
-                            />,
-                          ],
-                          /*
-                           * R6 item 4: what the customer had to TRANSFER, beside the principal,
-                           * when the route charged a fee — the figure a receipt is checked
-                           * against. From the payment's frozen snapshot; the page adds nothing.
-                           */
-                          [
-                            t('web.payment_transfer_payable'),
-                            row.customerFee === null ? null : (
-                              <Money
-                                key="tp"
-                                value={{
-                                  amountMinor: row.customerFee.payable,
-                                  currency: row.currency,
-                                }}
+                            t('web.payment_evidence_kind'),
+                            row.evidenceKind === null ? null : (
+                              <CodeName
+                                key="k"
+                                value={row.evidenceKind}
+                                labels={PAYMENT_EVIDENCE_KIND_LABELS}
                               />
                             ),
                           ],
+                          [t('web.payment_evidence_note'), row.evidenceNote],
                           [
-                            t('web.payment_external_reference'),
-                            row.externalReference === null ? null : (
-                              <Copyable key="x" value={row.externalReference} />
+                            t('web.payment_reviewer'),
+                            row.confirmedByAdminId === null ? null : (
+                              <Copyable key="w" value={row.confirmedByAdminId} />
                             ),
                           ],
-                          [t('web.payment_created_at'), formatTimestamp(row.createdAt)],
-                          [t('web.payment_updated_at'), formatTimestamp(row.updatedAt)],
                           [
-                            t('web.payment_expires_at'),
-                            row.expiresAt === null ? null : formatTimestamp(row.expiresAt),
-                          ],
-                          [
-                            t('web.payment_customer_signalled'),
-                            row.customerSignalledAt === null ? (
-                              // A SENTENCE, not a dash. "The customer has said nothing" is the
-                              // answer here rather than a missing value, and it is the half of
-                              // the picture a reviewer weighs before opening their bank.
-                              <span key="cs" className="muted small">
-                                {t('web.payment_customer_signalled_none')}
-                              </span>
-                            ) : (
-                              formatTimestamp(row.customerSignalledAt)
-                            ),
+                            t('web.payment_confirmed_at'),
+                            row.confirmedAt === null ? null : formatTimestamp(row.confirmedAt),
                           ],
                         ])}
                       />
-                      {row.customerSignalledAt !== null && (
-                        <p className="muted small">{t('web.payment_customer_signalled_hint')}</p>
-                      )}
                     </Card>
-                  </div>
-                  {hasSide && <div className="stack">{sideCards}</div>}
-                </div>
+                  ),
+                ],
+                [
+                  'resolution',
+                  row.resolvedAt !== null && (
+                    <Card title={t('web.payment_resolution')}>
+                      <KV
+                        columns
+                        items={present([
+                          [t('web.payment_resolved_at'), formatTimestamp(row.resolvedAt)],
+                          [
+                            t('web.payment_resolver'),
+                            row.resolvedByAdminId === null ? null : (
+                              <Copyable key="rw" value={row.resolvedByAdminId} />
+                            ),
+                          ],
+                          [t('web.payment_resolution_note'), row.resolutionNote],
+                        ])}
+                      />
+                    </Card>
+                  ),
+                ],
+                [
+                  'credit',
+                  row.receiptCredit !== null && (
+                    <Card title={t('web.payment_receipt_credit')}>
+                      <KV
+                        columns
+                        items={present([
+                          [
+                            t('web.payment_receipt_credit_amount'),
+                            <Money
+                              key="ca"
+                              value={{
+                                amountMinor: row.receiptCredit.amountMinor,
+                                currency: row.receiptCredit.currency,
+                              }}
+                            />,
+                          ],
+                          [
+                            t('web.payment_receipt_credit_admin'),
+                            <Copyable key="cw" value={row.receiptCredit.decidedByAdminId} />,
+                          ],
+                          [
+                            t('web.payment_receipt_credit_at'),
+                            formatTimestamp(row.receiptCredit.decidedAt),
+                          ],
+                          [t('web.payment_receipt_credit_note'), row.receiptCredit.note],
+                        ])}
+                      />
+                      <p className="muted small">{t('web.payment_receipt_credit_hint')}</p>
+                    </Card>
+                  ),
+                ],
+                ['amounts', row.amounts !== null && <AmountsCard value={row.amounts} />],
+                [
+                  'rate',
+                  (row.gatewayInvoice?.rateProvenance ?? null) !== null && (
+                    <RateProvenanceCard value={row.gatewayInvoice?.rateProvenance ?? null} />
+                  ),
+                ],
+                [
+                  'invoice',
+                  row.gatewayInvoice !== null && (
+                    <Card
+                      title={t('web.payment_gateway_invoice')}
+                      hint={t('web.payment_gateway_invoice_hint')}
+                    >
+                      <Disclosure size="sm" summary={t('web.payment_tech_details')}>
+                        <KV
+                          items={[
+                            [
+                              t('web.payment_gateway_invoice_order_id'),
+                              <Copyable key="po" value={row.gatewayInvoice.providerOrderId} />,
+                            ],
+                            [
+                              t('web.payment_gateway_invoice_id'),
+                              row.gatewayInvoice.providerInvoiceId === null ? (
+                                <Dash key="pi" />
+                              ) : (
+                                <Copyable key="pi" value={row.gatewayInvoice.providerInvoiceId} />
+                              ),
+                            ],
+                            /*
+                             * The provider's own id for the CHARGE (Telegram Stars'
+                             * `telegram_payment_charge_id`): what an operator reconciles or refunds by,
+                             * so it is shown and copyable (Codex review of #85). Absent for a route
+                             * that has none, rather than a dash that suggests one is missing.
+                             */
+                            ...(row.gatewayInvoice.providerChargeId === null
+                              ? []
+                              : [
+                                  [
+                                    t('web.payment_gateway_charge_id'),
+                                    <Copyable
+                                      key="pc"
+                                      value={row.gatewayInvoice.providerChargeId}
+                                    />,
+                                  ] as [ReactNode, ReactNode],
+                                ]),
+                            /*
+                             * NOWPayments: the provider payment a verified IPN (or the invoice's
+                             * payment list) last named — what the next status read follows, and
+                             * what an operator looks up in the NOWPayments dashboard.
+                             */
+                            ...(row.gatewayInvoice.hintedPaymentId === null
+                              ? []
+                              : [
+                                  [
+                                    t('web.payment_gateway_provider_payment_id'),
+                                    <Copyable
+                                      key="pp"
+                                      value={row.gatewayInvoice.hintedPaymentId}
+                                    />,
+                                  ] as [ReactNode, ReactNode],
+                                ]),
+                            /*
+                             * CentralPay: the integer the gateway knows this customer by —
+                             * what an operator matches against CentralPay's own records.
+                             */
+                            ...(row.gatewayInvoice.providerUserId === null
+                              ? []
+                              : [
+                                  [
+                                    t('web.payment_gateway_provider_user_id'),
+                                    <Copyable key="pu" value={row.gatewayInvoice.providerUserId} />,
+                                  ] as [ReactNode, ReactNode],
+                                ]),
+                            [
+                              t('web.payment_gateway_invoice_creation'),
+                              <span key="cs">
+                                <CodeName
+                                  value={row.gatewayInvoice.creationState}
+                                  labels={GATEWAY_CREATION_STATE_LABELS}
+                                />
+                                {row.gatewayInvoice.creationErrorCode === null ? null : (
+                                  <>
+                                    {' · '}
+                                    <ErrorCodeLabel code={row.gatewayInvoice.creationErrorCode} />
+                                  </>
+                                )}
+                              </span>,
+                            ],
+                            [
+                              t('web.payment_gateway_invoice_status'),
+                              <span key="st">
+                                <CodeName
+                                  value={row.gatewayInvoice.providerStatus}
+                                  labels={PROVIDER_STATUS_LABELS}
+                                />
+                                {row.gatewayInvoice.providerPaid === null ? null : (
+                                  <>
+                                    {' · '}
+                                    <span title={`paid=${String(row.gatewayInvoice.providerPaid)}`}>
+                                      {t(providerPaidKey(row.gatewayInvoice.providerPaid))}
+                                    </span>
+                                  </>
+                                )}
+                              </span>,
+                            ],
+                            [
+                              t('web.payment_gateway_invoice_last_inquiry'),
+                              row.gatewayInvoice.lastInquiryAt === null ? (
+                                <Dash key="li" />
+                              ) : (
+                                <span key="li">
+                                  {formatTimestamp(row.gatewayInvoice.lastInquiryAt)}
+                                  {row.gatewayInvoice.lastInquiryErrorCode === null ? null : (
+                                    <>
+                                      {' '}
+                                      <ErrorCodeLabel
+                                        code={row.gatewayInvoice.lastInquiryErrorCode}
+                                      />
+                                    </>
+                                  )}
+                                </span>
+                              ),
+                            ],
+                            [
+                              t('web.payment_gateway_invoice_webhook'),
+                              <span key="wh">
+                                <Ltr>{row.gatewayInvoice.webhookStatusHint ?? '—'}</Ltr>
+                                {` · ${String(row.gatewayInvoice.webhookCount)}`}
+                              </span>,
+                            ],
+                            [
+                              t('web.payment_gateway_invoice_amounts'),
+                              <Ltr key="am">
+                                {`${row.gatewayInvoice.sentAmount} / ${row.gatewayInvoice.requestAmount ?? '—'} / ${row.gatewayInvoice.finalAmount ?? '—'} / ${row.gatewayInvoice.creditAmount ?? '—'} ${row.gatewayInvoice.providerUnit}`}
+                              </Ltr>,
+                            ],
+                            ...creditAmountFacts(row.gatewayInvoice),
+                            /*
+                             * Package FX: how the provider figure was derived, and — for the central
+                             * rate — the snapshot it was derived from: the quote, its source and
+                             * times, the ratio and the effective figure per unit. Read from the
+                             * invoice row, never recomputed from today's rate.
+                             */
+                            [
+                              t('web.payment_gateway_invoice_policy'),
+                              t(CONVERSION_POLICY_LABELS[row.gatewayInvoice.conversionPolicy]),
+                            ],
+                            ...(row.gatewayInvoice.fx === null
+                              ? []
+                              : [
+                                  [
+                                    t('web.payment_gateway_invoice_fx'),
+                                    <Ltr key="fx">
+                                      {`${row.gatewayInvoice.fx.rate} ${row.gatewayInvoice.fx.quoteCurrency}/${row.gatewayInvoice.fx.baseAsset} · ${row.gatewayInvoice.fx.source} · ${row.gatewayInvoice.fx.quoteState} · ${formatTimestamp(row.gatewayInvoice.fx.fetchedAt)} · ×${row.gatewayInvoice.fx.unitRatio} → ${row.gatewayInvoice.fx.effectiveRate} ${row.gatewayInvoice.fx.quoteCurrency}/${row.gatewayInvoice.providerUnit} · v${String(row.gatewayInvoice.fx.policyVersion)}`}
+                                    </Ltr>,
+                                  ] as [ReactNode, ReactNode],
+                                ]),
+                            [
+                              t('web.payment_gateway_invoice_outcome'),
+                              <Ltr key="oc">{row.gatewayInvoice.outcome ?? '—'}</Ltr>,
+                            ],
+                            [
+                              t('web.payment_gateway_invoice_late'),
+                              row.gatewayInvoice.lateCompletionObservedAt === null ? (
+                                <Dash key="lt" />
+                              ) : (
+                                <Badge key="lt" tone="warn">
+                                  {formatTimestamp(row.gatewayInvoice.lateCompletionObservedAt)}
+                                </Badge>
+                              ),
+                            ],
+                            ...reviewFacts(row),
+                            ...cardTransferFacts(row.gatewayInvoice),
+                            ...providerNextStepFacts(row.gatewayInvoice),
+                          ]}
+                        />
+                      </Disclosure>
+                    </Card>
+                  ),
+                ],
+              ];
+              /*
+               * Redesign PR-2: cards side by side are the same height, row by row — the payment's
+               * own cards on the main side, the decision and evidence cards beside them. Each
+               * row pairs the next main card with the next side card; a card with no partner
+               * runs the whole row. Nothing is dropped: every card of the old two columns is here.
+               */
+              const mains = mainItems.filter(([, node]) => node !== false && node !== null);
+              const sides = sideItems.filter(([, node]) => node !== false && node !== null);
+              const rowCount = Math.max(mains.length, sides.length);
+              return (
+                <CardRows
+                  rows={Array.from({ length: rowCount }, (_, index) => {
+                    const main = mains[index];
+                    const side = sides[index];
+                    return main === undefined && side !== undefined
+                      ? { key: side[0], main: side[1] }
+                      : {
+                          key: main?.[0] ?? String(index),
+                          main: main?.[1],
+                          ...(side === undefined ? {} : { side: side[1] }),
+                        };
+                  })}
+                />
               );
             })()}
-            <div className="stack">
-              {mayViewReceipts && !usesReceipts && (
-                <ReceiptsCard paymentId={id} usesReceipts={false} />
-              )}
-              {/*
-              What a confirmation RESTS on, and who made it.
-              `UNK-PR-010` records the legacy receipt review as storing neither the
-              reviewer nor the time, which is why "was this approved by a human" is
-              unanswerable there. Both are columns here, and both are shown.
-            */}
-              {(row.evidenceKind !== null ||
-                row.evidenceNote !== null ||
-                row.confirmedByAdminId !== null ||
-                row.confirmedAt !== null) && (
-                <Card title={t('web.payment_evidence_kind')}>
-                  <KV
-                    columns
-                    items={present([
-                      [
-                        t('web.payment_evidence_kind'),
-                        row.evidenceKind === null ? null : (
-                          <CodeName
-                            key="k"
-                            value={row.evidenceKind}
-                            labels={PAYMENT_EVIDENCE_KIND_LABELS}
-                          />
-                        ),
-                      ],
-                      [t('web.payment_evidence_note'), row.evidenceNote],
-                      [
-                        t('web.payment_reviewer'),
-                        row.confirmedByAdminId === null ? null : (
-                          <Copyable key="w" value={row.confirmedByAdminId} />
-                        ),
-                      ],
-                      [
-                        t('web.payment_confirmed_at'),
-                        row.confirmedAt === null ? null : formatTimestamp(row.confirmedAt),
-                      ],
-                    ])}
-                  />
-                </Card>
-              )}
-              {/*
-              How it ended WITHOUT money, when it did.
-              Its own card rather than three more rows in the evidence one, because
-              the two are mutually exclusive by constraint — `payments_confirmed_check`
-              and `payments_resolved_check` are both equalities — and a screen showing
-              both sets side by side invites reading a rejection as an approval.
-            */}
-              {row.resolvedAt !== null && (
-                <Card title={t('web.payment_resolution')}>
-                  <KV
-                    columns
-                    items={present([
-                      [t('web.payment_resolved_at'), formatTimestamp(row.resolvedAt)],
-                      [
-                        t('web.payment_resolver'),
-                        row.resolvedByAdminId === null ? null : (
-                          <Copyable key="rw" value={row.resolvedByAdminId} />
-                        ),
-                      ],
-                      [t('web.payment_resolution_note'), row.resolutionNote],
-                    ])}
-                  />
-                </Card>
-              )}
-              {/*
-              The receipt's credit-to-wallet disposition, when that is how it was decided
-              (Payment File 02 §12, D2). READ-ONLY: it was decided in Telegram, and this
-              page shows what, by whom and when — never a control to make or undo one.
-              The amount is the reviewer's, which may differ from the payment's own; that
-              difference is the reason the disposition exists.
-            */}
-              {row.receiptCredit !== null && (
-                <Card title={t('web.payment_receipt_credit')}>
-                  <KV
-                    columns
-                    items={present([
-                      [
-                        t('web.payment_receipt_credit_amount'),
-                        <Money
-                          key="ca"
-                          value={{
-                            amountMinor: row.receiptCredit.amountMinor,
-                            currency: row.receiptCredit.currency,
-                          }}
-                        />,
-                      ],
-                      [
-                        t('web.payment_receipt_credit_admin'),
-                        <Copyable key="cw" value={row.receiptCredit.decidedByAdminId} />,
-                      ],
-                      [
-                        t('web.payment_receipt_credit_at'),
-                        formatTimestamp(row.receiptCredit.decidedAt),
-                      ],
-                      [t('web.payment_receipt_credit_note'), row.receiptCredit.note],
-                    ])}
-                  />
-                  <p className="muted small">{t('web.payment_receipt_credit_hint')}</p>
-                </Card>
-              )}
-              {/*
-                    The payment's money, the gateway fee (WP18) included, as the server
-                    computed it: ONE card, so the fee is never shown twice (review of PR #247).
-                  */}
-              <AmountsCard value={row.amounts} />
-              <RateProvenanceCard value={row.gatewayInvoice?.rateProvenance ?? null} />
-              {/*
-              The external gateway's side of this payment (WP11A): the provider's ids,
-              what its INQUIRY last said, what its webhook last hinted and how the
-              attempt ended. The provider's amounts are metadata only — the payment's own
-              amount above is what Nexa charged — and no payment link is shown.
-            */}
-              {row.gatewayInvoice !== null && (
-                <Card
-                  title={t('web.payment_gateway_invoice')}
-                  hint={t('web.payment_gateway_invoice_hint')}
-                >
-                  <Disclosure size="sm" summary={t('web.payment_tech_details')}>
-                    <KV
-                      items={[
-                        [
-                          t('web.payment_gateway_invoice_order_id'),
-                          <Copyable key="po" value={row.gatewayInvoice.providerOrderId} />,
-                        ],
-                        [
-                          t('web.payment_gateway_invoice_id'),
-                          row.gatewayInvoice.providerInvoiceId === null ? (
-                            <Dash key="pi" />
-                          ) : (
-                            <Copyable key="pi" value={row.gatewayInvoice.providerInvoiceId} />
-                          ),
-                        ],
-                        /*
-                         * The provider's own id for the CHARGE (Telegram Stars'
-                         * `telegram_payment_charge_id`): what an operator reconciles or refunds by,
-                         * so it is shown and copyable (Codex review of #85). Absent for a route
-                         * that has none, rather than a dash that suggests one is missing.
-                         */
-                        ...(row.gatewayInvoice.providerChargeId === null
-                          ? []
-                          : [
-                              [
-                                t('web.payment_gateway_charge_id'),
-                                <Copyable key="pc" value={row.gatewayInvoice.providerChargeId} />,
-                              ] as [ReactNode, ReactNode],
-                            ]),
-                        /*
-                         * NOWPayments: the provider payment a verified IPN (or the invoice's
-                         * payment list) last named — what the next status read follows, and
-                         * what an operator looks up in the NOWPayments dashboard.
-                         */
-                        ...(row.gatewayInvoice.hintedPaymentId === null
-                          ? []
-                          : [
-                              [
-                                t('web.payment_gateway_provider_payment_id'),
-                                <Copyable key="pp" value={row.gatewayInvoice.hintedPaymentId} />,
-                              ] as [ReactNode, ReactNode],
-                            ]),
-                        /*
-                         * CentralPay: the integer the gateway knows this customer by —
-                         * what an operator matches against CentralPay's own records.
-                         */
-                        ...(row.gatewayInvoice.providerUserId === null
-                          ? []
-                          : [
-                              [
-                                t('web.payment_gateway_provider_user_id'),
-                                <Copyable key="pu" value={row.gatewayInvoice.providerUserId} />,
-                              ] as [ReactNode, ReactNode],
-                            ]),
-                        [
-                          t('web.payment_gateway_invoice_creation'),
-                          <span key="cs">
-                            <CodeName
-                              value={row.gatewayInvoice.creationState}
-                              labels={GATEWAY_CREATION_STATE_LABELS}
-                            />
-                            {row.gatewayInvoice.creationErrorCode === null ? null : (
-                              <>
-                                {' · '}
-                                <ErrorCodeLabel code={row.gatewayInvoice.creationErrorCode} />
-                              </>
-                            )}
-                          </span>,
-                        ],
-                        [
-                          t('web.payment_gateway_invoice_status'),
-                          <span key="st">
-                            <CodeName
-                              value={row.gatewayInvoice.providerStatus}
-                              labels={PROVIDER_STATUS_LABELS}
-                            />
-                            {row.gatewayInvoice.providerPaid === null ? null : (
-                              <>
-                                {' · '}
-                                <span title={`paid=${String(row.gatewayInvoice.providerPaid)}`}>
-                                  {t(providerPaidKey(row.gatewayInvoice.providerPaid))}
-                                </span>
-                              </>
-                            )}
-                          </span>,
-                        ],
-                        [
-                          t('web.payment_gateway_invoice_last_inquiry'),
-                          row.gatewayInvoice.lastInquiryAt === null ? (
-                            <Dash key="li" />
-                          ) : (
-                            <span key="li">
-                              {formatTimestamp(row.gatewayInvoice.lastInquiryAt)}
-                              {row.gatewayInvoice.lastInquiryErrorCode === null ? null : (
-                                <>
-                                  {' '}
-                                  <ErrorCodeLabel code={row.gatewayInvoice.lastInquiryErrorCode} />
-                                </>
-                              )}
-                            </span>
-                          ),
-                        ],
-                        [
-                          t('web.payment_gateway_invoice_webhook'),
-                          <span key="wh">
-                            <Ltr>{row.gatewayInvoice.webhookStatusHint ?? '—'}</Ltr>
-                            {` · ${String(row.gatewayInvoice.webhookCount)}`}
-                          </span>,
-                        ],
-                        [
-                          t('web.payment_gateway_invoice_amounts'),
-                          <Ltr key="am">
-                            {`${row.gatewayInvoice.sentAmount} / ${row.gatewayInvoice.requestAmount ?? '—'} / ${row.gatewayInvoice.finalAmount ?? '—'} / ${row.gatewayInvoice.creditAmount ?? '—'} ${row.gatewayInvoice.providerUnit}`}
-                          </Ltr>,
-                        ],
-                        ...creditAmountFacts(row.gatewayInvoice),
-                        /*
-                         * Package FX: how the provider figure was derived, and — for the central
-                         * rate — the snapshot it was derived from: the quote, its source and
-                         * times, the ratio and the effective figure per unit. Read from the
-                         * invoice row, never recomputed from today's rate.
-                         */
-                        [
-                          t('web.payment_gateway_invoice_policy'),
-                          t(CONVERSION_POLICY_LABELS[row.gatewayInvoice.conversionPolicy]),
-                        ],
-                        ...(row.gatewayInvoice.fx === null
-                          ? []
-                          : [
-                              [
-                                t('web.payment_gateway_invoice_fx'),
-                                <Ltr key="fx">
-                                  {`${row.gatewayInvoice.fx.rate} ${row.gatewayInvoice.fx.quoteCurrency}/${row.gatewayInvoice.fx.baseAsset} · ${row.gatewayInvoice.fx.source} · ${row.gatewayInvoice.fx.quoteState} · ${formatTimestamp(row.gatewayInvoice.fx.fetchedAt)} · ×${row.gatewayInvoice.fx.unitRatio} → ${row.gatewayInvoice.fx.effectiveRate} ${row.gatewayInvoice.fx.quoteCurrency}/${row.gatewayInvoice.providerUnit} · v${String(row.gatewayInvoice.fx.policyVersion)}`}
-                                </Ltr>,
-                              ] as [ReactNode, ReactNode],
-                            ]),
-                        [
-                          t('web.payment_gateway_invoice_outcome'),
-                          <Ltr key="oc">{row.gatewayInvoice.outcome ?? '—'}</Ltr>,
-                        ],
-                        [
-                          t('web.payment_gateway_invoice_late'),
-                          row.gatewayInvoice.lateCompletionObservedAt === null ? (
-                            <Dash key="lt" />
-                          ) : (
-                            <Badge key="lt" tone="warn">
-                              {formatTimestamp(row.gatewayInvoice.lateCompletionObservedAt)}
-                            </Badge>
-                          ),
-                        ],
-                        ...reviewFacts(row),
-                        ...cardTransferFacts(row.gatewayInvoice),
-                        ...providerNextStepFacts(row.gatewayInvoice),
-                      ]}
-                    />
-                  </Disclosure>
-                </Card>
-              )}
-            </div>
+            {mayViewReceipts && !usesReceipts && (
+              <ReceiptsCard paymentId={id} usesReceipts={false} />
+            )}
             {/*
               Money going BACK, under its own two permissions.
               Placed after the evidence and before the decision forms, because that is
@@ -2636,12 +2800,14 @@ export function PaymentDetailPage({
               refund history is financial evidence about a customer.
             */}
             {mayViewRefunds && (
-              <RefundsCard
-                paymentId={id}
-                orderId={row.orderId}
-                mayIssue={mayIssueRefunds}
-                mayViewOrders={mayViewOrders}
-              />
+              <div id="pay-card-refunds" className="pay-anchor">
+                <RefundsCard
+                  paymentId={id}
+                  orderId={row.orderId}
+                  mayIssue={mayIssueRefunds}
+                  mayViewOrders={mayViewOrders}
+                />
+              </div>
             )}
             {/*
               What has happened to this payment, in order (WP17). Read-only, and its own

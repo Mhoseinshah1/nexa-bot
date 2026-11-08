@@ -8,6 +8,7 @@ import {
   installationKeysResponseSchema,
   healthInfoResponseSchema,
   inboxSummaryResponseSchema,
+  secretReentryListResponseSchema,
   incidentBannerResponseSchema,
   sessionResponseSchema,
   systemReadinessResponseSchema,
@@ -71,6 +72,8 @@ export const SHELL: readonly ShotFixture[] = [
       ? { unread: 6, atLeast: false, highestUnread: 'ERROR' }
       : { unread: 0, atLeast: false, highestUnread: null },
   ),
+  // The shell asks for the secrets a restore left to re-enter on every page; none is waiting.
+  fixture('/secret-reentry', secretReentryListResponseSchema, { items: [] }),
   fixture('/incidents/banner', incidentBannerResponseSchema, {
     incidents: SHELL_ATTENTION
       ? [
