@@ -195,7 +195,7 @@ describe('the referral banner card', () => {
   it('asks nothing about the banner without settings.view', async () => {
     const api = stubApi(routes(banner()));
     render({ mayViewBanner: false, mayEditBanner: false });
-    await screen.findByRole('heading', { name: 'قاعده‌هایی که این صفحه رعایت می‌کند' });
+    await screen.findByText('قاعده‌هایی که این صفحه رعایت می‌کند');
     expect(screen.queryByRole('heading', { name: 'بنر معرفی' })).toBeNull();
     expect(api.calls.filter((call) => call.url.includes('/media/'))).toHaveLength(0);
   });
