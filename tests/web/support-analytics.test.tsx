@@ -242,3 +242,23 @@ describe('the support analytics page', () => {
     expect(navPermitted(entry, ['business_chats.view'], [])).toBe(false);
   });
 });
+
+describe('PR-3: head, period line and the cards row by row', () => {
+  it('keeps the period as one muted line, the intro in a fold, and the range as chips', async () => {
+    stubApi([{ url: '/support-ai/analytics', body: analytics() }]);
+    const { container } = renderPage(<SupportAnalyticsPage route={route()} denied={false} />);
+    await screen.findByText(t('web.sa_conversations_now'));
+    const chips = screen.getByRole('group', { name: t('web.sa_range') });
+    // Exactly one range chip is pressed: the default one.
+    expect(
+      within(chips)
+        .getAllByRole('button')
+        .filter((chip) => chip.getAttribute('aria-pressed') === 'true'),
+    ).toHaveLength(1);
+    expect(container.textContent).toContain(t('web.sa_period_from'));
+    expect(screen.getByText(t('web.sa_about_fold'))).toBeTruthy();
+    // «now» and «learning» share one row of equal height.
+    const row = screen.getByText(t('web.sa_conversations_now')).closest('.card-row');
+    expect(row?.textContent).toContain(t('web.sa_learning'));
+  });
+});

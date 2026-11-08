@@ -151,6 +151,36 @@ describe('the ticket inbox', () => {
     expect(screen.queryByText('WAITING_FOR_SUPPORT')).toBeNull();
   });
 
+  it('PR-3: the status is a row of quick-filter chips over the table, and the categories wait behind a button', async () => {
+    stubApi([
+      { url: '/tickets', body: { tickets: [summary()], nextCursor: null } },
+      { url: '/ticket-categories', body: categories },
+    ]);
+    renderPage(
+      <TicketsPage
+        route={route('awaiting=support')}
+        denied={false}
+        mayAssign={false}
+        mayEditCategories={false}
+      />,
+    );
+    await screen.findByRole('link', { name: '#42' });
+    const chips = screen.getByRole('group', { name: t('web.status') });
+    expect(
+      within(chips)
+        .getByRole('button', { name: t('web.ticket_filter_awaiting_support') })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    fireEvent.click(within(chips).getByRole('button', { name: t('web.ticket_status_open') }));
+    expect(new URLSearchParams(window.location.search).get('status')).toBe('OPEN');
+    expect(new URLSearchParams(window.location.search).get('awaiting')).toBeNull();
+    // No restating subtitle: the intro sits in a fold; the categories card is closed until asked.
+    expect(screen.getByText(t('web.tickets_about_fold'))).toBeTruthy();
+    expect(screen.queryByRole('table', { name: t('web.ticket_categories_title') })).toBeNull();
+    // Status and priority share one cell; created sits under the last message.
+    expect(screen.queryByRole('columnheader', { name: t('web.ticket_priority') })).toBeNull();
+  });
+
   it('has no search row of its own: the customer field is a filter in the «فیلترها» panel', async () => {
     stubApi([
       { url: '/tickets', body: { tickets: [summary()], nextCursor: null } },
@@ -273,6 +303,8 @@ describe('the ticket inbox', () => {
     const { unmount } = renderPage(
       <TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories={false} />,
     );
+    // The categories card opens from the page head's button (it was always open before).
+    fireEvent.click(screen.getByRole('button', { name: t('web.tickets_categories_show') }));
     await screen.findAllByText('مشکل اتصال');
     expect(screen.queryByRole('button', { name: t('web.ticket_category_add') })).toBeNull();
     unmount();
@@ -290,6 +322,7 @@ describe('the ticket inbox', () => {
       },
     ]);
     renderPage(<TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories />);
+    fireEvent.click(screen.getByRole('button', { name: t('web.tickets_categories_show') }));
     // W3: the create form opens from the card's «افزودن دسته» button, in a drawer.
     fireEvent.click(await screen.findByRole('button', { name: t('web.ticket_category_add') }));
     const drawer = await screen.findByRole('dialog', { name: t('web.ticket_category_add') });
@@ -334,6 +367,7 @@ describe('the ticket inbox', () => {
       },
     ]);
     renderPage(<TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories />);
+    fireEvent.click(screen.getByRole('button', { name: t('web.tickets_categories_show') }));
     const table = await screen.findByRole('table', { name: t('web.ticket_categories_title') });
     // W3: the row's «ذخیرهٔ ترتیب» opens the same input in a drawer.
     fireEvent.click(within(table).getByRole('button', { name: t('web.ticket_category_reorder') }));
@@ -371,6 +405,7 @@ describe('the ticket inbox', () => {
     renderPage(
       <TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories={false} />,
     );
+    fireEvent.click(screen.getByRole('button', { name: t('web.tickets_categories_show') }));
     const table = await screen.findByRole('table', { name: t('web.ticket_categories_title') });
     expect(within(table).queryByLabelText(t('web.ticket_category_order'))).toBeNull();
     expect(
@@ -849,6 +884,21 @@ describe('one ticket', () => {
     );
   });
 
+  it('PR-3: the close action is red and sits in the head card’s grouped action bar', async () => {
+    stubApi([{ url: `/tickets/${TICKET_ID}`, body: detail({ status: 'OPEN' }) }]);
+    renderPage(
+      <TicketDetailPage id={TICKET_ID} denied={false} mayReply={false} mayAssign mayClose />,
+    );
+    const bar = await screen.findByRole('toolbar', { name: t('web.ticket_actions') });
+    expect(
+      within(bar).getByRole('button', { name: t('web.ticket_action_close') }).className,
+    ).toContain('danger');
+    expect(within(bar).getByRole('button', { name: t('web.ticket_assignee_change') })).toBeTruthy();
+    expect(within(bar).getByRole('button', { name: t('web.ticket_priority_change') })).toBeTruthy();
+    // One level-one heading, the head card's.
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
   it('offers a closed ticket one way back, and no reply form until it is reopened', async () => {
     stubApi([
       {
@@ -895,9 +945,10 @@ describe('one ticket', () => {
     // PR-C: the linked order by its short code, never a uuid prefix.
     const order = await screen.findByRole('link', { name: 'K7M2P9QA' });
     expect(order.getAttribute('href')).toBe('/orders/019350ab-cdef-7012-8345-6789abcdef01');
-    expect(screen.getByRole('link', { name: 'مریم' }).getAttribute('href')).toBe(
-      `/users/${CUSTOMER_ID}`,
-    );
+    // The customer is in the head's meta line and in the context card: both open the customer.
+    for (const link of screen.getAllByRole('link', { name: 'مریم' })) {
+      expect(link.getAttribute('href')).toBe(`/users/${CUSTOMER_ID}`);
+    }
     // W3: «مسئول پاسخ…» opens the select in a drawer; a choice still applies at once.
     expect(screen.queryByLabelText(t('web.ticket_assignee'), { selector: 'select' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: t('web.ticket_assignee_change') }));

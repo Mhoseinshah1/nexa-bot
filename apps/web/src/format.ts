@@ -111,6 +111,19 @@ export function formatDate(iso: string): string {
   return `\u2066${part('year')}/${part('month')}/${part('day')}\u2069`;
 }
 
+const TIME_ONLY = new Intl.DateTimeFormat('fa-IR-u-nu-latn', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** An ISO timestamp as the 24-hour time alone (`19:30`), Latin digits, in the viewer's zone. */
+export function formatTimeOfDay(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  return TIME_ONLY.format(at);
+}
+
 // ---------------------------------------------------------------------------
 // Money
 // ---------------------------------------------------------------------------

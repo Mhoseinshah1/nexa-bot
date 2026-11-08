@@ -21,12 +21,14 @@ import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
 import { messageFor } from './settings';
+import { CardRows } from '../ui/redesign';
 import {
   Badge,
   Banner,
   Card,
   CellMain,
   DataTable,
+  Disclosure,
   Drawer,
   Empty,
   Field,
@@ -337,47 +339,66 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
     },
   ];
 
+  const destination = (
+    <Card title={t('web.support_destination_title')}>
+      <div className="support-destination">
+        <Icon name="send" size={16} />
+        <p className="muted small">{t('web.support_destination_note')}</p>
+      </div>
+      <a className="btn sm" href="/settings" onClick={onLink}>
+        {t('web.support_destination_link')}
+      </a>
+    </Card>
+  );
+
   return (
     <>
       <PageHead
         title={t('web.support_title')}
-        subtitle={t('web.support_subtitle')}
         actions={mayEdit && editor.kind === 'closed' && rows.length > 0 ? newButton : undefined}
       />
-
-      <div className="support-destination">
-        <Icon name="send" size={16} />
-        <div>
-          <strong>{t('web.support_destination_title')}</strong>
-          <p className="muted small">{t('web.support_destination_note')}</p>
-        </div>
-        <a className="btn sm" href="/settings" onClick={onLink}>
-          {t('web.support_destination_link')}
-        </a>
-      </div>
 
       <StateSwitch
         query={faqs}
         denied={denied}
         isEmpty={queryState(faqs) === 'ready' && rows.length === 0}
         empty={
-          <Empty
-            title={t('web.support_faq_empty')}
-            hint={t('web.support_faq_empty_hint')}
-            action={mayEdit && editor.kind === 'closed' ? newButton : undefined}
-          />
+          <>
+            <Empty
+              title={t('web.support_faq_empty')}
+              hint={t('web.support_faq_empty_hint')}
+              action={mayEdit && editor.kind === 'closed' ? newButton : undefined}
+            />
+            {destination}
+          </>
         }
       >
-        <Card title={t('web.support_title')} hint={t('web.support_faq_hint')}>
-          <DataTable
-            columns={columns}
-            rows={paging.rows}
-            rowKey={(row) => row.id}
-            caption={t('web.support_title')}
-          />
-          {paging.pager}
-        </Card>
+        {/* The list and the way customers reach support, side by side at one height. */}
+        <CardRows
+          rows={[
+            {
+              key: 'faq',
+              main: (
+                <Card title={t('web.support_title')} hint={t('web.support_faq_hint')}>
+                  <DataTable
+                    columns={columns}
+                    rows={paging.rows}
+                    rowKey={(row) => row.id}
+                    caption={t('web.support_title')}
+                  />
+                  {paging.pager}
+                  <Disclosure size="sm" summary={t('web.support_about_fold')}>
+                    <p className="muted small">{t('web.support_subtitle')}</p>
+                  </Disclosure>
+                </Card>
+              ),
+              side: destination,
+            },
+          ]}
+        />
       </StateSwitch>
+      {/* Loading, refused or failed: the card is not in a row, so it stands alone. */}
+      {(denied || queryState(faqs) !== 'ready') && destination}
 
       {toggleFailure != null && (
         <Banner tone="danger">

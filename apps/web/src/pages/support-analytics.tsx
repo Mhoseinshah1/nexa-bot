@@ -18,15 +18,15 @@ import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { REPORT_RANGE_LABELS, rangeFromRoute, rangeIsComplete } from '../report-view';
 import { setQuery, useLinkHandler, type Route } from '../router';
+import { CardRows, QuickFilters } from '../ui/redesign';
 import {
   Badge,
   Banner,
   Card,
+  Disclosure,
   DataTable,
   Distribution,
   Empty,
-  FilterChip,
-  FilterChips,
   KV,
   Num,
   PageHead,
@@ -137,32 +137,28 @@ export function SupportAnalyticsPage({
 
   return (
     <>
-      <PageHead
-        title={t('web.sa_title')}
-        subtitle={
-          data === undefined
-            ? t('web.sa_intro_counts_and_text')
-            : `${t('web.sa_intro_counts_and_text')} ${t('web.sa_period_from')} ${formatTimestamp(data.period.start)} ${t('web.sa_period_to')} ${formatTimestamp(data.period.end)}`
-        }
-      />
-      {/* Demo parity (DIFFS support-analytics #2): the range label beside the pills, no rule under them. */}
+      <PageHead title={t('web.sa_title')} />
+      {/* Demo parity (DIFFS support-analytics #2): the range label beside the chips, no rule under them. */}
       {!denied && (
         <Card className="sa-range-card" tight>
           <div className="sa-range">
             <span className="sa-range-label">{t('web.sa_range')}</span>
-            <FilterChips label={t('web.sa_range')}>
-              {SUPPORT_ANALYTICS_RANGES.map((range) => (
-                <FilterChip
-                  key={range}
-                  pressed={selection.range === range}
-                  onClick={() => setQuery(route, 'range', range)}
-                >
-                  {t(REPORT_RANGE_LABELS[range])}
-                </FilterChip>
-              ))}
-            </FilterChips>
+            <QuickFilters
+              label={t('web.sa_range')}
+              value={selection.range}
+              onChange={(range) => setQuery(route, 'range', range)}
+              items={SUPPORT_ANALYTICS_RANGES.map((range) => ({
+                key: range,
+                label: t(REPORT_RANGE_LABELS[range]),
+              }))}
+            />
           </div>
         </Card>
+      )}
+      {data !== undefined && (
+        <p className="muted small">
+          {`${t('web.sa_period_from')} ${formatTimestamp(data.period.start)} ${t('web.sa_period_to')} ${formatTimestamp(data.period.end)}`}
+        </p>
       )}
       <StateSwitch query={analytics} denied={denied}>
         {data !== undefined && <AnalyticsBody data={data} mayReadText={mayReadText} />}
@@ -231,77 +227,104 @@ function AnalyticsBody({
         />
       </div>
 
-      <div className="grid-2">
-        <Card title={t('web.sa_conversations_now')} hint={t('web.sa_snapshot_hint')}>
-          <Distribution
-            scale="max"
-            slices={data.conversationsNow.map((row) => ({
-              key: row.state,
-              label: t(BUSINESS_STATE_LABELS[row.state]),
-              count: row.count,
-              tone: row.state === 'HANDOFF_REQUIRED' ? 'danger' : 'info',
-            }))}
-          />
-        </Card>
-      </div>
+      <CardRows
+        rows={[
+          {
+            key: 'now',
+            main: (
+              <Card title={t('web.sa_conversations_now')} hint={t('web.sa_snapshot_hint')}>
+                <Distribution
+                  scale="max"
+                  slices={data.conversationsNow.map((row) => ({
+                    key: row.state,
+                    label: t(BUSINESS_STATE_LABELS[row.state]),
+                    count: row.count,
+                    tone: row.state === 'HANDOFF_REQUIRED' ? 'danger' : 'info',
+                  }))}
+                />
+              </Card>
+            ),
+            side: (
+              <Card title={t('web.sa_learning')} hint={t('web.sa_learning_hint')}>
+                <Distribution
+                  scale="max"
+                  slices={data.learningByState.map((row) => ({
+                    key: row.state,
+                    label: t(CANDIDATE_STATE_LABELS[row.state]),
+                    count: row.count,
+                    tone:
+                      row.state === 'APPROVED'
+                        ? 'ok'
+                        : row.state === 'REJECTED'
+                          ? 'violet'
+                          : 'info',
+                  }))}
+                />
+              </Card>
+            ),
+          },
+        ]}
+      />
 
       <HandoffReasonsCard data={data} mayReadText={mayReadText} />
       <KnowledgeGapsCard mayReadText={mayReadText} />
 
-      <div className="grid-2">
-        <Card title={t('web.sa_auto')} hint={t('web.sa_auto_hint')}>
-          <KV
-            items={[
-              [t('web.sa_auto_sent_total'), <Num key="s" value={data.auto.sent} />],
-              [t('web.sa_auto_handed_off_total'), <Num key="h" value={data.auto.handedOff} />],
-              [t('web.sa_auto_dropped_total'), <Num key="d" value={data.auto.dropped} />],
-              [t('web.sa_auto_pending'), <Num key="p" value={data.auto.pending} />],
-            ]}
-          />
-          {supportAutoOutcomeCountsOf(data).length > 0 && (
-            <Distribution
-              scale="max"
-              slices={supportAutoOutcomeCountsOf(data).map((row, index) => ({
-                key: row.outcome,
-                label: t(AUTO_OUTCOME_LABELS[row.outcome]),
-                count: row.count,
-                tone: OUTCOME_BAR_TONES[index % OUTCOME_BAR_TONES.length] ?? 'info',
-              }))}
-            />
-          )}
-        </Card>
-        <Card title={t('web.sa_assist')} hint={t('web.sa_assist_hint')}>
-          <KV
-            items={[
-              [t('web.sa_assist_requested'), <Num key="r" value={data.assist.requested} />],
-              [t('web.sa_assist_sent'), <Num key="s" value={data.assist.sent} />],
-              [t('web.sa_assist_discarded'), <Num key="d" value={data.assist.discarded} />],
-              // L1: replaced by a newer request, counted apart from what operators discarded.
-              [t('web.sa_assist_superseded'), <Num key="x" value={data.assist.superseded} />],
-              [t('web.sa_assist_failed'), <Num key="f" value={data.assist.failed} />],
-              [t('web.sa_assist_open'), <Num key="o" value={data.assist.open} />],
-            ]}
-          />
-        </Card>
-      </div>
+      <CardRows
+        rows={[
+          {
+            key: 'auto',
+            main: (
+              <Card title={t('web.sa_auto')} hint={t('web.sa_auto_hint')}>
+                <KV
+                  items={[
+                    [t('web.sa_auto_sent_total'), <Num key="s" value={data.auto.sent} />],
+                    [
+                      t('web.sa_auto_handed_off_total'),
+                      <Num key="h" value={data.auto.handedOff} />,
+                    ],
+                    [t('web.sa_auto_dropped_total'), <Num key="d" value={data.auto.dropped} />],
+                    [t('web.sa_auto_pending'), <Num key="p" value={data.auto.pending} />],
+                  ]}
+                />
+                {supportAutoOutcomeCountsOf(data).length > 0 && (
+                  <Distribution
+                    scale="max"
+                    slices={supportAutoOutcomeCountsOf(data).map((row, index) => ({
+                      key: row.outcome,
+                      label: t(AUTO_OUTCOME_LABELS[row.outcome]),
+                      count: row.count,
+                      tone: OUTCOME_BAR_TONES[index % OUTCOME_BAR_TONES.length] ?? 'info',
+                    }))}
+                  />
+                )}
+              </Card>
+            ),
+            side: (
+              <Card title={t('web.sa_assist')} hint={t('web.sa_assist_hint')}>
+                <KV
+                  items={[
+                    [t('web.sa_assist_requested'), <Num key="r" value={data.assist.requested} />],
+                    [t('web.sa_assist_sent'), <Num key="s" value={data.assist.sent} />],
+                    [t('web.sa_assist_discarded'), <Num key="d" value={data.assist.discarded} />],
+                    // L1: replaced by a newer request, counted apart from what operators discarded.
+                    [t('web.sa_assist_superseded'), <Num key="x" value={data.assist.superseded} />],
+                    [t('web.sa_assist_failed'), <Num key="f" value={data.assist.failed} />],
+                    [t('web.sa_assist_open'), <Num key="o" value={data.assist.open} />],
+                  ]}
+                />
+              </Card>
+            ),
+          },
+        ]}
+      />
 
       <ProviderRunsCard rows={data.providerRuns} />
       <AiFailuresCard rows={data.aiFailures} />
 
-      <div className="grid-2">
-        <Card title={t('web.sa_learning')} hint={t('web.sa_learning_hint')}>
-          <Distribution
-            scale="max"
-            slices={data.learningByState.map((row) => ({
-              key: row.state,
-              label: t(CANDIDATE_STATE_LABELS[row.state]),
-              count: row.count,
-              tone: row.state === 'APPROVED' ? 'ok' : row.state === 'REJECTED' ? 'violet' : 'info',
-            }))}
-          />
-        </Card>
-        <KnowledgeCard rows={data.knowledgeBySource} />
-      </div>
+      <KnowledgeCard rows={data.knowledgeBySource} />
+      <Disclosure size="sm" summary={t('web.sa_about_fold')}>
+        <p className="muted small">{t('web.sa_intro_counts_and_text')}</p>
+      </Disclosure>
     </div>
   );
 }
