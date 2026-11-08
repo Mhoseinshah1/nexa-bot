@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId } from 'react';
 import {
   APPEARANCE_SLOTS,
   APPEARANCE_SLOT_FALLBACKS,
@@ -23,17 +23,7 @@ import { fill, labelOf } from './canvas';
 import {
   configOf,
   lookOf,
-  moveEarlier,
-  moveLater,
-  moveRow,
-  moveToNextRow,
-  moveToOwnRow,
-  moveToPreviousRow,
-  movesFor,
-  placeAtRowEnd,
-  placeInNewRow,
   positionOf,
-  removeToPool,
   setEnabled,
   setIconSlot,
   setStyle,
@@ -71,7 +61,6 @@ export function Inspector({
   iconEligibility,
   appearanceSlots,
   mayViewTemplates,
-  onMove,
   onChange,
   onEditLabel,
 }: {
@@ -89,14 +78,11 @@ export function Inspector({
   /** The tenant's appearance slots, when readable — which slots carry a custom emoji. */
   appearanceSlots: readonly AppearanceSlotView[] | null;
   mayViewTemplates: boolean;
-  /** A placement change: announced with the button's new position. */
-  onMove: (id: MainMenuRowItem, op: Op) => void;
   /** A configuration change: announced with what changed. */
   onChange: (op: Op, announcement: string) => void;
   onEditLabel: (id: MainMenuButtonId) => void;
 }) {
   const base = useId();
-  const [targetRow, setTargetRow] = useState<string>('new');
   if (id === null) {
     return (
       <section className="bb-inspector" aria-labelledby={`${base}-title`}>
@@ -113,32 +99,11 @@ export function Inspector({
   const at = positionOf(layout, id);
   // A custom button is configured only where it is placed (the layout schema's rule).
   const unplacedCustom = isCustom && at === null;
-  const moves = movesFor(layout, id);
-  const rowCount = layout.rows.length;
-  const chosenRow = targetRow === 'new' || Number(targetRow) < rowCount ? targetRow : 'new';
   const eligibleBots = iconEligibility.filter((bot) => bot.eligible);
   const slotView =
     config.iconSlot === null
       ? undefined
       : appearanceSlots?.find((slot) => slot.slot === config.iconSlot);
-  const moveButton = (
-    key: WebKey,
-    icon: 'arrowUp' | 'arrowDown' | 'chevronRight' | 'chevronLeft' | 'plus',
-    enabled: boolean,
-    op: Op,
-  ) => (
-    <button
-      type="button"
-      className="btn sm"
-      disabled={!editable || !enabled}
-      onClick={() => onMove(id, op)}
-      data-move={key}
-    >
-      <Icon name={icon} />
-      {t(key)}
-    </button>
-  );
-
   return (
     <section className="bb-inspector" aria-labelledby={`${base}-title`} data-testid="bb-inspector">
       <h3 id={`${base}-title`} className="bb-pane-title">
@@ -162,84 +127,7 @@ export function Inspector({
             </dd>
           </dl>
 
-          <fieldset className="bb-fieldset" disabled={!editable}>
-            <legend>{t('web.bb_place_title')}</legend>
-            {at !== null && (
-              <>
-                <div className="bb-move-grid" role="group" aria-label={t('web.bb_move_in_row')}>
-                  {moveButton('web.bb_move_earlier', 'chevronRight', moves.earlier, (l) =>
-                    moveEarlier(l, id),
-                  )}
-                  {moveButton('web.bb_move_later', 'chevronLeft', moves.later, (l) =>
-                    moveLater(l, id),
-                  )}
-                  {moveButton('web.bb_move_prev_row', 'arrowUp', moves.previousRow, (l) =>
-                    moveToPreviousRow(l, id),
-                  )}
-                  {moveButton('web.bb_move_next_row', 'arrowDown', moves.nextRow, (l) =>
-                    moveToNextRow(l, id),
-                  )}
-                  {moveButton('web.bb_move_own_row', 'plus', moves.ownRow, (l) =>
-                    moveToOwnRow(l, id),
-                  )}
-                </div>
-                <div className="bb-move-grid" role="group" aria-label={t('web.bb_row_moves')}>
-                  {moveButton('web.bb_row_up', 'arrowUp', moves.rowUp, (l) =>
-                    moveRow(l, at.row, at.row - 1),
-                  )}
-                  {moveButton('web.bb_row_down', 'arrowDown', moves.rowDown, (l) =>
-                    moveRow(l, at.row, at.row + 2),
-                  )}
-                </div>
-              </>
-            )}
-            <div className="bb-to-row">
-              <label htmlFor={`${base}-row`}>
-                {at === null ? t('web.bb_place_into') : t('web.bb_move_into')}
-              </label>
-              <select
-                id={`${base}-row`}
-                className="input sm"
-                value={chosenRow}
-                onChange={(event) => setTargetRow(event.target.value)}
-              >
-                {layout.rows.map((_, row) => (
-                  <option key={row} value={String(row)}>
-                    {fill(t('web.bb_row_n'), { n: row + 1 })}
-                  </option>
-                ))}
-                <option value="new">{t('web.bb_new_row_end')}</option>
-              </select>
-              <button
-                type="button"
-                className="btn sm"
-                disabled={!editable}
-                data-move="web.bb_place_go"
-                onClick={() =>
-                  onMove(id, (l) =>
-                    chosenRow === 'new'
-                      ? placeInNewRow(l, id, l.rows.length)
-                      : placeAtRowEnd(l, id, Number(chosenRow)),
-                  )
-                }
-              >
-                {at === null ? t('web.bb_place_add') : t('web.bb_place_move')}
-              </button>
-            </div>
-            {at !== null && (
-              <button
-                type="button"
-                className="btn sm danger"
-                disabled={!editable}
-                data-move="web.bb_remove"
-                onClick={() => onMove(id, (l) => removeToPool(l, id))}
-              >
-                <Icon name="archive" />
-                {t('web.bb_remove')}
-              </button>
-            )}
-            <p className="muted small">{t('web.bb_keyboard_hint')}</p>
-          </fieldset>
+          <p className="muted small">{t('web.bb_keyboard_hint')}</p>
         </div>
 
         <div className="bb-insp-col" role="group" aria-labelledby={`${base}-col-look`}>

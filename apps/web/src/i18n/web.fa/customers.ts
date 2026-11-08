@@ -356,6 +356,7 @@ export const WEB_FA_CUSTOMERS = {
   'web.user_services_ended_empty': 'این مشتری سرویس پایان‌یافته‌ای ندارد.',
   // Program §6: the terms and rules.
   'web.terms_page_title': 'قوانین و مقررات',
+  'web.terms_about_fold': 'دربارهٔ این صفحه',
   'web.terms_page_subtitle': 'متن قوانین ربات، نسخه‌های منتشرشده و پذیرش آن توسط مشتریان.',
   'web.terms_enforcement_label': 'الزام پذیرش قوانین',
   'web.terms_enforcement_hint':

@@ -36,6 +36,7 @@ import { useSubmissionKey } from '../submission-key';
 import { messageFor } from './settings';
 import { Badge, Banner, Button, Card, Field, useToast, useUnsavedChanges } from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
+import { QrPlacementStage } from './qr-placement';
 
 /**
  * Phase 2 item 4: «پس‌زمینهٔ QR» — the subscription QR drawn on the tenant's own image.
@@ -382,6 +383,34 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
         </Badge>
       }
     >
+      <section aria-labelledby="qrt-stage-title" className="qrt-stage-section">
+        <h3 id="qrt-stage-title" className="card-subtitle">
+          {t('web.qrt_stage_title')}
+        </h3>
+        {background === null ? (
+          <p className="muted">{t('web.qrt_needs_background')}</p>
+        ) : (
+          <QrPlacementStage
+            bounds={background}
+            square={
+              parsedDraft === null
+                ? null
+                : { x: parsedDraft.x, y: parsedDraft.y, size: parsedDraft.size }
+            }
+            backdrop={
+              preview.data?.templated === true
+                ? `data:image/png;base64,${preview.data.pngBase64}`
+                : null
+            }
+            disabled={!mayEdit || busy}
+            invalid={fieldError !== undefined}
+            onChange={(next) =>
+              edit({ x: String(next.x), y: String(next.y), size: String(next.size) })
+            }
+          />
+        )}
+      </section>
+
       <div className="grid-2">
         <section aria-labelledby="qrt-bg-title">
           <h3 id="qrt-bg-title" className="card-subtitle">

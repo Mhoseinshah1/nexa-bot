@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
-import { CATALOGUE_FA } from '@nexa/i18n';
 import { PanelDetailPage, PanelsPage } from '../../apps/web/src/pages/panels';
 import { BotsPage } from '../../apps/web/src/pages/bots';
 import { BotButtonsPage } from '../../apps/web/src/pages/bot-buttons';
@@ -349,23 +348,27 @@ describe('dirty-state protection on the OPS-A forms', () => {
         <LeaveGuardHost />
       </>,
     );
-    const help = await screen.findByRole('button', {
-      name: new RegExp(`^${CATALOGUE_FA['bot.menu.help']}`, 'u'),
-    });
+    await waitFor(() => expect(document.querySelector('[data-dnd-item="help"]')).not.toBeNull());
+    const drop = (target: Element | null) => {
+      // Re-read each time: a button dropped elsewhere is a new element.
+      const help = document.querySelector('[data-dnd-item="help"]') as HTMLElement;
+      fireEvent.pointerDown(help, { pointerId: 1, clientX: 1, clientY: 1 });
+      document.elementFromPoint = vi.fn(() => target);
+      fireEvent.pointerMove(help, { pointerId: 1, clientX: 40, clientY: 40 });
+      fireEvent.pointerUp(help, { pointerId: 1, clientX: 40, clientY: 40 });
+    };
     expect(leave()).toBeNull();
     go('/bot-buttons');
 
-    // Row 2 holds «help» alone: taking it to the pool is an unsaved arrangement.
-    fireEvent.click(help);
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_remove') }));
+    // Row 2 holds «help» alone: dragging it to the free box is an unsaved arrangement.
+    drop(document.querySelector('[data-dnd-free]'));
     expect(leave()).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_stay') }));
 
     // Back where it was (its own row, second): nothing is unsaved, nothing is asked.
-    fireEvent.change(screen.getByLabelText(t('web.bb_place_into')), { target: { value: '0' } });
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_place_add') }));
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_move_own_row') }));
+    drop(document.querySelector('[data-dnd-gap="1"]'));
     expect(leave()).toBeNull();
+    Reflect.deleteProperty(document, 'elementFromPoint');
   });
 
   it('guards an edited payment route, and releases the guard on cancel', async () => {
