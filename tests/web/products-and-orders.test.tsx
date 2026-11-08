@@ -241,11 +241,11 @@ describe('the product list', () => {
     await screen.findByText('پلن یک‌ماهه');
     const url = api.calls.find((call) => call.url.includes('/products?'))?.url ?? '';
     expect(new URLSearchParams(url.split('?')[1]).get('view')).toBe('CURRENT');
-    const current = screen.getByRole('tab', { name: t('web.products_view_current') });
-    expect(current).toHaveAttribute('aria-selected', 'true');
+    const current = screen.getByRole('button', { name: t('web.products_view_current') });
+    expect(current).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByText(t('web.products_archive_intro'))).toBeNull();
 
-    fireEvent.click(screen.getByRole('tab', { name: t('web.products_view_archive') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.products_view_archive') }));
     expect(new URLSearchParams(window.location.search).get('view')).toBe('archive');
   });
 
@@ -265,8 +265,8 @@ describe('the product list', () => {
     const urls = api.calls.filter((call) => call.url.includes('/products?')).map((c) => c.url);
     expect(urls.length).toBeGreaterThan(0);
     for (const u of urls) expect(new URLSearchParams(u.split('?')[1]).get('view')).toBe('ARCHIVE');
-    expect(screen.getByRole('tab', { name: t('web.products_view_archive') })).toHaveAttribute(
-      'aria-selected',
+    expect(screen.getByRole('button', { name: t('web.products_view_archive') })).toHaveAttribute(
+      'aria-pressed',
       'true',
     );
     expect(screen.getByText(t('web.products_archive_intro'))).toBeInTheDocument();

@@ -226,7 +226,7 @@ describe('the extra packages page', () => {
     renderPage(page(null));
     await screen.findByText('ده گیگ');
     expect(screen.getByText('غیرفعال است؛ در ربات نمایش داده نمی‌شود')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: t('web.extra_devices_edit') }));
+    fireEvent.click(screen.getByRole('button', { name: 'ده گیگ' }));
     await screen.findByText(t('web.extra_packages_editing'));
     expect(screen.queryByRole('switch', { name: t('web.extra_packages_active') })).toBeNull();
     cleanup();
