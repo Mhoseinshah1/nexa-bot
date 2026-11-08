@@ -28,6 +28,7 @@ import {
   Card,
   CursorPager,
   DataTable,
+  Disclosure,
   Field,
   Money,
   Num,
@@ -39,6 +40,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Modal } from '../ui/overlays';
+import { ListFreshness } from '../ui/list-search';
 import { DateField } from '../ui/date-field';
 import { ErrorRef } from '../ui/technical-details';
 import { useUnsavedChanges } from '../ui/unsaved';
@@ -96,7 +98,7 @@ export function GiftCardsPage({
   if (denied) {
     return (
       <>
-        <PageHead title={t('web.gift_cards_title')} subtitle={t('web.gift_cards_intro')} />
+        <PageHead title={t('web.gift_cards_title')} />
         <PermissionDeniedState />
       </>
     );
@@ -174,18 +176,20 @@ export function GiftCardsPage({
     <>
       <PageHead
         title={t('web.gift_cards_title')}
-        subtitle={t('web.gift_cards_intro')}
         actions={
-          mayCreate ? (
-            <Button
-              variant="primary"
-              icon="plus"
-              disabled={!enabled || currency === null}
-              onClick={() => setCreating(true)}
-            >
-              {t('web.gift_cards_new')}
-            </Button>
-          ) : undefined
+          <>
+            <ListFreshness query={list} />
+            {mayCreate ? (
+              <Button
+                variant="primary"
+                icon="plus"
+                disabled={!enabled || currency === null}
+                onClick={() => setCreating(true)}
+              >
+                {t('web.gift_cards_new')}
+              </Button>
+            ) : undefined}
+          </>
         }
       />
       {list.data !== undefined && !enabled && (
@@ -201,7 +205,7 @@ export function GiftCardsPage({
           )}
         </Banner>
       )}
-      <Card title={t('web.gift_cards_list_title')} hint={t('web.gift_cards_list_hint')}>
+      <Card title={t('web.gift_cards_list_title')}>
         <StateSwitch
           query={list}
           isEmpty={rows.length === 0 && cursors.length === 0}
@@ -223,6 +227,10 @@ export function GiftCardsPage({
             onNext={() => nextCursor !== null && setCursors([...cursors, nextCursor])}
           />
         </StateSwitch>
+        <Disclosure size="sm" summary={t('web.gift_cards_about_fold')}>
+          <p className="muted small">{t('web.gift_cards_intro')}</p>
+          <p className="muted small">{t('web.gift_cards_list_hint')}</p>
+        </Disclosure>
       </Card>
       {creating && currency !== null && (
         <CreateDialog
