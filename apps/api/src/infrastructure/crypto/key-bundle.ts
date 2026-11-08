@@ -1,7 +1,12 @@
 import { createCipheriv, createDecipheriv, randomBytes, scrypt } from 'node:crypto';
 import { z } from 'zod';
 import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
-import { kekFingerprint, type KitKdfProfile } from './recovery-kit.js';
+import {
+  FAST_KIT_KDF,
+  kekFingerprint,
+  PRODUCTION_KIT_KDF,
+  type KitKdfProfile,
+} from './recovery-kit.js';
 
 /**
  * The key bundle: the keyring keys a backup's secrets are sealed under, carried
@@ -46,6 +51,22 @@ export const KEY_BUNDLE_MAX_BYTES = 256 * 1024;
 const MAX_KEYS = 64;
 
 const b64url = z.string().regex(/^[A-Za-z0-9_-]+$/);
+
+/**
+ * The ONLY derivation costs a reader will run: the ones this release seals with
+ * (production, and the deliberately weak test profile). A bundle arrives inside an
+ * uploaded archive, so its KDF parameters are attacker-chosen until the tag has
+ * verified — and the tag can only be checked AFTER deriving. Any other profile is
+ * refused as malformed before a byte of scrypt memory is committed.
+ */
+const ACCEPTED_PROFILES: readonly KitKdfProfile[] = [PRODUCTION_KIT_KDF, FAST_KIT_KDF];
+
+function acceptedProfile(profile: KitKdfProfile): boolean {
+  return ACCEPTED_PROFILES.some(
+    (accepted) =>
+      accepted.log2N === profile.log2N && accepted.r === profile.r && accepted.p === profile.p,
+  );
+}
 
 /**
  * The reader's bounds on the KDF a FILE asks for: below them a bundle is not worth
@@ -145,7 +166,8 @@ async function derive(password: string, salt: Buffer, profile: KitKdfProfile): P
         secret,
         salt,
         KEY_BYTES,
-        { N, r: profile.r, p: profile.p, maxmem: 256 * N * profile.r + 1024 * 1024 },
+        // What scrypt needs (128·N·r), plus fixed headroom — not a multiple of it.
+        { N, r: profile.r, p: profile.p, maxmem: 128 * N * profile.r + 16 * 1024 * 1024 },
         (error, key) => (error ? reject(error) : resolve(key)),
       );
     });
@@ -167,6 +189,8 @@ export async function sealKeyBundle(input: {
   readonly profile: KitKdfProfile;
 }): Promise<Buffer> {
   if (input.password.length === 0) throw malformed('a key bundle needs a password');
+  if (!acceptedProfile(input.profile))
+    throw malformed('the key-derivation profile is not one this release reads');
   if (input.keys.length > MAX_KEYS) throw malformed('too many keys');
   const seen = new Set<string>();
   const prepared = input.keys.map((key) => {
@@ -237,6 +261,10 @@ export async function openKeyBundle(input: {
   // another backup says so rather than failing as a wrong password.
   if (document.data.backupId !== input.backupId) {
     throw malformed('it belongs to a different backup');
+  }
+  // BEFORE deriving: the profile is chosen by the file.
+  if (!acceptedProfile(document.data.kdf)) {
+    throw malformed('its key-derivation profile is not one this release writes');
   }
   const salt = Buffer.from(document.data.kdf.salt, 'base64url');
   if (salt.length !== SALT_BYTES) throw malformed('its salt is not 32 bytes');

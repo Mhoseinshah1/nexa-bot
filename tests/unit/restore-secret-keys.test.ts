@@ -293,6 +293,27 @@ describe('the key bundle a self-contained backup carries', () => {
     );
   });
 
+  it('refuses a bundle naming a KDF profile this release does not write, before deriving anything', async () => {
+    const bundle = await sealKeyBundle({
+      keys: [{ keyId: ID, material: randomBytes(32) }],
+      password,
+      backupId,
+      profile: FAST_KIT_KDF,
+    });
+    const doc = JSON.parse(bundle.toString('utf8')) as { kdf: Record<string, unknown> };
+    // 256 MiB of scrypt, well inside the schema's bounds and not an accepted profile.
+    // Derived, it would fail the tag (AUTH_FAILED) after seconds of work; refused
+    // first, it is MALFORMED at once.
+    const oversized = { ...doc, kdf: { ...doc.kdf, log2N: 18, r: 8, p: 4 } };
+    const started = Date.now();
+    expect(
+      await codeOf(
+        openKeyBundle({ bundle: Buffer.from(JSON.stringify(oversized)), password, backupId }),
+      ),
+    ).toBe(PLATFORM_ERROR_CODES.BACKUP_ARCHIVE_MALFORMED);
+    expect(Date.now() - started).toBeLessThan(200);
+  });
+
   it('is not a Recovery Kit: a kit reader refuses it and it refuses a kit', async () => {
     const bundle = await sealKeyBundle({
       keys: [{ keyId: ID, material: randomBytes(32) }],
