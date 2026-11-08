@@ -5,7 +5,6 @@ import { UsersPage, UserDetailPage } from '../../apps/web/src/pages/users';
 import { resolve } from '../../apps/web/src/app';
 import { customer, order, renderPage, stubApi } from './harness';
 import { openC360Tab, openWalletDialog, submitWalletDialog } from './c360-helpers';
-import { openFilterPanel } from './ui-helpers';
 import { sourceFilterAbsent, rowHasBadge } from './source-helpers';
 import { t } from '../../apps/web/src/i18n/web.fa';
 
@@ -151,7 +150,7 @@ describe('the customer list', () => {
     ).toBe('half');
   });
 
-  it('renders the six real columns and invents no commercial telemetry', async () => {
+  it('renders the real columns and invents no commercial telemetry', async () => {
     stubApi(list([customer()]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByText('5551234567');
@@ -181,8 +180,10 @@ describe('the customer list', () => {
     }
     // And the six that ARE there, by name, so a removal is as visible as an
     // addition.
+    // Name and @username share ONE «کاربر» cell (the row opens from the name); no «مشاهده» column.
+    expect(headers.join(' ')).toContain('کاربر');
+    expect(headers.join(' ')).not.toContain('مشاهده');
     expect(headers.join(' ')).toContain('شناسهٔ تلگرام');
-    expect(headers.join(' ')).toContain('نام کاربری');
     expect(headers.join(' ')).toContain('وضعیت');
     expect(headers.join(' ')).toContain('اولین فعالیت');
     expect(headers.join(' ')).toContain('آخرین فعالیت');
@@ -206,6 +207,31 @@ describe('the customer list', () => {
     // No tag COLUMN either way: a tag is read on the customer's own page.
     const headers = screen.getAllByRole('columnheader').map((cell) => cell.textContent ?? '');
     expect(headers.join(' ')).not.toContain('برچسب');
+  });
+
+  it('opens a customer from the name link, draws no «مشاهده» column and no client count', async () => {
+    stubApi(list([customer({ firstName: 'علی', lastName: 'رضایی' })]));
+    const { container } = renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+    const link = await screen.findByRole('link', { name: 'علی رضایی' });
+    expect(link).toHaveAttribute('href', `/users/${ROW_ID}`);
+    expect(screen.queryByRole('columnheader', { name: 'مشاهده' })).toBeNull();
+    // The list has no server total, so the title carries no count chip (a client count of one
+    // page would be a wrong statement about the tenant).
+    expect(container.querySelector('.page-head .count-chip')).toBeNull();
+  });
+
+  it('draws the selection bar only while rows are ticked, and clears it', async () => {
+    stubApi(list([customer({ firstName: 'علی', lastName: 'رضایی' })]));
+    renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+    await screen.findByRole('link', { name: 'علی رضایی' });
+    expect(screen.queryByRole('region', { name: 'عملیات روی موارد انتخاب‌شده' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: t('web.export_select_row') }));
+    const bar = screen.getByRole('region', { name: 'عملیات روی موارد انتخاب‌شده' });
+    expect(within(bar).getByRole('button', { name: t('web.export_csv') })).toBeEnabled();
+
+    fireEvent.click(within(bar).getByRole('button', { name: 'لغو انتخاب' }));
+    expect(screen.queryByRole('region', { name: 'عملیات روی موارد انتخاب‌شده' })).toBeNull();
   });
 
   it('shows a blocked customer as blocked rather than hiding them', async () => {
@@ -270,9 +296,14 @@ describe('the customer list', () => {
     stubApi(list([customer()]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch={false} denied={false} />);
     await screen.findByText('5551234567');
-    openFilterPanel();
-    expect(screen.getByRole('button', { name: 'مسدود' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'فعال' })).toBeInTheDocument();
+    // The status filter is a row of quick-filter chips on the page itself, not behind a panel.
+    const chips = screen.getByRole('group', { name: 'فیلتر وضعیت' });
+    expect(within(chips).getByRole('button', { name: 'مسدود' })).toBeInTheDocument();
+    expect(within(chips).getByRole('button', { name: 'فعال' })).toBeInTheDocument();
+    expect(within(chips).getByRole('button', { name: 'همه' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 
   /**
@@ -594,8 +625,8 @@ describe('the customer detail', () => {
       />,
     );
     // Step one: the button only opens the confirmation panel. No request yet.
-    await screen.findByRole('button', { name: 'مسدود کردن' });
-    fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
+    await screen.findByRole('button', { name: 'مسدود کردن…' });
+    fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن…' }));
     await screen.findByText('تأیید مسدودسازی');
     expect(api.calls.find((entry) => entry.url.includes('/block'))).toBeUndefined();
 
@@ -635,7 +666,7 @@ describe('the customer detail', () => {
     await screen.findByRole('button', { name: 'رفع مسدودی' });
     // Never both. Two enabled controls for opposite directions is how a
     // double-click blocks and unblocks in one gesture.
-    expect(screen.queryByRole('button', { name: 'مسدود کردن' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'مسدود کردن…' })).toBeNull();
   });
 
   it('sends no block until a non-empty reason is typed', async () => {
@@ -653,8 +684,8 @@ describe('the customer detail', () => {
         denied={false}
       />,
     );
-    await screen.findByRole('button', { name: 'مسدود کردن' });
-    fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
+    await screen.findByRole('button', { name: 'مسدود کردن…' });
+    fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن…' }));
     const confirm = await screen.findByRole('button', { name: 'تأیید و مسدود کردن' });
 
     // Disabled with nothing typed, and with whitespace only: a block without a reason is
@@ -689,13 +720,13 @@ describe('the customer detail', () => {
         denied={false}
       />,
     );
-    await screen.findByRole('button', { name: 'مسدود کردن' });
-    fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
+    await screen.findByRole('button', { name: 'مسدود کردن…' });
+    fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن…' }));
     fireEvent.change(await screen.findByLabelText(LABEL), { target: { value: 'typed' } });
     fireEvent.click(screen.getByRole('button', { name: 'انصراف' }));
 
     // Back to step one, and the typed reason is gone with the panel.
-    await screen.findByRole('button', { name: 'مسدود کردن' });
+    await screen.findByRole('button', { name: 'مسدود کردن…' });
     expect(screen.queryByLabelText(LABEL)).toBeNull();
     expect(api.calls.find((entry) => entry.url.includes('/block'))).toBeUndefined();
   });
@@ -772,7 +803,7 @@ describe('the customer detail', () => {
       />,
     );
     await screen.findByText(/users\.block/);
-    expect(screen.queryByRole('button', { name: 'مسدود کردن' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'مسدود کردن…' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'رفع مسدودی' })).toBeNull();
     // Not even the note field: a reason with nowhere to go is a form that looks
     // like it will do something.
@@ -805,8 +836,8 @@ describe('the customer detail', () => {
         denied={false}
       />,
     );
-    await screen.findByRole('button', { name: 'مسدود کردن' });
-    fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
+    await screen.findByRole('button', { name: 'مسدود کردن…' });
+    fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن…' }));
     fireEvent.change(await screen.findByLabelText(LABEL), { target: { value: 'spam' } });
     fireEvent.click(screen.getByRole('button', { name: 'تأیید و مسدود کردن' }));
 
@@ -989,7 +1020,7 @@ describe('the wallet card', () => {
     expect(within(card).getByText('3')).toBeTruthy();
     // The head's summary strip reads the SAME derived balance (the same query), so the
     // two can never disagree.
-    const strip = document.querySelector('.c360-stats') as HTMLElement;
+    const strip = document.querySelector('.kpi-row') as HTMLElement;
     expect(within(strip).getByText(/۷۵۰٬۰۰۰|750,000/u)).toBeTruthy();
     // The page SAYS the number is computed, because an operator seeing a balance
     // has no other way to know there is no stored column behind it.
@@ -1081,7 +1112,7 @@ describe('the wallet card', () => {
       expect(
         label === 'واریز به کیف پول' ||
           label === 'برداشت از کیف پول' ||
-          label === 'مسدود کردن' ||
+          label === 'مسدود کردن…' ||
           label === 'رفع مسدودی' ||
           // The shared pager's own two, which carry no wallet meaning.
           label === 'بعدی' ||
@@ -1372,9 +1403,17 @@ describe('the Mirza wallet history (one-time import)', () => {
       />,
     );
     await openC360Tab('financial');
-    expect((await screen.findAllByText('تاریخچهٔ پیشین کیف پول')).length).toBeGreaterThan(0);
+    // Merged into the main wallet table, marked as imported — no table of its own.
+    const importedCell = await screen.findByText('buy_service');
+    const table = importedCell.closest('table') as HTMLElement;
+    expect(within(table).getByRole('columnheader', { name: 'جهت' })).toBeTruthy();
+    expect(
+      within(importedCell.closest('tr') as HTMLElement).getByText(t('web.wallet_imported_badge')),
+    ).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'تاریخچهٔ پیشین کیف پول' })).toBeNull();
     expect(screen.queryByText('منتقل‌شده')).toBeNull();
-    expect(screen.getByText('buy_service')).toBeTruthy();
+    // The ledger entry sits in the SAME table.
+    expect(within(table).getAllByRole('row').length).toBe(3);
     // Its own pager, its own cursor: the ledger's is untouched.
     const nexts = await screen.findAllByText(t('web.page_older'));
     fireEvent.click(nexts[nexts.length - 1]!);

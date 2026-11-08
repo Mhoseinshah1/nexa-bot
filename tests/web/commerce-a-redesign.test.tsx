@@ -82,7 +82,7 @@ describe("the customer page's head", () => {
     );
 
     const strip = await waitFor(() => {
-      const found = document.querySelector('.c360-stats');
+      const found = document.querySelector('.kpi-row');
       if (!(found instanceof HTMLElement)) throw new Error('no summary strip');
       return found;
     });
@@ -114,7 +114,7 @@ describe("the customer page's head", () => {
       />,
     );
     const strip = await waitFor(() => {
-      const found = document.querySelector('.c360-stats');
+      const found = document.querySelector('.kpi-row');
       if (!(found instanceof HTMLElement)) throw new Error('no summary strip');
       return found;
     });
@@ -136,7 +136,7 @@ describe("the customer page's head", () => {
         denied={false}
       />,
     );
-    fireEvent.click(await screen.findByRole('button', { name: t('web.user_block') }));
+    fireEvent.click(await screen.findByRole('button', { name: `${t('web.user_block')}…` }));
     const dialog = screen.getByRole('dialog', { name: t('web.user_block_confirm_title') });
     expect(within(dialog).getByLabelText(t('web.user_block_reason_label'))).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button', { name: t('web.user_action_cancel') }));

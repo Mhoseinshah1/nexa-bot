@@ -179,13 +179,30 @@
   font-size: var(--fs-ui);
   font-weight: 500;
 }
+/* Four (or three) key figures fill the row instead of leaving an empty fifth cell. */
+.kpi-row:has(> :nth-child(4):last-child) {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.kpi-row:has(> :nth-child(3):last-child) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+/* The small lines a figure carries under it (a limit, a "read at"). */
+.kpi-row .kpi-cell-value .ca-stat-line {
+  display: flex;
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--fg-3);
+}
 @media (max-width: 1100px) {
-  .kpi-row {
+  .kpi-row,
+  .kpi-row:has(> :nth-child(4):last-child) {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 @media (max-width: 820px) {
-  .kpi-row {
+  .kpi-row,
+  .kpi-row:has(> :nth-child(4):last-child),
+  .kpi-row:has(> :nth-child(3):last-child) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

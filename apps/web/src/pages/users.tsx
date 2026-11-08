@@ -3,25 +3,34 @@ import { useQuery } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import { uuidV7Schema, type CustomerStatus, type CustomerSummaryResponse } from '@nexa/contracts';
 import { fetchCustomers } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatNumber, formatTimestamp } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
-import { RowExportBar, selectColumn, useRowSelection, type ExportColumn } from '../ui/row-export';
+import {
+  CSV_EXPORT_MAX_ROWS,
+  downloadCsv,
+  toCsv,
+  useRowSelection,
+  type ExportColumn,
+} from '../ui/row-export';
+import { QuickFilters, SelectionBar } from '../ui/redesign';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { ChipGroup, useListClearAll } from './commerce-parts';
-import { Dash, StatusBadge, avatarTint, displayName, initialOf } from './customer-parts';
+import { StatusBadge, avatarTint, displayName, initialOf } from './customer-parts';
 import { TagCatalogueModal, tagCatalogueQuery, useTagCatalogue } from './customer-360-crm';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
 import {
   Banner,
   Button,
   Card,
+  Checkbox,
   CursorPager,
   DataTable,
+  Disclosure,
   Empty,
   LIST_PAGE_SIZE,
   Ltr,
@@ -230,38 +239,60 @@ export function UsersPage({
 
   const columns: readonly Column<CustomerSummaryResponse>[] = [
     {
-      key: 'telegram',
-      header: t('web.user_telegram_id'),
+      key: 'select',
+      header: t('web.export_select'),
       render: (row) => (
-        <a href={`/users/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          {/* LTR and monospaced: a numeric identifier inside a right-to-left
-            page, whose digits a bidi-neutral rendering reorders against the
-            surrounding text. */}
-          <Ltr>{row.telegramUserId}</Ltr>
-        </a>
+        <input
+          type="checkbox"
+          aria-label={t('web.export_select_row')}
+          checked={selection.selected.has(userKey(row))}
+          onChange={() => selection.toggle(userKey(row))}
+        />
       ),
     },
     {
-      key: 'username',
-      header: t('web.user_username'),
-      render: (row) => (row.username === null ? <Dash /> : <Ltr>{`@${row.username}`}</Ltr>),
-    },
-    {
-      key: 'name',
-      header: t('web.user_name'),
+      /*
+       * One cell for who they are: the row opens from the NAME (a link — no «مشاهده» column),
+       * the @username under it. A customer with neither a name nor a username is opened from
+       * the Telegram id, which is the identity a support conversation quotes.
+       */
+      key: 'user',
+      header: t('web.users_column_user'),
       render: (row) => {
         const name = displayName(row);
-        return name === null ? (
-          <Dash />
-        ) : (
+        const label =
+          name ??
+          (row.username === null ? (
+            <Ltr>{row.telegramUserId}</Ltr>
+          ) : (
+            <Ltr>{`@${row.username}`}</Ltr>
+          ));
+        return (
           <span className="who">
-            <span className={`avatar ${avatarTint(name)}`} aria-hidden="true">
-              {initialOf(name)}
+            <span
+              className={`avatar ${avatarTint(name ?? row.username ?? '#')}`}
+              aria-hidden="true"
+            >
+              {initialOf(name ?? row.username ?? '#')}
             </span>
-            <span className="strong">{name}</span>
+            <span className="who-text">
+              <a href={`/users/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+                {label}
+              </a>
+              {name !== null && row.username !== null && (
+                <span className="muted small">
+                  <Ltr>{`@${row.username}`}</Ltr>
+                </span>
+              )}
+            </span>
           </span>
         );
       },
+    },
+    {
+      key: 'telegram',
+      header: t('web.user_telegram_id'),
+      render: (row) => <Ltr>{row.telegramUserId}</Ltr>,
     },
     {
       key: 'status',
@@ -278,7 +309,6 @@ export function UsersPage({
       header: t('web.user_last_seen'),
       render: (row) => <span className="nowrap">{formatTimestamp(row.lastSeenAt)}</span>,
     },
-    selectColumn(selection, userKey),
   ];
 
   /*
@@ -368,7 +398,6 @@ export function UsersPage({
     <>
       <PageHead
         title={t('web.users_title')}
-        subtitle={t('web.users_intro')}
         actions={
           <>
             <ListFreshness query={customers} hidden={toolbarHidden} />
@@ -397,6 +426,20 @@ export function UsersPage({
             <Banner tone="info">{t('web.users_search_denied')}</Banner>
           </div>
         )}
+        <div className="ca-quick" hidden={toolbarHidden}>
+          {/* The status filter as chips (server-side, in the URL as `status`); no counts —
+              the list has no server total per status, and a client count would be a lie. */}
+          <QuickFilters
+            label={t('web.users_filter_status')}
+            value={appliedStatus ?? 'ALL'}
+            onChange={(next) => setQuery(route, 'status', next === 'ALL' ? null : next)}
+            items={[
+              { key: 'ALL' as const, label: t('web.users_filter_all') },
+              { key: 'ACTIVE' as const, label: t('web.user_status_active') },
+              { key: 'BLOCKED' as const, label: t('web.user_status_blocked') },
+            ]}
+          />
+        </div>
         <div hidden={toolbarHidden}>
           <ListFilterBar
             first="search"
@@ -425,6 +468,21 @@ export function UsersPage({
           />
         </div>
 
+        {/* Only while rows are ticked: the ticked rows of THIS page, as a CSV. */}
+        {!denied && (
+          <SelectionBar count={selection.chosen.length} onClear={selection.clear}>
+            <Button
+              size="sm"
+              onClick={() => downloadCsv('users.csv', toCsv(selection.chosen, exportColumns))}
+            >
+              {t('web.export_csv')}
+            </Button>
+            <span className="muted small">
+              {t('web.export_cap')} {formatNumber(CSV_EXPORT_MAX_ROWS)}
+            </span>
+          </SelectionBar>
+        )}
+
         <StateSwitch
           query={customers}
           denied={denied}
@@ -448,12 +506,16 @@ export function UsersPage({
             rowKey={(row) => row.id}
             sticky
             toolbar={
-              <RowExportBar
-                selection={selection}
-                columns={exportColumns}
-                filename="users"
-                allowed={!denied}
-              />
+              !denied && rows.length > 0 ? (
+                <Checkbox
+                  checked={
+                    selection.chosen.length > 0 &&
+                    selection.chosen.length === Math.min(rows.length, CSV_EXPORT_MAX_ROWS)
+                  }
+                  onChange={() => selection.toggleAll()}
+                  label={t('web.users_select_all')}
+                />
+              ) : undefined
             }
           />
         </StateSwitch>
@@ -469,6 +531,11 @@ export function UsersPage({
         <p className="muted small ca-list-note" hidden={toolbarHidden}>
           {t('web.users_activity_note')}
         </p>
+        <div className="ca-list-about" hidden={toolbarHidden}>
+          <Disclosure size="sm" summary={t('web.users_about_fold')}>
+            <p className="muted small">{t('web.users_intro')}</p>
+          </Disclosure>
+        </div>
 
         {/* A sibling of `StateSwitch`, so it must not claim rows the error card
             replaced — see the panels pager for the defect this shape fixes. */}

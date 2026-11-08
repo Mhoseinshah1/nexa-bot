@@ -212,6 +212,35 @@ describe('the order list and page (W1, W4)', () => {
     ]);
   });
 
+  it('draws the state as quick-filter chips without counts, writing the same state key', async () => {
+    navigate('/orders', { replace: true, force: true });
+    stubApi([{ url: '/orders', body: { orders: [order()], nextCursor: null } }]);
+    renderPage(<LiveOrders />);
+    await screen.findByText(String(order().lineTitle));
+    const chips = screen.getByRole('group', { name: t('web.status') });
+    // The list sends no total: a chip carries no count.
+    expect(chips.querySelector('.cnt')).toBeNull();
+    fireEvent.click(within(chips).getByRole('button', { name: t('web.order_state_refunded') }));
+    await waitFor(() =>
+      expect(new URLSearchParams(window.location.search).get('state')).toBe('REFUNDED'),
+    );
+  });
+
+  it('draws the selection bar only while rows are ticked, and merges the code under the name', async () => {
+    navigate('/orders', { replace: true, force: true });
+    stubApi([{ url: '/orders', body: { orders: [order()], nextCursor: null } }]);
+    renderPage(<LiveOrders />);
+    await screen.findByText(String(order().lineTitle));
+    expect(screen.queryByRole('region', { name: t('web.kit_selection_bar') })).toBeNull();
+    // No «مشاهده» column: the row opens from its name, and the table has no separate code column.
+    expect(screen.queryByRole('columnheader', { name: t('web.record_code') })).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox', { name: t('web.export_select_row') }));
+    const bar = screen.getByRole('region', { name: t('web.kit_selection_bar') });
+    expect(within(bar).getByRole('button', { name: t('web.export_csv') })).toBeEnabled();
+    fireEvent.click(within(bar).getByRole('button', { name: t('web.kit_selection_clear') }));
+    expect(screen.queryByRole('region', { name: t('web.kit_selection_bar') })).toBeNull();
+  });
+
   it('draws the pricing under the two balanced columns, never in the tall one', async () => {
     stubApi([{ url: '/orders/019230ab', body: { order: order() } }]);
     const { container } = renderPage(
@@ -223,10 +252,13 @@ describe('the order list and page (W1, W4)', () => {
       />,
     );
     await screen.findByText(t('web.order_line_title'));
-    const balanced = container.querySelector('.wb-balance');
-    const tail = container.querySelector('.wb-balance-tail');
-    expect(balanced).not.toBeNull();
-    expect(tail).not.toBeNull();
+    // Redesign PR-1: `CardRows` — a grid of rows, so side-by-side cards share a height.
+    const rows = [...container.querySelectorAll('.card-rows > .card-row')];
+    const balanced = rows[0];
+    const tail = rows[rows.length - 1];
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+    expect(balanced).toBeDefined();
+    expect(tail).toHaveClass('solo');
     // The snapshot and the lifecycle side by side; pricing and the service underneath.
     expect(
       within(balanced as HTMLElement).getByText(t('web.order_line_title')),

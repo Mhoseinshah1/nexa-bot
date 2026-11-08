@@ -357,6 +357,7 @@ describe('an operator’s grant on one service', () => {
           entry={blocked[0]}
           mayGrant
           onActed={() => undefined}
+          blockerLabel={(blocker) => `blocked:${blocker}`}
         />
         <ul>
           {reasons.map((reason, index) => (
@@ -392,7 +393,11 @@ describe('an operator’s grant on one service', () => {
       </>,
     );
     expect(screen.getByRole('button', { name: t('web.service_action_add_time') })).toBeDisabled();
-    expect(screen.getByText(t('web.soc_grant_denied'))).toBeInTheDocument();
+    // The disabled button carries the sentence too (hover and focus), so it is found twice.
+    expect(screen.getAllByText(t('web.soc_grant_denied')).length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole('button', { name: t('web.service_action_add_time') }),
+    ).toHaveAccessibleDescription(t('web.soc_grant_denied'));
     expect(screen.getByText(t('web.soc_move_denied'))).toBeInTheDocument();
   });
 });

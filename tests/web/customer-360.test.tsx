@@ -129,7 +129,7 @@ describe('Customer 360 — the customer page', () => {
     expect(screen.queryByText(/در این نسخه پیاده نشده/)).toBeNull();
     // Exact aggregates only: the purchase count, from the server's summary — in the stat strip
     // AFTER the operations panel (demo parity), never inside the identity head.
-    const strip = container.querySelector('.c360-stats') as HTMLElement;
+    const strip = container.querySelector('.kpi-row') as HTMLElement;
     await waitFor(() => expect(within(strip).getByText('تعداد خرید')).toBeTruthy());
     expect(within(strip).getByText('سرویس‌های فعال')).toBeTruthy();
     expect(within(head).queryByText('تعداد خرید')).toBeNull();
@@ -187,7 +187,7 @@ describe('Customer 360 — the customer page', () => {
     await openC360Tab('controls');
     await screen.findByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' });
     expect(screen.queryByRole('button', { name: 'معاف کردن' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'انتقال حساب کاربری' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'انتقال حساب کاربری…' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'افزودن دستی سفارش' })).toBeNull();
     await openC360Tab('timeline');
     expect(
@@ -449,7 +449,7 @@ describe('Customer 360 — the customer page', () => {
       ]),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} mayTransfer denied={false} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری…' }));
     fireEvent.change(screen.getByLabelText('آی‌دی عددی تلگرام مقصد'), { target: { value: '999' } });
     fireEvent.click(screen.getByRole('button', { name: 'پیش‌نمایش انتقال' }));
     await screen.findByText('مشتری با این آی‌دی عددی در این ربات وجود ندارد.');
@@ -501,7 +501,7 @@ describe('Customer 360 — the customer page', () => {
     });
     stubApi(routes([{ url: `/users/${ID}/transfer/preview`, body: preview(true, true) }]));
     renderPage(<UserDetailPage id={ID} {...OFF} mayTransfer denied={false} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری…' }));
     fireEvent.change(screen.getByLabelText('آی‌دی عددی تلگرام مقصد'), { target: { value: '777' } });
     fireEvent.click(screen.getByRole('button', { name: 'پیش‌نمایش انتقال' }));
     await screen.findByText('معافیت از تأیید شماره (می‌ماند)');
@@ -549,7 +549,7 @@ describe('Customer 360 — the customer page', () => {
       ]),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} mayTransfer denied={false} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری…' }));
     fireEvent.change(screen.getByLabelText('آی‌دی عددی تلگرام مقصد'), { target: { value: '999' } });
     fireEvent.click(screen.getByRole('button', { name: 'پیش‌نمایش انتقال' }));
     await screen.findByText('مشتری با این آی‌دی عددی در این ربات وجود ندارد.');
@@ -626,7 +626,7 @@ describe('Customer 360 — the customer page', () => {
       ]),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} mayTransfer denied={false} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری…' }));
     fireEvent.change(screen.getByLabelText('آی‌دی عددی تلگرام مقصد'), { target: { value: '777' } });
     fireEvent.click(screen.getByRole('button', { name: 'پیش‌نمایش انتقال' }));
     await screen.findByText('سرویس‌های آزمایشی منتقل نمی‌شوند.');
@@ -786,7 +786,7 @@ describe('Customer 360 — tabs and the action panel', () => {
     expect(screen.queryByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' })).toBeNull();
   });
 
-  it('groups the actions under «عملیات روی این مشتری», the sensitive ones in their strip', async () => {
+  it("groups the actions in the head card's quick-action bar, the dangerous ones red and ending in «…»", async () => {
     stubApi(routes());
     renderPage(
       <UserDetailPage
@@ -804,7 +804,9 @@ describe('Customer 360 — tabs and the action panel', () => {
         denied={false}
       />,
     );
-    const panel = await screen.findByRole('region', { name: 'عملیات روی این مشتری' });
+    const panel = await screen.findByRole('toolbar', { name: 'عملیات روی این مشتری' });
+    // The bar lives INSIDE the head card, not in a panel of its own.
+    expect(panel.closest('.detail-head')).not.toBeNull();
     const group = (name: string) => within(panel).getByRole('group', { name });
     expect(within(group('کیف پول')).getByRole('button', { name: 'افزایش موجودی' })).toBeTruthy();
     expect(within(group('کیف پول')).getByRole('button', { name: 'کسر موجودی' })).toBeTruthy();
@@ -814,15 +816,47 @@ describe('Customer 360 — tabs and the action panel', () => {
     expect(
       within(group('ارتباط و دسترسی')).getByRole('button', { name: 'ارسال پیام' }),
     ).toBeTruthy();
+    expect(within(group('حساب')).getByRole('button', { name: 'مسدود کردن…' })).toBeTruthy();
+    expect(within(group('حساب')).getByRole('button', { name: 'انتقال حساب کاربری…' })).toBeTruthy();
+    // The dangerous ones are red; a plain one is not.
+    expect(within(group('حساب')).getByRole('button', { name: 'مسدود کردن…' })).toHaveClass(
+      'danger',
+    );
     expect(
-      within(group('ارتباط و دسترسی')).getByRole('button', { name: 'مسدود کردن' }),
-    ).toBeTruthy();
+      within(group('سرویس‌ها')).getByRole('button', { name: 'غیرفعال کردن همه کانفیگ‌ها…' }),
+    ).toHaveClass('danger');
     expect(
-      within(group('عملیات حساس')).getByRole('button', { name: 'انتقال حساب کاربری' }),
-    ).toBeTruthy();
+      within(group('سرویس‌ها')).getByRole('button', { name: 'فعال کردن همه کانفیگ‌ها' }),
+    ).not.toHaveClass('danger');
     // «افزایش موجودی» opens the wallet dialog directly — no scroll, no tab change needed.
     fireEvent.click(within(group('کیف پول')).getByRole('button', { name: 'افزایش موجودی' }));
     expect(screen.getByRole('dialog', { name: 'واریز به کیف پول' })).toBeInTheDocument();
+  });
+
+  it('draws a blocked customer as a red strip in the head area, with unblock in the account group', async () => {
+    stubApi(
+      routes([], undefined).map((route) =>
+        route.url === `/users/${ID}`
+          ? {
+              ...route,
+              body: {
+                customer: customer({
+                  status: 'BLOCKED',
+                  blockedAt: '2026-09-11T09:00:00.000Z',
+                  blockedReason: 'spam',
+                }),
+              },
+            }
+          : route,
+      ),
+    );
+    const { container } = renderPage(<UserDetailPage id={ID} {...OFF} mayBlock denied={false} />);
+    const bar = await screen.findByRole('toolbar', { name: 'عملیات روی این مشتری' });
+    const unblock = within(bar).getByRole('button', { name: 'رفع مسدودی' });
+    expect(unblock).not.toHaveClass('danger');
+    const strip = container.querySelector('.attention-strip.danger') as HTMLElement;
+    expect(strip).not.toBeNull();
+    expect(strip.textContent ?? '').toContain(t('web.user_blocked_banner_title'));
   });
 
   it('sets a trial override through a dialog, asking before a typed limit is dropped', async () => {

@@ -7,7 +7,7 @@ import {
 } from '@nexa/contracts';
 import { fetchCustomerWorkspace, fetchTickets } from '../api/client';
 import { customerAttentionItems, workspaceWithheld } from '../attention-view';
-import { formatTimestamp } from '../format';
+import { formatNumber, formatTimestamp } from '../format';
 import { CodeText } from '../ui/record-ref';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
@@ -17,13 +17,14 @@ import {
   Card,
   DataTable,
   Empty,
+  ErrorState,
   Ltr,
   Money,
   Num,
   StateSwitch,
   type Column,
 } from '../ui/kit';
-import { AttentionClear, AttentionList } from './attention-list';
+import { AttentionStrip } from '../ui/redesign';
 import { STATE_LABELS as ORDER_STATE_LABELS, STATE_TONES as ORDER_STATE_TONES } from './orders';
 import {
   PAYMENT_METHOD_LABELS,
@@ -54,37 +55,38 @@ export function useCustomerWorkspace(customerId: string) {
   });
 }
 
-/** What about this customer waits for a person, each row a link to where it is handled. */
-export function CustomerAttentionCard({ customerId }: { customerId: string }) {
+/**
+ * What about this customer waits for a person, as the yellow strip under the head: one chip per
+ * item, each a link to where it is handled. Nothing waiting draws nothing (the strip is not
+ * noise); a section the viewer's role withholds is said in the strip's note, never read as
+ * "nothing waits" (review N3).
+ */
+export function CustomerAttentionStrip({ customerId }: { customerId: string }) {
+  const onLink = useLinkHandler();
   const workspace = useCustomerWorkspace(customerId);
   const data = workspace.data?.workspace;
+  // A failed read is said, never drawn as «nothing waits».
+  if (workspace.isError) return <ErrorState query={workspace} />;
+  if (data === undefined) return null;
+  const items = customerAttentionItems(customerId, data);
+  const withheld = workspaceWithheld(data);
+  if (items.length === 0 && !withheld) return null;
   return (
-    <Card
-      id="c360-attention"
-      title={t('web.c360ws_attention_title')}
-      hint={t('web.c360ws_attention_hint')}
-      tight
-    >
-      <StateSwitch query={workspace}>
-        {data === undefined ? null : (
-          <>
-            {/*
-              "Nothing waits" is said only when every counting section was counted: over a
-              withheld one the list is empty because nothing was asked there, so only the
-              withheld note is drawn (review N3).
-            */}
-            <AttentionList
-              items={customerAttentionItems(customerId, data)}
-              label={t('web.c360ws_attention_title')}
-              empty={
-                workspaceWithheld(data) ? null : <AttentionClear title={t('web.c360ws_nothing')} />
-              }
-            />
-            {workspaceWithheld(data) && <p className="muted small">{t('web.c360ws_withheld')}</p>}
-          </>
-        )}
-      </StateSwitch>
-    </Card>
+    <div id="c360-attention" title={t('web.c360ws_attention_hint')}>
+      <AttentionStrip title={t('web.c360ws_attention_title')}>
+        {items.map((item) => (
+          <a key={item.key} className="attn-item" href={item.href} onClick={onLink}>
+            {t(item.label)}
+            <span className="num">
+              {' · '}
+              {formatNumber(item.count)}
+              {item.atLeast ? '+' : ''}
+            </span>
+          </a>
+        ))}
+        {withheld && <span className="muted small">{t('web.c360ws_withheld')}</span>}
+      </AttentionStrip>
+    </div>
   );
 }
 
