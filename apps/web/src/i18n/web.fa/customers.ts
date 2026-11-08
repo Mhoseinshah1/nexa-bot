@@ -635,7 +635,6 @@ export const WEB_FA_CUSTOMERS = {
   'web.c360ws_attention_title': 'نیازمند رسیدگی',
   'web.c360ws_attention_hint':
     'هر عدد شمارش سرور از ردیف‌های ذخیره‌شدهٔ همین مشتری است و به صفحه‌ای می‌رود که در آن رسیدگی می‌شود.',
-  'web.c360ws_nothing': 'برای این مشتری چیزی در انتظار رسیدگی نیست.',
   'web.c360ws_withheld': 'بخش‌هایی که مجوز صفحهٔ آن‌ها را ندارید در این خلاصه شمرده نشده‌اند.',
   'web.c360ws_tickets_awaiting': 'تیکت در انتظار پاسخ پشتیبانی',
   'web.c360ws_handoffs': 'گفتگوی بیزینس در انتظار اپراتور',
@@ -727,4 +726,12 @@ export const WEB_FA_CUSTOMERS = {
   'web.c360_toggle_refused_in_progress': 'یک عملیات از همین نوع در جریان است',
   'web.c360_toggle_refused_panel': 'پنل این سرویس فعلاً قابل استفاده نیست',
   'web.c360_toggle_refused_order_state': 'وضعیت سفارش این سرویس اجازه نمی‌دهد',
+  'web.c360_group_services': 'سرویس‌ها',
+  'web.c360_group_account': 'حساب',
+  'web.c360_action_busy': 'یک درخواست در حال ثبت است؛ پس از پایان آن دوباره امتحان کنید.',
+  'web.wallet_imported_badge': 'واردشده',
+  'web.users_column_user': 'کاربر',
+  'web.users_about_fold': 'دربارهٔ این فهرست',
+  'web.users_filter_status': 'فیلتر وضعیت',
+  'web.users_select_all': 'انتخاب همهٔ این صفحه',
 } as const;
