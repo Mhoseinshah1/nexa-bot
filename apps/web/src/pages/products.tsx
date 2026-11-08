@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
+import { ListFreshness } from '../ui/list-search';
+import { AttentionStrip, CardRows, KpiRow, QuickActionBar, QuickFilters } from '../ui/redesign';
 import {
   PANEL_PAGE_MAX,
   SALES_CURRENCY_CODES,
@@ -62,8 +64,7 @@ import {
   Money,
   PageHead,
   StateSwitch,
-  TabPanel,
-  Tabs,
+  Disclosure,
   useQueryTab,
   useToast,
   useUnsavedChanges,
@@ -76,7 +77,6 @@ import { listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { FormSection, SaveBar } from './editor-layout';
 import { DotTabs, type TabMark } from './dot-tabs';
 import { queryChipFilter } from './money-filters';
-import { ActionPanel } from '../ui/action-panel';
 import { ListFilterBar } from '../ui/filter-bar';
 import { useListClearAll } from './commerce-parts';
 import { Drawer } from '../ui/overlays';
@@ -485,16 +485,19 @@ export function ProductsPage({
       key: 'status',
       header: t('web.status'),
       render: (row) => (
-        <Badge tone={STATUS_TONES[row.status]} dot>
-          {t(STATUS_LABELS[row.status])}
-        </Badge>
-      ),
-    },
-    {
-      key: 'catalogue',
-      header: t('web.product_catalogue'),
-      render: (row) => (
-        <CatalogueBadge row={row} category={categoryFactsFor(row, categories.data?.categories)} />
+        <CellMain
+          primary={
+            <Badge tone={STATUS_TONES[row.status]} dot>
+              {t(STATUS_LABELS[row.status])}
+            </Badge>
+          }
+          secondary={
+            <CatalogueBadge
+              row={row}
+              category={categoryFactsFor(row, categories.data?.categories)}
+            />
+          }
+        />
       ),
     },
     {
@@ -533,9 +536,9 @@ export function ProductsPage({
     <>
       <PageHead
         title={t('web.products_title')}
-        subtitle={t('web.products_intro')}
         actions={
           <>
+            {!denied && <ListFreshness query={products} />}
             <a className="btn" href="/product-categories" onClick={onLink}>
               <Icon name="folder" />
               {t('web.nav_product_categories')}
@@ -549,23 +552,20 @@ export function ProductsPage({
         }
       />
 
-      {/*
-       * «محصولات جاری / آرشیو» is the page's own tab bar above the list card, as the demo
-       * draws a page's sections (appearance, settings), not a strip inside the card.
-       */}
-      {!denied && (
-        <Tabs
-          value={viewTab}
-          onChange={setViewTab}
-          panelId="products-list"
-          items={[
-            { id: 'current', label: t('web.products_view_current') },
-            { id: 'archive', label: t('web.products_view_archive') },
-          ]}
-        />
-      )}
-      <TabPanel id="products-list" labelledBy={`products-list-tab-${viewTab}`}>
+      <div>
         <Card className="products-list-card">
+          {/* No server total per view: the chips carry no count. */}
+          {!denied && (
+            <QuickFilters
+              label={t('web.products_title')}
+              value={viewTab}
+              onChange={setViewTab}
+              items={[
+                { key: 'current', label: t('web.products_view_current') },
+                { key: 'archive', label: t('web.products_view_archive') },
+              ]}
+            />
+          )}
           {archive && <p className="muted small">{t('web.products_archive_intro')}</p>}
           {/* Hidden while the card below cannot answer: a control that mints a new query
             key is a fresh request against a question the server has just refused. */}
@@ -706,7 +706,10 @@ export function ProductsPage({
             />
           )}
         </Card>
-      </TabPanel>
+      </div>
+      <Disclosure size="sm" summary={t('web.products_about_fold')}>
+        <p className="muted small">{t('web.products_intro')}</p>
+      </Disclosure>
 
       {!mayEdit && (
         // A sentence, not a disabled form. Both make the same claim and only one names
@@ -1673,14 +1676,41 @@ export function ProductDetailPage({
         {row === undefined ? null : (
           <>
             <TechnicalIds id={row.id} />
-            {gap !== null && (
-              <Banner
-                tone={isUnlistedGap(gap) ? 'info' : 'warn'}
-                title={t('web.product_gap_banner_title')}
-              >
-                {t(GAP_LABELS[gap])}
-              </Banner>
-            )}
+            <KpiRow
+              items={[
+                { key: 'price', label: t('web.product_price'), value: <Price row={row} /> },
+                {
+                  key: 'duration',
+                  label: t('web.product_duration'),
+                  value: <Duration days={row.durationDays} />,
+                },
+                {
+                  key: 'traffic',
+                  label: t('web.product_traffic'),
+                  value: <Traffic bytes={row.trafficBytes} />,
+                },
+                {
+                  key: 'devices',
+                  label: t('web.product_device_limit'),
+                  value:
+                    row.deviceLimit === null ? (
+                      <span>{t('web.product_devices_provider_default')}</span>
+                    ) : (
+                      <Num value={row.deviceLimit} />
+                    ),
+                },
+              ]}
+            />
+            {gap !== null &&
+              (isUnlistedGap(gap) ? (
+                <Banner tone="info" title={t('web.product_gap_banner_title')}>
+                  {t(GAP_LABELS[gap])}
+                </Banner>
+              ) : (
+                <AttentionStrip title={t('web.product_gap_banner_title')}>
+                  <span>{t(GAP_LABELS[gap])}</span>
+                </AttentionStrip>
+              ))}
 
             {/*
               W1.5/W3: the two actions on the product sit in the action panel under the
@@ -1690,11 +1720,11 @@ export function ProductDetailPage({
             */}
             {mayEdit && (
               <>
-                <ActionPanel
+                <QuickActionBar
                   groups={[
                     {
                       key: 'catalogue',
-                      title: t('web.product_actions_catalogue'),
+                      label: t('web.product_actions_catalogue'),
                       actions: [
                         <Button key="move" icon="folder" onClick={() => setMoving(true)}>
                           {t('web.product_category_assign')}
@@ -1785,89 +1815,98 @@ export function ProductDetailPage({
               </>
             )}
 
-            <div className="cb-editor no-nav">
-              <div className="cb-editor-main">
-                {mayEdit ? (
-                  // KEYED BY THE PRODUCT ID: React reconciles by position and type, so
-                  // navigating between two product URLs would keep one instance mounted
-                  // and every `useState` initialiser would hold the previous product's
-                  // values — which here are the fields about to be written.
-                  // Tabbed (W2): one section at a time; the tab resets with the product.
-                  <ProductForm key={row.id} mode="edit" product={row} tabbed />
-                ) : (
-                  <Card title={t('web.product_edit_title')}>
-                    <Banner tone="info">{t('web.product_edit_denied')}</Banner>
-                  </Card>
-                )}
-              </div>
-
-              <div className="cb-editor-side stack">
-                <Card title={t('web.product_identity_title')}>
-                  <KV
-                    items={[
-                      [t('web.record_code'), <CodeText key="code" code={row.code} />],
-                      [t('web.product_title'), row.title],
-                      [t('web.product_description'), row.description ?? <Dash key="d" />],
-                      [
-                        t('web.product_catalogue'),
-                        <CatalogueBadge key="c" row={row} category={facts} />,
-                      ],
-                      [
-                        t('web.product_category'),
-                        row.categoryId === null ? (
-                          <Badge key="cat" tone="warn">
-                            {t('web.product_category_unset')}
-                          </Badge>
-                        ) : (
-                          (categoryList.find((c) => c.id === row.categoryId)?.name ?? (
-                            <Dash key="cat" />
-                          ))
-                        ),
-                      ],
-                      [t('web.product_audience'), t(AUDIENCE_LABELS[row.audience])],
-                      [t('web.product_price'), <Price key="p" row={row} />],
-                      [t('web.product_duration'), <Duration key="dur" days={row.durationDays} />],
-                      [t('web.product_traffic'), <Traffic key="tr" bytes={row.trafficBytes} />],
-                      [
-                        t('web.product_device_limit'),
-                        row.deviceLimit === null ? (
-                          <span key="dl">{t('web.product_devices_provider_default')}</span>
-                        ) : (
-                          <Num key="dl" value={row.deviceLimit} />
-                        ),
-                      ],
-                      [t('web.product_sort_order'), <Num key="so" value={row.sortOrder} />],
-                      [
-                        t('web.product_panel'),
-                        row.panelId === null ? (
-                          <Dash key="pa" />
-                        ) : (
-                          <Copyable key="pa" value={row.panelId} />
-                        ),
-                      ],
-                      [
-                        t('web.product_display_locations'),
-                        <DisplayList key="dloc" lines={row.displayLocations} />,
-                      ],
-                      [
-                        t('web.product_display_features'),
-                        <DisplayList key="dfeat" lines={row.displayFeatures} />,
-                      ],
-                      [
-                        t('web.product_display_location_label'),
-                        row.serviceLocationLabel === null ? (
-                          <Dash key="dlabel" />
-                        ) : (
-                          <span key="dlabel">{row.serviceLocationLabel}</span>
-                        ),
-                      ],
-                      [t('web.product_created_at'), formatTimestamp(row.createdAt)],
-                      [t('web.updated_at'), formatTimestamp(row.updatedAt)],
-                    ]}
-                  />
-                </Card>
-              </div>
-            </div>
+            <CardRows
+              rows={[
+                {
+                  key: 'editor',
+                  main: (
+                    <>
+                      {mayEdit ? (
+                        // KEYED BY THE PRODUCT ID: React reconciles by position and type, so
+                        // navigating between two product URLs would keep one instance mounted
+                        // and every `useState` initialiser would hold the previous product's
+                        // values — which here are the fields about to be written.
+                        // Tabbed (W2): one section at a time; the tab resets with the product.
+                        <ProductForm key={row.id} mode="edit" product={row} tabbed />
+                      ) : (
+                        <Card title={t('web.product_edit_title')}>
+                          <Banner tone="info">{t('web.product_edit_denied')}</Banner>
+                        </Card>
+                      )}
+                    </>
+                  ),
+                  side: (
+                    <Card title={t('web.product_identity_title')}>
+                      <KV
+                        items={[
+                          [t('web.record_code'), <CodeText key="code" code={row.code} />],
+                          [t('web.product_title'), row.title],
+                          [t('web.product_description'), row.description ?? <Dash key="d" />],
+                          [
+                            t('web.product_catalogue'),
+                            <CatalogueBadge key="c" row={row} category={facts} />,
+                          ],
+                          [
+                            t('web.product_category'),
+                            row.categoryId === null ? (
+                              <Badge key="cat" tone="warn">
+                                {t('web.product_category_unset')}
+                              </Badge>
+                            ) : (
+                              (categoryList.find((c) => c.id === row.categoryId)?.name ?? (
+                                <Dash key="cat" />
+                              ))
+                            ),
+                          ],
+                          [t('web.product_audience'), t(AUDIENCE_LABELS[row.audience])],
+                          [t('web.product_price'), <Price key="p" row={row} />],
+                          [
+                            t('web.product_duration'),
+                            <Duration key="dur" days={row.durationDays} />,
+                          ],
+                          [t('web.product_traffic'), <Traffic key="tr" bytes={row.trafficBytes} />],
+                          [
+                            t('web.product_device_limit'),
+                            row.deviceLimit === null ? (
+                              <span key="dl">{t('web.product_devices_provider_default')}</span>
+                            ) : (
+                              <Num key="dl" value={row.deviceLimit} />
+                            ),
+                          ],
+                          [t('web.product_sort_order'), <Num key="so" value={row.sortOrder} />],
+                          [
+                            t('web.product_panel'),
+                            row.panelId === null ? (
+                              <Dash key="pa" />
+                            ) : (
+                              <Copyable key="pa" value={row.panelId} />
+                            ),
+                          ],
+                          [
+                            t('web.product_display_locations'),
+                            <DisplayList key="dloc" lines={row.displayLocations} />,
+                          ],
+                          [
+                            t('web.product_display_features'),
+                            <DisplayList key="dfeat" lines={row.displayFeatures} />,
+                          ],
+                          [
+                            t('web.product_display_location_label'),
+                            row.serviceLocationLabel === null ? (
+                              <Dash key="dlabel" />
+                            ) : (
+                              <span key="dlabel">{row.serviceLocationLabel}</span>
+                            ),
+                          ],
+                          [t('web.product_created_at'), formatTimestamp(row.createdAt)],
+                          [t('web.updated_at'), formatTimestamp(row.updatedAt)],
+                        ]}
+                      />
+                    </Card>
+                  ),
+                },
+              ]}
+            />
           </>
         )}
       </StateSwitch>

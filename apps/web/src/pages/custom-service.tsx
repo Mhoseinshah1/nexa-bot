@@ -40,6 +40,8 @@ import {
   Banner,
   Button,
   Card,
+  CellMain,
+  Disclosure,
   ConfirmDialog,
   Copyable,
   DataTable,
@@ -97,23 +99,27 @@ export function CustomServicePage({
   /** `resellers.view`: the tier picker is a select; without it a tier id is typed. */
   mayViewTiers: boolean;
 }) {
+  const queries = useQueryClient();
   const options = usePickerOptions({
     panels: !denied && mayViewPanels,
     tiers: !denied && mayViewTiers,
   });
   return (
     <>
-      <PageHead title={t('web.custom_service_title')} subtitle={t('web.custom_service_intro')} />
+      <PageHead
+        title={t('web.custom_service_title')}
+        onRefresh={() => {
+          void queries.invalidateQueries({ queryKey: ['custom-service-locations'] });
+          void queries.invalidateQueries({ queryKey: ['custom-service-rules'] });
+        }}
+      />
       <Banner tone="info" title={t('web.custom_service_flag_title')}>
         {t('web.custom_service_flag_note')}
       </Banner>
       <Locations denied={denied} mayEdit={mayEdit} options={options} />
       <Rules denied={denied} mayEdit={mayEdit} options={options} />
-      <Card
-        title={t('web.custom_service_specificity_title')}
-        tone="muted"
-        className="cs-specificity"
-      >
+      <Disclosure size="sm" variant="boxed" summary={t('web.custom_service_specificity_title')}>
+        <p className="muted small">{t('web.custom_service_intro')}</p>
         <p className="muted">{t('web.custom_service_specificity_intro')}</p>
         <ol className="custom-levels">
           {CUSTOM_SERVICE_RULE_LEVELS.map((level) => (
@@ -124,7 +130,7 @@ export function CustomServicePage({
         <p className="muted small">{t('web.custom_service_note_both')}</p>
         <p className="muted small">{t('web.custom_service_note_overlap')}</p>
         <p className="muted small">{t('web.custom_service_note_snapshot')}</p>
-      </Card>
+      </Disclosure>
     </>
   );
 }
@@ -366,7 +372,21 @@ function Locations({
       key: 'label',
       header: t('web.custom_service_location_label'),
       render: (row) =>
-        row.location === null ? <Dash /> : <span className="strong">{row.location.label}</span>,
+        row.location === null ? (
+          <Dash />
+        ) : !mayEdit ? (
+          <span className="strong">{row.location.label}</span>
+        ) : (
+          <button
+            type="button"
+            className="link strong"
+            disabled={remove.isPending}
+            title={t('web.rule_edit')}
+            onClick={() => setEditing({ row })}
+          >
+            {row.location.label}
+          </button>
+        ),
     },
     {
       key: 'offered',
@@ -380,15 +400,17 @@ function Locations({
       render: (row) =>
         !mayEdit ? null : (
           <RowActions>
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={row.location === null ? 'plus' : 'edit'}
-              disabled={remove.isPending}
-              onClick={() => setEditing({ row })}
-            >
-              {row.location === null ? t('web.custom_service_location_offer') : t('web.rule_edit')}
-            </Button>
+            {row.location === null && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon="plus"
+                disabled={remove.isPending}
+                onClick={() => setEditing({ row })}
+              >
+                {t('web.custom_service_location_offer')}
+              </Button>
+            )}
             {row.location !== null && (
               <IconButton
                 size="sm"
@@ -714,17 +736,31 @@ function Rules({
   const columns: readonly Column<CustomServiceRuleSummaryResponse>[] = [
     {
       key: 'dimension',
-      header: t('web.custom_service_dimension'),
+      header: `${t('web.custom_service_dimension')} / ${t('web.rule_label')}`,
       render: (row) => (
-        <Badge tone={row.dimension === 'VOLUME' ? 'info' : 'violet'} outline>
-          {t(DIMENSION_LABELS[row.dimension])}
-        </Badge>
+        <CellMain
+          primary={
+            !mayEdit ? (
+              <span className="strong">{row.label ?? <Dash />}</span>
+            ) : (
+              <button
+                type="button"
+                className="link strong"
+                disabled={remove.isPending}
+                title={t('web.rule_edit')}
+                onClick={() => setEditing({ rule: row })}
+              >
+                {row.label ?? t(DIMENSION_LABELS[row.dimension])}
+              </button>
+            )
+          }
+          secondary={
+            <Badge tone={row.dimension === 'VOLUME' ? 'info' : 'violet'} outline>
+              {t(DIMENSION_LABELS[row.dimension])}
+            </Badge>
+          }
+        />
       ),
-    },
-    {
-      key: 'label',
-      header: t('web.rule_label'),
-      render: (row) => (row.label === null ? <Dash /> : row.label),
     },
     {
       key: 'range',
@@ -745,18 +781,19 @@ function Rules({
     },
     {
       key: 'audience',
-      header: t('web.custom_service_audience'),
-      render: (row) => <Audience row={row} options={options} />,
-    },
-    {
-      key: 'panel',
-      header: t('web.custom_service_panel'),
-      render: (row) =>
-        row.panelId === null ? (
-          <span>{t('web.custom_service_all_panels')}</span>
-        ) : (
-          <Reference id={row.panelId} name={options.panelNames.get(row.panelId)} />
-        ),
+      header: `${t('web.custom_service_audience')} / ${t('web.custom_service_panel')}`,
+      render: (row) => (
+        <CellMain
+          primary={<Audience row={row} options={options} />}
+          secondary={
+            row.panelId === null ? (
+              <span>{t('web.custom_service_all_panels')}</span>
+            ) : (
+              <Reference id={row.panelId} name={options.panelNames.get(row.panelId)} />
+            )
+          }
+        />
+      ),
     },
     {
       key: 'enabled',
@@ -779,15 +816,6 @@ function Rules({
       render: (row) =>
         !mayEdit ? null : (
           <RowActions>
-            <Button
-              size="sm"
-              variant="ghost"
-              icon="edit"
-              disabled={remove.isPending}
-              onClick={() => setEditing({ rule: row })}
-            >
-              {t('web.rule_edit')}
-            </Button>
             <IconButton
               size="sm"
               icon="trash"

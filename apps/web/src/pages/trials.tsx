@@ -1,11 +1,14 @@
 import { useState } from 'react';
+import { ListFreshness } from '../ui/list-search';
+import { QuickFilters } from '../ui/redesign';
 import { Drawer } from '../ui/overlays';
 import { useConfirmedClose } from '../ui/unsaved';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import {
   TRIAL_ADMIN_REASON_MAX_LENGTH,
   trafficInputOf,
+  type PanelTrialOverviewResponse,
   type PanelTrialOverviewRow,
   type TrialOverrideRowResponse,
   type TrialResetPreviewResponse,
@@ -54,6 +57,19 @@ import { ErrorRef } from '../ui/technical-details';
  * may not use says so by name rather than vanishing, so an operator can tell "this does
  * not exist" from "this is not yours".
  */
+const PANEL_FILTER_LABEL = {
+  offered: 'web.trials_panel_offered',
+  not_offered: 'web.trials_panel_not_offered',
+  disabled: 'web.trials_panel_disabled',
+} as const;
+
+type PanelTrialFilter = 'all' | 'offered' | 'not_offered' | 'disabled';
+
+function panelTrialStateOf(row: PanelTrialOverviewRow): Exclude<PanelTrialFilter, 'all'> {
+  if (!row.trial.enabled) return 'disabled';
+  return row.offeredNow ? 'offered' : 'not_offered';
+}
+
 export function TrialsPage({
   mayViewOverrides,
   mayReset,
@@ -66,10 +82,23 @@ export function TrialsPage({
   /** R1: `panels.view`, which the per-panel overview is charged on. */
   mayViewPanels?: boolean;
 }) {
+  const panels = useQuery({
+    queryKey: ['trial-panels'],
+    queryFn: fetchTrialPanels,
+    enabled: mayViewPanels,
+  });
   return (
     <>
-      <PageHead title={t('web.trials_title')} actions={<ResetButton mayReset={mayReset} />} />
-      <PanelTrialsCard mayView={mayViewPanels} />
+      <PageHead
+        title={t('web.trials_title')}
+        actions={
+          <>
+            {mayViewPanels && <ListFreshness query={panels} />}
+            <ResetButton mayReset={mayReset} />
+          </>
+        }
+      />
+      <PanelTrialsCard mayView={mayViewPanels} panels={panels} />
       {/* W3: the reset is a head button opening a drawer; the two lists are full width. */}
       <OverridesCard mayView={mayViewOverrides} />
       <HistoryCard mayView={mayViewHistory} />
@@ -81,13 +110,15 @@ export function TrialsPage({
  * R1: every panel with a trial configured, and whether a customer is offered it now — the
  * server's answer from the same evaluator the bot asks. Edited on each panel's page.
  */
-function PanelTrialsCard({ mayView }: { mayView: boolean }) {
+function PanelTrialsCard({
+  mayView,
+  panels,
+}: {
+  mayView: boolean;
+  panels: UseQueryResult<PanelTrialOverviewResponse>;
+}) {
   const onLink = useLinkHandler();
-  const panels = useQuery({
-    queryKey: ['trial-panels'],
-    queryFn: fetchTrialPanels,
-    enabled: mayView,
-  });
+  const [stateFilter, setStateFilter] = useState<PanelTrialFilter>('all');
   if (!mayView) {
     return (
       <Card title={t('web.trials_panels_title')}>
@@ -144,14 +175,31 @@ function PanelTrialsCard({ mayView }: { mayView: boolean }) {
         {panels.data === undefined ? null : panels.data.panels.length === 0 ? (
           <Empty title={t('web.trials_panels_empty')} />
         ) : (
-          <DataTable
-            stack="labelled"
-            columns={columns}
-            rows={panels.data.panels}
-            rowKey={(row) => row.panelId}
-            caption={t('web.trials_panels_title')}
-            dense
-          />
+          <>
+            <QuickFilters
+              label={t('web.trials_panels_filter')}
+              value={stateFilter}
+              onChange={setStateFilter}
+              items={[
+                { key: 'all', label: t('web.trials_filter_all'), count: panels.data.panels.length },
+                ...(['offered', 'not_offered', 'disabled'] as const).map((key) => ({
+                  key,
+                  label: t(PANEL_FILTER_LABEL[key]),
+                  count: panels.data.panels.filter((row) => panelTrialStateOf(row) === key).length,
+                })),
+              ]}
+            />
+            <DataTable
+              stack="labelled"
+              columns={columns}
+              rows={panels.data.panels.filter(
+                (row) => stateFilter === 'all' || panelTrialStateOf(row) === stateFilter,
+              )}
+              rowKey={(row) => row.panelId}
+              caption={t('web.trials_panels_title')}
+              dense
+            />
+          </>
         )}
       </StateSwitch>
     </Card>

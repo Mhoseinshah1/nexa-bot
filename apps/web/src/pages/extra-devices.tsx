@@ -31,6 +31,7 @@ import {
   Button,
   Card,
   CursorPager,
+  Disclosure,
   DataTable,
   Empty,
   Field,
@@ -45,6 +46,7 @@ import {
   LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { SaveBar } from './editor-layout';
+import { ListFreshness } from '../ui/list-search';
 import { ErrorRef } from '../ui/technical-details';
 
 /**
@@ -291,7 +293,26 @@ export function ExtraDevicesPage({
     {
       key: 'title',
       header: t('web.extra_devices_rate_title'),
-      render: (row) => <span className="strong">{row.title}</span>,
+      render: (row) =>
+        !mayEdit ? (
+          <span className="strong">{row.title}</span>
+        ) : (
+          <button
+            type="button"
+            className="link strong"
+            disabled={busy}
+            title={t('web.extra_devices_edit')}
+            onClick={() =>
+              discard.confirmDiscard(() => {
+                setEditing(row.id);
+                setForm(formOf(row));
+                setOpen(true);
+              })
+            }
+          >
+            {row.title}
+          </button>
+        ),
     },
     {
       key: 'price',
@@ -342,21 +363,6 @@ export function ExtraDevicesPage({
             <Button
               size="sm"
               variant="ghost"
-              icon="edit"
-              disabled={busy}
-              onClick={() =>
-                discard.confirmDiscard(() => {
-                  setEditing(row.id);
-                  setForm(formOf(row));
-                  setOpen(true);
-                })
-              }
-            >
-              {t('web.extra_devices_edit')}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
               disabled={busy}
               onClick={() => toggle.mutate({ id: row.id, active: row.status !== 'ACTIVE' })}
             >
@@ -392,12 +398,19 @@ export function ExtraDevicesPage({
   return (
     <>
       {embedded ? (
-        mayEdit && <div className="toolbar">{addButton}</div>
+        <div className="toolbar">
+          {!denied && <ListFreshness query={rates} />}
+          {mayEdit && addButton}
+        </div>
       ) : (
         <PageHead
           title={t('web.extra_devices_title')}
-          subtitle={t('web.extra_devices_subtitle')}
-          {...(mayEdit ? { actions: addButton } : {})}
+          actions={
+            <>
+              {!denied && <ListFreshness query={rates} />}
+              {mayEdit && addButton}
+            </>
+          }
         />
       )}
 
@@ -597,6 +610,11 @@ export function ExtraDevicesPage({
           </Drawer>
         )}
       </div>
+      {!embedded && (
+        <Disclosure size="sm" summary={t('web.extra_packages_about_fold')}>
+          <p className="muted small">{t('web.extra_devices_subtitle')}</p>
+        </Disclosure>
+      )}
       {discard.dialog}
       {closeDialog}
     </>

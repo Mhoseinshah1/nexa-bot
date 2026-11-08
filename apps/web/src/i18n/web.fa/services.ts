@@ -648,6 +648,9 @@ export const WEB_FA_SERVICES = {
     'این جایگاه برای «روشن کردن سرویس» هم هست: یک سرویس فقط یکی از این دو را می‌بیند.',
   // WP-A6: the service location change — a panel's locations and the price of moving there.
   'web.service_locations_title': 'تغییر لوکیشن سرویس',
+  'web.service_locations_about_fold': 'دربارهٔ این فهرست',
+  'web.service_locations_filter_label': 'وضعیت مقصد',
+  'web.service_locations_filter_all': 'همه',
   'web.service_locations_subtitle':
     'لوکیشن‌های هر پنل، لوکیشنی که سرویس‌های جدید در آن ساخته می‌شوند، و هزینه و محدودیت انتقال سرویس فعلی مشتری به هر لوکیشن.',
   'web.service_locations_capable_panels':

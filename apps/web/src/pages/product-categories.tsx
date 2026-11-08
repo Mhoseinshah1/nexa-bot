@@ -16,12 +16,15 @@ import { t } from '../i18n/web.fa';
 import { formatNumber } from '../format';
 import { messageFor } from './settings';
 import { useLinkHandler } from '../router';
+import { ListFreshness } from '../ui/list-search';
+import { QuickFilters } from '../ui/redesign';
 import {
   Badge,
   Banner,
   Button,
   Card,
   ConfirmDialog,
+  Disclosure,
   DataTable,
   Empty,
   Field,
@@ -134,6 +137,14 @@ export function ProductCategoriesPage({
   const [deleting, setDeleting] = useState<ProductCategoryListingResponse | null>(null);
 
   const rows = categories.data?.categories ?? [];
+  const [filter, setFilter] = useState<'all' | 'active' | 'inactive' | 'hidden'>('all');
+  const shownRows = rows.filter(
+    (row) =>
+      filter === 'all' ||
+      (filter === 'active' && row.status === 'ACTIVE') ||
+      (filter === 'inactive' && row.status !== 'ACTIVE') ||
+      (filter === 'hidden' && row.visibility !== 'VISIBLE'),
+  );
   const editedRow = editing === null ? undefined : rows.find((row) => row.id === editing);
   const loaded = editedRow === undefined ? EMPTY_FORM : formOf(editedRow);
   const dirty = JSON.stringify(form) !== JSON.stringify(loaded);
@@ -260,7 +271,25 @@ export function ProductCategoriesPage({
               {row.emoji}{' '}
             </span>
           )}
-          <span className="strong">{row.name}</span>
+          {mayEdit ? (
+            <button
+              type="button"
+              className="link strong"
+              disabled={busy}
+              title={t('web.category_edit')}
+              onClick={() =>
+                discard.confirmDiscard(() => {
+                  setEditing(row.id);
+                  setForm(formOf(row));
+                  setFormOpen(true);
+                })
+              }
+            >
+              {row.name}
+            </button>
+          ) : (
+            <span className="strong">{row.name}</span>
+          )}
         </span>
       ),
     },
@@ -297,21 +326,6 @@ export function ProductCategoriesPage({
         const index = rows.findIndex((candidate) => candidate.id === row.id);
         return (
           <RowActions>
-            <Button
-              size="sm"
-              variant="ghost"
-              icon="edit"
-              disabled={busy}
-              onClick={() =>
-                discard.confirmDiscard(() => {
-                  setEditing(row.id);
-                  setForm(formOf(row));
-                  setFormOpen(true);
-                })
-              }
-            >
-              {t('web.category_edit')}
-            </Button>
             <Button
               size="sm"
               variant="ghost"
@@ -377,9 +391,10 @@ export function ProductCategoriesPage({
     <>
       <PageHead
         title={t('web.categories_title')}
-        subtitle={t('web.categories_subtitle')}
+        {...(denied ? {} : { count: rows.length })}
         actions={
           <>
+            {!denied && <ListFreshness query={categories} />}
             <a className="btn" href="/products" onClick={onLink}>
               <Icon name="products" />
               {t('web.nav_products')}
@@ -435,20 +450,44 @@ export function ProductCategoriesPage({
             }
           >
             <Card title={t('web.categories_title')}>
+              <QuickFilters
+                label={t('web.categories_filter_label')}
+                value={filter}
+                onChange={setFilter}
+                items={[
+                  { key: 'all', label: t('web.categories_filter_all'), count: rows.length },
+                  {
+                    key: 'active',
+                    label: t('web.category_active'),
+                    count: rows.filter((row) => row.status === 'ACTIVE').length,
+                  },
+                  {
+                    key: 'inactive',
+                    label: t('web.category_inactive'),
+                    count: rows.filter((row) => row.status !== 'ACTIVE').length,
+                  },
+                  {
+                    key: 'hidden',
+                    label: t('web.category_hidden'),
+                    count: rows.filter((row) => row.visibility !== 'VISIBLE').length,
+                  },
+                ]}
+              />
               <DataTable
                 columns={columns}
-                rows={rows}
+                rows={shownRows}
                 rowKey={(row) => row.id}
                 caption={t('web.categories_title')}
                 dense
               />
             </Card>
-            <Card tone="muted">
+            <Disclosure size="sm" summary={t('web.categories_about_fold')}>
+              <p className="muted small">{t('web.categories_subtitle')}</p>
               <ul className="cb-notes">
                 <li>{t('web.category_inactive_note')}</li>
                 <li>{t('web.category_hidden_note')}</li>
               </ul>
-            </Card>
+            </Disclosure>
             {/*
               Phase 2 Item 2: each category's premium icon before and ordinary emoji after,
               a separate setting (`bot.category_icons`) saved on its own — a category edit

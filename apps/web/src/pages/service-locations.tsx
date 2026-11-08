@@ -35,6 +35,7 @@ import {
   Button,
   Card,
   CellMain,
+  Disclosure,
   ConfirmDialog,
   DataTable,
   Empty,
@@ -52,6 +53,8 @@ import {
 import { CheckField, FormSection, SaveBar } from './editor-layout';
 import { Drawer } from '../ui/overlays';
 import { useConfirmedClose } from '../ui/unsaved';
+import { ListFreshness } from '../ui/list-search';
+import { QuickFilters } from '../ui/redesign';
 import { ErrorRef } from '../ui/technical-details';
 
 /**
@@ -319,6 +322,11 @@ export function ServiceLocationsPage({
     return parts.length === 0 ? t('web.service_locations_no_limits') : parts.join(' · ');
   };
 
+  const [filter, setFilter] = useState<'all' | 'on' | 'off'>('all');
+  const shownRows = rows.filter(
+    (row) => filter === 'all' || (filter === 'on' ? row.enabled : !row.enabled),
+  );
+
   const columns: readonly Column<ServiceLocationSummaryResponse>[] = [
     {
       key: 'label',
@@ -327,7 +335,25 @@ export function ServiceLocationsPage({
         <CellMain
           primary={
             <span className="row">
-              <span className="strong">{row.label}</span>
+              {mayEdit ? (
+                <button
+                  type="button"
+                  className="link strong"
+                  disabled={busy}
+                  title={t('web.service_locations_edit')}
+                  onClick={() =>
+                    discard.confirmDiscard(() => {
+                      setEditing(row.id);
+                      setForm(formOf(row));
+                      setOpen(true);
+                    })
+                  }
+                >
+                  {row.label}
+                </button>
+              ) : (
+                <span className="strong">{row.label}</span>
+              )}
               {row.initial && <Badge tone="info">{t('web.service_locations_initial_badge')}</Badge>}
             </span>
           }
@@ -390,21 +416,6 @@ export function ServiceLocationsPage({
       render: (row) =>
         !mayEdit ? null : (
           <RowActions>
-            <Button
-              size="sm"
-              variant="ghost"
-              icon="edit"
-              disabled={busy}
-              onClick={() =>
-                discard.confirmDiscard(() => {
-                  setEditing(row.id);
-                  setForm(formOf(row));
-                  setOpen(true);
-                })
-              }
-            >
-              {t('web.service_locations_edit')}
-            </Button>
             <IconButton
               size="sm"
               icon="trash"
@@ -421,25 +432,26 @@ export function ServiceLocationsPage({
     <>
       <PageHead
         title={t('web.service_locations_title')}
-        subtitle={t('web.service_locations_subtitle')}
-        {...(mayEdit
-          ? {
-              actions: (
-                <Button
-                  variant="primary"
-                  icon="plus"
-                  onClick={() =>
-                    discard.confirmDiscard(() => {
-                      reset();
-                      setOpen(true);
-                    })
-                  }
-                >
-                  {t('web.cb_add')}
-                </Button>
-              ),
-            }
-          : {})}
+        {...(denied ? {} : { count: rows.length })}
+        actions={
+          <>
+            {!denied && <ListFreshness query={locations} />}
+            {mayEdit && (
+              <Button
+                variant="primary"
+                icon="plus"
+                onClick={() =>
+                  discard.confirmDiscard(() => {
+                    reset();
+                    setOpen(true);
+                  })
+                }
+              >
+                {t('web.cb_add')}
+              </Button>
+            )}
+          </>
+        }
       />
 
       {/* W5: no «none supports it in this version» note; the panel select says it per panel. */}
@@ -477,14 +489,35 @@ export function ServiceLocationsPage({
           }
         >
           <Card title={t('web.service_locations_list')}>
+            <QuickFilters
+              label={t('web.service_locations_filter_label')}
+              value={filter}
+              onChange={setFilter}
+              items={[
+                { key: 'all', label: t('web.service_locations_filter_all'), count: rows.length },
+                {
+                  key: 'on',
+                  label: t('web.service_locations_target_on'),
+                  count: rows.filter((row) => row.enabled).length,
+                },
+                {
+                  key: 'off',
+                  label: t('web.service_locations_target_off'),
+                  count: rows.filter((row) => !row.enabled).length,
+                },
+              ]}
+            />
             <DataTable
               stack="labelled"
               columns={columns}
-              rows={rows}
+              rows={shownRows}
               rowKey={(row) => row.id}
               caption={t('web.service_locations_list')}
             />
           </Card>
+          <Disclosure size="sm" summary={t('web.service_locations_about_fold')}>
+            <p className="muted small">{t('web.service_locations_subtitle')}</p>
+          </Disclosure>
         </StateSwitch>
 
         {mayEdit && (
