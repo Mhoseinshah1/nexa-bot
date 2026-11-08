@@ -115,6 +115,14 @@ const routes = (body = workspace(), extra: readonly { url: string; body: unknown
   ...extra,
 ];
 
+/** The yellow attention strip under the head (customer 360). */
+const attentionStrip = async (): Promise<HTMLElement> =>
+  waitFor(() => {
+    const found = document.getElementById('c360-attention');
+    if (found === null) throw new Error('no attention strip yet');
+    return found;
+  });
+
 const hrefOf = (element: HTMLElement): string | null =>
   element.closest('a')?.getAttribute('href') ?? null;
 
@@ -122,7 +130,7 @@ describe('Customer 360 workspace — what waits for a person', () => {
   it('draws each server count as a link to the page that handles it, filtered to the customer', async () => {
     stubApi(routes());
     renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
-    const list = await screen.findByRole('list', { name: 'نیازمند رسیدگی' });
+    const list = await attentionStrip();
     const rows = within(list).getAllByRole('link');
     expect(rows.map((row) => row.getAttribute('href'))).toEqual([
       `/services?q=${ID}&state=UNRECONCILED`,
@@ -155,7 +163,7 @@ describe('Customer 360 workspace — what waits for a person', () => {
       ),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
-    const list = await screen.findByRole('list', { name: 'نیازمند رسیدگی' });
+    const list = await attentionStrip();
     expect(
       within(list)
         .getAllByRole('link')
@@ -192,7 +200,7 @@ describe('Customer 360 workspace — what waits for a person', () => {
     renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
     await screen.findByText(/مجوز صفحهٔ آن‌ها را ندارید/u);
     expect(screen.queryByText('برای این مشتری چیزی در انتظار رسیدگی نیست.')).toBeNull();
-    expect(screen.queryByRole('list', { name: 'نیازمند رسیدگی' })).toBeNull();
+    expect(within(await attentionStrip()).queryAllByRole('link')).toHaveLength(0);
   });
 
   it('does not report the latest orders, which add no row, as a withheld count', async () => {
@@ -208,7 +216,9 @@ describe('Customer 360 workspace — what waits for a person', () => {
       ),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
-    await screen.findByText('برای این مشتری چیزی در انتظار رسیدگی نیست.');
+    // Nothing waits and every section was counted: the strip is not drawn at all.
+    await screen.findByText('آخرین سفارش‌ها و پرداخت‌ها');
+    expect(document.getElementById('c360-attention')).toBeNull();
     expect(screen.queryByText(/مجوز صفحهٔ آن‌ها را ندارید/u)).toBeNull();
   });
 
@@ -224,8 +234,8 @@ describe('Customer 360 workspace — what waits for a person', () => {
       ),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
-    await screen.findByText('برای این مشتری چیزی در انتظار رسیدگی نیست.');
-    expect(screen.queryByRole('list', { name: 'نیازمند رسیدگی' })).toBeNull();
+    await screen.findByText('آخرین سفارش‌ها و پرداخت‌ها');
+    expect(document.getElementById('c360-attention')).toBeNull();
   });
 
   it('marks a count at the cap as a floor', () => {

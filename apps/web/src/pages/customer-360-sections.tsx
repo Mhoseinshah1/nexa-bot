@@ -1191,9 +1191,9 @@ const WARNING_LABELS: Readonly<Record<CustomerTransferWarning, WebKey>> = {
 
 /**
  * W1.5: the customer's sensitive actions — suspend every service, resume every service, the
- * account transfer — as buttons for the action panel's «عملیات حساس» strip, each under its
- * own permission, each opening its confirmation (which now opens with the danger hint the
- * old card showed above them). `modals` is drawn beside the panel.
+ * account transfer — as openers for the quick-action bar, each under its own permission,
+ * each opening its confirmation (which opens with the danger hint the old card showed above
+ * them). `modals` is drawn beside the bar.
  */
 export function useCustomerDangerActions({
   customerId,
@@ -1203,27 +1203,22 @@ export function useCustomerDangerActions({
   customerId: string;
   mayTransfer: boolean;
   mayEditServices: boolean;
-}): { readonly buttons: readonly ReactNode[]; readonly modals: ReactNode } {
+}): {
+  /** Each opener is `null` for an actor without the permission: the action is then not drawn. */
+  readonly open: {
+    readonly suspend: (() => void) | null;
+    readonly resume: (() => void) | null;
+    readonly transfer: (() => void) | null;
+  };
+  readonly modals: ReactNode;
+} {
   const [toggle, setToggle] = useState<'SUSPEND' | 'RESUME' | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
-  const buttons: ReactNode[] = [];
-  if (mayEditServices) {
-    buttons.push(
-      <Button key="suspend" variant="danger" onClick={() => setToggle('SUSPEND')}>
-        {t('web.c360_services_disable')}
-      </Button>,
-      <Button key="resume" onClick={() => setToggle('RESUME')}>
-        {t('web.c360_services_enable')}
-      </Button>,
-    );
-  }
-  if (mayTransfer) {
-    buttons.push(
-      <Button key="transfer" variant="danger-solid" onClick={() => setTransferOpen(true)}>
-        {t('web.c360_transfer')}
-      </Button>,
-    );
-  }
+  const open = {
+    suspend: mayEditServices ? () => setToggle('SUSPEND') : null,
+    resume: mayEditServices ? () => setToggle('RESUME') : null,
+    transfer: mayTransfer ? () => setTransferOpen(true) : null,
+  };
   const modals = (
     <>
       {mayEditServices && toggle !== null && (
@@ -1238,7 +1233,7 @@ export function useCustomerDangerActions({
       )}
     </>
   );
-  return { buttons, modals };
+  return { open, modals };
 }
 
 /**

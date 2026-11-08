@@ -12,6 +12,7 @@ import {
   type OrderSummaryResponse,
   type ServiceSummaryResponse,
   type WalletEntrySummaryResponse,
+  type WalletImportedEntryResponse,
 } from '@nexa/contracts';
 import {
   adjustWallet,
@@ -62,7 +63,7 @@ import {
   useCustomerOverview,
   useFinancialSummary,
 } from './customer-360-sections';
-import { ActionPanel } from '../ui/action-panel';
+import { AttentionStrip, CardRows, KpiRow, QuickAction, QuickActionBar } from '../ui/redesign';
 import { useScrollHold } from '../ui/scroll-hold';
 // Phase A2: «ارسال پیام» — the compose modal and the history, in their own file.
 import { DirectMessageComposeModal, DirectMessagesCard } from './customer-direct-messages';
@@ -70,7 +71,7 @@ import { CustomerCrmSection } from './customer-360-crm';
 import { LEDGER_REASON_LABELS } from './mirza-labels';
 // Roadmap B5: the workspace — attention, the newest rows, support, shortcuts.
 import {
-  CustomerAttentionCard,
+  CustomerAttentionStrip,
   CustomerLatestCard,
   CustomerTicketsCard,
   OperatorShortcutsCard,
@@ -97,11 +98,9 @@ import {
   Money,
   Num,
   PageHead,
-  Stat,
   StateSwitch,
   TabPanel,
   Tabs,
-  TwoColumn,
   useToast,
   type Column,
   type Tone,
@@ -467,95 +466,142 @@ export function UserDetailPage({
               exempt={controls !== undefined && controls.channelMembershipExemptAt !== null}
               overview={controls}
               isReseller={isReseller === true}
+              actions={
+                <QuickActionBar
+                  label={t('web.c360_action_panel_title')}
+                  groups={[
+                    {
+                      key: 'wallet',
+                      label: t('web.c360_group_wallet'),
+                      actions: [
+                        mayCredit && mayViewWallet && (
+                          <QuickAction
+                            key="credit"
+                            icon="plus"
+                            label={t('web.c360_increase_balance')}
+                            onClick={() => setWalletDialog('CREDIT')}
+                          />
+                        ),
+                        mayDebit && mayViewWallet && (
+                          <QuickAction
+                            key="debit"
+                            label={t('web.c360_decrease_balance')}
+                            onClick={() => setWalletDialog('DEBIT')}
+                          />
+                        ),
+                      ],
+                    },
+                    {
+                      key: 'orders',
+                      label: t('web.c360_group_orders'),
+                      actions: [
+                        /* A manual order spends the wallet: the server also charges users.wallet.debit. */
+                        mayManualOrder && mayDebit && (
+                          <QuickAction
+                            key="manual"
+                            icon="plus"
+                            label={t('web.c360_manual_order')}
+                            onClick={() => setManualOrderOpen(true)}
+                          />
+                        ),
+                        mayViewOrders && (
+                          <a
+                            key="orders"
+                            className="qa"
+                            href={`/orders?q=${encodeURIComponent(id)}`}
+                            onClick={onLink}
+                          >
+                            {t('web.c360_view_orders')}
+                          </a>
+                        ),
+                      ],
+                    },
+                    {
+                      key: 'services',
+                      label: t('web.c360_group_services'),
+                      actions: [
+                        danger.open.resume !== null && (
+                          <QuickAction
+                            key="resume"
+                            label={t('web.c360_services_enable')}
+                            onClick={danger.open.resume}
+                          />
+                        ),
+                        danger.open.suspend !== null && (
+                          <QuickAction
+                            key="suspend"
+                            danger
+                            label={t('web.c360_services_disable')}
+                            onClick={danger.open.suspend}
+                          />
+                        ),
+                      ],
+                    },
+                    {
+                      key: 'contact',
+                      label: t('web.c360_group_contact'),
+                      actions: [
+                        mayMessage && (
+                          <QuickAction
+                            key="message"
+                            icon="send"
+                            label={t('web.dm_send')}
+                            onClick={() => setMessageOpen(true)}
+                          />
+                        ),
+                      ],
+                    },
+                    {
+                      key: 'account',
+                      label: t('web.c360_group_account'),
+                      actions: [
+                        danger.open.transfer !== null && (
+                          <QuickAction
+                            key="transfer"
+                            danger
+                            label={t('web.c360_transfer')}
+                            onClick={danger.open.transfer}
+                          />
+                        ),
+                        mayBlock &&
+                          (row.status === 'ACTIVE' ? (
+                            <QuickAction
+                              key="block"
+                              danger
+                              icon="lock"
+                              label={t('web.user_block')}
+                              disabled={mutate.isPending}
+                              disabledReason={t('web.c360_action_busy')}
+                              onClick={() => setPending('BLOCK')}
+                            />
+                          ) : (
+                            <QuickAction
+                              key="unblock"
+                              icon="check"
+                              label={t('web.user_unblock')}
+                              disabled={mutate.isPending}
+                              disabledReason={t('web.c360_action_busy')}
+                              onClick={() => setPending('UNBLOCK')}
+                            />
+                          )),
+                      ],
+                    },
+                  ]}
+                />
+              }
             />
 
-            {/* W1.5: every action on this customer, in one panel under the head. */}
-            <ActionPanel
-              title={t('web.c360_action_panel_title')}
-              groups={[
-                {
-                  key: 'wallet',
-                  title: t('web.c360_group_wallet'),
-                  actions: [
-                    mayCredit && mayViewWallet && (
-                      <Button key="credit" icon="plus" onClick={() => setWalletDialog('CREDIT')}>
-                        {t('web.c360_increase_balance')}
-                      </Button>
-                    ),
-                    mayDebit && mayViewWallet && (
-                      <Button key="debit" onClick={() => setWalletDialog('DEBIT')}>
-                        {t('web.c360_decrease_balance')}
-                      </Button>
-                    ),
-                  ],
-                },
-                {
-                  key: 'orders',
-                  title: t('web.c360_group_orders'),
-                  actions: [
-                    /* A manual order spends the wallet: the server also charges users.wallet.debit. */
-                    mayManualOrder && mayDebit && (
-                      <Button key="manual" icon="plus" onClick={() => setManualOrderOpen(true)}>
-                        {t('web.c360_manual_order')}
-                      </Button>
-                    ),
-                    mayViewOrders && (
-                      <a
-                        key="orders"
-                        className="btn ghost"
-                        href={`/orders?q=${encodeURIComponent(id)}`}
-                        onClick={onLink}
-                      >
-                        {t('web.c360_view_orders')}
-                      </a>
-                    ),
-                  ],
-                },
-                {
-                  key: 'contact',
-                  title: t('web.c360_group_contact'),
-                  actions: [
-                    mayMessage && (
-                      <Button key="message" icon="send" onClick={() => setMessageOpen(true)}>
-                        {t('web.dm_send')}
-                      </Button>
-                    ),
-                    mayBlock &&
-                      (row.status === 'ACTIVE' ? (
-                        <Button
-                          key="block"
-                          variant="danger"
-                          icon="lock"
-                          disabled={mutate.isPending}
-                          onClick={() => setPending('BLOCK')}
-                        >
-                          {t('web.user_block')}
-                        </Button>
-                      ) : (
-                        <Button
-                          key="unblock"
-                          variant="primary"
-                          icon="check"
-                          disabled={mutate.isPending}
-                          onClick={() => setPending('UNBLOCK')}
-                        >
-                          {t('web.user_unblock')}
-                        </Button>
-                      )),
-                  ],
-                },
-              ]}
-              sensitive={danger.buttons}
-            />
             {danger.modals}
 
-            <CustomerStatStrip row={row} mayViewWallet={mayViewWallet} />
-
             {row.status === 'BLOCKED' && (
-              <Banner tone="danger" title={t('web.user_blocked_banner_title')}>
-                {t('web.user_blocked_banner_body')}
-              </Banner>
+              <AttentionStrip tone="danger" title={t('web.user_blocked_banner_title')}>
+                <span className="small">{t('web.user_blocked_banner_body')}</span>
+              </AttentionStrip>
             )}
+
+            <CustomerAttentionStrip customerId={id} />
+
+            <CustomerStatStrip row={row} mayViewWallet={mayViewWallet} />
 
             {/*
               Step two of a block or an unblock, never one click (WP10G, closing
@@ -656,8 +702,6 @@ export function UserDetailPage({
               onClose={() => setWalletDialog(null)}
             />
 
-            <CustomerAttentionCard customerId={id} />
-
             {/*
               W2: nine real tabs, only the chosen one drawn. A link that used to scroll to a
               card switches to the tab that holds it and flashes the card; another customer
@@ -666,86 +710,92 @@ export function UserDetailPage({
             <Tabs value={tab} onChange={chooseTab} items={tabs} panelId={PANEL_ID} />
             <TabPanel id={PANEL_ID} labelledBy={`${PANEL_ID}-tab-${tab}`}>
               {tab === 'overview' && (
-                <TwoColumn
-                  main={
-                    <>
-                      <CustomerLatestCard customerId={id} />
-                      <OperatorShortcutsCard
-                        shortcuts={customerShortcuts(id, {
-                          orders: mayViewOrders,
-                          services: mayViewServices,
-                          payments: mayViewPayments,
-                          tickets: mayViewTickets,
-                          wallet: mayViewWallet,
-                          businessChats: mayViewBusinessChats,
-                        })}
-                        onJump={jumpTo}
-                      />
-                    </>
-                  }
-                  side={
-                    <>
-                      <GeneralInfoCard
-                        row={row}
-                        overview={controls}
-                        resellerLabel={
-                          isReseller === undefined
-                            ? undefined
-                            : isReseller
-                              ? t('web.c360_group_reseller')
-                              : t('web.c360_group_regular')
-                        }
-                      />
-                      <Card title={t('web.user_access_title')}>
-                        <KV
-                          items={[
-                            [t('web.status'), <StatusBadge key="s" status={row.status} />],
-                            [
-                              t('web.user_blocked_at'),
-                              row.blockedAt === null ? (
-                                <Dash key="b" />
-                              ) : (
-                                formatTimestamp(row.blockedAt)
-                              ),
-                            ],
-                            [
-                              t('web.user_blocked_reason'),
-                              row.blockedReason === null ? <Dash key="r" /> : row.blockedReason,
-                            ],
-                            ...(row.status === 'BLOCKED' && row.blockedReason !== null
-                              ? ([
-                                  [
-                                    t('web.user_blocked_reason_shown'),
-                                    row.blockedReasonShown
-                                      ? t('web.user_blocked_reason_shown_yes')
-                                      : t('web.user_blocked_reason_shown_no'),
-                                  ],
-                                ] as [ReactNode, ReactNode][])
-                              : []),
-                            // Round N close (§D): the customer's own promotional opt-out.
-                            [
-                              t('web.user_marketing'),
-                              row.marketingOptOutAt === null
-                                ? t('web.user_marketing_in')
-                                : t('web.user_marketing_out'),
-                            ],
-                            ...(row.marketingOptOutAt === null
-                              ? []
-                              : ([
-                                  [
-                                    t('web.user_marketing_since'),
-                                    formatTimestamp(row.marketingOptOutAt),
-                                  ],
-                                ] as [ReactNode, ReactNode][])),
-                          ]}
+                <CardRows
+                  rows={[
+                    {
+                      key: 'latest',
+                      main: <CustomerLatestCard customerId={id} />,
+                      side: (
+                        <GeneralInfoCard
+                          row={row}
+                          overview={controls}
+                          resellerLabel={
+                            isReseller === undefined
+                              ? undefined
+                              : isReseller
+                                ? t('web.c360_group_reseller')
+                                : t('web.c360_group_regular')
+                          }
                         />
-                        <p className="muted small">{t('web.user_marketing_hint')}</p>
-                        {/* No disabled button. A disabled control and this sentence make
+                      ),
+                    },
+                    {
+                      key: 'shortcuts',
+                      main: (
+                        <OperatorShortcutsCard
+                          shortcuts={customerShortcuts(id, {
+                            orders: mayViewOrders,
+                            services: mayViewServices,
+                            payments: mayViewPayments,
+                            tickets: mayViewTickets,
+                            wallet: mayViewWallet,
+                            businessChats: mayViewBusinessChats,
+                          })}
+                          onJump={jumpTo}
+                        />
+                      ),
+                      side: (
+                        <Card title={t('web.user_access_title')}>
+                          <KV
+                            items={[
+                              [t('web.status'), <StatusBadge key="s" status={row.status} />],
+                              [
+                                t('web.user_blocked_at'),
+                                row.blockedAt === null ? (
+                                  <Dash key="b" />
+                                ) : (
+                                  formatTimestamp(row.blockedAt)
+                                ),
+                              ],
+                              [
+                                t('web.user_blocked_reason'),
+                                row.blockedReason === null ? <Dash key="r" /> : row.blockedReason,
+                              ],
+                              ...(row.status === 'BLOCKED' && row.blockedReason !== null
+                                ? ([
+                                    [
+                                      t('web.user_blocked_reason_shown'),
+                                      row.blockedReasonShown
+                                        ? t('web.user_blocked_reason_shown_yes')
+                                        : t('web.user_blocked_reason_shown_no'),
+                                    ],
+                                  ] as [ReactNode, ReactNode][])
+                                : []),
+                              // Round N close (§D): the customer's own promotional opt-out.
+                              [
+                                t('web.user_marketing'),
+                                row.marketingOptOutAt === null
+                                  ? t('web.user_marketing_in')
+                                  : t('web.user_marketing_out'),
+                              ],
+                              ...(row.marketingOptOutAt === null
+                                ? []
+                                : ([
+                                    [
+                                      t('web.user_marketing_since'),
+                                      formatTimestamp(row.marketingOptOutAt),
+                                    ],
+                                  ] as [ReactNode, ReactNode][])),
+                            ]}
+                          />
+                          <p className="muted small">{t('web.user_marketing_hint')}</p>
+                          {/* No disabled button. A disabled control and this sentence make
                         the same claim, and only one of them names the permission. */}
-                        {!mayBlock && <Banner tone="info">{t('web.user_block_denied')}</Banner>}
-                      </Card>
-                    </>
-                  }
+                          {!mayBlock && <Banner tone="info">{t('web.user_block_denied')}</Banner>}
+                        </Card>
+                      ),
+                    },
+                  ]}
                 />
               )}
               {tab === 'services' && (
@@ -850,11 +900,14 @@ function UserHead({
   exempt,
   overview,
   isReseller,
+  actions,
 }: {
   row: CustomerSummaryResponse;
   exempt: boolean;
   overview: CustomerOverviewResponse | undefined;
   isReseller: boolean;
+  /** The grouped quick-action bar, drawn inside the head card. */
+  actions: ReactNode;
 }) {
   const name = displayName(row);
   return (
@@ -895,8 +948,13 @@ function UserHead({
             <span className="faint">{t('web.user_language')}</span>
             {row.languageCode === null ? <Dash /> : <Ltr>{row.languageCode}</Ltr>}
           </span>
+          <span className="ca-meta">
+            <span className="faint">{t('web.user_first_seen')}</span>
+            {formatTimestampNumeric(row.firstSeenAt)}
+          </span>
         </>
       }
+      actions={actions}
     />
   );
 }
@@ -955,30 +1013,54 @@ function CustomerStatStrip({
   const active = services?.byState.find((entry) => entry.state === 'ACTIVE')?.count ?? 0;
   const purchases = orders?.purchases.reduce((sum, entry) => sum + entry.count, 0);
   return (
-    <div className="stat-grid c360-stats" aria-label={t('web.c360_stats_label')} role="group">
-      {mayViewWallet && (
-        <Stat
-          label={t('web.wallet_balance')}
-          value={
-            balance === undefined ? (
-              <Dash />
-            ) : (
-              <Money value={{ amountMinor: balance.balanceAmount, currency: balance.currency }} />
-            )
-          }
-        />
-      )}
-      {services !== undefined && services !== null && (
-        <Stat label={t('web.c360_stat_active_services')} value={<Num value={active} />} />
-      )}
-      {purchases !== undefined && (
-        <Stat label={t('web.c360_stat_purchases')} value={<Num value={purchases} />} />
-      )}
-      <Stat label={t('web.user_first_seen')} value={formatTimestampNumeric(row.firstSeenAt)} />
-      <Stat label={t('web.user_last_seen')} value={formatTimestampNumeric(row.lastSeenAt)} />
-      <Stat
-        label={t('web.user_stat_trial_remaining')}
-        value={remaining === undefined ? <Dash /> : <Num value={remaining} />}
+    <div role="group" aria-label={t('web.c360_stats_label')}>
+      <KpiRow
+        items={[
+          ...(mayViewWallet
+            ? [
+                {
+                  key: 'balance',
+                  label: t('web.wallet_balance'),
+                  value:
+                    balance === undefined ? (
+                      <Dash />
+                    ) : (
+                      <Money
+                        value={{ amountMinor: balance.balanceAmount, currency: balance.currency }}
+                      />
+                    ),
+                },
+              ]
+            : []),
+          ...(services !== undefined && services !== null
+            ? [
+                {
+                  key: 'active',
+                  label: t('web.c360_stat_active_services'),
+                  value: <Num value={active} />,
+                },
+              ]
+            : []),
+          ...(purchases !== undefined
+            ? [
+                {
+                  key: 'purchases',
+                  label: t('web.c360_stat_purchases'),
+                  value: <Num value={purchases} />,
+                },
+              ]
+            : []),
+          {
+            key: 'lastSeen',
+            label: t('web.user_last_seen'),
+            value: formatTimestampNumeric(row.lastSeenAt),
+          },
+          {
+            key: 'trial',
+            label: t('web.user_stat_trial_remaining'),
+            value: remaining === undefined ? <Dash /> : <Num value={remaining} />,
+          },
+        ]}
       />
     </div>
   );
@@ -1336,6 +1418,14 @@ function CustomerServiceRows({
 // Wallet
 // ---------------------------------------------------------------------------
 
+/**
+ * One line of the merged wallet table: a ledger entry, or a line of the one-time import's Mirza
+ * wallet history — drawn in the same table, marked «واردشده», never part of the ledger's sum.
+ */
+type WalletRow =
+  | { readonly kind: 'ledger'; readonly entry: WalletEntrySummaryResponse }
+  | { readonly kind: 'imported'; readonly entry: WalletImportedEntryResponse };
+
 const DIRECTION_LABELS: Readonly<Record<LedgerDirection, WebKey>> = {
   CREDIT: 'web.wallet_direction_credit',
   DEBIT: 'web.wallet_direction_debit',
@@ -1415,30 +1505,53 @@ function WalletCard({
     );
   }
 
-  const columns: Column<WalletEntrySummaryResponse>[] = [
+  const columns: Column<WalletRow>[] = [
     {
       key: 'direction',
       header: t('web.wallet_direction'),
-      render: (row) => (
-        <Badge tone={DIRECTION_TONES[row.direction]}>{t(DIRECTION_LABELS[row.direction])}</Badge>
-      ),
+      render: (line) =>
+        line.kind === 'imported' ? (
+          <Badge tone="neutral" title={t('web.wallet_imported_title')}>
+            {t('web.wallet_imported_badge')}
+          </Badge>
+        ) : (
+          <Badge tone={DIRECTION_TONES[line.entry.direction]}>
+            {t(DIRECTION_LABELS[line.entry.direction])}
+          </Badge>
+        ),
     },
     {
       key: 'amount',
       header: t('web.wallet_balance'),
       // Positive, always, with the sign carried by the direction beside it — the
       // ledger's own shape, preserved to the screen.
-      render: (row) => (
-        <span className={row.direction === 'CREDIT' ? 'ca-amount credit' : 'ca-amount debit'}>
-          <Money value={{ amountMinor: row.amount, currency: row.currency }} />
-        </span>
-      ),
+      render: (line) =>
+        line.kind === 'imported' ? (
+          <Money value={{ amountMinor: line.entry.signedAmount, currency: line.entry.currency }} />
+        ) : (
+          <span
+            className={line.entry.direction === 'CREDIT' ? 'ca-amount credit' : 'ca-amount debit'}
+          >
+            <Money value={{ amountMinor: line.entry.amount, currency: line.entry.currency }} />
+          </span>
+        ),
     },
     {
       key: 'reason',
       header: t('web.wallet_reason'),
       // W5: the Persian name, the raw key in `title`; an unknown key stays raw, never blank.
-      render: (row) => {
+      render: (line) => {
+        if (line.kind === 'imported') {
+          const row = line.entry;
+          return row.origin === 'WHEEL_SPIN' ? (
+            t('web.wallet_imported_wheel')
+          ) : row.rawKind === null ? (
+            <Dash />
+          ) : (
+            <Ltr>{row.rawKind}</Ltr>
+          );
+        }
+        const row = line.entry;
         const label = (LEDGER_REASON_LABELS as Readonly<Record<string, WebKey | undefined>>)[
           row.reason
         ];
@@ -1452,25 +1565,39 @@ function WalletCard({
     {
       key: 'actor',
       header: t('web.wallet_actor'),
-      render: (row) =>
-        row.actorAdminId === null ? (
+      render: (line) =>
+        line.kind === 'imported' ? (
+          <Dash />
+        ) : line.entry.actorAdminId === null ? (
           <span className="faint">{t('web.wallet_actor_system')}</span>
         ) : (
-          <IdText value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />
+          <IdText value={line.entry.actorAdminId} display={line.entry.actorAdminId.slice(0, 8)} />
         ),
     },
     {
       key: 'note',
       header: t('web.wallet_note'),
-      render: (row) => (row.note === null ? <Dash /> : row.note),
+      render: (line) => (line.entry.note === null ? <Dash /> : line.entry.note),
     },
     {
       key: 'createdAt',
       header: t('web.wallet_created_at'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+      render: (line) => (
+        <span className="nowrap">
+          {formatTimestamp(line.kind === 'imported' ? line.entry.occurredAt : line.entry.createdAt)}
+        </span>
+      ),
     },
   ];
 
+  const walletRows: WalletRow[] = [
+    ...(entries.data?.entries ?? []).map((entry): WalletRow => ({ kind: 'ledger', entry })),
+    ...(entries.data?.importedEntries ?? []).map((entry): WalletRow => ({
+      kind: 'imported',
+      entry,
+    })),
+  ];
+  const hasImported = (entries.data?.importedEntries ?? []).length > 0 || importedCursor !== null;
   const balance = wallet.data?.wallet;
   /*
    * BELOW ZERO is a real state, for two reasons: a reseller's legacy purchase drawn on the
@@ -1534,15 +1661,15 @@ function WalletCard({
 
       <h3 className="ca-subhead">{t('web.wallet_history_title')}</h3>
       <StateSwitch query={entries}>
-        {entries.data === undefined ? null : entries.data.entries.length === 0 ? (
+        {entries.data === undefined ? null : walletRows.length === 0 && importedCursor === null ? (
           <Empty variant="compact" title={t('web.wallet_history_empty')} />
         ) : (
           <>
             <DataTable
               caption={t('web.wallet_history_title')}
               columns={columns}
-              rows={entries.data.entries}
-              rowKey={(row) => row.id}
+              rows={walletRows}
+              rowKey={(line) => `${line.kind}:${line.entry.id}`}
               dense
             />
             <CursorPager
@@ -1553,70 +1680,29 @@ function WalletCard({
               onPrevious={() => setCursor(null)}
               onNext={() => setCursor(entries.data?.nextCursor ?? null)}
             />
+            {/*
+              The one-time import's Mirza wallet history sits in the table above,
+              marked imported, and is never part of the ledger. The balance is the ledger's alone;
+              Mirza's own balance was carried as ONE opening entry, so these rows are what
+              happened in Mirza, not money in NEXA. It pages on its own cursor.
+            */}
+            {hasImported && (
+              <>
+                <p className="muted small">{t('web.wallet_imported_hint')}</p>
+                <CursorPager
+                  order="newest-first"
+                  shown={(entries.data.importedEntries ?? []).length}
+                  hasPrevious={importedCursor !== null}
+                  hasNext={(entries.data.importedNextCursor ?? null) !== null}
+                  onPrevious={() => setImportedCursor(null)}
+                  onNext={() => setImportedCursor(entries.data?.importedNextCursor ?? null)}
+                />
+              </>
+            )}
           </>
         )}
       </StateSwitch>
       <p className="muted small">{t('web.wallet_immutable')}</p>
-
-      {/*
-        The one-time import's Mirza wallet history: shown beside the ledger, never part of
-        it. The balance above is the ledger's alone; Mirza's own balance was carried as ONE
-        opening entry, so these rows are what happened in Mirza, not money in NEXA.
-      */}
-      {entries.data !== undefined &&
-        ((entries.data.importedEntries ?? []).length > 0 || importedCursor !== null) && (
-          <>
-            <h3 className="ca-subhead">{t('web.wallet_imported_title')}</h3>
-            <p className="muted small">{t('web.wallet_imported_hint')}</p>
-            <DataTable
-              caption={t('web.wallet_imported_title')}
-              columns={[
-                {
-                  key: 'signedAmount',
-                  header: t('web.wallet_balance'),
-                  render: (row) => (
-                    <Money value={{ amountMinor: row.signedAmount, currency: row.currency }} />
-                  ),
-                },
-                {
-                  key: 'rawKind',
-                  header: t('web.wallet_reason'),
-                  render: (row) =>
-                    row.origin === 'WHEEL_SPIN' ? (
-                      t('web.wallet_imported_wheel')
-                    ) : row.rawKind === null ? (
-                      <Dash />
-                    ) : (
-                      <Ltr>{row.rawKind}</Ltr>
-                    ),
-                },
-                {
-                  key: 'note',
-                  header: t('web.wallet_note'),
-                  render: (row) => (row.note === null ? <Dash /> : row.note),
-                },
-                {
-                  key: 'occurredAt',
-                  header: t('web.wallet_created_at'),
-                  render: (row) => (
-                    <span className="nowrap">{formatTimestamp(row.occurredAt)}</span>
-                  ),
-                },
-              ]}
-              rows={entries.data.importedEntries ?? []}
-              rowKey={(row) => row.id}
-              dense
-            />
-            <CursorPager
-              order="newest-first"
-              shown={(entries.data.importedEntries ?? []).length}
-              hasPrevious={importedCursor !== null}
-              hasNext={(entries.data.importedNextCursor ?? null) !== null}
-              onPrevious={() => setImportedCursor(null)}
-              onNext={() => setImportedCursor(entries.data?.importedNextCursor ?? null)}
-            />
-          </>
-        )}
 
       {/*
         Named separately, because the two permissions are separate decisions with
