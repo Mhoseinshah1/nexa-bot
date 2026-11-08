@@ -28,6 +28,7 @@ import {
   Badge,
   Banner,
   Card,
+  Disclosure,
   Drawer,
   Field,
   Ltr,
@@ -164,7 +165,7 @@ export function AppearancePage({
   if (denied) {
     return (
       <>
-        <PageHead title={t('web.appearance_title')} subtitle={t('web.appearance_intro')} />
+        <PageHead title={t('web.appearance_title')} />
         <StateSwitch query={appearance} denied isEmpty={false}>
           {null}
         </StateSwitch>
@@ -174,7 +175,10 @@ export function AppearancePage({
 
   return (
     <>
-      <PageHead title={t('web.appearance_title')} subtitle={t('web.appearance_intro')} />
+      <PageHead title={t('web.appearance_title')} />
+      <Disclosure size="sm" summary={t('web.appearance_about_fold')}>
+        <p className="muted small">{t('web.appearance_intro')}</p>
+      </Disclosure>
       <Tabs
         value={tab}
         onChange={setTab}

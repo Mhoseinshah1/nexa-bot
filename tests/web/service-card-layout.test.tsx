@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { moveItem } from '../../apps/web/src/ui/layout-dnd';
 import {
   DEFAULT_SERVICE_CARD_ROWS,
   INLINE_BUTTONS,
@@ -15,12 +16,10 @@ import { INLINE_BUTTON_NAME } from '../../apps/web/src/pages/bot-buttons/inline-
 import {
   defaultServiceCardRows,
   effectiveServiceCardRows,
-  moveServiceCardAcrossRows,
-  moveServiceCardRow,
-  moveServiceCardWithinRow,
+  fromDndLayout,
   setServiceCardEnabled,
-  splitServiceCardButton,
   storedServiceCardRows,
+  toDndLayout,
 } from '../../apps/web/src/pages/bot-buttons/service-card-model';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, setting, stubApi } from './harness';
@@ -57,37 +56,64 @@ describe('the service layout model', () => {
     expect(hidden.flat().find((entry) => entry.button === 'service.link')?.enabled).toBe(false);
   });
 
-  it('moves within a row, across rows and into a row of its own — never past three', () => {
-    const rows = defaultServiceCardRows();
-    expect(order(moveServiceCardWithinRow(rows, 'service.refresh', 1))[0]).toEqual([
-      'service.files',
-      'service.refresh',
-    ]);
-    // The third row is full: nothing may join it.
-    const full = moveServiceCardAcrossRows(rows, 'service.link', 1);
-    expect(order(full)).toEqual(order(rows));
-    // A button may join a row with room, and its old row closes when it empties.
-    const joined = moveServiceCardAcrossRows(rows, 'service.add_devices', -1);
-    expect(order(joined)[3]).toEqual(['service.renew', 'service.suspend', 'service.add_devices']);
-    expect(joined.length).toBe(rows.length - 1);
-    // Split makes a row of one; a row of one cannot be split or moved off the end.
-    expect(order(splitServiceCardButton(rows, 'service.files'))[1]).toEqual(['service.files']);
-    expect(splitServiceCardButton(rows, 'service.add_devices')).toBe(rows);
-    for (const edited of [joined, full, splitServiceCardButton(rows, 'service.files')]) {
-      for (const row of edited) {
-        expect(row.length).toBeGreaterThanOrEqual(1);
-        expect(row.length).toBeLessThanOrEqual(SERVICE_CARD_ROW_MAX);
-      }
-      expect(serviceCardLayoutSchema.safeParse({ rows: edited }).success).toBe(true);
+  it('holds hidden buttons in the free box and stores them in trailing rows, never past three', () => {
+    const hidden = setServiceCardEnabled(
+      setServiceCardEnabled(defaultServiceCardRows(), 'service.link', false),
+      'service.note',
+      false,
+    );
+    const dnd = toDndLayout(hidden);
+    expect(dnd.free).toEqual(['service.link', 'service.note']);
+    expect(dnd.rows.flat()).not.toContain('service.link');
+    // Round trip: every button named once, hidden ones disabled, rows valid.
+    const stored = fromDndLayout(dnd);
+    expect(stored.flat().length).toBe(SERVICE_CARD_BUTTONS.length);
+    expect(
+      stored
+        .flat()
+        .filter((entry) => !entry.enabled)
+        .map((entry) => entry.button),
+    ).toEqual(['service.link', 'service.note']);
+    for (const row of stored) {
+      expect(row.length).toBeGreaterThanOrEqual(1);
+      expect(row.length).toBeLessThanOrEqual(SERVICE_CARD_ROW_MAX);
     }
+    expect(serviceCardLayoutSchema.safeParse({ rows: stored }).success).toBe(true);
   });
 
-  it('moves a whole row', () => {
-    const rows = defaultServiceCardRows();
-    expect(order(moveServiceCardRow(rows, 0, 1))[1]).toEqual(['service.refresh', 'service.files']);
-    expect(moveServiceCardRow(rows, 0, -1)).toBe(rows);
+  it('refuses a drop on a full row, and a new row keeps every row valid', () => {
+    const dnd = toDndLayout(defaultServiceCardRows());
+    const rules = { maxPerRow: SERVICE_CARD_ROW_MAX };
+    const full = dnd.rows.findIndex((row) => row.length === SERVICE_CARD_ROW_MAX);
+    expect(full).toBeGreaterThanOrEqual(0);
+    expect(moveItem(dnd, 'service.files', { kind: 'row-end', row: full }, rules)).toBeNull();
+    const alone = moveItem(dnd, 'service.files', { kind: 'new-row' }, rules);
+    expect(alone).not.toBeNull();
+    expect(alone?.rows.at(-1)).toEqual(['service.files']);
+    expect(serviceCardLayoutSchema.safeParse({ rows: fromDndLayout(alone as never) }).success).toBe(
+      true,
+    );
   });
 });
+
+/** A pointer drag of an item onto `target`, past the drag threshold. */
+function drag(button: string, target: () => Element | null): void {
+  const from = document.querySelector(`[data-dnd-item="${button}"]`) as HTMLElement;
+  fireEvent.pointerDown(from, { pointerId: 1, clientX: 1, clientY: 1 });
+  const element = target();
+  expect(element).not.toBeNull();
+  document.elementFromPoint = vi.fn(() => element);
+  fireEvent.pointerMove(from, { pointerId: 1, clientX: 30, clientY: 30 });
+  fireEvent.pointerUp(from, { pointerId: 1, clientX: 30, clientY: 30 });
+}
+const freeBox = () => document.querySelector('[data-dnd-free]');
+const newRow = () => document.querySelector('[data-dnd-new-row]');
+const drawnRows = () =>
+  [...document.querySelectorAll('.dnd-row')].map((row) =>
+    [...row.querySelectorAll('[data-button]')].map((one) => one.getAttribute('data-button')),
+  );
+
+afterEach(() => Reflect.deleteProperty(document, 'elementFromPoint'));
 
 const nameOf = (slot: (typeof SERVICE_CARD_BUTTONS)[number]) =>
   t(INLINE_BUTTON_NAME[slot as keyof typeof INLINE_BUTTON_NAME]);
@@ -140,16 +166,20 @@ describe('«چیدمان صفحهٔ سرویس»', () => {
     expect(screen.getByRole('button', { name: t('web.scl_save') })).toBeDisabled();
   });
 
-  it('saves an edited order, rows and switch as ONE write with the version read', async () => {
+  it('saves an edited order, rows and a removed button as ONE write with the version read', async () => {
     const a = api({ rows: [] }, 4);
     renderPage(section());
     await loaded();
-    fireEvent.click(
-      screen.getByRole('button', { name: `${t('web.scl_later')}: ${nameOf('service.refresh')}` }),
-    );
-    fireEvent.click(
-      screen.getByRole('switch', { name: `${t('web.scl_show')} ${nameOf('service.link')}` }),
-    );
+    // refresh onto the start half of files (right half in Persian): before it.
+    const files = document.querySelector('[data-dnd-item="service.files"]') as HTMLElement;
+    files.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 30 }) as DOMRect;
+    const from = document.querySelector('[data-dnd-item="service.refresh"]') as HTMLElement;
+    fireEvent.pointerDown(from, { pointerId: 1, clientX: 1, clientY: 1 });
+    document.elementFromPoint = vi.fn(() => files);
+    fireEvent.pointerMove(from, { pointerId: 1, clientX: 90, clientY: 20 });
+    fireEvent.pointerUp(from, { pointerId: 1, clientX: 90, clientY: 20 });
+    expect(drawnRows()[0]).toEqual(['service.refresh', 'service.files']);
+    drag('service.link', freeBox);
     fireEvent.click(screen.getByRole('button', { name: t('web.scl_save') }));
     await waitFor(() => {
       const write = a.calls.find((call) => call.method === 'POST');
@@ -160,10 +190,27 @@ describe('«چیدمان صفحهٔ سرویس»', () => {
       };
       expect(body.expectedVersion).toBe(4);
       expect(serviceCardLayoutSchema.safeParse(body.value).success).toBe(true);
-      expect(order(body.value.rows)[0]).toEqual(['service.files', 'service.refresh']);
+      expect(order(body.value.rows)[0]).toEqual(['service.refresh', 'service.files']);
       const link = body.value.rows.flat().find((entry) => entry.button === 'service.link');
       expect(link?.enabled).toBe(false);
     });
+  });
+
+  it('has no move, split or show/hide control: dragging and the free box are the only way', async () => {
+    api({ rows: [] }, null);
+    renderPage(section());
+    await loaded();
+    expect(screen.queryAllByRole('switch')).toHaveLength(0);
+    for (const button of document.querySelectorAll('[data-dnd-item] button')) {
+      expect(button.textContent).not.toMatch(/[↑↓→←⇡⇣⊟]/u);
+    }
+    expect(screen.getByText(t('web.kit_dnd_free'))).toBeTruthy();
+    expect(screen.getByText(t('web.kit_dnd_new_row'))).toBeTruthy();
+    // A full row refuses a fourth button: the drop changes nothing.
+    const before = drawnRows();
+    const full = before.findIndex((row) => row.length === SERVICE_CARD_ROW_MAX);
+    drag('service.files', () => document.querySelector(`[data-dnd-row="${String(full)}"]`));
+    expect(drawnRows()).toEqual(before);
   });
 
   it('«بازگشت به چیدمان پیش‌فرض» saves the empty layout', async () => {
@@ -183,9 +230,12 @@ describe('«چیدمان صفحهٔ سرویس»', () => {
     renderPage(section(false));
     await loaded();
     expect(screen.getByRole('button', { name: t('web.scl_save') })).toBeDisabled();
-    expect(
-      screen.getByRole('switch', { name: `${t('web.scl_show')} ${nameOf('service.link')}` }),
-    ).toBeDisabled();
+    for (const item of document.querySelectorAll('[data-dnd-item]')) {
+      if (item.getAttribute('tabindex') === '0')
+        expect(item.getAttribute('aria-disabled')).toBe('true');
+    }
+    drag('service.link', freeBox);
+    expect(drawnRows().flat()).toContain('service.link');
   });
 });
 
@@ -217,9 +267,7 @@ describe('«چیدمان صفحهٔ سرویس» — review fixes', () => {
     api({ rows: [] }, 4);
     renderPage(section());
     await loaded();
-    fireEvent.click(
-      screen.getByRole('button', { name: `${t('web.scl_later')}: ${nameOf('service.refresh')}` }),
-    );
+    drag('service.refresh', newRow);
     // Somebody else saved: the next read is version 5, and this save is refused.
     stubApi([
       {
@@ -246,9 +294,7 @@ describe('«چیدمان صفحهٔ سرویس» — review fixes', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: t('web.ib_reload') })).toBeNull(),
     );
-    fireEvent.click(
-      screen.getByRole('button', { name: `${t('web.scl_later')}: ${nameOf('service.refresh')}` }),
-    );
+    drag('service.refresh', newRow);
     fireEvent.click(screen.getByRole('button', { name: t('web.scl_save') }));
     await waitFor(() => {
       const write = a.calls.find((call) => call.method === 'POST');
@@ -266,13 +312,15 @@ describe('«چیدمان صفحهٔ سرویس» — review fixes', () => {
     );
     renderPage(section());
     await loaded();
-    const later = `${t('web.scl_later')}: ${nameOf('service.refresh')}`;
-    fireEvent.click(screen.getByRole('button', { name: later }));
+    drag('service.refresh', newRow);
     fireEvent.click(screen.getByRole('button', { name: t('web.scl_save') }));
-    await waitFor(() => expect(screen.getByRole('button', { name: later })).toBeDisabled());
-    expect(
-      screen.getByRole('switch', { name: `${t('web.scl_show')} ${nameOf('service.link')}` }),
-    ).toBeDisabled();
+    await waitFor(() =>
+      expect(document.querySelector('[data-dnd-item]')?.getAttribute('aria-disabled')).toBe('true'),
+    );
+    // In flight: a drop changes nothing.
+    const during = drawnRows();
+    drag('service.files', freeBox);
+    expect(drawnRows()).toEqual(during);
     expect(screen.getByRole('button', { name: t('web.scl_reset') })).toBeDisabled();
   });
 

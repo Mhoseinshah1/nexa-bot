@@ -31,6 +31,7 @@ import {
   CellMain,
   DataTable,
   Empty,
+  Disclosure,
   Field,
   Num,
   PageHead,
@@ -331,7 +332,10 @@ export function TermsPage({
 
   return (
     <>
-      <PageHead title={t('web.terms_page_title')} subtitle={t('web.terms_page_subtitle')} />
+      <PageHead title={t('web.terms_page_title')} />
+      <Disclosure size="sm" summary={t('web.terms_about_fold')}>
+        <p className="muted small">{t('web.terms_page_subtitle')}</p>
+      </Disclosure>
 
       <StateSwitch query={terms} denied={denied} isEmpty={false} empty={null}>
         {data !== undefined && (

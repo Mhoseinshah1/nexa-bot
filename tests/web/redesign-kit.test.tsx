@@ -416,3 +416,29 @@ describe('LayoutDnd keyboard flow', () => {
     expect(screen.queryByRole('button', { name: /بالا|پایین|جدا/ })).toBeNull();
   });
 });
+
+describe('LayoutDnd read-only', () => {
+  it('stays focusable and selectable (inspector) but never moves', () => {
+    const onSelect = vi.fn();
+    const onChange = vi.fn();
+    render(
+      <LayoutDnd
+        label="چیدمان"
+        layout={{ rows: [['a', 'b']], free: [] }}
+        disabled
+        nameOf={(id) => `دکمه ${id}`}
+        renderItem={(id) => <span>{id}</span>}
+        onSelect={onSelect}
+        onChange={onChange}
+      />,
+    );
+    const a = document.querySelector<HTMLElement>('[data-dnd-item="a"]') as HTMLElement;
+    expect(a.tabIndex).toBe(0);
+    fireEvent.pointerDown(a, { button: 0 });
+    expect(onSelect).toHaveBeenCalledWith('a');
+    fireEvent.keyDown(a, { key: 'Enter' });
+    fireEvent.keyDown(a, { key: 'ArrowLeft' });
+    expect(a.getAttribute('aria-pressed')).toBe('false');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});

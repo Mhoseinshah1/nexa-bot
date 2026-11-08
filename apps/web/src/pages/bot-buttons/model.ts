@@ -4,7 +4,6 @@ import {
   customMenuRefOf,
   defaultCustomMenuButtonConfig,
   defaultMainMenuButtonConfig,
-  explicitMainMenusEqual,
   isCustomMenuRef,
   normalizeExplicitMainMenu,
   placedCustomRefs,
@@ -109,54 +108,19 @@ function withRows(layout: ExplicitMainMenu, rows: ItemId[][]): ExplicitMainMenu 
   };
 }
 
-/** Put `id` immediately before `beforeId`, wherever each is now. */
-export function placeBefore(
+/**
+ * The layout after a drag-and-drop edit: `rows` are the rows the drag left (the free box is
+ * simply every button no row names — the pool). Configuration is kept, as every placement
+ * primitive keeps it.
+ */
+export function withDroppedRows(
   layout: ExplicitMainMenu,
-  id: ItemId,
-  beforeId: ItemId,
+  rows: readonly (readonly ItemId[])[],
 ): ExplicitMainMenu {
-  if (id === beforeId) return layout;
-  const rows = rowsWithout(layout, id);
-  for (const row of rows) {
-    const index = row.indexOf(beforeId);
-    if (index >= 0) {
-      row.splice(index, 0, id);
-      return withRows(layout, rows);
-    }
-  }
-  return layout;
-}
-
-/** Put `id` at the end of row `row` (an index into the layout's rows as they are now). */
-export function placeAtRowEnd(layout: ExplicitMainMenu, id: ItemId, row: number): ExplicitMainMenu {
-  const rows = rowsWithout(layout, id);
-  const target = rows[row];
-  if (target === undefined) return layout;
-  target.push(id);
-  return withRows(layout, rows);
-}
-
-/** Put `id` alone on a NEW row, inserted before row `at` (`rows.length`: after the last). */
-export function placeInNewRow(layout: ExplicitMainMenu, id: ItemId, at: number): ExplicitMainMenu {
-  const rows = rowsWithout(layout, id);
-  const clamped = Math.max(0, Math.min(at, rows.length));
-  rows.splice(clamped, 0, [id]);
-  return withRows(layout, rows);
-}
-
-/** Take `id` off the keyboard into the Available pool. Its configuration is kept. */
-export function removeToPool(layout: ExplicitMainMenu, id: ItemId): ExplicitMainMenu {
-  return withRows(layout, rowsWithout(layout, id));
-}
-
-/** Move a whole row so it sits before row `at` (`rows.length`: last). */
-export function moveRow(layout: ExplicitMainMenu, from: number, at: number): ExplicitMainMenu {
-  const rows = layout.rows.map((row) => [...row]);
-  const [moved] = rows.splice(from, 1);
-  if (moved === undefined) return layout;
-  const target = at > from ? at - 1 : at;
-  rows.splice(Math.max(0, Math.min(target, rows.length)), 0, moved);
-  return withRows(layout, rows);
+  return withRows(
+    layout,
+    rows.map((row) => [...row]),
+  );
 }
 
 function withConfig(
@@ -220,86 +184,6 @@ export function setIconSlot(
   return withConfig(layout, id, { iconSlot });
 }
 
-// --- The non-drag moves: each one is a primitive above, never a second implementation ---
-
-/** One place earlier in its row. */
-export function moveEarlier(layout: ExplicitMainMenu, id: ItemId): ExplicitMainMenu {
-  const at = positionOf(layout, id);
-  const before = at === null ? undefined : layout.rows[at.row]?.[at.index - 1];
-  return before === undefined ? layout : placeBefore(layout, id, before);
-}
-
-/** One place later in its row. */
-export function moveLater(layout: ExplicitMainMenu, id: ItemId): ExplicitMainMenu {
-  const at = positionOf(layout, id);
-  if (at === null) return layout;
-  const row = layout.rows[at.row] ?? [];
-  if (at.index >= row.length - 1) return layout;
-  const afterNext = row[at.index + 2];
-  return afterNext === undefined
-    ? placeAtRowEnd(layout, id, at.row)
-    : placeBefore(layout, id, afterNext);
-}
-
-/** To the end of the row above. */
-export function moveToPreviousRow(layout: ExplicitMainMenu, id: ItemId): ExplicitMainMenu {
-  const at = positionOf(layout, id);
-  if (at === null || at.row === 0) return layout;
-  return placeAtRowEnd(layout, id, at.row - 1);
-}
-
-/** To the end of the row below. */
-export function moveToNextRow(layout: ExplicitMainMenu, id: ItemId): ExplicitMainMenu {
-  const at = positionOf(layout, id);
-  if (at === null || at.row >= layout.rows.length - 1) return layout;
-  return placeAtRowEnd(layout, id, at.row + 1);
-}
-
-/** Alone on a new row directly below its current one. */
-export function moveToOwnRow(layout: ExplicitMainMenu, id: ItemId): ExplicitMainMenu {
-  const at = positionOf(layout, id);
-  if (at === null) return layout;
-  if ((layout.rows[at.row] ?? []).length <= 1) return layout;
-  return placeInNewRow(layout, id, at.row + 1);
-}
-
-/** What each control may do now, so a control that would do nothing is disabled. */
-export function movesFor(
-  layout: ExplicitMainMenu,
-  id: ItemId,
-): {
-  readonly earlier: boolean;
-  readonly later: boolean;
-  readonly previousRow: boolean;
-  readonly nextRow: boolean;
-  readonly ownRow: boolean;
-  readonly rowUp: boolean;
-  readonly rowDown: boolean;
-} {
-  const at = positionOf(layout, id);
-  if (at === null) {
-    return {
-      earlier: false,
-      later: false,
-      previousRow: false,
-      nextRow: false,
-      ownRow: false,
-      rowUp: false,
-      rowDown: false,
-    };
-  }
-  const length = (layout.rows[at.row] ?? []).length;
-  return {
-    earlier: at.index > 0,
-    later: at.index < length - 1,
-    previousRow: at.row > 0,
-    nextRow: at.row < layout.rows.length - 1,
-    ownRow: length > 1,
-    rowUp: at.row > 0,
-    rowDown: at.row < layout.rows.length - 1,
-  };
-}
-
 /**
  * The Available pool: declared buttons in no row, then (R10 D2) the owner's ACTIVE custom
  * buttons in no row, in the order the server listed them. An archived button is not offered.
@@ -356,7 +240,7 @@ export function withoutUnusableCustom(
   const usable = new Set(customs.filter((one) => one.archivedAt === null).map((one) => one.ref));
   const dead = placedCustomRefs(layout).filter((ref) => !usable.has(ref));
   if (dead.length === 0) return layout;
-  return dead.reduce((current, ref) => removeToPool(current, ref), layout);
+  return dead.reduce((current, ref) => withRows(current, rowsWithout(current, ref)), layout);
 }
 
 /**
@@ -422,114 +306,6 @@ export function diffLayouts(
 }
 
 // --- Drag and drop: what a drop DOES, decided here, never in the pointer code -----------
-
-/** What is being dragged: one button (placed or pooled), or a whole row. */
-export type DragSource =
-  { readonly kind: 'button'; readonly id: ItemId } | { readonly kind: 'row'; readonly row: number };
-
-export type DropTarget =
-  /** Before a placed button. */
-  | { readonly kind: 'chip'; readonly id: ItemId }
-  /** At the end of a row. */
-  | { readonly kind: 'row'; readonly row: number }
-  /** A NEW row, inserted before row `at` (`rows.length`: after the last). */
-  | { readonly kind: 'gap'; readonly at: number }
-  /** The Available pool: off the keyboard. */
-  | { readonly kind: 'pool' };
-
-/**
- * The layout a drop produces — through the SAME primitives the Inspector and the keyboard
- * call — or null when the drop would change nothing or is not a move at all (a row dropped
- * on a button, a pooled button dropped on the pool, a button dropped where it already is).
- *
- * Null is how "no accidental reorder" is decided: the page draws no insertion placeholder
- * for it, announces nothing, and leaves the draft untouched.
- */
-export function applyDrop(
-  layout: ExplicitMainMenu,
-  source: DragSource,
-  target: DropTarget,
-): ExplicitMainMenu | null {
-  let next: ExplicitMainMenu;
-  if (source.kind === 'row') {
-    if (target.kind !== 'gap') return null;
-    next = moveRow(layout, source.row, target.at);
-  } else {
-    const id = source.id;
-    switch (target.kind) {
-      case 'chip':
-        if (target.id === id) return null;
-        next = placeBefore(layout, id, target.id);
-        break;
-      case 'row':
-        next = placeAtRowEnd(layout, id, target.row);
-        break;
-      case 'gap':
-        next = placeInNewRow(layout, id, target.at);
-        break;
-      case 'pool':
-        next = removeToPool(layout, id);
-        break;
-    }
-  }
-  return explicitMainMenusEqual(next, layout) ? null : next;
-}
-
-/** Where the insertion placeholder is drawn for a drop that would change something. */
-export type DropHint =
-  /** A caret on the start edge of button `id`, in row `row` (the row is highlighted). */
-  | { readonly kind: 'before'; readonly id: ItemId; readonly row: number }
-  /** A caret after the last button of row `row` (the row is highlighted). */
-  | { readonly kind: 'row-end'; readonly row: number }
-  /** A line between rows, where a new row would be made. */
-  | { readonly kind: 'new-row'; readonly at: number }
-  | { readonly kind: 'pool' };
-
-/** The placeholder for `target`, or null when dropping there would change nothing. */
-export function dropHintOf(
-  layout: ExplicitMainMenu,
-  source: DragSource | null,
-  target: DropTarget | null,
-): DropHint | null {
-  if (source === null || target === null) return null;
-  if (applyDrop(layout, source, target) === null) return null;
-  switch (target.kind) {
-    case 'chip': {
-      const at = positionOf(layout, target.id);
-      return at === null ? null : { kind: 'before', id: target.id, row: at.row };
-    }
-    case 'row':
-      return { kind: 'row-end', row: target.row };
-    case 'gap':
-      return { kind: 'new-row', at: target.at };
-    case 'pool':
-      return { kind: 'pool' };
-  }
-}
-
-/** The row a hint highlights as the drop's target row, if it names one. */
-export function hintedRow(hint: DropHint | null): number | null {
-  return hint !== null && (hint.kind === 'before' || hint.kind === 'row-end') ? hint.row : null;
-}
-
-/**
- * Which half of a button the pointer is over, in READING order: the half a line starts
- * from is `before`, the other `after` — the right half in Persian, the left in a
- * left-to-right page. Within `band` pixels of the middle the previous answer is kept, so a
- * pointer resting on the boundary does not make the placeholder flicker between two places.
- */
-export function chipSide(
-  rect: { readonly left: number; readonly width: number },
-  x: number,
-  rtl: boolean,
-  previous: 'before' | 'after' | null,
-  band = 6,
-): 'before' | 'after' {
-  const middle = rect.left + rect.width / 2;
-  if (previous !== null && Math.abs(x - middle) < band) return previous;
-  const startSide = rtl ? x >= middle : x <= middle;
-  return startSide ? 'before' : 'after';
-}
 
 /** A label that already starts with an emoji: an icon beside it draws two symbols. */
 export function startsWithEmoji(label: string): boolean {

@@ -47,33 +47,6 @@
   grid-template-columns: minmax(0, 1fr);
   margin-top: 12px;
 }
-.bb-card .bb-workspace > .bb-pool {
-  grid-column: 1 / -1;
-  align-self: auto;
-}
-.bb-card .bb-pool,
-.bb-card .bb-canvas,
-.bb-card .bb-inspector {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--bg-1);
-  padding: 12px;
-}
-.bb-card .bb-pool.is-target {
-  border-style: dashed;
-  border-color: var(--line-2);
-}
-.bb-card .bb-pool.is-over {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.bb-card .bb-pool-list {
-  flex-direction: column;
-}
-.bb-card .bb-pool-list .bb-chip {
-  flex: 1 1 auto;
-  inline-size: 100%;
-}
 .bb-card .bb-canvas-head {
   margin-bottom: 4px;
 }
@@ -354,17 +327,6 @@
 .ci-list .ib-head .ib-preview {
   padding: 6px 14px;
   border-radius: 999px;
-}
-/* At phone width the demo's free buttons wrap as chips rather than full-width rows. */
-@media (max-width: 640px) {
-  .bb-card .bb-pool-list {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-  .bb-card .bb-pool-list .bb-chip {
-    flex: 0 1 auto;
-    inline-size: auto;
-  }
 }
 /* At phone width the demo's category chips wrap onto as many rows as they need. */
 @media (max-width: 720px) {

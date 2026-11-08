@@ -57,10 +57,10 @@ const page = (mayEdit = true, mayViewTemplates = true) => (
 
 const chip = (id: MainMenuButtonId) =>
   document.querySelector(`[data-chip="${id}"]`) as HTMLElement | null;
+/** The kit's draggable item around a button: what a press, a focus and a key land on. */
 const chipButton = (id: MainMenuButtonId) =>
-  document.querySelector(`[data-chip-button="${id}"]`) as HTMLButtonElement;
-const grip = (id: MainMenuButtonId) => chip(id)?.querySelector('.bb-grip') as HTMLElement;
-const pool = () => screen.getByTestId('bb-pool');
+  document.querySelector(`[data-dnd-item="${id}"]`) as HTMLElement;
+const pool = () => document.querySelector('[data-dnd-free]') as HTMLElement;
 const inspector = () => within(screen.getByTestId('bb-inspector'));
 const state = () => screen.getByTestId('bb-state').getAttribute('data-status');
 /*
@@ -82,7 +82,7 @@ const modeButton = (name: string) =>
 
 /** The rows the editor draws, as ids. */
 const drawnRows = (): string[][] =>
-  [...document.querySelectorAll('.bb-row')].map((row) =>
+  [...document.querySelectorAll('.dnd-row')].map((row) =>
     [...row.querySelectorAll('[data-chip]')].map((one) => one.getAttribute('data-chip') ?? ''),
   );
 const pooled = (): string[] =>
@@ -92,25 +92,19 @@ async function ready(): Promise<void> {
   await waitFor(() => expect(chip('catalog')).not.toBeNull());
 }
 
+/** Selecting a button is a press or a focus on it: the editor under the menu opens for it. */
 function select(id: MainMenuButtonId): void {
-  fireEvent.click(chipButton(id));
-}
-
-function move(key: string): void {
-  const button = screen
-    .getByTestId('bb-inspector')
-    .querySelector(`[data-move="${key}"]`) as HTMLButtonElement;
-  fireEvent.click(button);
+  fireEvent.focus(chipButton(id));
 }
 
 /**
- * A pointer drag from `id`'s grip onto whatever `target()` resolves to. The pointer travels
- * past the drag threshold first: a press that does not travel is not a drag. jsdom lays
- * nothing out, so every key's rectangle is empty and, in Persian, any point right of its
- * zero-width middle is its START half: a plain `drag` onto a key drops BEFORE it.
+ * A pointer drag of `id`'s item onto whatever `target()` resolves to. The pointer travels past
+ * the drag threshold first: a press that does not travel is not a drag. jsdom lays nothing
+ * out, so every item's rectangle is empty and, in Persian, any point right of its zero-width
+ * middle is its START half: a plain `drag` onto an item drops BEFORE it.
  */
 function drag(id: MainMenuButtonId, target: () => Element | null, x = 20): void {
-  const from = grip(id);
+  const from = chipButton(id);
   fireEvent.pointerDown(from, { pointerId: 1, clientX: 1, clientY: 1 });
   const element = target();
   expect(element).not.toBeNull();
@@ -119,12 +113,21 @@ function drag(id: MainMenuButtonId, target: () => Element | null, x = 20): void 
   fireEvent.pointerUp(from, { pointerId: 1, clientX: x, clientY: 20 });
 }
 
-/** A drag onto the START half of a key (the right half in Persian): before it. */
+/** A drag onto the START half of an item (the right half in Persian): before it. */
 function dragOntoStart(id: MainMenuButtonId, onto: MainMenuButtonId): void {
-  const host = chip(onto) as HTMLElement;
+  const host = chipButton(onto);
   host.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 30 }) as DOMRect;
   drag(id, () => host, 90);
 }
+
+/** Drop on the free-buttons box: the button leaves the menu, its configuration kept. */
+const toPool = (id: MainMenuButtonId) => drag(id, pool);
+/** Drop on «ردیف تازه»: the button gets a row of its own at the end. */
+const toNewRow = (id: MainMenuButtonId) =>
+  drag(id, () => document.querySelector('[data-dnd-new-row]'));
+/** Drop on a row's empty space: the end of that row. */
+const toRowEnd = (id: MainMenuButtonId, row: number) =>
+  drag(id, () => document.querySelector(`[data-dnd-row="${String(row)}"]`));
 
 const draftPuts = (api: Api) =>
   api.calls.filter((call) => call.method === 'PUT' && call.url.endsWith('/bot-menu/builder/draft'));
@@ -153,38 +156,17 @@ afterEach(() => {
 });
 
 describe('the button builder — editing the draft', () => {
-  it('drag and drop and the non-drag controls produce the identical draft', async () => {
-    // The drag path: help before catalog, wallet onto a new last row, referral to the pool.
-    let api = builderApi(builderView(), [saved()]);
+  it('every drop target works: a button, a new row at the end, the free box', async () => {
+    // help before catalog (a button), wallet to «ردیف تازه», referral to the free box.
+    const api = builderApi(builderView(), [saved()]);
     renderPage(page());
     await ready();
     dragOntoStart('help', 'catalog');
-    drag('wallet', () => {
-      const gaps = document.querySelectorAll('[data-drop="gap"]');
-      return gaps[gaps.length - 1] ?? null;
-    });
-    drag('referral', () => pool());
-    const dragged = (await saveAndRead(api)).layout;
-    cleanup();
-
-    // The same three changes through the Inspector, without a single drag.
-    api = builderApi(builderView(), [saved()]);
-    renderPage(page());
-    await ready();
-    select('help');
-    move('web.bb_move_prev_row');
-    move('web.bb_move_earlier');
-    move('web.bb_move_earlier');
-    select('wallet');
-    fireEvent.change(inspector().getByLabelText(t('web.bb_move_into')), {
-      target: { value: 'new' },
-    });
-    move('web.bb_place_go');
-    select('referral');
-    move('web.bb_remove');
-    const clicked = (await saveAndRead(api)).layout;
-
-    expect(dragged.rows).toEqual([
+    toNewRow('wallet');
+    toPool('referral');
+    expect(pooled()).toContain('referral');
+    const body = (await saveAndRead(api)).layout;
+    expect(body.rows).toEqual([
       ['help', 'catalog', 'services'],
       ['trial'],
       ['apps'],
@@ -192,50 +174,65 @@ describe('the button builder — editing the draft', () => {
       ['reseller_request'],
       ['wallet'],
     ]);
-    expect(clicked).toEqual(dragged);
   });
 
-  it('is operable from the keyboard alone, and says what each move did', async () => {
+  it('the row’s empty space and the line between rows are drop targets too', async () => {
     const api = builderApi(builderView(), [saved()]);
     renderPage(page());
     await ready();
-    const live = screen.getByTestId('bb-live');
-
-    chipButton('help').focus();
-    // Up a row: to the end of the first row.
-    fireEvent.keyDown(chipButton('help'), { key: 'ArrowUp', altKey: true });
-    expect(drawnRows()[0]).toEqual(['catalog', 'services', 'help']);
-    expect(live.textContent).toBe(
-      t('web.bb_announce_moved')
-        .replace('{label}', LABEL('help'))
-        .replace('{row}', '1')
-        .replace('{index}', '3'),
-    );
-    // Focus follows the button to its new row.
-    expect(document.activeElement).toBe(chipButton('help'));
-    // Earlier in the row: the arrow towards the start of a Persian line.
-    fireEvent.keyDown(chipButton('help'), { key: 'ArrowRight', altKey: true });
-    expect(drawnRows()[0]).toEqual(['catalog', 'help', 'services']);
-    // Delete: back to the pool, and still focused there.
-    fireEvent.keyDown(chipButton('help'), { key: 'Delete' });
-    expect(pooled()).toContain('help');
-    expect(live.textContent).toBe(t('web.bb_announce_pool').replace('{label}', LABEL('help')));
-    expect(document.activeElement).toBe(chipButton('help'));
-    // Alt+Enter in the pool: onto a new last row.
-    fireEvent.keyDown(chipButton('help'), { key: 'Enter', altKey: true });
-    expect(drawnRows().at(-1)).toEqual(['help']);
-
+    toRowEnd('wallet', 0);
+    expect(drawnRows()[0]).toEqual(['catalog', 'services', 'wallet']);
+    drag('help', () => document.querySelector('[data-dnd-gap="1"]'));
+    expect(drawnRows()[1]).toEqual(['help']);
     const body = await saveAndRead(api);
-    expect(body.layout.rows.at(-1)).toEqual(['help']);
+    expect(body.layout.rows[0]).toEqual(['catalog', 'services', 'wallet']);
+    expect(body.layout.rows[1]).toEqual(['help']);
   });
 
-  it('removes a button to the pool and restores it with its configuration kept', async () => {
+  it('has no move, place or remove button anywhere — dragging is the only way', async () => {
+    builderApi(builderView());
+    renderPage(page());
+    await ready();
+    select('help');
+    expect(document.querySelector('[data-move]')).toBeNull();
+    // The only buttons in the menu editor are the draggable items and the mode switch.
+    const canvas = document.querySelector('.bb-canvas') as HTMLElement;
+    expect(canvas.querySelectorAll('button').length).toBe(3);
+  });
+
+  it('is operable from the keyboard alone: focus, Enter grabs, arrows move, Delete frees', async () => {
+    const api = builderApi(builderView(), [saved()]);
+    renderPage(page());
+    await ready();
+
+    chipButton('help').focus();
+    fireEvent.keyDown(chipButton('help'), { key: 'Enter' });
+    // Up a row, then along the row.
+    fireEvent.keyDown(chipButton('help'), { key: 'ArrowUp' });
+    expect(drawnRows()[0]).toContain('help');
+    expect(document.activeElement).toBe(chipButton('help'));
+    // The arrow towards the start of a Persian line moves it earlier.
+    fireEvent.keyDown(chipButton('help'), { key: 'ArrowRight' });
+    // Delete: back to the free box, and still focused there.
+    fireEvent.keyDown(chipButton('help'), { key: 'Delete' });
+    expect(pooled()).toContain('help');
+    expect(document.activeElement).toBe(chipButton('help'));
+    // An arrow in the free box puts it back into the menu.
+    fireEvent.keyDown(chipButton('help'), { key: 'ArrowDown' });
+    expect(pooled()).not.toContain('help');
+    fireEvent.keyDown(chipButton('help'), { key: 'Enter' });
+
+    const body = await saveAndRead(api);
+    expect(body.layout.rows.flat()).toContain('help');
+  });
+
+  it('removes a button to the free box and restores it with its configuration kept', async () => {
     const api = builderApi(builderView(), [saved()]);
     renderPage(page());
     await ready();
     select('catalog');
     fireEvent.click(inspector().getByLabelText(t('web.bb_style_success')));
-    move('web.bb_remove');
+    toPool('catalog');
     expect(pooled()).toContain('catalog');
     expect(drawnRows().flat()).not.toContain('catalog');
     expect(screen.getByTestId('bb-where').textContent).toBe(t('web.bb_in_pool'));
@@ -247,7 +244,7 @@ describe('the button builder — editing the draft', () => {
     ).toBeNull();
     fireEvent.click(modeButton(t('web.bb_mode_edit')));
 
-    move('web.bb_place_go');
+    toNewRow('catalog');
     expect(drawnRows().at(-1)).toEqual(['catalog']);
     const body = await saveAndRead(api);
     expect(body.layout.buttons.find((one) => one.button === 'catalog')?.style).toBe('success');
@@ -391,13 +388,7 @@ describe('the button builder — editing the draft', () => {
     builderApi(builderView(), [saved()]);
     renderPage(page());
     await ready();
-    for (const id of ['wallet', 'help'] as const) {
-      select(id);
-      fireEvent.change(inspector().getByLabelText(t('web.bb_move_into')), {
-        target: { value: '0' },
-      });
-      move('web.bb_place_go');
-    }
+    for (const id of ['wallet', 'help'] as const) toRowEnd(id, 0);
     expect(drawnRows()[0]).toHaveLength(4);
     expect(
       screen.getByText(t('web.bb_rows_cramped').replace('{rows}', '1'), { exact: false }),
@@ -442,8 +433,7 @@ describe('the button builder — saving', () => {
     renderPage(page());
     await ready();
     expect(state()).toBe('not_saved');
-    select('help');
-    move('web.bb_move_own_row');
+    toNewRow('help');
     expect(state()).toBe('unsaved');
     const first = await saveAndRead(api);
     expect(first.expectedDraftVersion).toBeNull();
@@ -452,8 +442,7 @@ describe('the button builder — saving', () => {
     await waitFor(() => expect(state()).toBe('differs'));
 
     // The next save names the version the first one produced, under a NEW key.
-    select('help');
-    move('web.bb_remove');
+    toPool('help');
     const second = await saveAndRead(api);
     expect(second.expectedDraftVersion).toBe(1);
     expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
@@ -475,8 +464,7 @@ describe('the button builder — saving', () => {
     const api = builderApi(builderView(), [saved({ version: 1, layout: withoutHelp })]);
     renderPage(page());
     await ready();
-    select('help');
-    move('web.bb_remove');
+    toPool('help');
     await saveAndRead(api);
     const reads = () =>
       api.calls.filter((call) => call.method === 'GET' && call.url.endsWith('/bot-menu/builder'))
@@ -492,8 +480,7 @@ describe('the button builder — saving', () => {
     ]);
     renderPage(page());
     await ready();
-    select('help');
-    move('web.bb_remove');
+    toPool('help');
     fireEvent.click(toolbarButton(t('web.bb_save_draft')));
     await screen.findByTestId('bb-conflict');
     expect(state()).toBe('conflict');
@@ -537,8 +524,7 @@ describe('the button builder — saving', () => {
     ]);
     renderPage(page());
     await ready();
-    select('help');
-    move('web.bb_remove');
+    toPool('help');
     fireEvent.click(toolbarButton(t('web.bb_save_draft')));
     await screen.findByText('rows: A button may be placed once.');
     expect(state()).toBe('invalid');
@@ -549,8 +535,7 @@ describe('the button builder — saving', () => {
     renderPage(page());
     await ready();
     for (const id of ['catalog', 'services', 'wallet', 'help', 'apps', 'tickets'] as const) {
-      select(id);
-      move('web.bb_remove');
+      toPool(id);
     }
     expect(screen.getByText(t('web.bot_buttons_one_required'))).toBeTruthy();
     expect(state()).toBe('invalid');
@@ -568,8 +553,7 @@ describe('the button builder — saving', () => {
     );
     await ready();
     const start = window.location.pathname;
-    select('help');
-    move('web.bb_remove');
+    toPool('help');
     act(() => navigate('/orders'));
     expect(window.location.pathname).toBe(start);
     expect(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).toBeTruthy();
@@ -675,8 +659,7 @@ describe('the button builder — publish, history, reset', () => {
     renderPage(page());
     await ready();
     expect(toolbarButton(t('web.bb_publish')).disabled).toBe(false);
-    select('help');
-    move('web.bb_remove');
+    toPool('help');
     expect(toolbarButton(t('web.bb_publish')).disabled).toBe(true);
     expect(screen.getByTestId('bb-publish-blocker').textContent).toBe(
       t('web.bb_publish_save_first'),
@@ -825,7 +808,9 @@ describe('the button builder — banners and permissions', () => {
     for (const name of ['web.bb_save_draft', 'web.bb_publish', 'web.bb_reset'] as const) {
       expect(screen.queryByRole('button', { name: t(name) })).toBeNull();
     }
-    expect(document.querySelector('.bb-grip, .bb-row-grip')).toBeNull();
+    // Nothing can be grabbed: no item is in the tab order, and a drop changes nothing.
+    expect(document.querySelector('[data-dnd-item]:not([aria-disabled="true"])')).toBeNull();
+    toPool('help');
     select('help');
     expect(
       (
@@ -839,7 +824,6 @@ describe('the button builder — banners and permissions', () => {
         (one) => (one as HTMLSelectElement).disabled || one.closest('fieldset')?.disabled,
       ),
     ).toBe(true);
-    fireEvent.keyDown(chipButton('help'), { key: 'Delete' });
     expect(pooled()).not.toContain('help');
     fireEvent.click(toolbarButton(t('web.bb_history')));
     const history = await screen.findByTestId('bb-history');
@@ -912,18 +896,13 @@ describe('the button builder — review of PR #134', () => {
     const held = holdRequests('PUT', '/bot-menu/builder/draft');
     renderPage(page());
     await ready();
-    select('help');
-    move('web.bb_remove');
+    toPool('help');
     fireEvent.click(toolbarButton(t('web.bb_save_draft')));
     await waitFor(() => expect(state()).toBe('saving'));
     // In flight: the controls are off and the keyboard moves nothing.
-    select('catalog');
-    const remove = screen
-      .getByTestId('bb-inspector')
-      .querySelector('[data-move="web.bb_remove"]') as HTMLButtonElement;
-    expect(remove.disabled).toBe(true);
-    fireEvent.keyDown(chipButton('catalog'), { key: 'Delete' });
+    toPool('catalog');
     expect(drawnRows().flat()).toContain('catalog');
+    expect(document.querySelector('[data-dnd-item]:not([aria-disabled="true"])')).toBeNull();
     held.release();
     await waitFor(() => expect(state()).toBe('differs'));
     expect(draftPuts(api)).toHaveLength(1);
@@ -971,8 +950,7 @@ describe('the button builder — review of PR #134', () => {
     ]);
     renderPage(page());
     await ready();
-    select('help');
-    move('web.bb_remove');
+    toPool('help');
     fireEvent.click(toolbarButton(t('web.bb_save_draft')));
     await screen.findByText('rows: A button may be placed once.');
     fireEvent.click(toolbarButton(t('web.bb_reset')));
@@ -989,8 +967,7 @@ describe('the button builder — review of PR #134', () => {
     failBuilderReadsAfterFirst();
     renderPage(page());
     await ready();
-    select('help');
-    move('web.bb_remove');
+    toPool('help');
     fireEvent.click(toolbarButton(t('web.bb_save_draft')));
     await screen.findByTestId('bb-conflict');
     fireEvent.click(screen.getAllByRole('button', { name: t('web.bb_reload') })[0] as HTMLElement);
@@ -1184,55 +1161,47 @@ describe('the button builder — round-T follow-ups (owner, 2026-10-02)', () => 
 });
 
 describe('the button builder — drag quality (owner, 2026-10-02)', () => {
-  it('a press on a grip that does not travel moves nothing, whatever is under it', async () => {
+  it('a press that does not travel moves nothing, whatever is under it', async () => {
     const api = builderApi(builderView(), [saved()]);
     renderPage(page());
     await ready();
     const before = drawnRows();
-    const from = grip('help');
+    const from = chipButton('help');
     fireEvent.pointerDown(from, { pointerId: 1, clientX: 10, clientY: 10 });
     document.elementFromPoint = vi.fn(() => pool());
     // Three pixels: a trembling finger or a click, not a drag.
     fireEvent.pointerMove(from, { pointerId: 1, clientX: 12, clientY: 12 });
     fireEvent.pointerUp(from, { pointerId: 1, clientX: 12, clientY: 12 });
     expect(drawnRows()).toEqual(before);
-    expect(screen.getByTestId('bb-live').textContent).toBe('');
     expect(state()).not.toBe('unsaved');
     expect(draftPuts(api)).toHaveLength(0);
   });
 
-  it('a drop where the key already is, or a cancelled drag, changes nothing and says nothing', async () => {
+  it('a drop where the button already is, or a cancelled drag, changes nothing', async () => {
     builderApi(builderView());
     renderPage(page());
     await ready();
     const before = drawnRows();
     // `services` is right after `catalog`: onto catalog's END half is where it already is.
-    const catalog = chip('catalog') as HTMLElement;
+    const catalog = chipButton('catalog');
     catalog.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 30 }) as DOMRect;
     drag('services', () => catalog, 10);
-    // A row dropped on a key is not a move.
-    const rowGrip = screen.getByTestId('bb-row-1').querySelector('.bb-row-grip') as HTMLElement;
-    fireEvent.pointerDown(rowGrip, { pointerId: 2, clientX: 1, clientY: 1 });
-    document.elementFromPoint = vi.fn(() => chip('catalog'));
-    fireEvent.pointerMove(rowGrip, { pointerId: 2, clientX: 40, clientY: 40 });
-    fireEvent.pointerUp(rowGrip, { pointerId: 2, clientX: 40, clientY: 40 });
     // Escape abandons a drag that would have moved something.
-    fireEvent.pointerDown(grip('help'), { pointerId: 3, clientX: 1, clientY: 1 });
+    fireEvent.pointerDown(chipButton('help'), { pointerId: 3, clientX: 1, clientY: 1 });
     document.elementFromPoint = vi.fn(() => pool());
-    fireEvent.pointerMove(grip('help'), { pointerId: 3, clientX: 40, clientY: 40 });
+    fireEvent.pointerMove(chipButton('help'), { pointerId: 3, clientX: 40, clientY: 40 });
     fireEvent.keyDown(document, { key: 'Escape' });
-    fireEvent.pointerUp(grip('help'), { pointerId: 3, clientX: 40, clientY: 40 });
+    fireEvent.pointerUp(chipButton('help'), { pointerId: 3, clientX: 40, clientY: 40 });
     // A pointer the browser cancels (a scroll gesture, a call) moves nothing either.
-    fireEvent.pointerDown(grip('help'), { pointerId: 4, clientX: 1, clientY: 1 });
-    fireEvent.pointerMove(grip('help'), { pointerId: 4, clientX: 40, clientY: 40 });
-    fireEvent.pointerCancel(grip('help'), { pointerId: 4 });
-    fireEvent.pointerUp(grip('help'), { pointerId: 4, clientX: 40, clientY: 40 });
+    fireEvent.pointerDown(chipButton('help'), { pointerId: 4, clientX: 1, clientY: 1 });
+    fireEvent.pointerMove(chipButton('help'), { pointerId: 4, clientX: 40, clientY: 40 });
+    fireEvent.pointerCancel(chipButton('help'), { pointerId: 4 });
+    fireEvent.pointerUp(chipButton('help'), { pointerId: 4, clientX: 40, clientY: 40 });
     expect(drawnRows()).toEqual(before);
-    expect(screen.getByTestId('bb-live').textContent).toBe('');
     expect(state()).not.toBe('unsaved');
   });
 
-  it('decides before/after by the half of the key under the pointer, in reading order (RTL)', async () => {
+  it('decides before/after by the half of the button under the pointer, in reading order (RTL)', async () => {
     const api = builderApi(builderView(), [saved()]);
     renderPage(page());
     await ready();
@@ -1240,63 +1209,25 @@ describe('the button builder — drag quality (owner, 2026-10-02)', () => {
     dragOntoStart('help', 'catalog');
     expect(drawnRows()[0]).toEqual(['help', 'catalog', 'services']);
     // The LEFT half of catalog is its end — wallet goes after it, before services.
-    const host = chip('catalog') as HTMLElement;
+    const host = chipButton('catalog');
     host.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 30 }) as DOMRect;
     drag('wallet', () => host, 10);
     expect(drawnRows()[0]).toEqual(['help', 'catalog', 'wallet', 'services']);
-    // The left half of the LAST key: the end of its row.
-    const last = chip('services') as HTMLElement;
-    last.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 30 }) as DOMRect;
-    drag('apps', () => last, 10);
-    expect(drawnRows()[0]).toEqual(['help', 'catalog', 'wallet', 'services', 'apps']);
     const body = await saveAndRead(api);
-    expect(body.layout.rows[0]).toEqual(['help', 'catalog', 'wallet', 'services', 'apps']);
+    expect(body.layout.rows[0]).toEqual(['help', 'catalog', 'wallet', 'services']);
   });
 
-  it('keeps the layout still when a drag starts, and draws the placeholder and target row over it', async () => {
+  it('draws the drop zones from the start: the gaps, «ردیف تازه» and the free box', async () => {
     builderApi(builderView());
     renderPage(page());
     await ready();
-    // The gaps are laid out before any drag: starting one adds nothing to the page.
-    const gaps = document.querySelectorAll('[data-drop="gap"]').length;
-    expect(gaps).toBe(drawnRows().length + 1);
-    const from = grip('help');
-    fireEvent.pointerDown(from, { pointerId: 1, clientX: 1, clientY: 1 });
-    const host = chip('catalog') as HTMLElement;
-    host.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 30 }) as DOMRect;
-    document.elementFromPoint = vi.fn(() => host);
-    fireEvent.pointerMove(from, { pointerId: 1, clientX: 90, clientY: 20 });
-    expect(document.querySelectorAll('[data-drop="gap"]').length).toBe(gaps);
-    // The ghost follows the pointer; the caret sits before catalog; its row is the target.
-    expect(await screen.findByTestId('bb-drag-ghost')).toBeTruthy();
-    await waitFor(() => expect(chip('catalog')?.className).toContain('is-insert-before'));
-    expect(screen.getByTestId('bb-row-0').className).toContain('is-target');
-    expect(screen.getByTestId('bb-row-1').className).not.toContain('is-target');
-    expect(chip('help')?.className).toContain('is-dragging');
-    // Over the pool: the pool is the target, no row is.
-    document.elementFromPoint = vi.fn(() => pool());
-    fireEvent.pointerMove(from, { pointerId: 1, clientX: 95, clientY: 25 });
-    await waitFor(() => expect(pool().className).toContain('is-over'));
-    expect(document.querySelector('.bb-row.is-target')).toBeNull();
-    fireEvent.pointerUp(from, { pointerId: 1, clientX: 95, clientY: 25 });
-    expect(screen.queryByTestId('bb-drag-ghost')).toBeNull();
-    expect(pooled()).toContain('help');
+    expect(document.querySelectorAll('[data-dnd-gap]').length).toBe(drawnRows().length + 1);
+    expect(document.querySelector('[data-dnd-new-row]')).not.toBeNull();
+    expect(pool()).not.toBeNull();
+    expect(screen.getByText(t('web.bb_pool_hint'))).toBeTruthy();
   });
 
-  it('the grip is a real button a finger lands on, out of the tab order (QA-2)', async () => {
-    builderApi(builderView());
-    renderPage(page());
-    await ready();
-    const grips = document.querySelectorAll('.bb-grip, .bb-row-grip');
-    expect(grips.length).toBeGreaterThan(0);
-    for (const one of grips) {
-      expect(one.tagName).toBe('BUTTON');
-      expect(one.getAttribute('tabindex')).toBe('-1');
-      expect(one.getAttribute('aria-hidden')).toBe('true');
-    }
-  });
-
-  it('keeps the keyboard fallback: Alt+arrows follow the reading direction in LTR too', async () => {
+  it('keeps the keyboard path in a left-to-right page: arrows follow the reading direction', async () => {
     builderApi(builderView());
     const before = document.documentElement.dir;
     document.documentElement.dir = 'ltr';
@@ -1304,9 +1235,10 @@ describe('the button builder — drag quality (owner, 2026-10-02)', () => {
       renderPage(page());
       await ready();
       // The default draft's first row is catalog, services.
-      fireEvent.keyDown(chipButton('services'), { key: 'ArrowLeft', altKey: true });
+      fireEvent.keyDown(chipButton('services'), { key: 'Enter' });
+      fireEvent.keyDown(chipButton('services'), { key: 'ArrowLeft' });
       expect(drawnRows()[0]).toEqual(['services', 'catalog']);
-      fireEvent.keyDown(chipButton('services'), { key: 'ArrowRight', altKey: true });
+      fireEvent.keyDown(chipButton('services'), { key: 'ArrowRight' });
       expect(drawnRows()[0]).toEqual(['catalog', 'services']);
     } finally {
       document.documentElement.dir = before;
@@ -1333,6 +1265,7 @@ describe('the builder’s editor under the preview', () => {
     ]);
     const [place, look, show] = columns as [HTMLElement, HTMLElement, HTMLElement];
     expect(within(place).getByTestId('bb-where')).toBeInTheDocument();
+    expect(place.querySelector('button')).toBeNull();
     expect(within(look).getByTestId('bb-icon')).toBeInTheDocument();
     expect(within(look).getByText(t('web.bb_style_title'))).toBeInTheDocument();
     expect(within(show).getByTestId('bb-label')).toBeInTheDocument();

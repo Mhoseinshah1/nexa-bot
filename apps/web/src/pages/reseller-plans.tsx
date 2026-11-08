@@ -54,6 +54,7 @@ import {
   Badge,
   Banner,
   Card,
+  Disclosure,
   DataTable,
   Empty,
   Field,
@@ -71,6 +72,7 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
+import { ListFreshness } from '../ui/list-search';
 import { Icon } from '../ui/icons';
 import { Drawer } from '../ui/overlays';
 import { ListFilterBar } from '../ui/filter-bar';
@@ -285,7 +287,12 @@ export function ResellerPlansPage({
     {
       key: 'name',
       header: t('web.reseller_tier_name'),
-      render: (row) => <strong>{row.name}</strong>,
+      // The name is the way in: the tier's products and permissions drawer.
+      render: (row) => (
+        <button type="button" className="link strong" onClick={() => setGrantsId(row.id)}>
+          {row.name}
+        </button>
+      ),
     },
     {
       key: 'products',
@@ -342,9 +349,9 @@ export function ResellerPlansPage({
     <>
       <PageHead
         title={t('web.reseller_plans_title')}
-        subtitle={t('web.reseller_plans_intro')}
         actions={
           <>
+            <ListFreshness query={tiers} hidden={denied} />
             <a className="btn" href="/resellers" onClick={onLink}>
               <Icon name="resellers" />
               {t('web.nav_resellers')}
@@ -356,6 +363,30 @@ export function ResellerPlansPage({
           </>
         }
       />
+
+      <Disclosure size="sm" summary={t('web.reseller_minimum_rules_title')}>
+        <p className="muted small">{t('web.reseller_plans_intro')}</p>
+        <ul className="cb-notes">
+          <li>{t('web.reseller_minimum_rule_counts')}</li>
+          <li>{t('web.reseller_minimum_rule_period')}</li>
+          <li>{t('web.reseller_minimum_rule_no_consequence')}</li>
+          <li>{t('web.reseller_minimum_rule_notices')}</li>
+          <li>{t('web.reseller_minimum_rule_mirza')}</li>
+        </ul>
+        <p>
+          <a href="/features" onClick={onLink}>
+            {t('web.reseller_minimum_features_link')}
+          </a>
+          {t('web.list_separator')}
+          <a href="/settings" onClick={onLink}>
+            {t('web.reseller_minimum_settings_link')}
+          </a>
+          {t('web.list_separator')}
+          <a href="/resellers" onClick={onLink}>
+            {t('web.reseller_tiers_resellers_link')}
+          </a>
+        </p>
+      </Disclosure>
 
       <Card title={t('web.reseller_plans_tiers_title')} hint={t('web.reseller_plans_tiers_hint')}>
         <StateSwitch
@@ -451,29 +482,6 @@ export function ResellerPlansPage({
           />
         )}
       </Drawer>
-
-      <Card title={t('web.reseller_minimum_rules_title')} tone="muted">
-        <ul className="cb-notes">
-          <li>{t('web.reseller_minimum_rule_counts')}</li>
-          <li>{t('web.reseller_minimum_rule_period')}</li>
-          <li>{t('web.reseller_minimum_rule_no_consequence')}</li>
-          <li>{t('web.reseller_minimum_rule_notices')}</li>
-          <li>{t('web.reseller_minimum_rule_mirza')}</li>
-        </ul>
-        <p>
-          <a href="/features" onClick={onLink}>
-            {t('web.reseller_minimum_features_link')}
-          </a>
-          {t('web.list_separator')}
-          <a href="/settings" onClick={onLink}>
-            {t('web.reseller_minimum_settings_link')}
-          </a>
-          {t('web.list_separator')}
-          <a href="/resellers" onClick={onLink}>
-            {t('web.reseller_tiers_resellers_link')}
-          </a>
-        </p>
-      </Card>
     </>
   );
 }

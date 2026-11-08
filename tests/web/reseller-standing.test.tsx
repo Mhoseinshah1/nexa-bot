@@ -138,7 +138,7 @@ describe('the reseller standing cards', () => {
     const api = stubApi(routes());
     render();
     await screen.findByText('Reza Reseller');
-    fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
     await openResellerTab('credit');
     await waitFor(() => expect(gets(api, '/purchases?limit=10')).toHaveLength(1));
   });
@@ -147,7 +147,7 @@ describe('the reseller standing cards', () => {
     stubApi(routes());
     render();
     await screen.findByText('Reza Reseller');
-    fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
     await openResellerTab('credit');
 
     expect(await screen.findByText(LEGACY_DEBT)).toBeInTheDocument();
@@ -188,7 +188,7 @@ describe('the reseller standing cards', () => {
     );
     render();
     await screen.findByText('Reza Reseller');
-    fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
     await openResellerTab('credit');
     const card = (await screen.findByText('کیف پول نماینده')).closest('section') ?? document.body;
     await waitFor(() => expect(card.textContent).toContain('5,000'));
@@ -200,7 +200,7 @@ describe('the reseller standing cards', () => {
     const api = stubApi(routes());
     render({ wallet: false, orders: false, audit: false });
     await screen.findByText('Reza Reseller');
-    fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
     // The exact wallet sentence: the register form's customer picker names users.view too.
     await openResellerTab('credit');
     expect(await screen.findByText(t('web.reseller_credit_denied'))).toBeInTheDocument();
@@ -310,7 +310,7 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
     const api = stubApi(routes());
     open('/resellers', ['resellers.view']);
     await screen.findByText('Reza Reseller');
-    fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
 
     for (const view of VIEWS) {
       await openResellerTab(tabOf(view.key));
@@ -324,7 +324,7 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
       const api = stubApi(routes());
       open('/resellers', ['resellers.view', held.key]);
       await screen.findByText('Reza Reseller');
-      fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
 
       await openResellerTab(tabOf(held.key));
       await waitFor(() => expect(gets(api, held.fragment)).toHaveLength(1));
@@ -341,7 +341,7 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
     stubApi(routes());
     open('/resellers', ['resellers.view', 'users.view', 'orders.view', 'audit.view']);
     await screen.findByText('Reza Reseller');
-    fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
 
     await openResellerTab('credit');
     expect(await screen.findByText(LEGACY_DEBT)).toBeInTheDocument();
