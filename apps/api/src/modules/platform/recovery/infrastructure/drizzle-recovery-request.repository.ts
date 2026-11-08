@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, ne, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, lt, ne, notInArray, sql } from 'drizzle-orm';
 import {
   NexaError,
   PLATFORM_ERROR_CODES,
@@ -168,6 +168,7 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
       patch?: RecoveryPatch;
       finished?: boolean;
       leaseOwner?: string;
+      failedWith?: RecoveryFailureCode;
     },
     tx?: unknown,
   ): Promise<boolean> {
@@ -186,6 +187,10 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
       // landing on a row somebody else already failed would report success for
       // an operation that was abandoned.
       predicates.push(eq(recoveryRequests.leaseOwner, input.leaseOwner));
+    }
+    if (input.failedWith !== undefined) {
+      predicates.push(eq(recoveryRequests.failureCode, input.failedWith));
+      predicates.push(isNotNull(recoveryRequests.workspacePath));
     }
     try {
       const updated = await executor

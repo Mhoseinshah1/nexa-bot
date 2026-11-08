@@ -8,6 +8,7 @@ import {
   type AuditWriter,
   type Clock,
   type CorrelationId,
+  type IdGenerator,
   type OperationalEventRecorder,
   type RecoveryFailureCode,
   type RecoveryRestoreTest,
@@ -32,9 +33,24 @@ import { isTenantForeignKeyViolation } from '../../../../infrastructure/lifecycl
 import { runBoundedWrite } from './recovery-write-retry.js';
 import type { ExtraKey } from '../../../../infrastructure/crypto/keyring.js';
 import {
+  exemptRows,
   unreadableCounts,
+  type SecretExemption,
   type SecretTrialReport,
 } from '../../../../infrastructure/crypto/secret-trial.js';
+import type { SecretClearingReport } from '../../../../infrastructure/crypto/secret-clearing.js';
+
+/**
+ * Whether every purpose unreadable now was acknowledged, with no more values than the
+ * owner accepted. Fewer is fine (a kit imported since); more, or another purpose, is not.
+ */
+export function withinAcknowledged(
+  now: readonly { purpose: string; count: number }[],
+  acknowledged: readonly { purpose: string; count: number }[],
+): boolean {
+  const accepted = new Map(acknowledged.map((entry) => [entry.purpose, entry.count]));
+  return now.every((entry) => entry.count <= (accepted.get(entry.purpose) ?? 0));
+}
 
 /**
  * The destructive half of a recovery, in its own process.
@@ -98,6 +114,11 @@ export interface RecoveryExecutorDeps {
    */
   readonly supersedeLegacyImports?: (cutoverAt: Date) => Promise<readonly string[]>;
   readonly clock: Clock;
+  /**
+   * Ids for the `secret_reentry_items` rows a §2.3 clearing writes. Optional only for
+   * tests that never reach it; without it an acknowledged clearing aborts.
+   */
+  readonly ids?: IdGenerator;
   readonly opsLog: OperationalEventRecorder;
   readonly scope: () => ScopeContext | null;
   /**
@@ -1229,6 +1250,7 @@ export class RecoveryExecutor {
     const sealedBundle = await workspace.readBundledKeys();
     let bundledKeys: ExtraKey[] = [];
     let secretsRewrapped: number;
+    let secretsCleared = 0;
     try {
       if (sealedBundle !== null) {
         try {
@@ -1242,15 +1264,74 @@ export class RecoveryExecutor {
         }
       }
       const trial = await this.deps.keys.trialDecrypt(candidate, bundledKeys);
+      let exempt: SecretExemption | undefined;
       if (trial.unreadableTotal > 0) {
-        await this.recordUnreadable(id, inspection.tableCount, compatibility, trial, sealedBundle);
-        throw new RecoveryAbort(
-          'recovery.candidate_secrets_unreadable',
-          `The candidate holds ${String(trial.unreadableTotal)} secret(s) no key held here decrypts.`,
+        /*
+         * §2.3 choice 2: the owner acknowledged an exact list and chose to re-enter
+         * those values. Honoured ONLY when what is unreadable NOW is within it, purpose
+         * by purpose (a key imported since may have made some readable; nothing may
+         * have become unreadable that the owner did not see). Then the values are
+         * cleared in the candidate, in one transaction with their re-entry records —
+         * never a silent cut-over into secrets that fail authentication.
+         */
+        const acknowledged = request.restoreTest?.acknowledgedUnreadable;
+        const within =
+          request.restoreTest?.clearUnreadable === true &&
+          acknowledged !== undefined &&
+          withinAcknowledged(unreadableCounts(trial), acknowledged);
+        if (!within) {
+          await this.recordUnreadable(
+            id,
+            inspection.tableCount,
+            compatibility,
+            trial,
+            sealedBundle,
+          );
+          throw new RecoveryAbort(
+            'recovery.candidate_secrets_unreadable',
+            `The candidate holds ${String(trial.unreadableTotal)} secret(s) no key held here decrypts.`,
+          );
+        }
+        if (this.deps.ids === undefined) {
+          throw new RecoveryAbort(
+            'recovery.internal',
+            'This executor cannot mint ids, so it cannot record what it would clear.',
+          );
+        }
+        const ids = this.deps.ids;
+        let clearing: SecretClearingReport;
+        try {
+          clearing = await this.deps.keys.clearUnreadable(candidate, {
+            unreadable: trial.unreadable,
+            recoveryId: id,
+            now: this.deps.clock.now(),
+            newId: () => ids.uuid(),
+          });
+        } catch (error) {
+          throw new RecoveryAbort(
+            'recovery.candidate_secrets_unreadable',
+            'The unreadable secrets could not be cleared in the candidate.',
+            error,
+          );
+        }
+        secretsCleared = clearing.cleared;
+        exempt = exemptRows(clearing.kept);
+        // The trial once more: everything still unreadable must be a row the clearing
+        // deliberately left (a stopped bot's token), and nothing else.
+        const after = await this.deps.keys.trialDecrypt(candidate, bundledKeys);
+        if (after.unreadable.some((row) => !(exempt as SecretExemption)(row))) {
+          throw new RecoveryAbort(
+            'recovery.candidate_secrets_unreadable',
+            'Secrets are still unreadable in the candidate after clearing.',
+          );
+        }
+        this.deps.logger.warn(
+          { recoveryId: id, cleared: clearing.cleared, kept: clearing.kept.length },
+          'cleared the acknowledged unreadable secrets in the candidate for re-entry',
         );
       }
       try {
-        const rewrap = await this.deps.keys.rewrapUnderActiveKey(candidate, bundledKeys);
+        const rewrap = await this.deps.keys.rewrapUnderActiveKey(candidate, bundledKeys, exempt);
         secretsRewrapped = rewrap.rewrapped;
       } catch (error) {
         throw new RecoveryAbort(
@@ -1287,6 +1368,7 @@ export class RecoveryExecutor {
       cutoverPermitted: true,
       unreadableSecrets: [],
       secretsRewrapped,
+      ...(secretsCleared > 0 ? { secretsCleared } : {}),
     };
     await this.deps.requests.progress({
       id,

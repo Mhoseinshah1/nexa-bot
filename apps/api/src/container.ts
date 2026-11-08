@@ -155,6 +155,8 @@ import { PROVIDER_RULES } from './modules/platform/providers/infrastructure/prov
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
+import { SecretReentryService } from './modules/platform/recovery/application/secret-reentry.service.js';
+import { DrizzleSecretReentryReader } from './modules/platform/recovery/infrastructure/drizzle-secret-reentry.reader.js';
 import { hostname } from 'node:os';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import { InstallationKeyring } from './infrastructure/crypto/installation-keyring.js';
@@ -1842,6 +1844,8 @@ export interface Container {
   readonly recoveryQuiesced: () => Promise<boolean>;
   /** Disaster recovery: the operator's service, and the destructive executor. */
   readonly recoveryService: RecoveryService;
+  /** NEXA-FIX-RESTORE-SECRETS §2.3: the attention strip of secrets to re-enter. */
+  readonly secretReentry: SecretReentryService;
   readonly backupAdmin: BackupAdminService;
   readonly recoveryExecutor: RecoveryExecutor;
   readonly recoveryRequests: DrizzleRecoveryRequestRepository;
@@ -8673,8 +8677,15 @@ export function createContainer(
     verifyStepUp: (scope, actor, stepUp, context, action) =>
       adminManagement.verifyStepUp(scope, actor, stepUp, context, action),
   });
+  const secretReentry = new SecretReentryService({
+    reader: new DrizzleSecretReentryReader(database.db, cipher),
+    guard,
+    audit,
+    opsLog,
+  });
   const recoveryService = new RecoveryService({
     requests: recoveryRequests,
+    idempotency,
     workspaces: recoveryWorkspaces,
     // The SAME archiver the backup pipeline seals with, so one keyring and one
     // `openArchive`. A recovery that decrypted through its own route would be
@@ -8883,6 +8894,8 @@ export function createContainer(
 
   const recoveryExecutor = new RecoveryExecutor({
     requests: recoveryRequests,
+    // §2.3: ids for the re-entry records a clearing writes into the candidate.
+    ids,
     recovery: recoveryService,
     engine: backupTools,
     workspaces: recoveryWorkspaces,
@@ -10022,6 +10035,7 @@ export function createContainer(
     dataCompactionLoop,
     backupTools,
     recoveryService,
+    secretReentry,
     backupAdmin,
     recoveryExecutor,
     recoveryRequests,

@@ -2,6 +2,11 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Client } from 'pg';
+import {
+  clearUnreadableSecrets,
+  type SecretClearingInput,
+  type SecretClearingReport,
+} from '../../../../infrastructure/crypto/secret-clearing.js';
 import { readArchiveHeader } from '../../backup/infrastructure/archive.js';
 import { assertNotLiveTarget } from '../../backup/infrastructure/pg-tools.js';
 import { SECRET_COLUMNS } from '../../../../infrastructure/crypto/secret-registry.js';
@@ -19,6 +24,7 @@ import { kekFingerprint } from '../../../../infrastructure/crypto/recovery-kit.j
 import { AesGcmSecretCipher } from '../../../../infrastructure/crypto/secret-cipher.js';
 import {
   rewrapAndProve,
+  type SecretExemption,
   trialDecryptSecrets,
   type SecretRewrapReport,
   type SecretRowQueryable,
@@ -455,12 +461,20 @@ export class KeyringRecoveryKeyCoverage implements RecoveryKeyCoverage {
   async rewrapUnderActiveKey(
     database: string,
     extraKeys: readonly ExtraKey[] = [],
+    exempt?: SecretExemption,
   ): Promise<SecretRewrapReport> {
     const keyring = withExtraKeys(this.keyring, extraKeys);
     const { proof: _proof, ...report } = await this.candidates.use(database, (db) =>
-      rewrapAndProve(db, keyring, this.acceptV1),
+      rewrapAndProve(db, keyring, this.acceptV1, exempt),
     );
     return report;
+  }
+
+  async clearUnreadable(
+    database: string,
+    input: SecretClearingInput,
+  ): Promise<SecretClearingReport> {
+    return this.candidates.use(database, (db) => clearUnreadableSecrets(db, input));
   }
 
   sealForExecutor(recoveryId: string, keys: readonly ExtraKey[]): string {

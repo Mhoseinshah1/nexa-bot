@@ -1,10 +1,15 @@
 import type { InstallationKeySource } from '@nexa/contracts';
 import type { ExtraKey } from '../../../../infrastructure/crypto/keyring.js';
 import type {
+  SecretExemption,
   SecretRewrapReport,
   SecretRowQueryable,
   SecretTrialReport,
 } from '../../../../infrastructure/crypto/secret-trial.js';
+import type {
+  SecretClearingInput,
+  SecretClearingReport,
+} from '../../../../infrastructure/crypto/secret-clearing.js';
 
 /**
  * Ports for the Recovery Kit's key lifecycle (ADR-0032).
@@ -177,7 +182,16 @@ export interface RecoveryKeyCoverage {
   rewrapUnderActiveKey(
     database: string,
     extraKeys?: readonly ExtraKey[],
+    /** Rows a clearing deliberately left unreadable (a stopped bot's token). */
+    exempt?: SecretExemption,
   ): Promise<SecretRewrapReport>;
+  /**
+   * §2.3 choice 2: in the CANDIDATE, makes each of `unreadable` read as not set and
+   * records a `secret_reentry_items` row for it, in one transaction
+   * (`clearUnreadableSecrets`). Throws `SecretClearingRefused` for a value that cannot
+   * be cleared without moving money or losing a readable value.
+   */
+  clearUnreadable(database: string, input: SecretClearingInput): Promise<SecretClearingReport>;
   /**
    * The archive's bundled keys, sealed for the EXECUTOR (another process) under this
    * installation's configured active key and bound to the recovery id — so they can

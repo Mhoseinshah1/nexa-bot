@@ -355,6 +355,12 @@ export interface RecoveryRequestRepository {
       readonly finished?: boolean;
       /** Guards the write on the lease, for executor-owned transitions. */
       readonly leaseOwner?: string;
+      /**
+       * NEXA-FIX-RESTORE-SECRETS §2.3: guards a transition OUT OF FAILED on the code it
+       * failed with, and on its upload still being kept — the only FAILED rows that may
+       * be re-tested or acknowledged.
+       */
+      readonly failedWith?: RecoveryFailureCode;
     },
     tx?: unknown,
   ): Promise<boolean>;

@@ -13,8 +13,11 @@ import {
   RECOVERY_CONFIRMATION_PHRASE,
   RECOVERY_CONFIRMATION_TTL_MS,
   RECOVERY_ROUTES,
+  recoveryAcknowledgeUnreadableRequestSchema,
   recoveryConfirmationSchema,
+  recoveryRetestRequestSchema,
   recoveryVerifyRequestSchema,
+  type SecretReentryListResponse,
   LEGACY_COMPACTION_ROUTES,
   DATA_COMPACTION_ROUTES,
   type DataCompactionPreview,
@@ -464,6 +467,48 @@ export class RecoveryController {
       artifactChecksum: command.artifactChecksum,
     });
     return { recovery: toRecoverySummary(confirmed) };
+  }
+
+  /**
+   * NEXA-FIX-RESTORE-SECRETS §2.3, choice 1: the restore test again, on the same request,
+   * after `recovery.candidate_secrets_unreadable` (typically once the old server's
+   * Recovery Kit is imported). A 200 with the row whatever it concluded, like `verify`.
+   */
+  @Post('recoveries/:id/retest')
+  async retest(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<RecoveryDetailResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const command = recoveryRetestRequestSchema.parse(body);
+    const outcome = await this.container.recoveryService.retest(scope, actor, id, command);
+    return { recovery: toRecoverySummary(outcome.request) };
+  }
+
+  /** §2.3, choice 2 («ادامه؛ این‌ها را دوباره وارد می‌کنم»). */
+  @Post('recoveries/:id/acknowledge-unreadable')
+  async acknowledgeUnreadable(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<RecoveryDetailResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const command = recoveryAcknowledgeUnreadableRequestSchema.parse(body);
+    const row = await this.container.recoveryService.acknowledgeUnreadable(
+      scope,
+      actor,
+      id,
+      command,
+    );
+    return { recovery: toRecoverySummary(row) };
+  }
+
+  /** The attention strip: secrets a restore cleared that are still not re-entered. */
+  @Get(RECOVERY_ROUTES.secretReentry)
+  async secretReentry(@Req() request: FastifyRequest): Promise<SecretReentryListResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return { items: await this.container.secretReentry.list(scope, actor) };
   }
 }
 

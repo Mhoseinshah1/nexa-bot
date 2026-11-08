@@ -184,6 +184,21 @@ export function unreadableCounts(
   return [...counts.entries()].map(([purpose, count]) => ({ purpose, count }));
 }
 
+/** Names rows a rewrap and its proof leave alone. Identity only. */
+export type SecretExemption = (row: {
+  readonly purpose: SecretPurpose;
+  readonly table: string;
+  readonly entityId: string;
+}) => boolean;
+
+/** An exemption for exactly these rows. */
+export function exemptRows(
+  rows: readonly { purpose: SecretPurpose; table: string; entityId: string }[],
+): SecretExemption {
+  const keys = new Set(rows.map((row) => `${row.purpose}|${row.table}|${row.entityId}`));
+  return (row) => keys.has(`${row.purpose}|${row.table}|${row.entityId}`);
+}
+
 export interface SecretRewrapReport {
   /** Re-encrypted under the active key. */
   readonly rewrapped: number;
@@ -212,6 +227,12 @@ export async function rewrapSecretsUnderActiveKey(
   db: SecretRowQueryable,
   keyring: SecretKeyring,
   acceptV1: boolean,
+  /**
+   * Rows deliberately left as they are: the unreadable values a restore was told to
+   * clear and could only DISABLE (a bot token: the column is NOT NULL, so the bot is
+   * stopped and its token waits to be re-entered). Not read, not rewritten, not counted.
+   */
+  exempt: SecretExemption = () => false,
 ): Promise<SecretRewrapReport> {
   const full = new AesGcmSecretCipher(keyring, acceptV1);
   const activeOnly = new AesGcmSecretCipher(activeKeyOnly(keyring), false);
@@ -222,6 +243,7 @@ export async function rewrapSecretsUnderActiveKey(
     const rows = await storedValues(db, column);
     if (rows === null) continue;
     for (const row of rows) {
+      if (exempt({ purpose: column.purpose, table: column.table, entityId: row.id })) continue;
       const context = { purpose: column.purpose, tenantId: row.tenant_id, entityId: row.id };
       const stored = { keyId: row.key_id ?? '', ciphertext: row.ciphertext };
       if (
@@ -263,19 +285,22 @@ export async function rewrapAndProve(
   db: SecretRowQueryable,
   keyring: SecretKeyring,
   acceptV1: boolean,
+  exempt: SecretExemption = () => false,
 ): Promise<SecretRewrapReport & { readonly proof: SecretTrialReport }> {
-  const rewrap = await rewrapSecretsUnderActiveKey(db, keyring, acceptV1);
+  const rewrap = await rewrapSecretsUnderActiveKey(db, keyring, acceptV1, exempt);
   const proof = await trialDecryptSecrets(
     db,
     new AesGcmSecretCipher(activeKeyOnly(keyring), false),
   );
-  if (rewrap.failed > 0 || proof.unreadableTotal > 0) {
+  // An exempt row is unreadable by definition; anything else unreadable is a failure.
+  const stillUnreadable = proof.unreadable.filter((row) => !exempt(row));
+  if (rewrap.failed > 0 || stillUnreadable.length > 0) {
     throw new NexaError({
       kind: 'INTERNAL',
       code: PLATFORM_ERROR_CODES.SECRET_AUTH_FAILED,
       message:
         `Re-encrypting the restored secrets under the active key did not converge: ` +
-        `${String(rewrap.failed)} could not be re-encrypted, ${String(proof.unreadableTotal)} ` +
+        `${String(rewrap.failed)} could not be re-encrypted, ${String(stillUnreadable.length)} ` +
         'do not read under the active key.',
       details: { unreadable: unreadableCounts(proof) },
     });
