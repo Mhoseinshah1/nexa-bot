@@ -566,9 +566,23 @@ export function PageHead({
   badge,
   meta,
   actions,
+  count,
+  freshness,
+  onRefresh,
+  refreshing = false,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
+  /**
+   * A count chip beside the title (web redesign PR-0). Must be a REAL server total — never the
+   * length of the page of rows on screen. Absent, no chip is drawn.
+   */
+  count?: number;
+  /** The «last updated» line — drawn in the same row as the refresh button and the page actions. */
+  freshness?: ReactNode;
+  /** When given, a refresh icon button is drawn in the actions row. */
+  onRefresh?: () => void;
+  refreshing?: boolean;
   /**
    * Only for a page that does not do its job yet (planned, server-ready,
    * unsupported). A working page carries no badge: «فعال» beside a list's
@@ -588,13 +602,27 @@ export function PageHead({
         {trail.length > 1 && <Breadcrumbs items={trail} />}
         <h1>
           {title}
+          {count !== undefined && <span className="count-chip num">{formatNumber(count)}</span>}
           {badge}
           {maturity !== undefined && <MaturityBadge value={maturity} />}
         </h1>
         {subtitle !== undefined && <MoreText className="sub">{subtitle}</MoreText>}
         {meta !== undefined && <div className="head-meta">{meta}</div>}
       </div>
-      {actions !== undefined && <div className="actions">{actions}</div>}
+      {(actions !== undefined || freshness !== undefined || onRefresh !== undefined) && (
+        <div className="actions">
+          {freshness !== undefined && <span className="head-fresh">{freshness}</span>}
+          {onRefresh !== undefined && (
+            <IconButton
+              icon="refresh"
+              label={t('web.kit_refresh')}
+              disabled={refreshing}
+              onClick={onRefresh}
+            />
+          )}
+          {actions}
+        </div>
+      )}
     </div>
   );
 }
