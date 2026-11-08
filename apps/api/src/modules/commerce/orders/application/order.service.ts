@@ -30,6 +30,7 @@ import {
   type UserId,
   type BotInstanceId,
 } from '@nexa/contracts';
+import { totalWithin } from '../../list-total-deadline.js';
 import { productIdSchema } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -307,6 +308,12 @@ export interface OrderListQuery {
   readonly limit?: number;
   readonly cursor?: OrderCursor;
   readonly search: OrderSearch;
+  /**
+   * Ask for the count chip's total. Opt-in: only the Web Admin list handlers do. Another
+   * caller of this list (global search, the Telegram flows) neither shows a chip nor should
+   * pay for one. Ignored on a page with a cursor: a page turn does not recount.
+   */
+  readonly withTotal?: boolean;
 }
 
 /**
@@ -354,10 +361,26 @@ export class OrderService {
   ): Promise<OrderListing> {
     await this.deps.guard.check(scope, actor, ORDER_VIEW_PERMISSION);
     const limit = Math.min(Math.max(query.limit ?? ORDER_PAGE_DEFAULT, 1), ORDER_PAGE_MAX);
-    // The count chip's total runs beside the page, never before it, and never fails it.
+    // The product-name arm is resolved ONCE, for the page and the total alike.
+    const productIds =
+      query.search.text?.kind === 'TEXT'
+        ? await this.deps.repository.productIdsTitled(scope, query.search.text.folded)
+        : [];
+    // The count chip's total runs beside the page, never before it, and never fails it or
+    // holds it up past `totalWithin`'s bound.
+    const wantTotal = query.withTotal === true && (query.cursor ?? null) === null;
     const [page, total] = await Promise.all([
-      this.deps.repository.list(scope, query.search, limit, query.cursor ?? null),
-      this.deps.repository.total(scope, query.search),
+      this.deps.repository.list(
+        scope,
+        query.search,
+        limit,
+        query.cursor ?? null,
+        undefined,
+        productIds,
+      ),
+      wantTotal
+        ? totalWithin(() => this.deps.repository.total(scope, query.search, productIds))
+        : null,
     ]);
     return { ...page, total };
   }

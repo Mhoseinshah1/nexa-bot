@@ -74,6 +74,7 @@ export class OrdersController {
     });
     const text = page.q === undefined ? null : classifyListSearch(page.q);
     const result = await this.container.orders.list(scope, actor, {
+      withTotal: true,
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: orderCursorFrom(page.cursor) }),
       search: {

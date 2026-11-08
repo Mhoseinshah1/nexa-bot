@@ -28,17 +28,42 @@ import type { Database } from './database.js';
  */
 export const LIST_TOTAL_EXACT_CEILING = 5_000;
 export const LIST_TOTAL_TIMEOUT_MS = 1_500;
+/**
+ * The planner's total cost above which the capped `count(*)` is not executed: the estimate
+ * is returned as it is. A selection the planner thinks is small but whose cheapest plan is
+ * a walk of a big table (a rare, un-indexed filter) would otherwise run until the timeout.
+ */
+export const LIST_TOTAL_COUNT_COST_CEILING = 20_000;
+
+/** True when every pooled connection is busy and callers are already queueing for one. */
+function poolSaturated(db: Database): boolean {
+  const pool = (db as unknown as { $client?: { idleCount?: number; waitingCount?: number } })
+    .$client;
+  return (
+    pool !== undefined &&
+    typeof pool.idleCount === 'number' &&
+    typeof pool.waitingCount === 'number' &&
+    pool.idleCount === 0 &&
+    pool.waitingCount > 0
+  );
+}
 
 export async function listTotal(
   db: Database,
   table: PgTable,
   where: SQL | undefined,
+  /** Only a test lowers the ceiling, to reach the "too costly to count" branch. */
+  options: { readonly countCostCeiling?: number } = {},
 ): Promise<ListTotal | null> {
+  // A chip is not worth queueing behind the page for a connection.
+  if (poolSaturated(db)) return null;
   try {
     return await db.transaction(async (tx) => {
       await tx.execute(
         sql`SET LOCAL statement_timeout = ${sql.raw(String(LIST_TOTAL_TIMEOUT_MS))}`,
       );
+      // One backend: a parallel scan for a count would take workers from the page.
+      await tx.execute(sql`SET LOCAL max_parallel_workers_per_gather = 0`);
       const selection = tx
         .select({ one: sql`1`.as('one') })
         .from(table)
@@ -53,6 +78,15 @@ export async function listTotal(
         .where(where)
         .limit(LIST_TOTAL_EXACT_CEILING + 1)
         .as('capped');
+      // Plan the count itself: a cheap estimate of ROWS says nothing about what finding
+      // them costs. Past the ceiling, the estimate is the answer and nothing is executed.
+      const countPlan = await tx.execute(
+        sql`EXPLAIN (FORMAT JSON) ${tx.select({ n: count() }).from(capped)}`,
+      );
+      const cost = planTotalCost(countPlan);
+      if (cost === null || cost > (options.countCostCeiling ?? LIST_TOTAL_COUNT_COST_CEILING)) {
+        return { value: estimate, estimated: true };
+      }
       const counted = await tx.select({ n: count() }).from(capped);
       const exact = Number(counted[0]?.n ?? 0);
       return exact > LIST_TOTAL_EXACT_CEILING
@@ -62,6 +96,17 @@ export async function listTotal(
   } catch {
     return null;
   }
+}
+
+/** The top plan node's `Total Cost` out of `EXPLAIN (FORMAT JSON)`; null for anything else. */
+export function planTotalCost(result: unknown): number | null {
+  const rows = (result as { rows?: Record<string, unknown>[] }).rows;
+  const cell = rows?.[0]?.['QUERY PLAN'];
+  const parsed: unknown = typeof cell === 'string' ? JSON.parse(cell) : cell;
+  const cost = (parsed as { Plan?: { 'Total Cost'?: unknown } }[] | undefined)?.[0]?.Plan?.[
+    'Total Cost'
+  ];
+  return typeof cost === 'number' && Number.isFinite(cost) ? cost : null;
 }
 
 /** The top plan node's `Plan Rows` out of `EXPLAIN (FORMAT JSON)`; null for anything else. */

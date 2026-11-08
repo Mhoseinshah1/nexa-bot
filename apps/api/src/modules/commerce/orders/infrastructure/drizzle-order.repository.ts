@@ -199,11 +199,15 @@ export class DrizzleOrderRepository implements OrderRepository {
     limit: number,
     cursor: OrderCursor | null,
     tx?: unknown,
+    resolvedProductIds?: readonly string[],
   ): Promise<OrderPage> {
+    // The service resolves the product-name arm once for the page and the total; a caller
+    // that has not (the Telegram flows, tests) gets it resolved here.
     const productIds =
-      search.text?.kind === 'TEXT'
+      resolvedProductIds ??
+      (search.text?.kind === 'TEXT'
         ? await this.productIdsTitled(scope, search.text.folded, tx)
-        : [];
+        : []);
     const rows = await this.listStatement(scope, search, limit, cursor, tx, productIds);
     const page = rows.slice(0, limit);
     const last = page[page.length - 1];
@@ -283,14 +287,21 @@ export class DrizzleOrderRepository implements OrderRepository {
    * (PR-10). Exact when the planner expects a small selection, its estimate otherwise;
    * see `listTotal`. `null` when none could be produced in time.
    */
-  async total(scope: TenantContext, search: OrderSearch): Promise<ListTotal | null> {
-    const productIds =
-      search.text?.kind === 'TEXT' ? await this.productIdsTitled(scope, search.text.folded) : [];
-    return listTotal(
-      this.db,
-      orders,
-      and(...this.searchConditions(requireTenantId(scope), search, productIds)),
-    );
+  async total(
+    scope: TenantContext,
+    search: OrderSearch,
+    productIds: readonly string[],
+  ): Promise<ListTotal | null> {
+    try {
+      return await listTotal(
+        this.db,
+        orders,
+        and(...this.searchConditions(requireTenantId(scope), search, productIds)),
+      );
+    } catch {
+      // A total never fails the list that asked for it.
+      return null;
+    }
   }
 
   /** The list's filters, tenant first — shared by the page statement and the total. */

@@ -10,6 +10,7 @@ import {
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
+import { totalWithin } from '../../list-total-deadline.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { SERVICE_PAGE_DEFAULT } from './provisioning.service.js';
 import { serviceIdOrNotFound } from './service-id.js';
@@ -66,6 +67,12 @@ export interface ServiceAdminQuery {
   readonly limit?: number;
   readonly cursor?: ServiceCursor;
   readonly search: ServiceSearch;
+  /**
+   * Ask for the count chip's total. Opt-in: only the Web Admin list handlers do. Another
+   * caller of this list (global search, the Telegram flows) neither shows a chip nor should
+   * pay for one. Ignored on a page with a cursor: a page turn does not recount.
+   */
+  readonly withTotal?: boolean;
 }
 
 export interface ServiceAdminServiceDeps {
@@ -151,9 +158,10 @@ export class ServiceAdminService {
     await this.deps.guard.check(scope, actor, SERVICE_VIEW_PERMISSION);
     const limit = Math.min(Math.max(query.limit ?? SERVICE_PAGE_DEFAULT, 1), SERVICE_PAGE_MAX);
     // The count chip's total runs beside the page, never before it, and never fails it.
+    const wantTotal = query.withTotal === true && (query.cursor ?? null) === null;
     const [page, total] = await Promise.all([
       this.deps.services.list(scope, query.search, limit, query.cursor ?? null),
-      this.deps.services.total(scope, query.search),
+      wantTotal ? totalWithin(() => this.deps.services.total(scope, query.search)) : null,
     ]);
     return { ...page, total };
   }

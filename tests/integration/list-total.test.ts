@@ -148,7 +148,7 @@ describe('list totals on large tables', () => {
   it('estimates the orders and the services of a 200k tenant the same way', async () => {
     const orders = new DrizzleOrderRepository(ctx.container.database.db);
     const services = new DrizzleServiceRepository(ctx.container.database.db);
-    const o = await timed(() => orders.total(tenantA, {}));
+    const o = await timed(() => orders.total(tenantA, {}, []));
     const s = await timed(() => services.total(tenantA, {}));
     for (const [one, expected] of [
       [o, BIG],
@@ -167,7 +167,7 @@ describe('list totals on large tables', () => {
       value: BLOCKED,
       estimated: false,
     });
-    expect(await ordersRepo.total(tenantA, { state: 'REFUNDED' })).toEqual({
+    expect(await ordersRepo.total(tenantA, { state: 'REFUNDED' }, [])).toEqual({
       value: BLOCKED,
       estimated: false,
     });
@@ -179,6 +179,19 @@ describe('list totals on large tables', () => {
     // The tenant's own one-row customer plus the generated ones.
     expect(await customersRepo.total(tenantB, {})).toEqual({ value: SMALL + 1, estimated: false });
     expect(await servicesRepo.total(tenantB, {})).toEqual({ value: SMALL, estimated: false });
+  });
+
+  it('returns the estimate, executing no count, when the count itself is planned as costly', async () => {
+    // The same 7-row selection that is exact above, with the cost ceiling lowered under the
+    // count's plan: the planner's row estimate is returned and flagged, nothing is counted.
+    const out = await listTotal(
+      ctx.container.database.db,
+      customers,
+      sql`${customers.tenantId} = ${tenantA.tenantId} AND ${customers.status} = 'BLOCKED'`,
+      { countCostCeiling: 1 },
+    );
+    expect(out?.estimated).toBe(true);
+    expect(out?.value).toBeGreaterThan(0);
   });
 
   it('keeps the exact path under the ceiling', () => {

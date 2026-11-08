@@ -117,6 +117,7 @@ export class ServicesController {
     const now = this.container.clock.now();
     const text = page.q === undefined ? null : classifyListSearch(page.q);
     const result = await this.container.serviceAdmin.list(scope, actor, {
+      withTotal: true,
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: serviceCursorFrom(page.cursor) }),
       search: {

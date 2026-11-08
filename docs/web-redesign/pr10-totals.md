@@ -37,5 +37,20 @@ that, so no count ran), within 10 % of the real figure, in under 400 ms; filtere
 7 refunded orders) and the 3k tenant are exact with `estimated: false` and never include the other tenant; a total that
 cannot finish (`pg_sleep` in the filter) returns `null` in under 4 s.
 
-Known limit for the reviewer: a rare, un-indexed filter that the planner estimates small still scans until it finds
-5 001 matches or reaches the end of the table; the 1.5 s `statement_timeout` is the bound there.
+## After the Opus review
+
+- The page never waits on the total beyond 1.5 s (`totalWithin`, in `modules/commerce/list-total-deadline.ts`; the
+  server-side `statement_timeout` still cancels the query). It is opt-in (`withTotal`, set only by the three Web Admin
+  list handlers; global search and the Telegram flows never pay for it) and is computed for the first page only. A page
+  turn does not recount: the web keeps the chip of the same list (`useKeptTotal`) until a filter changes.
+- `OrderService.list` resolves the product-name arm once (`productIdsTitled`) and passes it to the page and the total;
+  `total()` cannot throw (any error is `null`).
+- The count is planned before it runs: `SET LOCAL max_parallel_workers_per_gather = 0`, then `EXPLAIN` of the capped
+  `count(*)` itself; a top-node Total Cost above 20 000 returns the row estimate (`estimated: true`) and executes
+  nothing. This replaces the earlier "known limit": a rare un-indexed filter that is expensive to find is no longer
+  scanned. The 1.5 s timeout stays as the backstop. When the pool is saturated (no idle connection, callers waiting) the
+  total is skipped.
+- Statistics: the planner's row estimate uses the table's statistics, which are table-wide (most-common values and
+  n_distinct over all tenants), not per tenant. An estimate above the threshold therefore says something about the
+  installation's row distribution as well as this tenant's. This is accepted: it is shown as «حدود N», it only ever
+  decides between "estimate" and "exact count", and the exact path is for small selections only.
