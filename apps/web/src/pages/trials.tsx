@@ -57,6 +57,12 @@ import { ErrorRef } from '../ui/technical-details';
  * may not use says so by name rather than vanishing, so an operator can tell "this does
  * not exist" from "this is not yours".
  */
+const PANEL_FILTER_LABEL = {
+  offered: 'web.trials_panel_offered',
+  not_offered: 'web.trials_panel_not_offered',
+  disabled: 'web.trials_panel_disabled',
+} as const;
+
 type PanelTrialFilter = 'all' | 'offered' | 'not_offered' | 'disabled';
 
 function panelTrialStateOf(row: PanelTrialOverviewRow): Exclude<PanelTrialFilter, 'all'> {
@@ -178,7 +184,7 @@ function PanelTrialsCard({
                 { key: 'all', label: t('web.trials_filter_all'), count: panels.data.panels.length },
                 ...(['offered', 'not_offered', 'disabled'] as const).map((key) => ({
                   key,
-                  label: t(`web.trials_panel_filter_${key}`),
+                  label: t(PANEL_FILTER_LABEL[key]),
                   count: panels.data.panels.filter((row) => panelTrialStateOf(row) === key).length,
                 })),
               ]}

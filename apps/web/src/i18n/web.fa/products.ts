@@ -203,6 +203,7 @@ export const WEB_FA_PRODUCTS = {
     'انتقال، ویرایشِ مشخصات محصول نیست؛ ردیف جداگانه‌ای در گزارش اقدام‌ها ثبت می‌کند.',
   'web.product_category_assigned': 'محصول به دستهٔ تازه منتقل شد',
 
+  'web.products_about_fold': 'دربارهٔ این فهرست',
   'web.products_intro': 'سرویس‌هایی که مشتری می‌تواند بخرد، و آنهایی که هنوز نمی‌تواند.',
   'web.products_empty': 'هنوز محصولی تعریف نشده است.',
   'web.products_empty_hint': 'با فرم پایین همین صفحه اولین محصول را بسازید.',
@@ -391,9 +392,6 @@ export const WEB_FA_PRODUCTS = {
   'web.trials_panel_disabled': 'خاموش',
   'web.trials_panels_filter': 'وضعیت سرویس تست پنل',
   'web.trials_filter_all': 'همه',
-  'web.trials_panel_filter_offered': 'در حال ارائه',
-  'web.trials_panel_filter_not_offered': 'ارائه نمی‌شود',
-  'web.trials_panel_filter_disabled': 'خاموش',
 
   /* Shared by the two rule tables and the two forms. */
   'web.rule_label': 'عنوان',
