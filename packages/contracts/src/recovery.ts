@@ -210,6 +210,18 @@ export const RECOVERY_EVENTS = [
   'READY',
   'NOT_READY',
   'ABANDONED',
+  /**
+   * NEXA-FIX-RESTORE-SECRETS §2.3, choice 1: after a `recovery.candidate_secrets_unreadable`
+   * refusal the owner imported the old server's Recovery Kit, and the SAME request is
+   * verified and restore-tested again from its kept upload.
+   */
+  'RETEST',
+  /**
+   * §2.3, choice 2 («ادامه؛ این‌ها را دوباره وارد می‌کنم»): the owner acknowledged the exact
+   * list of unreadable secrets; the request may be confirmed, and the executor clears those
+   * values in the candidate before the cut-over.
+   */
+  'ACKNOWLEDGE_UNREADABLE',
 ] as const;
 export type RecoveryEvent = (typeof RECOVERY_EVENTS)[number];
 
@@ -285,6 +297,24 @@ export const RECOVERY_MACHINE: StateMachineDefinition<RecoveryState, RecoveryEve
     { from: 'RESTARTING', to: 'SUCCEEDED', on: 'READY' },
     { from: 'RESTARTING', to: 'FAILED', on: 'NOT_READY' },
     { from: 'RESTARTING', to: 'FAILED', on: 'ABANDONED' },
+    /*
+     * The only two ways out of FAILED, and both are narrow: the request must have failed
+     * with `recovery.candidate_secrets_unreadable` (the one refusal that keeps its upload)
+     * and still hold its workspace. Each is a conditional UPDATE naming the failure code
+     * as well as the state, on `recovery.restore`, audited. Every other FAILED is final.
+     */
+    {
+      from: 'FAILED',
+      to: 'UPLOADED',
+      on: 'RETEST',
+      guard: 'failure is candidate_secrets_unreadable, upload kept, recovery.restore',
+    },
+    {
+      from: 'FAILED',
+      to: 'RESTORE_TEST_PASSED',
+      on: 'ACKNOWLEDGE_UNREADABLE',
+      guard: 'failure is candidate_secrets_unreadable, upload kept, exact list acknowledged',
+    },
   ],
 };
 
@@ -561,6 +591,23 @@ export const recoveryRestoreTestSchema = z.object({
    * active key in the candidate, before the cutover. Set by the executor only.
    */
   secretsRewrapped: z.number().int().nonnegative().optional(),
+  /**
+   * §2.3 choice 2: the owner chose to re-enter the unreadable secrets. Set only by the
+   * acknowledgment, together with `acknowledgedUnreadable` — the exact list the owner
+   * confirmed. The executor clears at most that many values of each purpose in the
+   * candidate, before the renames; anything else unreadable still refuses the cut-over.
+   */
+  clearUnreadable: z.boolean().optional(),
+  acknowledgedUnreadable: z
+    .array(
+      z.object({
+        purpose: z.enum(SECRET_PURPOSES),
+        count: z.number().int().positive(),
+      }),
+    )
+    .optional(),
+  /** How many unreadable values the executor cleared in the candidate. Executor only. */
+  secretsCleared: z.number().int().nonnegative().optional(),
 });
 export type RecoveryRestoreTest = z.infer<typeof recoveryRestoreTestSchema>;
 
@@ -598,6 +645,83 @@ export type RecoveryConfirmation = z.infer<typeof recoveryConfirmationSchema>;
  * the one concession, because a trailing newline from a paste is not a different
  * intention.
  */
+/**
+ * §2.3 choice 1: run the verification and restore test again on the SAME request, after
+ * a `recovery.candidate_secrets_unreadable` refusal (typically after importing the old
+ * server's Recovery Kit). `archivePassword` as in the verify request: a 7-Zip upload's
+ * password, used once and never stored.
+ */
+export const recoveryRetestRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  archivePassword: z.string().min(1).max(1024).optional(),
+});
+export type RecoveryRetestRequest = z.infer<typeof recoveryRetestRequestSchema>;
+
+/**
+ * §2.3 choice 2 («ادامه؛ این‌ها را دوباره وارد می‌کنم»): the list the owner saw and
+ * accepts losing. It must equal the request's recorded `restoreTest.unreadableSecrets`
+ * exactly (same purposes, same counts, any order), or the acknowledgment is refused.
+ */
+export const recoveryAcknowledgeUnreadableRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  unreadable: z
+    .array(
+      z.object({
+        purpose: z.enum(SECRET_PURPOSES),
+        count: z.number().int().positive(),
+      }),
+    )
+    .min(1)
+    .max(SECRET_PURPOSES.length),
+});
+export type RecoveryAcknowledgeUnreadableRequest = z.infer<
+  typeof recoveryAcknowledgeUnreadableRequestSchema
+>;
+
+/**
+ * Where in the Web Admin a cleared secret is entered again — a route KEY, not a URL; the
+ * Web Admin owns the paths: `bots` → /bots, `panels` → /panels/<entityId>,
+ * `payment-gateways` → /payment-gateways/<slug of provider>, `recovery` → /recovery
+ * (the backup password), `support-ai` → /support-ai, `account` → /account (an
+ * administrator's own two-factor enrolment), `hosting` → /hosting (the creator panel's).
+ */
+export const SECRET_REENTRY_PLACES = [
+  'bots',
+  'panels',
+  'payment-gateways',
+  'recovery',
+  'support-ai',
+  'account',
+  'hosting',
+] as const;
+export type SecretReentryPlace = (typeof SECRET_REENTRY_PLACES)[number];
+
+/**
+ * One secret a restore cleared (§2.3 choice 2) that is STILL not set or not readable,
+ * computed when asked — re-entering it through its normal page removes it. Never a value,
+ * a ciphertext or a key id.
+ */
+export const secretReentryItemSchema = z.object({
+  purpose: z.enum(SECRET_PURPOSES),
+  /** One of `UNREADABLE_SECRET_KINDS` (`ops-error-events.ts`), the kind the alerts use. */
+  kind: z.string().min(1).max(32),
+  /** The entity to re-enter it on: a bot, a panel, a gateway credential row, an admin. */
+  entityId: z.string().min(1).max(64),
+  /** A human handle when one is cheap: the bot's username, the panel's name, the admin's. */
+  label: z.string().max(200).nullable(),
+  /** For `payment-gateways`: the provider whose page it is. Null otherwise. */
+  provider: z.string().max(64).nullable(),
+  reenterAt: z.enum(SECRET_REENTRY_PLACES),
+  clearedAt: z.iso.datetime(),
+  recoveryId: z.string(),
+});
+export type SecretReentryItem = z.infer<typeof secretReentryItemSchema>;
+
+export const secretReentryListResponseSchema = z.object({
+  items: z.array(secretReentryItemSchema),
+});
+export type SecretReentryListResponse = z.infer<typeof secretReentryListResponseSchema>;
+
 export function isRecoveryConfirmationPhrase(value: string): boolean {
   return value.trim() === RECOVERY_CONFIRMATION_PHRASE;
 }

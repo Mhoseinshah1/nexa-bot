@@ -33,8 +33,16 @@ import {
 describe('the recovery state machine', () => {
   it('has exactly two terminal states, and both are terminal in the declaration', () => {
     expect([...RECOVERY_TERMINAL_STATES]).toEqual(['SUCCEEDED', 'FAILED']);
-    for (const state of RECOVERY_TERMINAL_STATES) {
-      expect(RECOVERY_MACHINE.transitions.some((t) => t.from === state)).toBe(false);
+    expect(RECOVERY_MACHINE.transitions.some((t) => t.from === 'SUCCEEDED')).toBe(false);
+    // NEXA-FIX-RESTORE-SECRETS §2.3: FAILED is left by exactly two guarded events, both
+    // for a refused restore test whose upload was kept — never into the destructive chain.
+    const outOfFailed = RECOVERY_MACHINE.transitions.filter((t) => t.from === 'FAILED');
+    expect(outOfFailed.map((t) => [t.on, t.to])).toEqual([
+      ['RETEST', 'UPLOADED'],
+      ['ACKNOWLEDGE_UNREADABLE', 'RESTORE_TEST_PASSED'],
+    ]);
+    for (const transition of outOfFailed) {
+      expect(transition.guard).toContain('candidate_secrets_unreadable');
     }
   });
 
