@@ -280,7 +280,7 @@ export const WEB_FA_SYSTEM = {
   'web.secret_unreadable_count': 'تعداد',
   'web.secret_unreadable_kit_choice': 'بارگذاری کیت بازیابی سرور قبلی',
   'web.secret_unreadable_kit_hint':
-    'کیت بازیابی همان سرور را در بخش «کیت بازیابی» بالای همین صفحه وارد کنید، سپس دکمهٔ زیر را بزنید تا همین فایل دوباره آزموده شود. نیازی به بارگذاری دوبارهٔ بکاپ نیست.',
+    'کیت بازیابی همان سرور را همین‌جا، در فرم زیر وارد کنید (رمز کیت جدا از رمز فایل بکاپ است)، سپس دکمهٔ آزمون دوباره را بزنید تا همین فایل دوباره آزموده شود. نیازی به بارگذاری دوبارهٔ بکاپ نیست.',
   'web.secret_unreadable_retest': 'آزمون دوباره با کیت وارد‌شده',
   'web.secret_unreadable_retesting': 'در حال آزمون…',
   'web.secret_unreadable_continue': 'ادامه؛ این‌ها را دوباره وارد می‌کنم',
@@ -297,7 +297,8 @@ export const WEB_FA_SYSTEM = {
     'فهرست پذیرفته شد. برای شروع بازیابی عبارت تأیید را بنویسید.',
   'web.secret_unreadable_refund_card':
     'کارت بازپرداخت درگاه با این بازیابی پاک نمی‌شود، چون پاک کردنش بازپرداخت‌ها را تغییر می‌دهد. برای این بکاپ باید کیت بازیابی سرور قبلی را وارد کنید.',
-  'web.secret_unreadable_password_label': 'رمز فایل 7-Zip',
+  'web.secret_unreadable_archive_password_label':
+    'رمز فایل بکاپ (همان رمزی که بکاپ با آن گرفته شده)',
   'web.secret_unreadable_no_permission': 'شما اجازهٔ بازگرداندن این نصب را ندارید.',
   'web.secret_summary_rewrapped': 'رمز زیر کلید این سرور دوباره رمزگذاری شد',
   'web.secret_summary_cleared': 'رمز پاک شد و باید دوباره وارد شود',
@@ -333,7 +334,6 @@ export const WEB_FA_SYSTEM = {
 
   // --- Alerts --------------------------------------------------------------
   'web.alerts_title': 'هشدارهای مدیریتی',
-  'web.alerts_intro': 'مواردی که واقعاً به رسیدگی یک نفر نیاز دارند.',
   'web.alerts_scope_body':
     'تنها رویدادهای مدیریتی اینجا می‌آیند: تغییر مدیران و نقش‌ها، قفل‌شدن حساب، رد دسترسی، پرشدن سهمیهٔ پایش یک مستأجر، و تنظیمی که دیگر خوانده نمی‌شود. جریان روتین — هر بررسی سلامت، هر تلاش ارسال، و ازکارافتادن کانال اعلان — به گروه گزارش تلگرام می‌رود.',
   // Two empty states, because there are two questions and only one of them was
@@ -347,13 +347,15 @@ export const WEB_FA_SYSTEM = {
   'web.system_title': 'سامانه و عملیات',
   'web.system_intro': 'وضعیت اجرا، نسخهٔ در حال اجرا، مدیران، و پیکربندی پایش.',
   'web.system_tab_status': 'وضعیت',
+  'web.system_about_fold': 'دربارهٔ این صفحه',
+  'web.system_tab_audit': 'تاریخچهٔ تغییرات',
   'web.system_tab_monitor': 'پایش',
   'web.system_tab_admins': 'مدیران',
   'web.system_status_hint': 'زنده‌بودن و آماده‌بودن دو چیز جدا هستند.',
   'web.build_time': 'زمان ساخت',
   'web.node_version': 'نسخهٔ Node',
   'web.last_login': 'آخرین ورود',
-  'web.opsgroup_title': 'گروه گزارش‌های مدیریتی',
+  'web.opsgroup_title': 'گروه لاگ',
   'web.opsgroup_subtitle':
     'گروه تلگرامی که Nexa گزارش‌های سیستم، خطاها و پرداخت‌ها را در تاپیک‌های خودش در آن ارسال می‌کند.',
   'web.opsgroup_lane_off':
@@ -518,13 +520,24 @@ export const WEB_FA_SYSTEM = {
   'web.recovery_verdict_behind': 'عقب‌تر از این نسخه',
   'web.recovery_verdict_none': 'بدون مهاجرت',
   'web.recovery_verdict_diverged': 'ناهم‌خوان با این نسخه',
-  'web.nc_title': 'مرکز اعلان‌ها',
+  'web.nc_title': 'اعلان‌ها و هشدارها',
   'web.nc_intro':
     'رخدادهایی که به اقدام مدیر نیاز دارند، از گزارش عملیاتی سامانه. هر رخداد تکراری یک اعلان با شمارنده است؛ وضعیت خوانده‌شدن برای هر مدیر جداست و رخداد را حل نمی‌کند.',
   'web.nc_bell': 'اعلان‌ها',
   'web.nc_bell_unread': 'اعلان خوانده‌نشده',
   'web.nc_filter_all': 'همه',
   'web.nc_filter_unread': 'خوانده‌نشده',
+  'web.nc_filter_open_alerts': 'هشدارهای باز',
+  'web.nc_filter_recorded_alerts': 'هشدارهای ثبت‌شده',
+  'web.nc_filters_label': 'نمایش',
+  'web.nc_source_alert': 'هشدار مدیریتی',
+  'web.nc_alerts_strip_title': 'هشدار باز',
+  'web.nc_alerts_strip_link': 'مشاهدهٔ هشدارهای باز',
+  'web.nc_bell_drawer_title': 'اعلان‌های خوانده‌نشده',
+  'web.nc_bell_drawer_empty': 'خوانده‌نشده‌ای نمانده است.',
+  'web.nc_bell_drawer_all': 'همهٔ اعلان‌ها و هشدارها',
+  'web.opsgroup_tab_group': 'تنظیمات گروه',
+  'web.opsgroup_tab_log': 'گزارش ارسال‌ها',
   'web.nc_filter_category': 'دسته',
   'web.nc_category_all': 'همهٔ دسته‌ها',
   'web.nc_mark_all': 'همه را خوانده‌شده کن',
@@ -629,6 +642,10 @@ export const WEB_FA_SYSTEM = {
     'رخدادهای جاری، پنجره‌های نگهداری زمان‌بندی‌شده، توقف دقیق فروش و اطلاع‌رسانی به مشتریان آسیب‌دیده.',
   'web.inc_new': 'رخداد تازه',
   'web.inc_empty': 'رخدادی ثبت نشده است.',
+  'web.inc_about_fold': 'دربارهٔ این صفحه',
+  'web.inc_list_hint': 'برای دیدن جزئیات، روی عنوان رخداد بزنید.',
+  'web.inc_drawer_title': 'جزئیات رخداد',
+  'web.inc_open_full': 'صفحهٔ کامل رخداد',
   'web.inc_col_title': 'عنوان',
   'web.inc_col_kind': 'نوع',
   'web.inc_col_severity': 'شدت',

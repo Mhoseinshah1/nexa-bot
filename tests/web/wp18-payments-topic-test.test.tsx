@@ -27,7 +27,7 @@ describe('the test sends on the notifications page (WP18)', () => {
   const open = () => {
     const api = stubApi([HISTORY, REFUSED]);
     renderPage(
-      resolve({ path: '/notifications', query: new URLSearchParams() }, [
+      resolve({ path: '/ops-group', query: new URLSearchParams('tab=log') }, [
         'settings.edit',
         'opslog.view',
       ]).element as ReactElement,

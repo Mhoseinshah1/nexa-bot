@@ -36,7 +36,7 @@ const item = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe('the bell', () => {
-  it('draws the unread count, toned by the worst unread severity, and links to the inbox', async () => {
+  it('draws the unread count, toned by the worst unread severity, and opens the drawer of the latest unread items', async () => {
     stubApi([
       {
         url: '/notification-center/summary',
@@ -45,12 +45,11 @@ describe('the bell', () => {
     ]);
     renderPage(<NotificationBell />);
     const bell = await screen.findByRole(
-      'link',
+      'button',
       { name: /اعلان‌ها: 3/u },
       // The summary is a request; under a loaded runner it can take longer than the default.
       { timeout: 5000 },
     );
-    expect(bell.getAttribute('href')).toBe('/notification-center');
     expect(bell.querySelector('.nc-bell-count.danger')?.textContent).toBe('3');
   });
 
@@ -62,8 +61,39 @@ describe('the bell', () => {
       },
     ]);
     renderPage(<NotificationBell />);
-    const bell = await screen.findByRole('link', { name: 'اعلان‌ها' });
+    const bell = await screen.findByRole('button', { name: 'اعلان‌ها' });
     await waitFor(() => expect(bell.querySelector('.nc-bell-count')).toBeNull());
+  });
+
+  it('opens a drawer with the latest unread items, asking only once it is opened', async () => {
+    const api = stubApi([
+      {
+        url: '/notification-center/summary',
+        body: { unread: 1, atLeast: false, highestUnread: 'WARN' },
+      },
+      { url: '/notification-center', body: { notifications: [item()], nextCursor: null } },
+    ]);
+    renderPage(<NotificationBell />);
+    const bell = await screen.findByRole('button', { name: /اعلان‌ها: 1/u });
+    const listed = () =>
+      api.calls.filter(
+        (call) => new URL(call.url, 'http://x').searchParams.get('unread') === 'true',
+      );
+    expect(listed()).toHaveLength(0);
+
+    fireEvent.click(bell);
+    const drawer = await screen.findByRole('dialog', { name: t('web.nc_bell_drawer_title') });
+    const link = await within(drawer).findByRole('link', {
+      name: 'پرداخت درگاهی نیاز به تطبیق دستی دارد',
+    });
+    expect(link.getAttribute('href')).toBe(`/payments/${PAYMENT}`);
+    expect(new URL(listed()[0]?.url ?? '', 'http://x').searchParams.get('limit')).toBe('8');
+    // The way on to the whole page.
+    expect(
+      within(drawer)
+        .getByRole('link', { name: t('web.nc_bell_drawer_all') })
+        .getAttribute('href'),
+    ).toBe('/notification-center');
   });
 });
 
@@ -172,6 +202,8 @@ describe('the deep links', () => {
     }
     expect(pathOf({ target: 'SERVICE', id: PAYMENT })).toBe(`/services/${PAYMENT}`);
     expect(pathOf({ target: 'ADMINS', id: null })).toBe('/system?section=admins');
+    // The alerts link lands on the unified page's «هشدارهای باز» chip, not on a redirect.
+    expect(pathOf({ target: 'ALERTS', id: null })).toBe('/notification-center?filter=open');
   });
 });
 

@@ -312,7 +312,7 @@ export const WEB_FA_SETTINGS = {
   'web.feature_where_label': 'کجا دیده می‌شود',
   'web.feature_where_bot': 'ربات مشتری',
   'web.feature_where_miniapp': 'مینی‌اپ',
-  'web.feature_where_ops_group': 'گروه گزارش‌ها',
+  'web.feature_where_ops_group': 'گروه لاگ',
   'web.feature_where_web_admin': 'پنل مدیریت',
   'web.feature_where_background': 'پس‌زمینه',
   'web.feature_off_label': 'اگر خاموش شود',
