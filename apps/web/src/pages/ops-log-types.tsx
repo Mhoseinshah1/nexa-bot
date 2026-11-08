@@ -13,6 +13,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import { Banner, Card, Disclosure, Field, Num, StateSwitch, ToggleRow, useToast } from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
+import { TimeField24 } from '../ui/time-field24';
 
 /**
  * The per-type switches of «گروه گزارش‌های مدیریتی» (Round 4 PR-D).
@@ -202,7 +203,7 @@ const OPTIONS: readonly {
   readonly key: string;
   readonly label: WebKey;
   readonly hint: WebKey;
-  readonly kind: 'boolean' | 'number' | 'text';
+  readonly kind: 'boolean' | 'number' | 'text' | 'time';
 }[] = [
   {
     key: 'ops.log.storm_rollup_enabled',
@@ -226,7 +227,7 @@ const OPTIONS: readonly {
     key: 'ops.log.nightly_report_time',
     label: 'web.opslog_report_time',
     hint: 'web.opslog_report_time_hint',
-    kind: 'text',
+    kind: 'time',
   },
   {
     key: 'ops.log.admin_base_url',
@@ -317,16 +318,32 @@ function OptionRow({
   }
   return (
     <div className="field-row">
-      <Field label={t(option.label)} hint={t(option.hint)} htmlFor={id} compact>
-        <input
-          id={id}
-          className="input sm"
-          dir="ltr"
-          inputMode={option.kind === 'number' ? 'numeric' : 'text'}
-          value={draft}
-          disabled={!mayManage}
-          onChange={(event) => setDraft(event.target.value)}
-        />
+      <Field
+        label={t(option.label)}
+        hint={t(option.hint)}
+        htmlFor={option.kind === 'time' ? `${id}-h` : id}
+        compact
+      >
+        {option.kind === 'time' ? (
+          // The Persian 24-hour picker; the value stays the `HH:MM` text it always was.
+          <TimeField24
+            id={id}
+            label={t(option.label)}
+            value={draft}
+            disabled={!mayManage}
+            onChange={setDraft}
+          />
+        ) : (
+          <input
+            id={id}
+            className="input sm"
+            dir="ltr"
+            inputMode={option.kind === 'number' ? 'numeric' : 'text'}
+            value={draft}
+            disabled={!mayManage}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+        )}
       </Field>
       {mayManage && (
         <button

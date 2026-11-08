@@ -1,6 +1,7 @@
 import {
   MARZBAN_PROXY_PROTOCOLS,
   PANEL_ACTIVATION_SCHEMAS,
+  providerDescriptor,
   type ProviderType,
 } from '@nexa/contracts';
 import { t } from '../i18n/web.fa';
@@ -69,6 +70,16 @@ export const EMPTY_ACTIVATION_DRAFT: ActivationDraft = {
  */
 export function acceptsRequestTimeout(providerType: ProviderType): boolean {
   return PANEL_ACTIVATION_SCHEMAS[providerType].safeParse({ requestTimeoutMs: 5_000 }).success;
+}
+
+/**
+ * Whether the operator configures protocols / inbounds / a subscription domain for this
+ * provider (Marzban, 3X-UI: the descriptor names required activation fields). Where it does
+ * not (RickPanel, the custom bridge) the panel decides them and the page shows the provider
+ * rules read-only: no protocol boxes, no incomplete-configuration warning.
+ */
+export function takesOperatorActivation(providerType: ProviderType): boolean {
+  return (providerDescriptor(providerType)?.requiredActivationFields.length ?? 0) > 0;
 }
 
 /** Seconds as typed, as the milliseconds the schema stores; `NaN` when it is not a number. */
@@ -297,6 +308,7 @@ export function ActivationFields({
       </Field>
     );
   }
+  if (!takesOperatorActivation(providerType)) return null;
   return (
     <>
       <Field

@@ -262,6 +262,10 @@ describe('the settings screen', () => {
     ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
     await screen.findByRole('heading', { name: t('web.setting_ops_max_per_minute') });
+    // The page's one save bar appears once a row holds an edit.
+    fireEvent.change(screen.getByLabelText(t('web.setting_ops_max_per_minute')), {
+      target: { value: '9' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     expect(await screen.findByText('ثبت شد، اما مقداری تغییر نکرد.')).toBeInTheDocument();
   });
@@ -296,6 +300,10 @@ describe('the settings screen', () => {
     ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
     await screen.findByRole('heading', { name: t('web.setting_ops_max_per_minute') });
+    // The page's one save bar appears once a row holds an edit.
+    fireEvent.change(screen.getByLabelText(t('web.setting_ops_max_per_minute')), {
+      target: { value: '9' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
 
     expect(await screen.findByText(t('web.rejected'))).toBeInTheDocument();
@@ -326,6 +334,9 @@ describe('the settings screen', () => {
     const failing = vi.fn(() => Promise.reject(new TypeError('Failed to fetch')));
     const previous = globalThis.fetch;
     vi.stubGlobal('fetch', failing);
+    fireEvent.change(screen.getByLabelText(t('web.setting_ops_max_per_minute')), {
+      target: { value: '9' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
 
     expect(await screen.findByText(t('web.error'))).toBeInTheDocument();

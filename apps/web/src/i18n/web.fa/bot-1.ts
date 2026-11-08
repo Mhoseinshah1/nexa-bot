@@ -5,7 +5,6 @@
  */
 export const WEB_FA_BOT_1 = {
   // OPS-B redesign (round W): the settings-like pages' shared structure.
-  'web.ob_sections': 'بخش‌های این صفحه',
   'web.ob_unsaved_count': 'تغییر ذخیره‌نشده',
   'web.ob_unsaved_row': 'ذخیره‌نشده',
   'web.ob_toast_saved': 'ذخیره شد',

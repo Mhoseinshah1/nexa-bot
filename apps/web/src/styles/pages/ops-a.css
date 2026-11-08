@@ -219,6 +219,16 @@
   white-space: nowrap;
   font-size: 20px;
 }
+.panel-lifecycle-slot {
+  display: contents;
+}
+.panel-head-stats .kpi-sub {
+  display: block;
+  font-weight: 400;
+}
+.prule-note {
+  margin-block-start: 12px;
+}
 .panel-head-note {
   margin: 0;
 }
@@ -794,16 +804,6 @@
 
 /* --- Panel health dashboard (Phase C2) ------------------------------------- */
 
-/* Five figures that wrap to two or three a row on a phone, never a scrolling strip. */
-.ph-summary {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
-  margin-block-end: 8px;
-}
-.ph-summary > .stat {
-  margin: 0;
-}
 /* One card per panel: two a row on a desk, as the demo draws them; one at 390px. */
 .ph-cards {
   display: grid;

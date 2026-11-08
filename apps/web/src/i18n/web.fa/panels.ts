@@ -71,6 +71,12 @@ export const WEB_FA_PANELS = {
 
   // --- Panels --------------------------------------------------------------
   'web.panels_title': 'پنل‌ها',
+  'web.panels_rules_fold': 'دربارهٔ این فهرست',
+  'web.providers_rules_fold': 'دربارهٔ ارائه‌دهنده‌ها',
+  'web.ph_rules_fold': 'دربارهٔ سلامت پنل‌ها',
+  'web.panel_actions_bar': 'اقدام‌های پنل',
+  'web.panel_group_probe': 'بررسی',
+  'web.panel_group_lifecycle': 'چرخهٔ عمر پنل',
   'web.panels_intro': 'پنل‌های ارائه‌دهنده، سلامت آنها و اعتبارنامه‌هایشان.',
   'web.panels_empty': 'هنوز پنلی ثبت نشده است.',
   'web.panels_empty_hint': 'برای شروع، یک پنل اضافه کنید.',

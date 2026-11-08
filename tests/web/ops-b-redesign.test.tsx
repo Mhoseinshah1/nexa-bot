@@ -15,6 +15,7 @@ import { t } from '../../apps/web/src/i18n/web.fa';
 import { formatNumber } from '../../apps/web/src/format';
 import { TEMPLATE_COPY_FA } from '../../apps/web/src/i18n/templates.fa';
 import { renderPage, setting, stubApi } from './harness';
+import { openSettingsGroupOf } from './settings-tabs';
 
 /**
  * What the OPS-B redesign ADDED to its pages, pinned so a later edit cannot quietly drop
@@ -33,6 +34,8 @@ afterEach(() => {
 });
 
 const unsavedCount = (count: number) => `${formatNumber(count)} ${t('web.ob_unsaved_count')}`;
+const barCount = (count: number) =>
+  t('web.kit_settings_unsaved').replace('{n}', formatNumber(count));
 
 describe('the settings page, as a product settings page', () => {
   const rows = [
@@ -46,21 +49,31 @@ describe('the settings page, as a product settings page', () => {
     const field = (await screen.findByLabelText(
       t('web.setting_payment_window_minutes'),
     )) as HTMLInputElement;
-    expect(screen.queryByText(unsavedCount(1))).toBeNull();
+    expect(screen.queryByText(barCount(1))).toBeNull();
 
     fireEvent.change(field, { target: { value: '45' } });
-    expect(screen.getByText(unsavedCount(1))).toBeInTheDocument();
+    expect(screen.getByText(barCount(1))).toBeInTheDocument();
     const row = field.closest('article') as HTMLElement;
     expect(within(row).getByText(t('web.ob_unsaved_row'))).toBeInTheDocument();
-    // The tab strip marks the tab that holds it.
-    const tabs = screen.getByRole('tablist', { name: t('web.ob_sections') });
-    expect(within(tabs).getByText(t('web.ob_unsaved_row'))).toBeInTheDocument();
+    // Its section's head carries the count of unsaved settings, and the one bar offers save / cancel.
+    const sectionHead = row.closest('section')!.querySelector('.settings-section-head')!;
+    expect(within(sectionHead as HTMLElement).getByText('1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.kit_settings_cancel') })).toBeInTheDocument();
 
     fireEvent.click(within(row).getByRole('button', { name: t('web.discard') }));
     expect(
       (screen.getByLabelText(t('web.setting_payment_window_minutes')) as HTMLInputElement).value,
     ).toBe('60');
-    expect(screen.queryByText(unsavedCount(1))).toBeNull();
+    expect(screen.queryByText(barCount(1))).toBeNull();
+    // «لغو» on the bar restores every unsaved row.
+    fireEvent.change(screen.getByLabelText(t('web.setting_payment_window_minutes')), {
+      target: { value: '50' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: t('web.kit_settings_cancel') }));
+    expect(
+      (screen.getByLabelText(t('web.setting_payment_window_minutes')) as HTMLInputElement).value,
+    ).toBe('60');
+    expect(screen.queryByText(barCount(1))).toBeNull();
   });
 
   it('holds an in-app navigation while any row is unsaved, and lets it go once saved', async () => {
@@ -94,15 +107,14 @@ describe('the settings page, as a product settings page', () => {
     const dialog = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
     fireEvent.click(within(dialog).getByRole('button', { name: t('web.unsaved_stay') }));
 
-    const row = field.closest('article') as HTMLElement;
-    fireEvent.click(within(row).getByRole('button', { name: t('web.save') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
     // The toast names the setting it is about; the banner under the row stays the record.
     expect(
       await screen.findByText(
         `${t('web.ob_toast_saved')} — ${t('web.setting_payment_window_minutes')}`,
       ),
     ).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText(unsavedCount(1))).toBeNull());
+    await waitFor(() => expect(screen.queryByText(barCount(1))).toBeNull());
     act(() => navigate('/panels'));
     expect(window.location.pathname).toBe('/panels');
   });
@@ -123,16 +135,15 @@ describe('the settings page, as a product settings page', () => {
       `${t('web.currency')} — ${t('web.setting_sales_currency')}`,
     );
     fireEvent.change(select, { target: { value: 'IRR' } });
-    const row = select.closest('article') as HTMLElement;
 
-    fireEvent.click(within(row).getByRole('button', { name: t('web.save') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText(t('web.settings_currency_confirm'))).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: t('web.feature_confirm_cancel') }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
 
-    fireEvent.click(within(row).getByRole('button', { name: t('web.save') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', {
         name: t('web.settings_currency_confirm_yes'),
@@ -155,14 +166,12 @@ describe('the settings page, as a product settings page', () => {
     renderPage(<SettingsPage mayEdit denied={false} />);
     const field = await screen.findByLabelText(t('web.setting_payment_window_minutes'));
     fireEvent.change(field, { target: { value: '30' } });
-    fireEvent.click(
-      within(field.closest('article') as HTMLElement).getByRole('button', { name: t('web.save') }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
     await waitFor(() => expect(api.calls.some((call) => call.method === 'POST')).toBe(true));
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
-  it('W2: shows one group at a time as tabs, and keeps a draft across a switch', async () => {
+  it('shows each group as a collapsible section, and keeps a draft across closing one', async () => {
     stubApi([
       {
         url: '/settings',
@@ -178,28 +187,108 @@ describe('the settings page, as a product settings page', () => {
     const field = (await screen.findByLabelText(
       t('web.setting_payment_window_minutes'),
     )) as HTMLInputElement;
-    const tabs = screen.getByRole('tablist', { name: t('web.ob_sections') });
-    const sales = within(tabs).getByRole('tab', {
-      name: new RegExp(t('web.settings_group_sales')),
-    });
-    expect(sales).toHaveAttribute('aria-selected', 'true');
+    const heads = [
+      ...document.querySelectorAll<HTMLButtonElement>('.settings-section-head button'),
+    ];
+    const sales = heads.find((one) =>
+      (one.textContent ?? '').startsWith(t('web.settings_group_sales')),
+    )!;
+    const support = heads.find((one) =>
+      (one.textContent ?? '').startsWith(t('web.settings_group_support')),
+    )!;
+    // The first section starts open, the others closed.
+    expect(sales).toHaveAttribute('aria-expanded', 'true');
+    expect(support).toHaveAttribute('aria-expanded', 'false');
     fireEvent.change(field, { target: { value: '45' } });
 
-    const support = within(tabs).getByRole('tab', {
-      name: new RegExp(t('web.settings_group_support')),
-    });
     const scrolled = window.scrollY;
     fireEvent.click(support);
-    expect(support).toHaveAttribute('aria-selected', 'true');
-    // The sales group is hidden, not unmounted: its draft and its dot survive the switch.
-    expect(field.closest('[role="tabpanel"]')).toHaveAttribute('hidden');
-    expect(within(sales).getByText(t('web.ob_unsaved_row'))).toBeInTheDocument();
-    expect(screen.getByText(unsavedCount(1))).toBeInTheDocument();
+    expect(support).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(sales);
+    expect(sales).toHaveAttribute('aria-expanded', 'false');
+    // A closed section is hidden, not unmounted: its draft and its count survive.
+    expect(field.closest('.settings-section-body')).toHaveAttribute('hidden');
+    expect(within(sales).getByText('1')).toBeInTheDocument();
+    expect(screen.getByText(barCount(1))).toBeInTheDocument();
     expect(window.scrollY).toBe(scrolled);
     fireEvent.click(sales);
     expect(
       (screen.getByLabelText(t('web.setting_payment_window_minutes')) as HTMLInputElement).value,
     ).toBe('45');
+  });
+
+  it('saves every unsaved row from the one bar, each with its own request and version', async () => {
+    const api = stubApi([
+      {
+        url: '/settings',
+        body: {
+          settings: [
+            ...rows,
+            setting({
+              key: 'ops.notifications.max_per_minute',
+              value: 5,
+              version: 4,
+              configures: null,
+            }),
+          ],
+        },
+      },
+      { url: '/settings/sales.payment_window_minutes', body: { setting: rows[0], changed: true } },
+      {
+        url: '/settings/ops.notifications.max_per_minute',
+        body: {
+          setting: setting({
+            key: 'ops.notifications.max_per_minute',
+            value: 9,
+            version: 5,
+            configures: null,
+          }),
+          changed: true,
+        },
+      },
+    ]);
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    await openSettingsGroupOf('ops.notifications.max_per_minute');
+    fireEvent.change(await screen.findByLabelText(t('web.setting_payment_window_minutes')), {
+      target: { value: '45' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.setting_ops_max_per_minute')), {
+      target: { value: '9' },
+    });
+    expect(screen.getByText(barCount(2))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      const writes = api.calls.filter((call) => call.method === 'POST');
+      expect(writes).toHaveLength(2);
+      expect(writes.map((call) => call.body)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ value: 45, expectedVersion: 2 }),
+          expect.objectContaining({ value: 9, expectedVersion: 4 }),
+        ]),
+      );
+    });
+  });
+
+  it('keeps an edit that the server refuses, and says on the bar how many failed', async () => {
+    stubApi([
+      { url: '/settings', body: { settings: rows } },
+      {
+        status: 409,
+        url: '/settings/sales.payment_window_minutes',
+        body: { error: { code: 'control.version_conflict', message: 'conflict' } },
+      },
+    ]);
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    const field = (await screen.findByLabelText(
+      t('web.setting_payment_window_minutes'),
+    )) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: '45' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    expect(
+      await screen.findByText(t('web.settings_bar_failed').replace('{n}', '1')),
+    ).toBeInTheDocument();
+    expect(field.value).toBe('45');
+    expect(screen.getByText(barCount(1))).toBeInTheDocument();
   });
 });
 

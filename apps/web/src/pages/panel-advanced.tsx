@@ -682,6 +682,31 @@ function ProviderRulesCard({
   );
 }
 
+/**
+ * The provider's rules for protocols, inbounds and the subscription link, read-only, for the
+ * Overview of a panel whose provider decides them itself (RickPanel, the custom bridge). The
+ * same `advanced` read the capabilities tab makes, so it costs no new endpoint.
+ */
+export function ProviderRulesNote({ panel }: { panel: PanelSummaryResponse }) {
+  const advanced = useQuery({
+    queryKey: advancedKey(panel.id),
+    queryFn: () => fetchPanelAdvanced(panel.id),
+  });
+  const rules = advanced.data?.providerRules;
+  if (rules === undefined) return null;
+  const row = <K extends keyof ProviderRules>(key: K): [string, string] => [
+    t(RULE_LABELS[key]),
+    t((RULE_VALUE_LABELS[key] as Readonly<Record<string, WebKey>>)[rules[key]] as WebKey),
+  ];
+  return (
+    <div className="prule-note">
+      <p className="field-group-head">{t('web.prule_title')}</p>
+      <KV items={[row('protocols'), row('inbounds'), row('subscriptionLink')]} />
+      <p className="faint small">{t('web.prule_hint')}</p>
+    </div>
+  );
+}
+
 /** A stored activation value, flattened for reading. Never a credential: it has none. */
 function summarise(value: unknown): string {
   if (Array.isArray(value)) return value.map(summarise).join(', ');

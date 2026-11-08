@@ -228,9 +228,9 @@ describe('the panel detail, redesigned', () => {
     );
     renderPage(<PanelDetailPage id={PANEL_ID} mayEdit mayRotate denied={false} />);
     await panelHeading();
-    // Demo parity: the figures are a strip of separate stat cards under the page header.
+    // Demo parity: the figures are a KPI row under the page header.
     const strip = document.querySelector('.panel-head-stats') as HTMLElement;
-    const labels = [...strip.querySelectorAll('.stat .lbl')].map((cell) => cell.textContent);
+    const labels = [...strip.querySelectorAll('.kpi-cell-label')].map((cell) => cell.textContent);
     expect(labels).toEqual([
       t('web.panel_health'),
       t('web.panel_latency'),
