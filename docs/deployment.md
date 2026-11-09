@@ -1150,6 +1150,13 @@ panels. `docs/vps-acceptance.md` is where a measured figure for a real
 installation belongs. The monitor will not widen it on the installation's
 behalf.
 
+## Moving the server to another data centre
+
+`botctl move export --out FILE` (old server, freezes it), `botctl move import FILE` (new
+server, after `install.sh` of the same or a newer release), `botctl move verify` and
+`botctl move abort`: the step-by-step guide, in Persian and English, is `docs/server-move.md`
+(ADR-0039 § 8).
+
 ## Backups
 
 `botctl backup` runs `pg_dump` inside the database container and writes
