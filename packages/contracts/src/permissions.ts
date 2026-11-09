@@ -1045,6 +1045,32 @@ export const INSTALLATION_ONLY_PERMISSIONS = [
 ] as const satisfies readonly PermissionKey[];
 
 /**
+ * Phase 6B «ورود به پنل» (D5, ADR-0039 § 9 refinement 3): what an ENTERED session — the
+ * installation owner acting inside a hosted tenant as its HOST principal — never holds,
+ * whatever else it does. The owner has full access to every hosted install, except that he
+ * cannot change its administrators or their permissions, rotate its panel credentials, or
+ * touch backups and restores (installation-only anyway) or the creator panel from inside it.
+ * `data.export` is denied too: a hosted bot's bulk customer export is a HOST action behind a
+ * fresh code («میزبانی‌ها»), and the tenant owner's own door must not be a way around it.
+ *
+ * Dropped by `PermissionGuard` for any actor carrying `impersonation`. A permission alone
+ * cannot cover every secret (the bot token is under `settings.edit`), so every writer that
+ * seals a new secret value also refuses an impersonated actor itself
+ * (`identity.impersonation_forbidden`), and the account-security endpoints (password, second
+ * factor) refuse the HOST kind.
+ */
+export const IMPERSONATION_DENIED_PERMISSIONS = [
+  'admins.edit',
+  'admins.permissions.edit',
+  'panels.credentials.rotate',
+  'backup.run',
+  'backup.download',
+  'recovery.restore',
+  'hosting.manage',
+  'data.export',
+] as const satisfies readonly PermissionKey[];
+
+/**
  * Resolution: effective = (role permissions ∪ GRANT overrides) − DENY overrides.
  * DENY always wins, and anything not listed is denied.
  */

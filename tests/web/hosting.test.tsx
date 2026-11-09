@@ -322,15 +322,35 @@ describe('the panel', () => {
     expect(await screen.findByText(t('web.hosting_bots_empty_title'))).toBeInTheDocument();
   });
 
-  it('offers «ورود به پنل» disabled with its note and never calls the server for it', async () => {
-    const api = stubApi(panelRoutes());
-    renderPage(<HostingPage denied={false} />);
-    const card = await screen.findByRole('article', { name: 'آکمه' });
-    expect(
-      within(card).getByRole('button', { name: t('web.hosting_action_enter') }),
-    ).toBeDisabled();
-    expect(within(card).getByText(t('web.hosting_enter_later'))).toBeInTheDocument();
-    expect(api.calls.some((call) => call.url.endsWith('/enter'))).toBe(false);
+  it('«ورود به پنل» asks for a fresh code, then opens the bot’s own domain in a new tab', async () => {
+    const entryUrl = 'https://shop.example.com/enter#token=abc';
+    const api = stubApi([
+      ...panelRoutes(),
+      {
+        url: ROUTE_OF(HOSTING_ROUTES.enter),
+        method: 'POST',
+        body: { url: entryUrl, expiresAt: '2026-11-09T12:15:00.000Z', replayed: false },
+      },
+    ]);
+    const tab = { opener: {} as unknown };
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
+    try {
+      renderPage(<HostingPage denied={false} />);
+      const card = await screen.findByRole('article', { name: 'آکمه' });
+      fireEvent.click(within(card).getByRole('button', { name: t('web.hosting_action_enter') }));
+      const dialog = await screen.findByRole('dialog');
+      const confirm = within(dialog).getByRole('button', { name: t('web.hosting_enter_submit') });
+      expect(confirm).toBeDisabled();
+      expect(posts(api, '/enter')).toHaveLength(0);
+      typeCode('111111');
+      fireEvent.click(confirm);
+      await waitFor(() => expect(open).toHaveBeenCalledWith(entryUrl, '_blank'));
+      expect(posts(api, '/enter')[0]?.body).toMatchObject({ proof: { code: '111111' } });
+      // The new tab is cut loose from this one.
+      expect(tab.opener).toBeNull();
+    } finally {
+      open.mockRestore();
+    }
   });
 });
 

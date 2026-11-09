@@ -83,7 +83,25 @@ export const WEB_FA_HOSTING = {
   'web.hosting_action_expiry': 'انقضا',
   'web.hosting_action_limits': 'سقف‌ها',
   'web.hosting_action_enter': 'ورود به پنل',
-  'web.hosting_enter_later': 'در فاز بعد',
+  // Phase 6B «ورود به پنل».
+  'web.hosting_enter_title': 'ورود به پنل',
+  'web.hosting_enter_hint':
+    'پنل مدیریت این ربات در زبانهٔ تازه، روی دامنهٔ خود ربات باز می‌شود. پیوند ورود یک‌بار مصرف است و تا 15 دقیقه کار می‌کند. کارهای شما آنجا فقط در گزارش فعالیت خودتان ثبت می‌شود، و مدیران، رمزها، کد دومرحله‌ای و کلیدهای آن ربات را نمی‌توانید تغییر دهید.',
+  'web.hosting_enter_submit': 'باز کردن پنل',
+  'web.hosting_enter_opened': 'پنل در زبانهٔ تازه باز شد.',
+  'web.hosting_enter_blocked':
+    'مرورگر زبانهٔ تازه را باز نکرد. این پیوند را باز کنید (فقط یک‌بار کار می‌کند):',
+  'web.hosting_enter_replayed':
+    'این درخواست قبلاً انجام شده است. برای پیوند تازه دوباره «ورود به پنل» را بزنید.',
+  'web.enter_title': 'ورود به پنل از «میزبانی‌ها»',
+  'web.enter_pending': 'در حال ورود…',
+  'web.enter_no_token': 'این پیوند ناقص است. از «میزبانی‌ها» دوباره «ورود به پنل» را بزنید.',
+  'web.impersonation_banner': 'در حال مشاهده به‌عنوان میزبان',
+  'web.impersonation_owner': 'حساب شما:',
+  'web.impersonation_note':
+    'کارهایتان فقط در گزارش فعالیت خودتان ثبت می‌شود، نه در گزارش این ربات.',
+  'web.impersonation_exit': 'خروج',
+  'web.admin_kind_host': 'میزبان',
   'web.hosting_act_title': 'فعال‌سازی ربات',
   'web.hosting_act_stopped_token_first':
     'این ربات متوقف است و تا توکن تلگرامش دوباره وارد نشود متوقف می‌ماند. توکن را با «تغییر توکن یا دامنه» (یا «ثبت توکن و دامنه») وارد کنید، سپس «فعال‌سازی» را بزنید.',

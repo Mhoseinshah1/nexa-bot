@@ -313,3 +313,66 @@ export const hostedBotActivationLinks = pgTable(
     }),
   ],
 );
+
+// ---------------------------------------------------------------------------
+// Phase 6B PR-5 (D5): «ورود به پنل» — the owner entering a hosted bot's Web Admin
+// ---------------------------------------------------------------------------
+
+/**
+ * One minted entry into a hosted tenant's Web Admin (ADR-0039 § 9 refinement 2).
+ *
+ * OWNED BY THE INSTALLATION TENANT, like the rest of the panel: the owner's own record of when
+ * he entered which bot. Only `token_hash` (SHA-256 of 256 random bits) is stored; the token
+ * travels once, in the FRAGMENT of `https://<domain>/enter#token=…`. It is good while
+ * `used_at` is NULL and `expires_at` (the `Clock`, 15 minutes) has not passed, and only on the
+ * hosted tenant AND domain it names (the audience); it is spent by one conditional UPDATE.
+ * `hosting_session_id` is the section session it was minted from: the entered session ends
+ * with it. `admin_session_id` is the entered session the redemption opened.
+ */
+export const hostingEnterTokens = pgTable(
+  'hosting_enter_tokens',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    hostedTenantId: uuid('hosted_tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    domain: text('domain').notNull(),
+    ownerAdminId: uuid('owner_admin_id').notNull(),
+    hostingSessionId: uuid('hosting_session_id')
+      .notNull()
+      .references(() => hostingSessions.id),
+    tokenHash: text('token_hash').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    usedAt: timestamptz('used_at'),
+    /** The hosted tenant's session the redemption opened (plain uuid: another tenant's row). */
+    adminSessionId: uuid('admin_session_id'),
+  },
+  (table) => [
+    uniqueIndex('hosting_enter_tokens_token_key').on(table.tokenHash),
+    index('hosting_enter_tokens_hosted_idx').on(
+      table.tenantId,
+      table.hostedTenantId,
+      table.createdAt,
+    ),
+    check('hosting_enter_tokens_expiry_check', sql`expires_at > created_at`),
+    check('hosting_enter_tokens_used_check', sql`(used_at IS NULL) = (admin_session_id IS NULL)`),
+    check(
+      'hosting_enter_tokens_domain_shape_check',
+      sql`domain = lower(domain) AND char_length(domain) BETWEEN 4 AND 253`,
+    ),
+    foreignKey({
+      name: 'hosting_enter_tokens_hosted_fk',
+      columns: [table.tenantId, table.hostedTenantId],
+      foreignColumns: [hostedBots.tenantId, hostedBots.hostedTenantId],
+    }),
+    foreignKey({
+      name: 'hosting_enter_tokens_owner_fk',
+      columns: [table.tenantId, table.ownerAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+  ],
+);

@@ -71,6 +71,11 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleDataExportRepository.statesOf',
   'DrizzleDirectMessageRepository.purgeFileContentBefore',
   'DrizzleGatewayInvoiceRepository.providerOrderIdTaken',
+  // Phase 6B «ورود به پنل»: an entered session's liveness, asked by the token lookup's caller
+  // before any tenant but the session's is known — the owner's section and Web Admin sessions
+  // (one row each, by id) are the INSTALLATION's.
+  'DrizzleHostingEnterRepository.ownerOf',
+  'DrizzleHostingEnterRepository.sectionFacts',
   'DrizzleHeavyJobQueueRepository.enqueue',
   'DrizzleHeavyJobQueueRepository.finish',
   'DrizzleHeavyJobQueueRepository.heartbeat',
@@ -216,6 +221,17 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'reason: hosting: slug taken in any tenant',
   'reason: hosting: spend an activation link',
   'reason: hosting: the hosted bot list, every hosted tenant',
+  // Phase 6B PR-5, «ورود به پنل» (ADR-0039 § 9): the owner's transaction writes the hosted
+  // tenant's HOST principal; the hosted tenant's transaction spends the installation's token row
+  // (one row, by its hash and audience); every request of an entered session reads the owner's
+  // section and Web Admin sessions (one row each, by id); closing a section revokes the hosted
+  // sessions entered from it (one owner's); and the entered session's audit row is written into
+  // the INSTALLATION's log from the hosted tenant's transaction (D5).
+  'reason: audit: host owner acting in a hosted tenant',
+  'reason: hosting: ensure the host principal of a hosted tenant',
+  'reason: hosting: entered session liveness',
+  'reason: hosting: open an entered session in a hosted tenant',
+  'reason: hosting: revoke entered sessions with the section',
   'reason: idempotency retention: interactive keys',
   'reason: outbox retention: published messages',
   'reason: restore-exclusion',

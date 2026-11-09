@@ -3,6 +3,7 @@ import {
   asId,
   type Admin,
   type AdminId,
+  type AdminKind,
   type AdminStatus,
   type ScopeContext,
   type TenantStatus,
@@ -36,6 +37,7 @@ function toAdmin(row: AdminRow): Admin {
     username: row.username,
     displayName: row.displayName,
     status: row.status as AdminStatus,
+    kind: row.kind as AdminKind,
     telegramUserId: row.telegramUserId,
     createdAt: row.createdAt,
     lastLoginAt: row.lastLoginAt,
@@ -61,7 +63,11 @@ export class DrizzleAdminRepository implements AdminRepository {
       .from(admins)
       .where(and(eq(admins.tenantId, tenantId), eq(admins.username, username)))
       .limit(1);
-    return row ? { admin: toAdmin(row), passwordHash: row.passwordHash } : null;
+    // Phase 6B: a HOST principal has no password and is NOT a credential. It answers exactly
+    // as an unknown username does — the caller then spends the same dummy work, so neither
+    // the answer nor its timing says the name exists.
+    if (row === undefined || row.kind !== 'OPERATOR' || row.passwordHash === null) return null;
+    return { admin: toAdmin(row), passwordHash: row.passwordHash };
   }
 
   async findById(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<Admin | null> {
@@ -318,6 +324,8 @@ export class DrizzleAdminRepository implements AdminRepository {
           eq(admins.tenantId, requireTenantId(scope)),
           eq(admins.id, id),
           eq(admins.status, 'ACTIVE'),
+          // A HOST has no credential to lock (phase 6B).
+          eq(admins.kind, 'OPERATOR'),
         ),
       )
       .for('update')

@@ -29,6 +29,7 @@ import {
   runAuthorizedMutation,
 } from '../../access/application/authorized-mutation.js';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
+import { refuseImpersonatedHostAction } from '../../identity/application/impersonation.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
 import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import { hashRequest } from '../../idempotency/infrastructure/drizzle-idempotency-store.js';
@@ -300,6 +301,10 @@ export class DataExportService {
         },
       );
     }
+    // An entered session is the installation owner as HOST: the bulk export is a host action
+    // behind a fresh code in «میزبانی‌ها», never this door (also `data.export` in
+    // IMPERSONATION_DENIED_PERMISSIONS).
+    refuseImpersonatedHostAction(actor, action);
     try {
       await this.deps.guard.check(scope, actor, DATA_EXPORT_PERMISSION);
     } catch (denial) {

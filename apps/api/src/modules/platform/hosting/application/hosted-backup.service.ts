@@ -22,6 +22,7 @@ import {
   type SecretCipher,
   type TenantContext,
 } from '@nexa/contracts';
+import { refuseImpersonatedSecretWrite } from '../../identity/application/impersonation.js';
 import { hashRequest } from '../../idempotency/infrastructure/drizzle-idempotency-store.js';
 import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
@@ -208,6 +209,7 @@ export class HostedBackupService {
       'hosting.backup_password_set',
       hostedTenantId,
     );
+    refuseImpersonatedSecretWrite(actor, 'hosting.archive_password');
     const command = hostedBackupPasswordRequestSchema.parse(input);
     if (hasControlCharacter(command.password)) {
       throw errors.validation(

@@ -35,6 +35,7 @@ import {
   type TotpEnrolResponse,
   type UnitOfWork,
 } from '@nexa/contracts';
+import { refuseImpersonatedAccountChange, refuseImpersonatedSecretWrite } from './impersonation.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   AdminRepository,
@@ -154,6 +155,8 @@ export class AccountSecurityService {
     input: unknown,
     context: PasswordChangeContext,
   ): Promise<TotpEnrolResponse> {
+    // Phase 6B: the secret writer of `admin.totp_secret` refuses an entered session itself.
+    refuseImpersonatedSecretWrite(actor, 'admin.totp_secret');
     const { tenantScope, adminId } = this.self(scope, actor);
     const command = totpEnrolRequestSchema.parse(input);
     await this.deps.verifyOwnPassword(scope, actor, command.password, context, 'admin.totp_enrol');
@@ -247,6 +250,7 @@ export class AccountSecurityService {
     input: unknown,
     context: PasswordChangeContext = { ip: null },
   ): Promise<{ backupCodes: string[]; endedSignIns: number }> {
+    refuseImpersonatedAccountChange(actor, 'admin.totp_activate');
     const { tenantScope, adminId } = this.self(scope, actor);
     const command = totpActivateRequestSchema.parse(input);
     const admin = await this.requireAdmin(tenantScope, adminId);
@@ -434,6 +438,7 @@ export class AccountSecurityService {
     input: unknown,
     context: PasswordChangeContext,
   ): Promise<void> {
+    refuseImpersonatedAccountChange(actor, 'admin.totp_disable');
     await this.withProof(
       scope,
       actor,
@@ -477,6 +482,7 @@ export class AccountSecurityService {
     input: unknown,
     context: PasswordChangeContext,
   ): Promise<{ backupCodes: string[] }> {
+    refuseImpersonatedAccountChange(actor, 'admin.backup_codes');
     const codes = generateBackupCodes();
     await this.withProof(
       scope,
@@ -582,6 +588,7 @@ export class AccountSecurityService {
 
   /** "Sign out everywhere else": every live session but the one making the request. */
   async revokeOtherSessions(scope: ScopeContext, actor: ActorContext): Promise<number> {
+    refuseImpersonatedAccountChange(actor, 'admin.sessions_revoke_others');
     const { tenantScope, adminId } = this.self(scope, actor);
     if (actor.sessionId === undefined) {
       throw errors.unauthenticated(IDENTITY_ERROR_CODES.AUTH_REQUIRED, 'Sign in first.');

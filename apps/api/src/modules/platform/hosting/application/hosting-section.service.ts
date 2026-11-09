@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
   errors,
+  systemContext,
   hostingActivateRequestSchema,
   hostingEnrolRequestSchema,
   hostingOpenSessionRequestSchema,
@@ -31,6 +32,8 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
+import { refuseImpersonatedSecretWrite } from '../../identity/application/impersonation.js';
+import type { HostingEnterRepository } from './hosting-enter.ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   generateBackupCodes,
@@ -106,6 +109,12 @@ export interface HostingSectionDeps {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly qr: { encode(text: string): Uint8Array } | null;
+  /**
+   * Phase 6B «ورود به پنل»: ends the hosted sessions entered from a section session when it is
+   * closed or replaced. Absent in a graph without enter (deny by default holds regardless: an
+   * entered session's every request re-checks its section).
+   */
+  readonly entered?: Pick<HostingEnterRepository, 'revokeEndedSections'>;
   readonly verifyOwnPassword: (
     scope: ScopeContext,
     actor: ActorContext,
@@ -158,6 +167,8 @@ export class HostingSectionService {
     input: unknown,
     context: { readonly ip: string | null },
   ): Promise<HostingEnrolResponse> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'hosting.totp_secret');
     const installation = await this.deps.owner.checkAudited(scope, actor, 'hosting.totp_enrol');
     const command = hostingEnrolRequestSchema.parse(input);
     await this.deps.verifyOwnPassword(
@@ -364,11 +375,13 @@ export class HostingSectionService {
   /** Ends this Web Admin session's section session. */
   async closeSession(scope: ScopeContext, actor: ActorContext): Promise<{ closed: number }> {
     const installation = await this.deps.owner.checkAudited(scope, actor, 'hosting.session_close');
+    const now = this.deps.clock.now();
     const closed = await this.deps.repository.revokeSessions(installation, {
       adminId: actor.id as string,
       adminSessionId: this.requireWebSession(actor),
-      now: this.deps.clock.now(),
+      now,
     });
+    await this.endEnteredSessions(installation, actor.id as string, now);
     await this.deps.audit.record(installation, actor, {
       action: 'hosting.session_close',
       entityType: 'Admin',
@@ -642,6 +655,7 @@ export class HostingSectionService {
     const expiresAt = new Date(now.getTime() + HOSTING_SECTION_SESSION_TTL_SECONDS * 1000);
     // One section per Web Admin session: opening again replaces it.
     await this.deps.repository.revokeSessions(installation, { adminId, adminSessionId, now }, tx);
+    await this.endEnteredSessions(installation, adminId, now, tx);
     await this.deps.repository.createSession(
       installation,
       {
@@ -655,6 +669,41 @@ export class HostingSectionService {
       tx,
     );
     return expiresAt;
+  }
+
+  /** Phase 6B: the hosted sessions entered from this owner's ended section sessions end too. */
+  private async endEnteredSessions(
+    installation: TenantContext,
+    ownerAdminId: string,
+    now: Date,
+    tx?: unknown,
+  ): Promise<void> {
+    await this.deps.entered?.revokeEndedSections(
+      systemContext('hosting.session_close'),
+      { installationTenantId: installation.tenantId, ownerAdminId, now },
+      tx,
+    );
+  }
+
+  /**
+   * Phase 6B: the live section session itself, inside a write — what «ورود به پنل» binds its
+   * token to (the entered session ends with it).
+   */
+  async liveSectionIn(
+    installation: TenantContext,
+    actor: ActorContext,
+    sectionToken: string | null,
+    tx: unknown,
+  ): Promise<HostingSessionRow> {
+    const row =
+      sectionToken === null ? null : await this.liveSession(installation, actor, sectionToken, tx);
+    if (row === null) {
+      throw errors.unauthenticated(
+        HOSTING_ERROR_CODES.SECTION_SESSION_REQUIRED,
+        'The creator panel’s session ended. Open it again.',
+      );
+    }
+    return row;
   }
 
   private requireWebSession(actor: ActorContext): string {

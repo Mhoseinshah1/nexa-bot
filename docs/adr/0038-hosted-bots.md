@@ -121,6 +121,9 @@ owner's id there), the token crosses to the hosted domain as a URL fragment, sec
 refused at each secret writer, and the owner's audit row is written on the same transaction
 through the system path.
 
+**Built in Phase 6B PR-5** (`feat/6b-enter`): the stub and `hosting.enter_not_implemented` are
+gone; what was decided while building it is ADR-0039 § «As built in PR-5».
+
 ## Backups (Phase 6B / D7)
 
 The creator sets the backup password for every hosted bot; hosted-bot owners cannot change it

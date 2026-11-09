@@ -1,5 +1,6 @@
 import {
   isSystemContext,
+  PERMISSION_KEYS,
   resolveEffectivePermissions,
   type ActorContext,
   type AdminId,
@@ -57,6 +58,18 @@ export class AdminPermissionResolver implements PermissionResolver {
     // No such admin in this tenant, or disabled. A disabled admin keeps their
     // roles — history must still name them — and holds none of their powers.
     if (admin === null || admin.status !== 'ACTIVE') return empty;
+
+    // Phase 6B «ورود به پنل» (ADR-0039 § 9 refinement 3). The HOST principal has no role:
+    // it holds nothing at all unless the actor is an ENTERED session (the server sets
+    // `impersonation` only from a live entered session row), and then it holds the tenant's
+    // whole catalogue — the owner has full access to every hosted install — from which the
+    // guard drops `IMPERSONATION_DENIED_PERMISSIONS` (and the installation-only keys). An
+    // operator presenting `impersonation` holds nothing either: the two must agree.
+    if (admin.kind === 'HOST' || actor.impersonation !== undefined) {
+      return admin.kind === 'HOST' && actor.impersonation !== undefined
+        ? new Set<PermissionKey>(PERMISSION_KEYS)
+        : empty;
+    }
 
     return this.compute(scope, adminId, tx);
   }

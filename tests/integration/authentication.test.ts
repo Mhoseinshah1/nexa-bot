@@ -89,7 +89,7 @@ describe('username and password login', () => {
 
     expect(row?.passwordHash).toBeTruthy();
     expect(row?.passwordHash).not.toContain('the-owners-real-password');
-    expect(row?.passwordHash.startsWith('scrypt$')).toBe(true);
+    expect(row?.passwordHash?.startsWith('scrypt$')).toBe(true);
     // And the whole row, serialised, carries no trace of it.
     expect(JSON.stringify(row)).not.toContain('the-owners-real-password');
   });

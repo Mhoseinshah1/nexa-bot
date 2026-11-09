@@ -34,6 +34,7 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
+import { refuseImpersonatedSecretWrite } from '../../identity/application/impersonation.js';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import {
   recordMutationDenial,
@@ -306,6 +307,8 @@ export class LegacyMigrationService {
     id: string,
     body: unknown,
   ): Promise<LegacyMigrationImportView> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'legacy_migration.package_key');
     const action = LEGACY_NXPKG_AUDIT_ACTIONS.configure;
     this.assertEnabled();
     await this.requirePermission(scope, actor, LEGACY_MIGRATION_MANAGE_PERMISSION, {

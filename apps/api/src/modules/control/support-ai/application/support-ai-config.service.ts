@@ -27,6 +27,7 @@ import {
   type UnitOfWork,
   SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT,
 } from '@nexa/contracts';
+import { refuseImpersonatedSecretWrite } from '../../../platform/identity/application/impersonation.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
   recordMutationDenial,
@@ -377,6 +378,8 @@ export class SupportAiConfigService {
     providerRaw: string,
     body: unknown,
   ): Promise<{ readonly replaced: boolean }> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'support_ai_provider.api_key');
     const provider = this.providerOf(providerRaw);
     const command = supportAiCredentialSetRequestSchema.parse(body);
     if (command.region !== undefined && provider !== 'ZAI') {
