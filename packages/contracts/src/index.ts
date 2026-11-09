@@ -213,6 +213,7 @@ export * from './capacity.js';
 /** Phase 6B (ADR-0039): the tenant archive — format, manifest, restore modes and states. */
 export * from './tenant-archive.js';
 export * from './tenant-archive-errors.js';
+export * from './move-errors.js';
 /** Phase 6B PR-3 (ADR-0039): the open data export — states, deadline. */
 export * from './data-export.js';
 /** Phase 6A PR-3: the creator panel — hosted bots, their lifecycle and the section's 2FA. */
