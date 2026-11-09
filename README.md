@@ -161,35 +161,36 @@ username and password you chose. Then open your bot in Telegram and send
 <details>
 <summary>Every botctl command</summary>
 
-| Command                                                | Meaning                                                                      |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `botctl status`                                        | what is running, and whether it is ready                                     |
-| `botctl version`                                       | installed version, source commit, image digest                               |
-| `botctl backup`                                        | a consistent PostgreSQL dump, timestamped                                    |
-| `botctl restore --target DB PART...`                   | restore a Nexa backup into an empty database you created, never the live one |
-| `botctl update VERSION`                                | update to VERSION, by digest                                                 |
-| `botctl rollback`                                      | return to the previous release's image                                       |
-| `botctl logs [SERVICE]`                                | follow logs                                                                  |
-| `botctl restart`                                       | restart the stack                                                            |
-| `botctl restart background`                            | restart worker, monitor and provisioner (after a legacy import or restore)   |
-| `botctl roles status`                                  | which background roles are switched off                                      |
-| `botctl roles disable ROLE...`                         | keep monitor, provisioner or assistant stopped                               |
-| `botctl roles enable ROLE...`                          | start them again                                                             |
-| `botctl cutover preflight`                             | the MirzaBot cutover's read-only checklist                                   |
-| `botctl cutover rehearse PACKAGE`                      | the cutover runbook against a new, disposable database                       |
-| `botctl telegram status`                               | the local registration and Telegram's own webhook state                      |
-| `botctl telegram register`                             | reconcile the webhook with Telegram                                          |
-| `botctl secrets status`                                | configuration, envelope versions and key ids in use                          |
-| `botctl secrets rewrap`                                | re-encrypt secrets under the active key                                      |
-| `botctl secrets retire-check --key ID`                 | whether a key can leave the keyring                                          |
-| `botctl secrets migrate-config`                        | convert a pre-keyring SECRETS_KEK host to SECRETS_KEYS                       |
-| `botctl secrets shutdown-check`                        | whether v1 can be switched off yet                                           |
-| `botctl secrets disable-v1`                            | stop reading v1 ciphertext, once the check passes                            |
-| `botctl admin check-2fa --username NAME`               | whether an administrator has two-step sign-in on                             |
-| `botctl admin reset-2fa --username NAME --reason TEXT` | owner recovery: remove an administrator's two-step sign-in (audited)         |
-| `botctl admin reset-password USERNAME`                 | owner recovery: set a new password, typed twice and hidden (audited)         |
-| `botctl customers prune-empty`                         | list the customers with no dependent row (changes nothing)                   |
-| `botctl customers prune-empty --apply`                 | back up, confirm on the terminal, delete only those (audited)                |
+| Command                                                        | Meaning                                                                         |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `botctl status`                                                | what is running, and whether it is ready                                        |
+| `botctl version`                                               | installed version, source commit, image digest                                  |
+| `botctl backup`                                                | a consistent PostgreSQL dump, timestamped                                       |
+| `botctl restore --target DB PART...`                           | restore a Nexa backup into an empty database you created, never the live one    |
+| `botctl update VERSION`                                        | update to VERSION, by digest                                                    |
+| `botctl rollback`                                              | return to the previous release's image                                          |
+| `botctl logs [SERVICE]`                                        | follow logs                                                                     |
+| `botctl restart`                                               | restart the stack                                                               |
+| `botctl restart background`                                    | restart worker, monitor and provisioner (after a legacy import or restore)      |
+| `botctl roles status`                                          | which background roles are switched off                                         |
+| `botctl roles disable ROLE...`                                 | keep monitor, provisioner or assistant stopped                                  |
+| `botctl roles enable ROLE...`                                  | start them again                                                                |
+| `botctl cutover preflight`                                     | the MirzaBot cutover's read-only checklist                                      |
+| `botctl cutover rehearse PACKAGE`                              | the cutover runbook against a new, disposable database                          |
+| `botctl telegram status`                                       | the local registration and Telegram's own webhook state                         |
+| `botctl telegram register`                                     | reconcile the webhook with Telegram                                             |
+| `botctl secrets status`                                        | configuration, envelope versions and key ids in use                             |
+| `botctl secrets rewrap`                                        | re-encrypt secrets under the active key                                         |
+| `botctl secrets retire-check --key ID`                         | whether a key can leave the keyring                                             |
+| `botctl secrets migrate-config`                                | convert a pre-keyring SECRETS_KEK host to SECRETS_KEYS                          |
+| `botctl secrets shutdown-check`                                | whether v1 can be switched off yet                                              |
+| `botctl secrets disable-v1`                                    | stop reading v1 ciphertext, once the check passes                               |
+| `botctl admin check-2fa --username NAME`                       | whether an administrator has two-step sign-in on                                |
+| `botctl admin reset-2fa --username NAME --reason TEXT`         | owner recovery: remove an administrator's two-step sign-in (audited)            |
+| `botctl admin reset-password USERNAME`                         | owner recovery: set a new password, typed twice and hidden (audited)            |
+| `botctl admin reset-hosting-2fa --username NAME --reason TEXT` | owner recovery: remove the «میزبانی‌ها» section's own two-step factor (audited) |
+| `botctl customers prune-empty`                                 | list the customers with no dependent row (changes nothing)                      |
+| `botctl customers prune-empty --apply`                         | back up, confirm on the terminal, delete only those (audited)                   |
 
 `cutover preflight` and `cutover rehearse` take more options, and `secrets
 rewrap` takes `--batch N` and `--max N`; `botctl --help` and

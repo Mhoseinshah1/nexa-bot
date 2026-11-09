@@ -212,6 +212,16 @@ else
   pass "the server-side password reset is not reachable from any surface"
 fi
 
+# The same argument for the «میزبانی‌ها» section's factor (`botctl admin reset-hosting-2fa`).
+RESET_HOSTING_2FA_LEAK=$(grep -rn "server-hosting-factor-recovery\|ServerHostingFactorRecovery" \
+  apps/api/src/surfaces apps/api/src/container.ts apps/api/src/app.module.ts 2>/dev/null || true)
+if [ -n "$RESET_HOSTING_2FA_LEAK" ]; then
+  fail "A surface reaches the server-side hosting 2FA reset" "$RESET_HOSTING_2FA_LEAK" \
+       "Hosting factor recovery is a CLI (src/admin-hosting-2fa-reset.cli.ts), not an endpoint."
+else
+  pass "the server-side hosting 2FA reset is not reachable from any surface"
+fi
+
 # Deleting customers (`botctl customers prune-empty`) is an operator tool: no surface may reach it.
 PRUNE_LEAK=$(grep -rn "customer-prune\|CustomerPruneService\|customerPrune" \
   apps/api/src/surfaces apps/api/src/app.module.ts 2>/dev/null || true)
