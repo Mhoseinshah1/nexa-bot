@@ -361,3 +361,29 @@
   display: grid;
   gap: 12px;
 }
+
+/* The demo's avatar tints (`avc`): six soft tones, chosen by the name. */
+.avatar.av0 {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.avatar.av1 {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.avatar.av2 {
+  background: var(--violet-soft);
+  color: var(--violet);
+}
+.avatar.av3 {
+  background: var(--teal-soft);
+  color: var(--teal);
+}
+.avatar.av4 {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.avatar.av5 {
+  background: var(--danger-soft);
+  color: var(--danger);
+}

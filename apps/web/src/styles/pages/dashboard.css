@@ -464,6 +464,9 @@ li.dash-attn-tile .dash-attn-go {
   min-height: 84px;
   flex: 1;
 }
+.area-spark.as-card {
+  height: 56px;
+}
 .area-spark .area {
   stroke: none;
 }
