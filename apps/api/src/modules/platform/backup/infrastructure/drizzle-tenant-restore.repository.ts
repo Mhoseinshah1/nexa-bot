@@ -75,6 +75,7 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
     input: {
       readonly id: string;
       readonly artifactSha256: string;
+      readonly mode: TenantRestoreMode;
       readonly leaseOwner: string;
       readonly now: Date;
     },
@@ -95,10 +96,42 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
           eq(tenantRestores.id, input.id),
           eq(tenantRestores.state, 'VERIFIED'),
           eq(tenantRestores.artifactSha256, input.artifactSha256),
+          eq(tenantRestores.mode, input.mode),
         ),
       )
       .returning({ hostedTenantId: tenantRestores.hostedTenantId });
     return row ?? null;
+  }
+
+  async setPreReplaceRun(
+    scope: TenantContext,
+    input: {
+      readonly id: string;
+      readonly runId: string;
+      readonly leaseOwner: string;
+      readonly now: Date;
+    },
+  ): Promise<void> {
+    const rows = await this.db
+      .update(tenantRestores)
+      .set({ preReplaceRunId: input.runId, updatedAt: input.now })
+      .where(
+        and(
+          eq(tenantRestores.tenantId, requireTenantId(scope)),
+          eq(tenantRestores.id, input.id),
+          eq(tenantRestores.mode, 'REPLACE'),
+          eq(tenantRestores.leaseOwner, input.leaseOwner),
+          IN_PROGRESS,
+        ),
+      )
+      .returning({ id: tenantRestores.id });
+    if (rows.length === 0) {
+      throw new NexaError({
+        kind: 'CONFLICT',
+        code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+        message: 'The tenant restore request is no longer in progress.',
+      });
+    }
   }
 
   async heartbeat(

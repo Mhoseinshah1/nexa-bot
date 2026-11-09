@@ -10,6 +10,7 @@ import {
   TENANT_ARCHIVE_ERROR_CODES,
   type SecretCipher,
   type TenantArchiveManifest,
+  type TenantRestoreMode,
   type TenantRestoreStage,
 } from '@nexa/contracts';
 import { KEY_BUNDLE_ENTRY, sealKeyBundle } from '../../../../infrastructure/crypto/key-bundle.js';
@@ -23,6 +24,7 @@ import type {
   TenantRestoreSummary,
 } from '../application/tenant-archive.service.js';
 import { applyRestore, preflightRestore } from './tenant-archive-apply.js';
+import { applyReplace } from './tenant-archive-replace.js';
 import { exportTenant, type TenantExportInput } from './tenant-archive-export.js';
 import {
   compareArchiveHead,
@@ -318,6 +320,8 @@ export class PostgresTenantArchiveEngine implements TenantArchiveEngine, TenantR
     readonly installationTenantId: string;
     readonly actorAdminId: string;
     readonly slug?: string;
+    readonly mode?: TenantRestoreMode;
+    readonly requestId?: string;
     readonly apply: boolean;
     readonly onOpened: (manifest: TenantArchiveManifest) => Promise<void>;
     readonly onStage: (stage: TenantRestoreStage) => Promise<void>;
@@ -373,7 +377,9 @@ export class PostgresTenantArchiveEngine implements TenantArchiveEngine, TenantR
           app: this.deps.app,
           scratch,
           manifest: opened.manifest,
-          ...(input.slug === undefined ? {} : { slug: input.slug }),
+          ...(input.slug === undefined || input.mode === 'REPLACE' ? {} : { slug: input.slug }),
+          mode: input.mode ?? 'NEW',
+          installationTenantId: input.installationTenantId,
         });
         for (const table of opened.manifest.tables) {
           if (preflight.counts[table.name] !== table.rows) {
@@ -394,6 +400,26 @@ export class PostgresTenantArchiveEngine implements TenantArchiveEngine, TenantR
         };
         if (!input.apply) return summary;
         await input.onStage('APPLY');
+        if (input.mode === 'REPLACE') {
+          if (input.requestId === undefined) {
+            throw new NexaError({
+              kind: 'INTERNAL',
+              code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+              message: 'A replace is applied only under its own request row.',
+            });
+          }
+          const replaced = await applyReplace({
+            app: this.deps.app,
+            scratch,
+            manifest: opened.manifest,
+            installationTenantId: input.installationTenantId,
+            requestId: input.requestId,
+            now: this.deps.now(),
+            archiveCipher: opened.cipher,
+            targetCipher: this.deps.cipher,
+          });
+          return { ...summary, counts: replaced };
+        }
         const counts = await applyRestore({
           app: this.deps.app,
           scratch,

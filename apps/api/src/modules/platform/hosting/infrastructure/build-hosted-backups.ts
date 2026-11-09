@@ -1,13 +1,13 @@
-import type {
-  AuditWriter,
-  Clock,
-  IdempotencyStore,
-  IdGenerator,
-  SecretCipher,
-  SettingKey,
-  TemplateKey,
-  TemplateValues,
-  TenantContext,
+import {
+  type AuditWriter,
+  type Clock,
+  type IdempotencyStore,
+  type IdGenerator,
+  type SecretCipher,
+  type SettingKey,
+  type TemplateKey,
+  type TemplateValues,
+  type TenantContext,
 } from '@nexa/contracts';
 import type { DatabaseHandle } from '../../../../infrastructure/persistence/database.js';
 import { migrationsFolder } from '../../../../infrastructure/persistence/migration-state.js';
@@ -29,12 +29,14 @@ import {
 import type { SevenZipOptions } from '../../backup/infrastructure/seven-zip.js';
 import { DrizzleTenantRestoreRepository } from '../../backup/infrastructure/drizzle-tenant-restore.repository.js';
 import { DrizzleHostedArchiveRuns } from '../../backup/infrastructure/drizzle-hosted-archive-runs.js';
+import { DrizzleTenantReplaceHold } from '../../backup/infrastructure/tenant-replace-hold.js';
 import { HostedBackupService } from '../application/hosted-backup.service.js';
 import { HOSTED_BACKUP_TICK_MS, HostedBackupLoop } from '../application/hosted-backup-loop.js';
 import type { HostingSectionService } from '../application/hosting-section.service.js';
 import type { HostingOwnerGuard } from '../application/hosting-owner-guard.js';
 import type { HostingRepository } from '../application/ports.js';
 import { TenantRestoreAdminService } from '../application/tenant-restore-admin.service.js';
+import { hostedPreReplaceArchive } from '../application/hosted-pre-replace.js';
 import { DrizzleHostedBackupPolicies } from './drizzle-hosted-backup-policies.js';
 import { FilesystemTenantRestoreWorkspaces } from './tenant-restore-workspaces.js';
 import { FilesystemHostedArchiveFiles } from './hosted-archive-files.js';
@@ -137,23 +139,39 @@ export function buildHostedBackups(deps: {
     }),
   });
   const tenantRestoreRequests = new DrizzleTenantRestoreRepository(deps.database.db);
+  const policies = new DrizzleHostedBackupPolicies(deps.database.db);
+  const hold = new DrizzleTenantReplaceHold(deps.database, () => deps.clock.now());
   const tenantRestores = new TenantRestoreService({
     engine,
     requests: tenantRestoreRequests,
+    replace: {
+      hold: (installationTenantId, hostedTenantId) =>
+        hold.hold(installationTenantId, hostedTenantId),
+      release: (installationTenantId, hostedTenantId) =>
+        hold.release(installationTenantId, hostedTenantId),
+      preReplace: hostedPreReplaceArchive({
+        policies,
+        cipher: deps.cipher,
+        archives: tenantArchives,
+        installationTenantId: installation,
+      }),
+    },
     heavyJobs: deps.heavyJobs,
     clock: deps.clock,
     ids: deps.ids,
     leaseOwner: deps.leaseOwner,
     queue,
   });
+  const hostedRuns = new DrizzleHostedArchiveRuns(deps.database.db);
+  const hostedFiles = new FilesystemHostedArchiveFiles(deps.workRoot);
   const hostedBackups = new HostedBackupService({
     section: deps.section,
     owner: deps.owner,
     bots: deps.bots,
-    policies: new DrizzleHostedBackupPolicies(deps.database.db),
-    runs: new DrizzleHostedArchiveRuns(deps.database.db),
+    policies,
+    runs: hostedRuns,
     archives: tenantArchives,
-    files: new FilesystemHostedArchiveFiles(deps.workRoot),
+    files: hostedFiles,
     cipher: deps.cipher,
     guard: deps.guard,
     idempotency: deps.idempotency,
@@ -177,6 +195,15 @@ export function buildHostedBackups(deps: {
     requests: tenantRestoreRequests,
     workspaces: new FilesystemTenantRestoreWorkspaces(deps.recoveryWorkRoot),
     cipher: deps.cipher,
+    // The path is DERIVED from two validated ids and the work root, never accepted (as the
+    // download's), and only for a verified, unpruned run of a hosted bot of this installation.
+    hostedArchive: async (installation, hostedTenantId, runId) => {
+      if ((await deps.bots.findHosted(installation, hostedTenantId)) === null) return null;
+      const run = await hostedRuns.byId(hostedTenantId, runId);
+      if (run === null || run.state !== 'SUCCEEDED' || run.verifiedAt === null) return null;
+      if (run.archivePrunedAt !== null) return null;
+      return (await hostedFiles.archive(hostedTenantId, runId))?.path ?? null;
+    },
     idempotency: deps.idempotency,
     audit: deps.audit,
     clock: deps.clock,
