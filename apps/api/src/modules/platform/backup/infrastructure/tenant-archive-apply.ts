@@ -259,6 +259,30 @@ async function advanceIdentities(executor: SqlExecutor, shape: TableShape): Prom
   }
 }
 
+/** `last_error` of an outbox message a restore carried in unpublished and will never relay. */
+export const RESTORED_NOT_RELAYED = 'tenant_archive.restored_not_relayed';
+
+/**
+ * A restored tenant's UNPUBLISHED outbox messages are history, not work for this server: they
+ * were meant for the source's relay at the source's moment, and relaying them here would send
+ * customers stale notifications and repeat side effects (provisioning, payments) the source may
+ * already have performed. Each is landed EXHAUSTED — the mark the relay already respects
+ * (`notExhausted()`), which also never holds a sibling back — with this reason, at insert,
+ * so the frozen content is never updated.
+ */
+function holdUnpublished(columns: readonly string[], rows: (string | null)[][], now: Date): void {
+  const published = columns.indexOf('published_at');
+  const exhausted = columns.indexOf('exhausted_at');
+  const lastError = columns.indexOf('last_error');
+  const nextAttempt = columns.indexOf('next_attempt_at');
+  for (const row of rows) {
+    if (row[published] !== null || row[exhausted] !== null) continue;
+    row[exhausted] = now.toISOString();
+    row[lastError] = RESTORED_NOT_RELAYED;
+    row[nextAttempt] = null;
+  }
+}
+
 /**
  * A SHARED_KEY aggregate's counter is the installation's (`AGGREGATE_OWNERSHIP`): the archive's
  * messages of it are given the next numbers of THIS installation's counter, in their order,
@@ -380,7 +404,10 @@ export async function applyRestore(input: {
               const slots = secretSlots(table, columns);
               for (const row of rows)
                 resealRow(row, slots, input.archiveCipher, input.targetCipher);
-              if (table === 'outbox_messages') await renumberShared(tx, columns, rows, counters);
+              if (table === 'outbox_messages') {
+                await renumberShared(tx, columns, rows, counters);
+                holdUnpublished(columns, rows, input.now);
+              }
               await insertRows(
                 tx,
                 live,

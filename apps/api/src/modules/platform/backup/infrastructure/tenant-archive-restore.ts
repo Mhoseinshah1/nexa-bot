@@ -450,12 +450,17 @@ export async function canonicalDigests(
     // the canonical form compares the message, not the number the installation gave it.
     const type = columns.indexOf('aggregate_type');
     const sequence = columns.indexOf('sequence');
+    // And an unpublished message lands exhausted (never relayed here): its delivery marks are
+    // the target's, not the archive's, so they are compared out too.
+    const published = columns.indexOf('published_at');
+    const delivery = ['exhausted_at', 'last_error', 'next_attempt_at'].map((c) =>
+      columns.indexOf(c),
+    );
     const masked = (row: (string | null)[]): (string | null)[] => {
-      if (table !== 'outbox_messages' || !SHARED_AGGREGATE_TYPES.includes(row[type] ?? '')) {
-        return row;
-      }
+      if (table !== 'outbox_messages') return row;
       const out = [...row];
-      out[sequence] = null;
+      if (SHARED_AGGREGATE_TYPES.includes(row[type] ?? '')) out[sequence] = null;
+      if (row[published] === null) for (const at of delivery) out[at] = null;
       return out;
     };
     const digest = await digestTable(executor, shape, columns, tenantId, (row) =>

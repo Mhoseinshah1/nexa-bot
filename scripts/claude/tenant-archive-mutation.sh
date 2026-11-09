@@ -45,6 +45,7 @@ MUTATIONS=(
   "identity-bound|$B/infrastructure/tenant-archive-apply.ts|s/if \\(top > last \\+ IDENTITY_RESTORE_HEADROOM \\x7c\\x7c top > typeMax \\/ 2n\\)/if (false)/|$ARCHIVE_SUITE"
   "extract-cap|$B/infrastructure/tenant-archive-restore.ts|s/if \\(declared > input.limits.maxExtractedBytes\\)/if (false)/|$ARCHIVE_SUITE"
   "buffer-cap|$B/infrastructure/tenant-archive-copy.ts|s/if \\(buffer.length > limits.rows \\x7c\\x7c state.bytes > limits.bytes\\)/if (false)/|tests/unit/tenant-archive-copy.test.ts"
+  "outbox-not-relayed|$B/infrastructure/tenant-archive-apply.ts|s/holdUnpublished\\(columns, rows, input.now\\);//|$ARCHIVE_SUITE"
   "shared-renumber|$B/infrastructure/tenant-archive-apply.ts|s/if \\(table === 'outbox_messages'\\) await renumberShared/if (false) await renumberShared/|$ARCHIVE_SUITE"
 )
 

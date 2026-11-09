@@ -681,11 +681,17 @@ Changes to the design above, each decided in PR-1 and binding on later PRs:
   - the parts a manifest declares are capped before extraction by a limit that is not the
     archive's (32 GiB by default) and by the work volume's free space less 1 GiB; a
     self-referencing table is buffered within fixed bounds (200,000 rows, 256 MiB).
+- **Unpublished outbox messages are never relayed on the target (§ 4).** They were the
+  source's work at the source's moment; relaying them here would send customers stale
+  notifications and repeat side effects. The restore inserts each unpublished message
+  EXHAUSTED (`exhausted_at` = the restore, `last_error = 'tenant_archive.restored_not_relayed'`)
+  — the mark the relay already respects, which also holds no sibling back — and the canonical
+  digest compares such a row without its delivery marks. They stay as history in the tenant.
 - **The dry run and the confirmation (§ 4).** A dry run leaves its `tenant_restores` row
   `VERIFIED` (it holds the installation's one restore slot); the confirmation names that row,
   is bound to the uploaded file's SHA-256, repeats the whole verification and applies. A
-  `VERIFIED` row nobody confirms holds the slot: PR-2's restore page must offer «لغو» and
-  expire it (open).
+  `VERIFIED` row nobody confirms holds the slot: cancelling and expiring it is NOT built in
+  PR-1 — PR-2's restore page must offer «لغو» and expire a stale `VERIFIED` row (open).
 - **Replace — NOT DONE in PR-1.** `mode: 'REPLACE'` is refused
   (`tenant_archive.replace_unavailable`). The rewrite allowance of § 10 needs a DELETE branch
   and a refusing/accepting test in each of the 41 append-only guard functions; that was not

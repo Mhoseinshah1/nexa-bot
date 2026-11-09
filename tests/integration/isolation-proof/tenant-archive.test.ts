@@ -530,6 +530,23 @@ describe('tenant archive (Phase 6B PR-1) — export, verify, restore, as nexa_ap
     const source = await digestsOf(owner, HOSTED_1, world.api.container.cipher);
     const restored = await digestsOf(target.owner, HOSTED_1, target.cipher);
     expect(restored).toEqual(source);
+    // The source's unpublished messages (the suite runs no relay, so there are some) land
+    // EXHAUSTED here, with the restore's reason: the target's relay never sends them.
+    const pending = (
+      (
+        await owner.db.execute(
+          sql`SELECT count(*)::int AS n FROM outbox_messages WHERE tenant_id = ${HOSTED_1} AND published_at IS NULL`,
+        )
+      ).rows[0] as { n: number }
+    ).n;
+    expect(pending).toBeGreaterThan(0);
+    const relayable = (
+      await target.owner.db.execute(sql`
+      SELECT count(*) FILTER (WHERE exhausted_at IS NULL)::int AS live,
+             count(*) FILTER (WHERE last_error = 'tenant_archive.restored_not_relayed')::int AS held
+        FROM outbox_messages WHERE tenant_id = ${HOSTED_1} AND published_at IS NULL`)
+    ).rows[0];
+    expect(relayable).toEqual({ live: 0, held: pending });
     expect(Object.keys(source).length).toBeGreaterThan(20);
     // The secret reads under the TARGET's key, and names it.
     const bot = (
