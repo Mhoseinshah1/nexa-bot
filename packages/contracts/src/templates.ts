@@ -585,7 +585,8 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.unknown_command',
-    description: 'Shown when the bot receives a command it does not handle.',
+    description:
+      'Shown when the bot receives free text or a command it does not understand. Names no command (not /help): it points at the menu buttons, and the main menu follows it with no extra tap.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
