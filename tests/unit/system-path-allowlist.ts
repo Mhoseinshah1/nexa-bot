@@ -182,6 +182,11 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleTenantRepository.findById',
   'DrizzleTenantRepository.findBySlug',
   'DrizzleTenantRepository.findPrimary',
+  // Phase 6B replace: holding a hosted bot still for its replace and returning it to its
+  // register's status are installation work on a hosted tenant's row (each also names its
+  // own literal reason below); the reconcile after a crash spans every hosted bot.
+  'DrizzleTenantReplaceHold.hold',
+  'DrizzleTenantReplaceHold.release',
   'DrizzleTicketRepository.purgeReplyFileContentBefore',
   'OutboxRelay.isFresh',
   'OutboxRelay.isHealthy',

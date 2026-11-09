@@ -1,7 +1,15 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { HOSTED_BOT_STATES, HOSTED_BOT_TENANT_STATUS } from '@nexa/contracts';
+import {
+  HOSTED_BOT_STATES,
+  HOSTED_BOT_TENANT_STATUS,
+  NexaError,
+  TENANT_ARCHIVE_ERROR_CODES,
+} from '@nexa/contracts';
 import type { DatabaseHandle } from '../../../../infrastructure/persistence/database.js';
-import { withSystemScope } from '../../../../infrastructure/persistence/database-scope.js';
+import {
+  ScopeBound,
+  withSystemScope,
+} from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * Phase 6B (ADR-0039 § 4): a hosted bot held still while it is replaced.
@@ -19,21 +27,43 @@ import { withSystemScope } from '../../../../infrastructure/persistence/database
  * The hosted tenant is not the caller's (the installation's work), so both statements run on
  * the system path under their own reasons, and each names the installation as the parent.
  */
+@ScopeBound()
 export class DrizzleTenantReplaceHold {
   constructor(
     private readonly app: DatabaseHandle,
     private readonly now: () => Date,
   ) {}
 
-  async hold(installationTenantId: string, hostedTenantId: string): Promise<void> {
-    await withSystemScope('tenant archive: hold a hosted bot still for its replace', () =>
-      this.app.db.execute(sql`
-        UPDATE tenants t SET status = 'STOPPED', updated_at = ${this.now()}
-          FROM hosted_bots b
-         WHERE t.id = ${hostedTenantId}::uuid
-           AND t.kind = 'HOSTED' AND t.parent_tenant_id = ${installationTenantId}::uuid
-           AND b.tenant_id = ${installationTenantId}::uuid AND b.hosted_tenant_id = t.id
-           AND t.status = 'ACTIVE'`),
+  /**
+   * Holds the bot and answers its register state at that moment (the replace's transaction
+   * requires the same state, and the tenant still held, or it refuses). An ACTIVE bot's tenant
+   * becomes STOPPED; any other is already not taking work.
+   */
+  async hold(installationTenantId: string, hostedTenantId: string): Promise<string> {
+    return withSystemScope('tenant archive: hold a hosted bot still for its replace', () =>
+      this.app.db.transaction(async (tx) => {
+        const locked = (await tx.execute(sql`
+          SELECT b.state, t.status FROM tenants t
+            JOIN hosted_bots b ON b.hosted_tenant_id = t.id
+                              AND b.tenant_id = ${installationTenantId}::uuid
+           WHERE t.id = ${hostedTenantId}::uuid AND t.kind = 'HOSTED'
+             AND t.parent_tenant_id = ${installationTenantId}::uuid
+             FOR UPDATE OF t, b`)) as unknown as { rows: { state: string; status: string }[] };
+        const row = locked.rows[0];
+        if (row === undefined) {
+          throw new NexaError({
+            kind: 'CONFLICT',
+            code: TENANT_ARCHIVE_ERROR_CODES.REPLACE_TARGET_MISSING,
+            message: 'The hosted bot to replace is no longer on this server.',
+          });
+        }
+        if (row.status === 'ACTIVE') {
+          await tx.execute(sql`
+            UPDATE tenants SET status = 'STOPPED', updated_at = ${this.now()}
+             WHERE id = ${hostedTenantId}::uuid AND status = 'ACTIVE'`);
+        }
+        return row.state;
+      }),
     );
   }
 
