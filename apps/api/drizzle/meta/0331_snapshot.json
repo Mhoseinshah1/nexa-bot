@@ -1,5 +1,5 @@
 {
-  "id": "481fbc13-0ddc-4f4e-ac9e-2a8cf9bccd3b",
+  "id": "8a178494-d0fc-47f6-9fbe-434f950f73fa",
   "prevId": "d477860f-b6bf-46c5-9374-6a87cdca54a8",
   "version": "7",
   "dialect": "postgresql",
@@ -8322,7 +8322,7 @@
       "checkConstraints": {
         "secret_reentry_items_purpose_check": {
           "name": "secret_reentry_items_purpose_check",
-          "value": "purpose IN ('bot_instance.token', 'panel.username', 'panel.password', 'panel.api_token', 'payment_gateway.api_key', 'payment_gateway.webhook_secret', 'payment_gateway.verify_key', 'payment_gateway.refund_card', 'admin.totp_secret', 'support_ai_provider.api_key', 'legacy_migration.package_key', 'backup.archive_password', 'gift_card.batch_export', 'hosting.totp_secret', 'hosting.archive_password')"
+          "value": "purpose IN ('bot_instance.token', 'panel.username', 'panel.password', 'panel.api_token', 'payment_gateway.api_key', 'payment_gateway.webhook_secret', 'payment_gateway.verify_key', 'payment_gateway.refund_card', 'admin.totp_secret', 'support_ai_provider.api_key', 'legacy_migration.package_key', 'backup.archive_password', 'gift_card.batch_export', 'hosting.totp_secret')"
         },
         "secret_reentry_items_entity_table_check": {
           "name": "secret_reentry_items_entity_table_check",
@@ -8401,12 +8401,6 @@
         },
         "confirmed_at": {
           "name": "confirmed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "confirm_requested_at": {
-          "name": "confirm_requested_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -46680,8 +46674,8 @@
       },
       "isRLSEnabled": false
     },
-    "public.hosted_bot_backup_policies": {
-      "name": "hosted_bot_backup_policies",
+    "public.tenant_data_exports": {
+      "name": "tenant_data_exports",
       "schema": "",
       "columns": {
         "id": {
@@ -46696,59 +46690,90 @@
           "primaryKey": false,
           "notNull": true
         },
-        "hosted_tenant_id": {
-          "name": "hosted_tenant_id",
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requested_by_admin_id": {
+          "name": "requested_by_admin_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
         },
-        "enabled": {
-          "name": "enabled",
+        "requested_by_host": {
+          "name": "requested_by_host",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true
         },
-        "daily_time": {
-          "name": "daily_time",
-          "type": "text",
+        "requested_at": {
+          "name": "requested_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
         },
-        "keep": {
-          "name": "keep",
+        "lease_owner": {
+          "name": "lease_owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "heartbeat_at": {
+          "name": "heartbeat_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
           "type": "integer",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": 0
         },
-        "password_ciphertext": {
-          "name": "password_ciphertext",
+        "file_name": {
+          "name": "file_name",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "password_key_id": {
-          "name": "password_key_id",
+        "bytes": {
+          "name": "bytes",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sha256": {
+          "name": "sha256",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "password_set_at": {
-          "name": "password_set_at",
+        "ready_at": {
+          "name": "ready_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
-        "run_requested_at": {
-          "name": "run_requested_at",
+        "expires_at": {
+          "name": "expires_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
-        "created_at": {
-          "name": "created_at",
+        "removed_at": {
+          "name": "removed_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
+        },
+        "failure_code": {
+          "name": "failure_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "updated_at": {
           "name": "updated_at",
@@ -46758,29 +46783,24 @@
         }
       },
       "indexes": {
-        "hosted_bot_backup_policies_hosted_key": {
-          "name": "hosted_bot_backup_policies_hosted_key",
+        "tenant_data_exports_single_active_idx": {
+          "name": "tenant_data_exports_single_active_idx",
           "columns": [
             {
               "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "hosted_tenant_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             }
           ],
           "isUnique": true,
+          "where": "state IN ('REQUESTED', 'RUNNING')",
           "concurrently": false,
           "method": "btree",
           "with": {}
         },
-        "hosted_bot_backup_policies_tenant_idx": {
-          "name": "hosted_bot_backup_policies_tenant_idx",
+        "tenant_data_exports_tenant_requested_idx": {
+          "name": "tenant_data_exports_tenant_requested_idx",
           "columns": [
             {
               "expression": "tenant_id",
@@ -46789,7 +46809,7 @@
               "nulls": "last"
             },
             {
-              "expression": "updated_at",
+              "expression": "requested_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -46799,28 +46819,53 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "tenant_data_exports_queue_idx": {
+          "name": "tenant_data_exports_queue_idx",
+          "columns": [
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "requested_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "state IN ('REQUESTED', 'RUNNING')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "tenant_data_exports_expiry_idx": {
+          "name": "tenant_data_exports_expiry_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "state = 'READY'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "hosted_bot_backup_policies_tenant_id_tenants_id_fk": {
-          "name": "hosted_bot_backup_policies_tenant_id_tenants_id_fk",
-          "tableFrom": "hosted_bot_backup_policies",
+        "tenant_data_exports_tenant_id_tenants_id_fk": {
+          "name": "tenant_data_exports_tenant_id_tenants_id_fk",
+          "tableFrom": "tenant_data_exports",
           "tableTo": "tenants",
           "columnsFrom": [
             "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "hosted_bot_backup_policies_hosted_tenant_id_tenants_id_fk": {
-          "name": "hosted_bot_backup_policies_hosted_tenant_id_tenants_id_fk",
-          "tableFrom": "hosted_bot_backup_policies",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "hosted_tenant_id"
           ],
           "columnsTo": [
             "id"
@@ -46833,21 +46878,25 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "hosted_bot_backup_policies_not_self_check": {
-          "name": "hosted_bot_backup_policies_not_self_check",
-          "value": "tenant_id <> hosted_tenant_id"
+        "tenant_data_exports_state_check": {
+          "name": "tenant_data_exports_state_check",
+          "value": "state IN ('REQUESTED', 'RUNNING', 'READY', 'FAILED', 'EXPIRED')"
         },
-        "hosted_bot_backup_policies_time_check": {
-          "name": "hosted_bot_backup_policies_time_check",
-          "value": "daily_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'"
+        "tenant_data_exports_sha_check": {
+          "name": "tenant_data_exports_sha_check",
+          "value": "sha256 IS NULL OR sha256 ~ '^[0-9a-f]{64}$'"
         },
-        "hosted_bot_backup_policies_keep_check": {
-          "name": "hosted_bot_backup_policies_keep_check",
-          "value": "keep BETWEEN 1 AND 60"
+        "tenant_data_exports_attempts_check": {
+          "name": "tenant_data_exports_attempts_check",
+          "value": "attempts >= 0"
         },
-        "hosted_bot_backup_policies_password_check": {
-          "name": "hosted_bot_backup_policies_password_check",
-          "value": "(password_ciphertext IS NULL) = (password_key_id IS NULL) AND (password_ciphertext IS NULL) = (password_set_at IS NULL)"
+        "tenant_data_exports_ready_check": {
+          "name": "tenant_data_exports_ready_check",
+          "value": "(state IN ('READY', 'EXPIRED')) = (file_name IS NOT NULL AND sha256 IS NOT NULL AND expires_at IS NOT NULL AND ready_at IS NOT NULL)"
+        },
+        "tenant_data_exports_failure_check": {
+          "name": "tenant_data_exports_failure_check",
+          "value": "(state = 'FAILED') = (failure_code IS NOT NULL)"
         }
       },
       "isRLSEnabled": false
