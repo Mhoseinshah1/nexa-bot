@@ -131,6 +131,13 @@ export const HOSTING_ERROR_CODES = {
    * `backup.archive_auth_failed` collapses its causes: a guesser learns nothing.
    */
   ENTER_TOKEN_INVALID: 'hosting.enter_token_invalid',
+  /**
+   * Phase 6B (ADR-0039 § 7): the bot has no backup password, so no archive is taken — an
+   * archive the owner cannot open is not a backup. Shown on the bot's card.
+   */
+  BACKUP_PASSWORD_REQUIRED: 'hosting.backup_password_required',
+  /** Phase 6B: no such archive of this bot, or it is no longer on this server. */
+  ARCHIVE_NOT_FOUND: 'hosting.archive_not_found',
 } as const;
 
 // ---------------------------------------------------------------------------

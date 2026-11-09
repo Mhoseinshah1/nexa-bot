@@ -143,6 +143,8 @@ export const OPS_LOG_BODIES_FA = {
     '🖥 پنل‌ها و نماینده‌ها — {day}\n\n{panelsBlock}\n\n{resellersBlock}\n{topResellers}',
   'ops.log.backup_caption':
     '💾 بکاپ — {at}\n📦 {fileName} · {size}\n✅ رمزگذاری و بازیابی آزمایشی موفق\n🕒 بکاپ بعدی: {nextAt}\nSHA-256: {checksum}',
+  'ops.log.hosted_backup_caption':
+    '💾 بکاپ ربات — {at}\n📦 {fileName} · {size}\n✅ رمزگذاری و بازیابی آزمایشی موفق\n🔐 رمز این فایل نزد میزبان است.\nSHA-256: {checksum}',
 
   // --- Topic names ------------------------------------------------------------------------
   'ops.group.topic_name.users': '👥 کاربران',

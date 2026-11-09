@@ -1,5 +1,5 @@
 {
-  "id": "cdc04d7f-f213-4228-8bb0-baa1e3650c69",
+  "id": "210e74f6-2dd1-4418-a304-4ab31d1934e8",
   "prevId": "8a178494-d0fc-47f6-9fbe-434f950f73fa",
   "version": "7",
   "dialect": "postgresql",
@@ -796,12 +796,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "acted_in_tenant_id": {
-          "name": "acted_in_tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -2359,37 +2353,9 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "impersonated_by_admin_id": {
-          "name": "impersonated_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "impersonation_hosting_session_id": {
-          "name": "impersonation_hosting_session_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
-        "admin_sessions_impersonation_idx": {
-          "name": "admin_sessions_impersonation_idx",
-          "columns": [
-            {
-              "expression": "impersonation_hosting_session_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "impersonation_hosting_session_id IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "admin_sessions_token_key": {
           "name": "admin_sessions_token_key",
           "columns": [
@@ -2491,12 +2457,7 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "admin_sessions_impersonation_check": {
-          "name": "admin_sessions_impersonation_check",
-          "value": "(impersonated_by_admin_id IS NULL) = (impersonation_hosting_session_id IS NULL)"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.admin_totp_factors": {
@@ -2685,7 +2646,7 @@
           "name": "password_hash",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "password_updated_at": {
           "name": "password_updated_at",
@@ -2699,13 +2660,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'ACTIVE'"
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'OPERATOR'"
         },
         "telegram_user_id": {
           "name": "telegram_user_id",
@@ -2804,22 +2758,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "admins_tenant_host_key": {
-          "name": "admins_tenant_host_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "kind = 'HOST'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -2869,14 +2807,6 @@
         "admins_disabled_at_check": {
           "name": "admins_disabled_at_check",
           "value": "(status = 'DISABLED' AND disabled_at IS NOT NULL) OR (status <> 'DISABLED' AND disabled_at IS NULL)"
-        },
-        "admins_kind_check": {
-          "name": "admins_kind_check",
-          "value": "kind IN ('OPERATOR', 'HOST')"
-        },
-        "admins_kind_password_check": {
-          "name": "admins_kind_password_check",
-          "value": "(kind = 'HOST') = (password_hash IS NULL)"
         }
       },
       "isRLSEnabled": false
@@ -8392,7 +8322,7 @@
       "checkConstraints": {
         "secret_reentry_items_purpose_check": {
           "name": "secret_reentry_items_purpose_check",
-          "value": "purpose IN ('bot_instance.token', 'panel.username', 'panel.password', 'panel.api_token', 'payment_gateway.api_key', 'payment_gateway.webhook_secret', 'payment_gateway.verify_key', 'payment_gateway.refund_card', 'admin.totp_secret', 'support_ai_provider.api_key', 'legacy_migration.package_key', 'backup.archive_password', 'gift_card.batch_export', 'hosting.totp_secret')"
+          "value": "purpose IN ('bot_instance.token', 'panel.username', 'panel.password', 'panel.api_token', 'payment_gateway.api_key', 'payment_gateway.webhook_secret', 'payment_gateway.verify_key', 'payment_gateway.refund_card', 'admin.totp_secret', 'support_ai_provider.api_key', 'legacy_migration.package_key', 'backup.archive_password', 'gift_card.batch_export', 'hosting.totp_secret', 'hosting.archive_password')"
         },
         "secret_reentry_items_entity_table_check": {
           "name": "secret_reentry_items_entity_table_check",
@@ -8471,6 +8401,12 @@
         },
         "confirmed_at": {
           "name": "confirmed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "confirm_requested_at": {
+          "name": "confirm_requested_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -46340,211 +46276,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.hosting_enter_tokens": {
-      "name": "hosting_enter_tokens",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "hosted_tenant_id": {
-          "name": "hosted_tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "domain": {
-          "name": "domain",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "owner_admin_id": {
-          "name": "owner_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "hosting_session_id": {
-          "name": "hosting_session_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "token_hash": {
-          "name": "token_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "used_at": {
-          "name": "used_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "admin_session_id": {
-          "name": "admin_session_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "hosting_enter_tokens_token_key": {
-          "name": "hosting_enter_tokens_token_key",
-          "columns": [
-            {
-              "expression": "token_hash",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "hosting_enter_tokens_hosted_idx": {
-          "name": "hosting_enter_tokens_hosted_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "hosted_tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "hosting_enter_tokens_tenant_id_tenants_id_fk": {
-          "name": "hosting_enter_tokens_tenant_id_tenants_id_fk",
-          "tableFrom": "hosting_enter_tokens",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "hosting_enter_tokens_hosted_tenant_id_tenants_id_fk": {
-          "name": "hosting_enter_tokens_hosted_tenant_id_tenants_id_fk",
-          "tableFrom": "hosting_enter_tokens",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "hosted_tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "hosting_enter_tokens_hosting_session_id_hosting_sessions_id_fk": {
-          "name": "hosting_enter_tokens_hosting_session_id_hosting_sessions_id_fk",
-          "tableFrom": "hosting_enter_tokens",
-          "tableTo": "hosting_sessions",
-          "columnsFrom": [
-            "hosting_session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "hosting_enter_tokens_hosted_fk": {
-          "name": "hosting_enter_tokens_hosted_fk",
-          "tableFrom": "hosting_enter_tokens",
-          "tableTo": "hosted_bots",
-          "columnsFrom": [
-            "tenant_id",
-            "hosted_tenant_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "hosted_tenant_id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "hosting_enter_tokens_owner_fk": {
-          "name": "hosting_enter_tokens_owner_fk",
-          "tableFrom": "hosting_enter_tokens",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "owner_admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "hosting_enter_tokens_expiry_check": {
-          "name": "hosting_enter_tokens_expiry_check",
-          "value": "expires_at > created_at"
-        },
-        "hosting_enter_tokens_used_check": {
-          "name": "hosting_enter_tokens_used_check",
-          "value": "(used_at IS NULL) = (admin_session_id IS NULL)"
-        },
-        "hosting_enter_tokens_domain_shape_check": {
-          "name": "hosting_enter_tokens_domain_shape_check",
-          "value": "domain = lower(domain) AND char_length(domain) BETWEEN 4 AND 253"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.hosting_recovery_codes": {
       "name": "hosting_recovery_codes",
       "schema": "",
@@ -46945,6 +46676,178 @@
         "hosting_totp_factors_attempts_check": {
           "name": "hosting_totp_factors_attempts_check",
           "value": "failed_attempts >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.hosted_bot_backup_policies": {
+      "name": "hosted_bot_backup_policies",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "hosted_tenant_id": {
+          "name": "hosted_tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "daily_time": {
+          "name": "daily_time",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "keep": {
+          "name": "keep",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "password_ciphertext": {
+          "name": "password_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "password_key_id": {
+          "name": "password_key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "password_set_at": {
+          "name": "password_set_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "run_requested_at": {
+          "name": "run_requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "hosted_bot_backup_policies_hosted_key": {
+          "name": "hosted_bot_backup_policies_hosted_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "hosted_tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "hosted_bot_backup_policies_tenant_idx": {
+          "name": "hosted_bot_backup_policies_tenant_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "hosted_bot_backup_policies_tenant_id_tenants_id_fk": {
+          "name": "hosted_bot_backup_policies_tenant_id_tenants_id_fk",
+          "tableFrom": "hosted_bot_backup_policies",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "hosted_bot_backup_policies_hosted_tenant_id_tenants_id_fk": {
+          "name": "hosted_bot_backup_policies_hosted_tenant_id_tenants_id_fk",
+          "tableFrom": "hosted_bot_backup_policies",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "hosted_tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "hosted_bot_backup_policies_not_self_check": {
+          "name": "hosted_bot_backup_policies_not_self_check",
+          "value": "tenant_id <> hosted_tenant_id"
+        },
+        "hosted_bot_backup_policies_time_check": {
+          "name": "hosted_bot_backup_policies_time_check",
+          "value": "daily_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'"
+        },
+        "hosted_bot_backup_policies_keep_check": {
+          "name": "hosted_bot_backup_policies_keep_check",
+          "value": "keep BETWEEN 1 AND 60"
+        },
+        "hosted_bot_backup_policies_password_check": {
+          "name": "hosted_bot_backup_policies_password_check",
+          "value": "(password_ciphertext IS NULL) = (password_key_id IS NULL) AND (password_ciphertext IS NULL) = (password_set_at IS NULL)"
         }
       },
       "isRLSEnabled": false

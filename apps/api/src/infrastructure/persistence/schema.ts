@@ -35,5 +35,6 @@ export * from './schema/ops.js';
 export * from './schema/legacy-import.js';
 export * from './schema/legacy-history.js';
 export * from './schema/hosting.js';
+export * from './schema/hosted-backups.js';
 export * from './schema/data-export.js';
 export * from './schema/registry.js';

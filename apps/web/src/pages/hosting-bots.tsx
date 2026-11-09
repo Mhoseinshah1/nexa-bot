@@ -51,6 +51,7 @@ import { Modal } from '../ui/overlays';
 import { fromLocalInput, toLocalInput } from './incidents';
 import { CodePromptDialog, HOSTING_BOTS_KEY, HOSTING_SERVER_KEY } from './hosting-parts';
 import { ActivationSection } from './hosting-activation';
+import { HostedBackupSection } from './hosting-backup';
 import { DataExportSection } from './hosting-data-export';
 
 /**
@@ -276,6 +277,11 @@ function BotCard({
       {!closed && (
         <Disclosure summary={t('web.hosting_action_data_export')} size="sm">
           <DataExportSection bot={bot} />
+        </Disclosure>
+      )}
+      {!closed && (
+        <Disclosure summary={t('web.hosted_backup_title')} size="sm">
+          <HostedBackupSection bot={bot} />
         </Disclosure>
       )}
       {!closed && (

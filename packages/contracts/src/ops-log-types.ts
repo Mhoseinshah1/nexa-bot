@@ -202,7 +202,15 @@ export const OPS_LOG_TYPES = {
   REPORT_SUMMARY: { l: 'L27', topic: 'REPORTS', templates: ['ops.log.report_summary'] },
   REPORT_FINANCIAL: { l: 'L28', topic: 'REPORTS', templates: ['ops.log.report_financial'] },
   REPORT_PANELS: { l: 'L29', topic: 'REPORTS', templates: ['ops.log.report_panels'] },
-  BACKUP_FILE: { l: 'L31', topic: 'BACKUPS', templates: ['ops.log.backup_caption'] },
+  /*
+   * Phase 6B (ADR-0039 § 7): a hosted bot's own archive, posted to ITS OWN group's backups
+   * topic by its own bot — never the owner's. Same switch, same topic, in the hosted tenant.
+   */
+  BACKUP_FILE: {
+    l: 'L31',
+    topic: 'BACKUPS',
+    templates: ['ops.log.backup_caption', 'ops.log.hosted_backup_caption'],
+  },
   /*
    * R10 D4: gift cards. A redemption (a wallet credit through the ledger) and a batch minted (a
    * liability created in one act). One switch, the PAYMENTS topic, beside the signup gift.
@@ -1311,6 +1319,11 @@ export const OPS_LOG_TEMPLATES = [
     'ops.log.backup_caption',
     'Log L31: the caption of a backup archive sent to the backups topic.',
     [...req('at', 'fileName', 'size'), ...opt('nextAt', 'checksum')],
+  ),
+  logTemplate(
+    'ops.log.hosted_backup_caption',
+    'Phase 6B (ADR-0039 § 7): the caption of a hosted bot’s own archive, sent to ITS OWN operations group’s backups topic by its own bot (never the host’s). The host keeps the password and restores; the caption names no restore command.',
+    [...req('at', 'fileName', 'size'), ...opt('checksum')],
   ),
   logTemplate(
     'ops.log.gift_card_redeemed',

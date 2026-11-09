@@ -49,6 +49,7 @@ export const INSTALLATION_TABLES: Readonly<Record<string, string>> = {
   secret_reentry_items: 'whole-installation restores',
   backup_archive_passwords: "the installation's own archive password",
   tenant_restores: "the owner's record of tenant restores into this installation",
+  hosted_bot_backup_policies: "the owner's schedule and password for a hosted bot's archives",
 };
 
 /**

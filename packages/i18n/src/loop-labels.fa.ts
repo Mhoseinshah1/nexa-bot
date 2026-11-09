@@ -45,6 +45,7 @@ export const LOOP_LABELS_FA: Readonly<Record<string, string>> = {
   'backup-housekeeping': 'نگهداری بکاپ‌ها',
   'data-export-runner': 'ساخت خروجی داده',
   'capacity-monitor': 'پایش ظرفیت سرور',
+  'hosted-backups': 'بکاپ ربات‌های میزبانی‌شده',
   // The monitor, the recovery executor, the migration executor.
   'panel-monitor': 'پایش پنل‌ها',
   'recovery-executor': 'اجرای بازیابی',
