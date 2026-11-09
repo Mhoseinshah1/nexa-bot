@@ -1,5 +1,11 @@
 import { and, asc, eq, getTableColumns, or, sql, type SQL } from 'drizzle-orm';
-import type { CustomerStatus, ListSearchTerm, RecordSource, UserId } from '@nexa/contracts';
+import type {
+  CustomerStatus,
+  ListSearchTerm,
+  ListTotal,
+  RecordSource,
+  UserId,
+} from '@nexa/contracts';
 import type { BotInstanceId, ScopeContext, TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -11,6 +17,7 @@ import {
   customers,
 } from '../../../../infrastructure/persistence/schema.js';
 import { lowerPrefix } from '../../../../infrastructure/persistence/list-search.js';
+import { listTotal } from '../../../../infrastructure/persistence/list-total.js';
 import type {
   CustomerCursor,
   CustomerPage,
@@ -234,6 +241,40 @@ export class DrizzleCustomerRepository implements CustomerRepository {
     tx?: unknown,
   ) {
     const tenantId = requireTenantId(scope);
+    const conditions = this.searchConditions(tenantId, search);
+    if (cursor !== null) {
+      conditions.push(
+        sql`(${customers.createdAt}, ${customers.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+
+    return this.exec(tx)
+      .select({
+        ...getTableColumns(customers),
+        /** The cursor's own half of the key, in the one spelling the cursor carries. */
+        createdAtText: sql<string>`to_char(${customers.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      })
+      .from(customers)
+      .where(and(...conditions))
+      .orderBy(asc(customers.createdAt), asc(customers.id))
+      .limit(limit + 1);
+  }
+
+  /**
+   * The count chip's total for the same filters the list applies, without its cursor
+   * (PR-10). Exact when the planner expects a small selection, its estimate otherwise;
+   * see `listTotal`. `null` when none could be produced in time.
+   */
+  total(scope: TenantContext, search: CustomerSearch): Promise<ListTotal | null> {
+    return listTotal(
+      this.db,
+      customers,
+      and(...this.searchConditions(requireTenantId(scope), search)),
+    );
+  }
+
+  /** The list's filters, tenant first — shared by the page statement and the total. */
+  private searchConditions(tenantId: string, search: CustomerSearch): SQL[] {
     const conditions: SQL[] = [eq(customers.tenantId, tenantId)];
 
     if (search.telegramUserId !== undefined) {
@@ -269,22 +310,7 @@ export class DrizzleCustomerRepository implements CustomerRepository {
     if (search.source !== undefined) conditions.push(eq(customers.source, search.source));
     if (search.text !== undefined) conditions.push(customerTextCondition(search.text));
     if (search.tagId !== undefined) conditions.push(customerTagCondition(tenantId, search.tagId));
-    if (cursor !== null) {
-      conditions.push(
-        sql`(${customers.createdAt}, ${customers.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
-      );
-    }
-
-    return this.exec(tx)
-      .select({
-        ...getTableColumns(customers),
-        /** The cursor's own half of the key, in the one spelling the cursor carries. */
-        createdAtText: sql<string>`to_char(${customers.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
-      })
-      .from(customers)
-      .where(and(...conditions))
-      .orderBy(asc(customers.createdAt), asc(customers.id))
-      .limit(limit + 1);
+    return conditions;
   }
 
   /**

@@ -14,6 +14,11 @@ import {
   businessChatDetailResponseSchema,
   businessOutboundOriginOf,
   businessOutboundView,
+  BUSINESS_MESSAGE_ORIGINS,
+  BUSINESS_MESSAGE_SENDERS,
+  BUSINESS_MESSAGE_SENDER_ORIGINS,
+  businessChatHistoryQuerySchema,
+  businessMessageSenderOf,
 } from '@nexa/contracts';
 import {
   frozenPreA4DetailOutbound,
@@ -173,5 +178,37 @@ describe('the handoff-reason follow-up to CX1 — reasons and outcomes a pre-A3 
     // no_action is left out of the folded list only; the detail and the totals keep it.
     expect(sum(result.auto.byOutcome)).toBe(SUPPORT_AI_AUTO_OUTCOMES.length - 1);
     expect(supportAutoOutcomeCountsOf(result)).toHaveLength(SUPPORT_AI_AUTO_OUTCOMES.length);
+  });
+});
+
+describe('PR-10 — the history query and the sender groups', () => {
+  it('puts every message origin in exactly one sender group, the one its mapping names', () => {
+    const grouped = BUSINESS_MESSAGE_SENDERS.flatMap(
+      (sender) => BUSINESS_MESSAGE_SENDER_ORIGINS[sender],
+    );
+    expect([...grouped].sort()).toEqual([...BUSINESS_MESSAGE_ORIGINS].sort());
+    for (const sender of BUSINESS_MESSAGE_SENDERS) {
+      for (const origin of BUSINESS_MESSAGE_SENDER_ORIGINS[sender]) {
+        expect(businessMessageSenderOf(origin)).toBe(sender);
+      }
+    }
+  });
+
+  it('accepts a message id cursor, a trimmed search and a sender; refuses anything else', () => {
+    const id = '0190f3c2-6c1e-7a3b-9d2e-4f5a6b7c8d9e';
+    expect(
+      businessChatHistoryQuerySchema.parse({ before: id, q: '  وصل  ', sender: 'ai' }),
+    ).toEqual({ before: id, q: 'وصل', sender: 'ai' });
+    expect(businessChatHistoryQuerySchema.parse({})).toEqual({});
+    for (const bad of [
+      { before: 'not-an-id' },
+      { q: '   ' },
+      { q: 'x'.repeat(101) },
+      { sender: 'INBOUND' },
+    ]) {
+      expect(businessChatHistoryQuerySchema.safeParse(bad).success, JSON.stringify(bad)).toBe(
+        false,
+      );
+    }
   });
 });

@@ -215,9 +215,40 @@ describe('the customer list', () => {
     const link = await screen.findByRole('link', { name: 'علی رضایی' });
     expect(link).toHaveAttribute('href', `/users/${ROW_ID}`);
     expect(screen.queryByRole('columnheader', { name: 'مشاهده' })).toBeNull();
-    // The list has no server total, so the title carries no count chip (a client count of one
+    // No `total` from the server, so the title carries no count chip (a client count of one
     // page would be a wrong statement about the tenant).
     expect(container.querySelector('.page-head .count-chip')).toBeNull();
+  });
+
+  it('draws the server total in the title: exact as a number, estimated as «حدود N»', async () => {
+    stubApi([
+      {
+        url: '/users',
+        body: { customers: [customer()], nextCursor: null, total: { value: 7, estimated: false } },
+      },
+    ]);
+    const exact = renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+    await waitFor(() =>
+      expect(exact.container.querySelector('.page-head .count-chip')?.textContent).toBe('7'),
+    );
+    exact.unmount();
+
+    stubApi([
+      {
+        url: '/users',
+        body: {
+          customers: [customer()],
+          nextCursor: null,
+          total: { value: 201_000, estimated: true },
+        },
+      },
+    ]);
+    const estimated = renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+    await waitFor(() => {
+      const chip = estimated.container.querySelector('.page-head .count-chip');
+      expect(chip?.textContent).toMatch(/^حدود /);
+      expect(chip?.textContent).toContain('201,000');
+    });
   });
 
   it('draws the selection bar only while rows are ticked, and clears it', async () => {

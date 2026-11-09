@@ -60,7 +60,8 @@ const sentConfig = async (api: ReturnType<typeof stubApi>) => {
   const put = api.calls.find((call) => call.method === 'PUT')!;
   return (put.body as { config: Record<string, unknown> }).config;
 };
-const save = () => fireEvent.click(screen.getByRole('button', { name: t('web.sai_save') }));
+const save = () =>
+  fireEvent.click(screen.getByRole('button', { name: t('web.kit_settings_save') }));
 
 describe('the automatic-reply topics and confidence on /support-ai', () => {
   it('draws one Persian checkbox per safe topic, checked exactly as the server has them', async () => {
@@ -174,15 +175,14 @@ describe('the automatic-reply topics and confidence on /support-ai', () => {
 
   it('is not dirty after a topic is ticked off and on again, whatever order the server stored', async () => {
     page({ autoTopics: ['KNOWN_ERROR', 'PLAN_INFO'] });
-    const button = (await screen.findByRole('button', {
-      name: t('web.sai_save'),
-    })) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    await topicBox('PLAN_INFO');
+    const bar = () => screen.queryByRole('button', { name: t('web.kit_settings_save') });
+    expect(bar()).toBeNull();
     for (const topic of ['PLAN_INFO', 'KNOWN_ERROR'] as const) {
       fireEvent.click(await topicBox(topic));
-      expect(button.disabled, topic).toBe(false);
+      expect((bar() as HTMLButtonElement).disabled, topic).toBe(false);
       fireEvent.click(await topicBox(topic));
-      expect(button.disabled, topic).toBe(true);
+      expect(bar(), topic).toBeNull();
     }
   });
 
@@ -293,7 +293,9 @@ describe('Phase 4 PR-1: the recommended preset, the banner and the zero-topic re
     page({ mode: 'AUTO_REPLY_SAFE', autoTopics: ['APP_SETUP'] });
     fireEvent.click(await topicBox('APP_SETUP'));
     expect(await screen.findByText(t('web.sai_fault_auto_topics_required'))).toBeTruthy();
-    const button = screen.getByRole('button', { name: t('web.sai_save') }) as HTMLButtonElement;
+    const button = screen.getByRole('button', {
+      name: t('web.kit_settings_save'),
+    }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
   });
 });

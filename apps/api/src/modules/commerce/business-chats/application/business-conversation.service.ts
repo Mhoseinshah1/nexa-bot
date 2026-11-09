@@ -1,6 +1,7 @@
 import {
   BUSINESS_CHAT_DETAIL_MESSAGES,
   BUSINESS_CHAT_RESUME_ALL_LIMIT,
+  BUSINESS_MESSAGE_SENDER_ORIGINS,
   businessInboxPriority,
   BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY,
   BUSINESS_TAKEOVER_ORIGINS,
@@ -15,6 +16,7 @@ import {
   type BusinessHandoffKind,
   type BusinessHandoffReason,
   type BusinessMessageOrigin,
+  type BusinessMessageSender,
   type BusinessOutboundButtons,
   type BusinessOutboundOrigin,
   type BusinessTakeoverReason,
@@ -70,6 +72,8 @@ export const BUSINESS_CHAT_ERROR_CODES = {
   CONNECTION_UNUSABLE: 'business_chats.connection_unusable',
   IDEMPOTENCY_MISMATCH: 'business_chats.idempotency_payload_mismatch',
   NOT_IN_STATE: 'business_chats.not_in_state',
+  /** PR-10: a history cursor that names no message of this conversation. */
+  HISTORY_CURSOR_INVALID: 'business_chats.history_cursor_invalid',
 } as const;
 
 export interface BusinessConversationServiceDeps {
@@ -380,6 +384,47 @@ export class BusinessConversationService {
       this.deps.escalations.forConversation(scope, conversationId, 20),
     ]);
     return { item, messages, outbound, escalations };
+  }
+
+  /**
+   * Web redesign PR-10 — one page of the conversation's history, newest first, beyond the
+   * detail's window: the messages older than `before` (a message of THIS conversation),
+   * optionally only those whose text holds `text` or whose speaker is `sender`, searched
+   * across the whole conversation. Read-only; `business_chats.view`, like the detail. A cursor
+   * that names no message of this conversation is refused rather than read as the first page:
+   * answering the newest page to a request for an older one would show the operator messages
+   * they already saw as if they were older. Nothing here logs a message's text.
+   */
+  async history(
+    scope: ScopeContext,
+    actor: ActorContext,
+    input: {
+      readonly conversationId: string;
+      readonly before?: string;
+      readonly text?: string;
+      readonly sender?: BusinessMessageSender;
+      readonly limit: number;
+    },
+  ): Promise<readonly BusinessMessageRecord[]> {
+    await this.deps.guard.check(scope, actor, BUSINESS_CHATS_VIEW_PERMISSION);
+    const conversation = await this.deps.conversations.findById(scope, input.conversationId);
+    if (conversation === null) throw this.notFound();
+    if (input.before !== undefined) {
+      const anchor = await this.deps.messages.findById(scope, conversation.id, input.before);
+      if (anchor === null) {
+        throw errors.validation(
+          BUSINESS_CHAT_ERROR_CODES.HISTORY_CURSOR_INVALID,
+          'The page cursor is not a message of this conversation; reload the thread.',
+        );
+      }
+    }
+    return this.deps.messages.history(scope, {
+      conversationId: conversation.id,
+      beforeId: input.before ?? null,
+      text: input.text ?? null,
+      origins: input.sender === undefined ? null : BUSINESS_MESSAGE_SENDER_ORIGINS[input.sender],
+      limit: input.limit,
+    });
   }
 
   /** The operator takes the conversation: HUMAN_ACTIVE, epoch+1 (a no-op when already human). */

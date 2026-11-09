@@ -21,6 +21,7 @@ import {
   SERVICE_TERMINAL_STATES,
   UNLIMITED_TRAFFIC_BYTES,
   type ListSearchTerm,
+  type ListTotal,
 } from '@nexa/contracts';
 import type {
   OrderId,
@@ -46,6 +47,7 @@ import {
   serviceRefundRequests,
   services,
 } from '../../../../infrastructure/persistence/schema.js';
+import { listTotal } from '../../../../infrastructure/persistence/list-total.js';
 import {
   customerIdsWithTelegramId,
   customerIdsWithUsernamePrefix,
@@ -439,6 +441,70 @@ export class DrizzleServiceRepository implements ServiceRepository {
     tx?: unknown,
   ) {
     const tenantId = requireTenantId(scope);
+    const filters = this.searchConditions(tenantId, search);
+    if (cursor !== null) {
+      /*
+       * Keyset, on `(COALESCE(original_started_at, created_at), id)`, DESCENDING.
+       *
+       * The instant is the service's ORIGINAL purchase since Track 3 §3: `created_at` for
+       * every service this installation made, and the previous bot's own date for an
+       * imported one — whose `created_at` is the import for an adopted live service, which
+       * put a year of history at the top of the list as "today". `SERVICE_STARTED_AT` is the
+       * one spelling, shared with the ORDER BY and the three online indexes that serve it.
+       *
+       * The instant alone is not unique, so an offset would skip or repeat a row whenever
+       * two services started in the same millisecond — which is exactly what a batch
+       * settlement or an import produces. The tuple form rather than the spelled-out
+       * `a < x OR (a = x AND id < y)` is what the btree can use as an index condition;
+       * `backup_runs.page` carries the same note.
+       *
+       * The DIRECTION is the owner's, recorded as revision 13 and rendered on `/services`
+       * in words: newest first, decided by the server. `/users`, `/orders` and `/products`
+       * page the other way, so this is a deliberate divergence rather than a copy that
+       * drifted.
+       *
+       * The instant is PostgreSQL's own microsecond TEXT and is cast back explicitly, so
+       * the value that came out is the value that goes in; `ServiceCursor.createdAt`
+       * records what a `Date` cost here and why nothing had noticed.
+       */
+      filters.push(
+        sql`(${SERVICE_STARTED_AT}, ${services.id}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+
+    return this.exec(tx)
+      .select({
+        ...getTableColumns(services),
+        /**
+         * The cursor's own half of the key, in the one spelling the cursor carries.
+         *
+         * `to_char` rather than the driver's parse, and explicit rather than `::text`,
+         * because `::text` follows the session's `DateStyle` and this has to be the
+         * same string on every connection.
+         */
+        keysetAtText: sql<string>`to_char(${SERVICE_STARTED_AT} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      })
+      .from(services)
+      .where(and(...filters))
+      .orderBy(desc(SERVICE_STARTED_AT), desc(services.id))
+      .limit(limit + 1);
+  }
+
+  /**
+   * The count chip's total for the same filters the list applies, without its cursor
+   * (PR-10). Exact when the planner expects a small selection, its estimate otherwise;
+   * see `listTotal`. `null` when none could be produced in time.
+   */
+  total(scope: TenantContext, search: ServiceSearch): Promise<ListTotal | null> {
+    return listTotal(
+      this.db,
+      services,
+      and(...this.searchConditions(requireTenantId(scope), search)),
+    );
+  }
+
+  /** The list's filters, tenant first — shared by the page statement and the total. */
+  private searchConditions(tenantId: string, search: ServiceSearch): SQL[] {
     const filters: SQL[] = [eq(services.tenantId, tenantId)];
     if (search.customerId !== undefined) filters.push(eq(services.customerId, search.customerId));
     /*
@@ -492,51 +558,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
         ),
       );
     }
-    if (cursor !== null) {
-      /*
-       * Keyset, on `(COALESCE(original_started_at, created_at), id)`, DESCENDING.
-       *
-       * The instant is the service's ORIGINAL purchase since Track 3 §3: `created_at` for
-       * every service this installation made, and the previous bot's own date for an
-       * imported one — whose `created_at` is the import for an adopted live service, which
-       * put a year of history at the top of the list as "today". `SERVICE_STARTED_AT` is the
-       * one spelling, shared with the ORDER BY and the three online indexes that serve it.
-       *
-       * The instant alone is not unique, so an offset would skip or repeat a row whenever
-       * two services started in the same millisecond — which is exactly what a batch
-       * settlement or an import produces. The tuple form rather than the spelled-out
-       * `a < x OR (a = x AND id < y)` is what the btree can use as an index condition;
-       * `backup_runs.page` carries the same note.
-       *
-       * The DIRECTION is the owner's, recorded as revision 13 and rendered on `/services`
-       * in words: newest first, decided by the server. `/users`, `/orders` and `/products`
-       * page the other way, so this is a deliberate divergence rather than a copy that
-       * drifted.
-       *
-       * The instant is PostgreSQL's own microsecond TEXT and is cast back explicitly, so
-       * the value that came out is the value that goes in; `ServiceCursor.createdAt`
-       * records what a `Date` cost here and why nothing had noticed.
-       */
-      filters.push(
-        sql`(${SERVICE_STARTED_AT}, ${services.id}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
-      );
-    }
-    return this.exec(tx)
-      .select({
-        ...getTableColumns(services),
-        /**
-         * The cursor's own half of the key, in the one spelling the cursor carries.
-         *
-         * `to_char` rather than the driver's parse, and explicit rather than `::text`,
-         * because `::text` follows the session's `DateStyle` and this has to be the
-         * same string on every connection.
-         */
-        keysetAtText: sql<string>`to_char(${SERVICE_STARTED_AT} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
-      })
-      .from(services)
-      .where(and(...filters))
-      .orderBy(desc(SERVICE_STARTED_AT), desc(services.id))
-      .limit(limit + 1);
+    return filters;
   }
 
   /**

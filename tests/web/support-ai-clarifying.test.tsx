@@ -46,7 +46,7 @@ function page(config: Record<string, unknown>, mayAutoReply = false) {
 const field = async () =>
   (await screen.findByLabelText(t('web.sai_max_consecutive_clarifying'))) as HTMLInputElement;
 const saveButton = () =>
-  screen.getByRole('button', { name: t('web.sai_save') }) as HTMLButtonElement;
+  screen.getByRole('button', { name: t('web.kit_settings_save') }) as HTMLButtonElement;
 const sentConfig = async (api: ReturnType<typeof stubApi>) => {
   await waitFor(() => expect(api.calls.filter((call) => call.method === 'PUT')).toHaveLength(1));
   const put = api.calls.find((call) => call.method === 'PUT')!;
@@ -98,11 +98,11 @@ describe('the clarifying-question limit on /support-ai', () => {
   it('is dirty only while the value differs from the server’s', async () => {
     page({ maxConsecutiveClarifyingQuestions: 2 });
     const input = await field();
-    expect(saveButton().disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: t('web.kit_settings_save') })).toBeNull();
     fireEvent.change(input, { target: { value: '3' } });
     expect(saveButton().disabled).toBe(false);
     fireEvent.change(input, { target: { value: '2' } });
-    expect(saveButton().disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: t('web.kit_settings_save') })).toBeNull();
   });
 
   it('refuses a value outside 1–10, or not a whole number, in Persian, and sends nothing', async () => {

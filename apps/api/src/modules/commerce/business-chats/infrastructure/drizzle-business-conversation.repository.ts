@@ -614,6 +614,41 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
     return rows.map(toMessage).reverse();
   }
 
+  async history(
+    scope: ScopeContext,
+    input: Parameters<BusinessMessageRepository['history']>[1],
+  ): Promise<readonly BusinessMessageRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const conditions: SQL[] = [
+      eq(businessMessages.tenantId, tenantId),
+      eq(businessMessages.conversationId, input.conversationId),
+    ];
+    if (input.beforeId !== null) {
+      // The cursor's own keys, read in the same statement: no instant travels through the
+      // client (a JS Date holds milliseconds, the column microseconds), and a cursor of
+      // another conversation or tenant compares with NULL and keeps nothing.
+      conditions.push(sql`(${businessMessages.sentAt}, ${businessMessages.telegramMessageId}) < (
+        SELECT anchor.sent_at, anchor.telegram_message_id FROM business_messages anchor
+         WHERE anchor.tenant_id = ${tenantId}
+           AND anchor.conversation_id = ${input.conversationId}
+           AND anchor.id = ${input.beforeId})`);
+    }
+    if (input.text !== null) {
+      // A substring, not a pattern: strpos needs no escaping of % or _.
+      conditions.push(sql`strpos(lower(${businessMessages.text}), lower(${input.text})) > 0`);
+    }
+    if (input.origins !== null) {
+      conditions.push(inArray(businessMessages.origin, [...input.origins]));
+    }
+    const rows = await this.db
+      .select()
+      .from(businessMessages)
+      .where(and(...conditions))
+      .orderBy(desc(businessMessages.sentAt), desc(businessMessages.telegramMessageId))
+      .limit(input.limit);
+    return rows.map(toMessage);
+  }
+
   async photoReference(
     scope: ScopeContext,
     input: { readonly conversationId: string; readonly messageId: string },

@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { keepPageWhileTurning } from '../ui/paging';
+import { keepPageWhileTurning, useKeptTotal } from '../ui/paging';
 import {
   ORDER_STATES,
   UNLIMITED_DURATION_DAYS,
@@ -266,6 +266,8 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
     }),
   );
 
+  // The server counts the first page only; a later page keeps the chip of the same list.
+  const total = useKeptTotal(orders.data?.total, searchSignature);
   const rows = orders.data?.orders ?? [];
   const nextCursor = orders.data?.nextCursor ?? null;
   const filtering = appliedSearch !== '';
@@ -373,7 +375,10 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
     <>
       <PageHead
         title={t('web.orders_title')}
-        // Redesign PR-1: no count chip — `GET /orders` sends a keyset page and no total.
+        // PR-10: the server's total (exact, or «حدود N» when it is the planner's estimate);
+        // absent when it could not produce one in time, and then no chip is drawn.
+        count={total?.value}
+        countEstimated={total?.estimated}
         actions={<ListFreshness query={orders} hidden={toolbarHidden} />}
       />
 

@@ -99,11 +99,13 @@ export const WEB_FA_SUPPORT = {
   'web.bchat_tf_operator': 'اپراتور',
   'web.bchat_tf_events': 'رویدادها',
   'web.bchat_thread_hits': '{n} نتیجه',
+  'web.bchat_thread_hits_more': 'دست‌کم {n} نتیجه',
+  'web.bchat_thread_older_failed': 'پیام‌های قدیمی‌تر خوانده نشد؛ دوباره امتحان کنید.',
   'web.bchat_thread_none': 'پیامی با این فیلتر یا جستجو پیدا نشد.',
   'web.bchat_thread_older': 'نمایش {n} پیام قدیمی‌تر',
   'web.bchat_thread_jump': 'رفتن به آخرین پیام',
   'web.bchat_thread_note':
-    'پیام‌های قدیمی‌تر پنجاه‌تا پنجاه‌تا نشان داده می‌شوند؛ جستجو در کل گفتگوی خوانده‌شده انجام می‌شود.',
+    'پیام‌های قدیمی‌تر پنجاه‌تا پنجاه‌تا از سرور خوانده می‌شوند؛ جستجو در کل گفتگو انجام می‌شود.',
   'web.bchat_event_handoff': 'سپرده شدن به پشتیبان',
   'web.bchat_composer_locked': 'برای پاسخ دستی، اول گفتگو را «در اختیار گرفتن» کنید.',
   'web.bchat_state_ai_active': 'هوش مصنوعی فعال',
@@ -185,6 +187,8 @@ export const WEB_FA_SUPPORT = {
   'web.bchat_outbound_origin_assist': 'پیشنهاد هوش مصنوعی، تأییدشده',
   'web.bchat_outbound_origin_auto': 'هوش مصنوعی',
   'web.bchat_fault_not_found': 'این گفتگو پیدا نشد.',
+  'web.bchat_fault_history_cursor':
+    'پیام‌های قدیمی‌تر از جای درستی خوانده نشد؛ صفحه را دوباره باز کنید.',
   'web.bchat_fault_connection':
     'اتصال تلگرام بیزینس این گفتگو اکنون اجازهٔ ارسال ندارد؛ اتصال یا اجازهٔ پاسخ را در تلگرام بررسی کنید.',
   'web.bchat_fault_not_in_state':

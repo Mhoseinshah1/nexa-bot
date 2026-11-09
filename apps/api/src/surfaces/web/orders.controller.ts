@@ -74,6 +74,7 @@ export class OrdersController {
     });
     const text = page.q === undefined ? null : classifyListSearch(page.q);
     const result = await this.container.orders.list(scope, actor, {
+      withTotal: true,
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: orderCursorFrom(page.cursor) }),
       search: {
@@ -97,6 +98,8 @@ export class OrdersController {
         toSummary(record, identities.get(record.customerId), labels),
       ),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
+      // Omitted, not null, when none could be produced in time (`listTotalSchema`).
+      ...(result.total === null ? {} : { total: result.total }),
     };
   }
 

@@ -172,6 +172,31 @@ const detail = (
 ];
 
 describe('the service list', () => {
+  it('draws the server total beside the title, «حدود N» when it is an estimate', async () => {
+    stubApi([
+      {
+        url: '/services',
+        body: {
+          services: [service()],
+          nextCursor: null,
+          total: { value: 180_000, estimated: true },
+        },
+      },
+    ]);
+    const { container } = renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+    await waitFor(() => {
+      const chip = container.querySelector('.page-head .count-chip');
+      expect(chip?.textContent).toBe('حدود 180,000');
+    });
+  });
+
+  it('draws no count chip when the server sent no total', async () => {
+    stubApi(list([service()]));
+    const { container } = renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+    await screen.findAllByText('nx-7f3a91');
+    expect(container.querySelector('.page-head .count-chip')).toBeNull();
+  });
+
   it('renders a service with its username, state and delivery state', async () => {
     stubApi(list([service()]));
     renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);

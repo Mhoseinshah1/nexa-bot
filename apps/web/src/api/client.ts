@@ -632,11 +632,14 @@ import {
   type SupportKnowledgeGapsResponse,
   type BusinessHandoffReason,
   businessChatDetailResponseSchema,
+  businessChatHistoryResponseSchema,
   businessChatListResponseSchema,
   businessChatSendResponseSchema,
   businessConnectionListResponseSchema,
   type BusinessChatControlResponse,
   type BusinessChatDetailResponse,
+  type BusinessChatHistoryResponse,
+  type BusinessMessageSender,
   type BusinessChatListResponse,
   type BusinessChatSendResponse,
   type BusinessConnectionListResponse,
@@ -4652,6 +4655,28 @@ export function fetchBusinessChats(
 
 export function fetchBusinessChat(id: string): Promise<BusinessChatDetailResponse> {
   return authedGet(BUSINESS_CHAT_ROUTES.detail(id), businessChatDetailResponseSchema);
+}
+
+/**
+ * PR-10: one page of a conversation's history, newest first — older than `before` (a message
+ * id), searched by `q` and `sender` across the whole conversation. `business_chats.view`.
+ */
+export function fetchBusinessChatHistory(
+  id: string,
+  query: {
+    readonly before?: string;
+    readonly q?: string;
+    readonly sender?: BusinessMessageSender;
+  } = {},
+): Promise<BusinessChatHistoryResponse> {
+  return authedGet(
+    paged(BUSINESS_CHAT_ROUTES.history(id), {
+      before: query.before,
+      q: query.q,
+      sender: query.sender,
+    }),
+    businessChatHistoryResponseSchema,
+  );
 }
 
 export function fetchBusinessConnections(): Promise<BusinessConnectionListResponse> {
