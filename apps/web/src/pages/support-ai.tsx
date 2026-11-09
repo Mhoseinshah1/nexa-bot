@@ -36,7 +36,13 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { CardRows } from '../ui/redesign';
+import {
+  CardRows,
+  SettingRow,
+  SettingsSection,
+  StickySaveBar,
+  SwitchSettingRow,
+} from '../ui/redesign';
 import { useSubmissionKey } from '../submission-key';
 import { messageFor } from './settings';
 import {
@@ -493,6 +499,25 @@ function fromDraft(draft: ConfigDraft): unknown {
   };
 }
 
+/** The form's own fields (not its bookkeeping): each is one unsaved change when it differs. */
+type DraftField = Exclude<keyof ConfigDraft, 'absent' | 'retiredMaxConsecutiveReplies'>;
+const DRAFT_FIELDS: readonly DraftField[] = [
+  'mode',
+  'primary',
+  'fallbacks',
+  'visionEnabled',
+  'autoTopics',
+  'autoMinConfidence',
+  'timeoutMs',
+  'maxOutputChars',
+  'sessionReplyBudget',
+  'maxAutoRepliesPerHour',
+  'maxConsecutiveClarifyingQuestions',
+  'cooldownSeconds',
+  'settleDelaySeconds',
+  'toneInstructions',
+];
+
 /** One Persian sentence per invalid field, in the order the form draws them. */
 const ISSUE_LABELS: Readonly<Record<string, WebKey>> = {
   primary: 'web.sai_invalid_primary',
@@ -525,9 +550,14 @@ function ConfigCard({
   const set = <K extends keyof ConfigDraft>(key: K, value: ConfigDraft[K]) =>
     setDraft((current) => ({ ...current, [key]: value }));
   const parsed = supportAiConfigSaveSchema.safeParse(fromDraft(draft));
-  const dirty =
-    JSON.stringify(fromDraft(draft)) !== JSON.stringify(fromDraft(toDraft(response.config)));
-  useUnsavedChanges(dirty);
+  // Dirty state PER FIELD: the bar counts the fields that differ from what was loaded.
+  const loaded = toDraft(response.config);
+  const changedKeys = DRAFT_FIELDS.filter(
+    (key) => JSON.stringify(draft[key]) !== JSON.stringify(loaded[key]),
+  );
+  const isChanged = (key: DraftField) => changedKeys.includes(key);
+  const sectionChanged = (keys: readonly DraftField[]) => keys.filter(isChanged).length;
+  useUnsavedChanges(changedKeys.length > 0);
   // Phase 4 PR-1: automatic replies with no topic answer nothing — refused here as the server does.
   const noTopics = draft.mode === 'AUTO_REPLY_SAFE' && draft.autoTopics.length === 0;
   const issues: WebKey[] = [
@@ -595,6 +625,10 @@ function ConfigCard({
         toNumber(draft.maxAutoRepliesPerHour) >
           (response.config.maxAutoRepliesPerHour ?? Number.POSITIVE_INFINITY)));
   const stale = response.version !== baseVersion;
+  const submit = () => {
+    if (parsed.success && !noTopics && !save.isPending) save.mutate(parsed.data);
+  };
+  // «لغو» and «بارگذاری دوباره»: back to the loaded values (and the loaded version).
   const reload = () => {
     setDraft(toDraft(response.config));
     setBaseVersion(response.version);
@@ -617,175 +651,207 @@ function ConfigCard({
       {/*
         W2: out of scroll anchoring, so adding a fallback puts its row where the button was and
         the page stays put; anchored, the rows above were pushed up off the screen (390).
+        PR-10: the kit settings pattern — collapsible sections of setting rows and ONE sticky
+        save bar (unsaved count, save, cancel). The save is still the one whole-document PUT
+        (the contract requires every field), built from the loaded values with the changed
+        fields applied over them.
       */}
       <form
         className="stack no-scroll-anchor sai-config"
         onSubmit={(event) => {
           event.preventDefault();
-          if (parsed.success) save.mutate(parsed.data);
+          submit();
         }}
       >
-        <fieldset className="field">
-          <legend className="field-label">{t('web.sai_mode')}</legend>
-          <div className="stack-sm">
-            {SUPPORT_AI_MODES.map((mode) => (
-              <label key={mode} className="check">
-                <input
-                  type="radio"
-                  name="support-ai-mode"
-                  value={mode}
-                  checked={draft.mode === mode}
-                  onChange={() => {
-                    set('mode', mode);
-                    // Phase 4 PR-1: switching to automatic replies with no topic fills the
-                    // recommended preset into the form (visible, unsaved).
-                    if (mode === 'AUTO_REPLY_SAFE' && draft.autoTopics.length === 0) applyPreset();
-                  }}
-                />{' '}
-                <strong>{t(SUPPORT_AI_MODE_LABELS[mode])}</strong>
-                <span className="muted small"> — {t(MODE_EXPLAINED[mode])}</span>
-                <span className="muted small sai-mode-consequence">
-                  {t(MODE_CONSEQUENCES[mode])}
-                </span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-        {draft.mode === 'AUTO_REPLY_SAFE' && response.config.mode !== 'AUTO_REPLY_SAFE' && (
-          <Banner tone="warn">
-            {t(mayAutoReply ? 'web.sai_mode_auto_entering' : 'web.sai_mode_auto_needs_owner')}
-          </Banner>
-        )}
-
-        <fieldset className="field">
-          <legend className="field-label">{t('web.sai_chain')}</legend>
-          <p className="muted small">{t('web.sai_chain_hint')}</p>
-          <StepFields
-            id="sai-primary"
-            label={t('web.sai_primary')}
-            step={draft.primary}
-            options={providerOptions}
-            onChange={(next) => set('primary', next)}
+        <SettingsSection title={t('web.sai_mode')} changed={sectionChanged(['mode'])}>
+          <SettingRow
+            title={t('web.sai_mode')}
+            changed={isChanged('mode')}
+            control={
+              <div className="stack-sm" role="radiogroup" aria-label={t('web.sai_mode')}>
+                {SUPPORT_AI_MODES.map((mode) => (
+                  <label key={mode} className="check">
+                    <input
+                      type="radio"
+                      name="support-ai-mode"
+                      value={mode}
+                      checked={draft.mode === mode}
+                      onChange={() => {
+                        set('mode', mode);
+                        // Phase 4 PR-1: switching to automatic replies with no topic fills the
+                        // recommended preset into the form (visible, unsaved).
+                        if (mode === 'AUTO_REPLY_SAFE' && draft.autoTopics.length === 0)
+                          applyPreset();
+                      }}
+                    />{' '}
+                    <strong>{t(SUPPORT_AI_MODE_LABELS[mode])}</strong>
+                    <span className="muted small"> — {t(MODE_EXPLAINED[mode])}</span>
+                    <span className="muted small sai-mode-consequence">
+                      {t(MODE_CONSEQUENCES[mode])}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            }
           />
-          {draft.fallbacks.map((step, index) => (
-            <StepFields
-              // Position IS the identity of a fallback: it is the order the chain tries.
-              key={index}
-              id={`sai-fallback-${index}`}
-              label={`${t('web.sai_fallback')} ${index + 1}`}
-              step={step}
-              options={providerOptions}
-              onChange={(next) =>
-                set(
-                  'fallbacks',
-                  draft.fallbacks.map((current, at) => (at === index ? next : current)),
-                )
-              }
-              onRemove={() =>
-                set(
-                  'fallbacks',
-                  draft.fallbacks.filter((_, at) => at !== index),
-                )
-              }
-            />
-          ))}
-          {draft.fallbacks.length < SUPPORT_AI_LIMITS.maxFallbacks && (
-            <button
-              type="button"
-              className="btn sm sai-fallback-add"
-              onClick={() => set('fallbacks', [...draft.fallbacks, { provider: '', model: '' }])}
-            >
-              <Icon name="plus" />
-              {t('web.sai_fallback_add')}
-            </button>
+          {draft.mode === 'AUTO_REPLY_SAFE' && response.config.mode !== 'AUTO_REPLY_SAFE' && (
+            <Banner tone="warn">
+              {t(mayAutoReply ? 'web.sai_mode_auto_entering' : 'web.sai_mode_auto_needs_owner')}
+            </Banner>
           )}
-        </fieldset>
+        </SettingsSection>
 
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={draft.visionEnabled}
-            onChange={(event) => set('visionEnabled', event.target.checked)}
-          />{' '}
-          {t('web.sai_vision')}
-        </label>
-
-        {restrictive && (
-          <Banner
-            tone="info"
-            action={
-              <button type="button" className="btn sm" onClick={applyPreset}>
-                {t('web.sai_preset_apply')}
-              </button>
-            }
-          >
-            {t('web.sai_preset_banner')}
-          </Banner>
-        )}
-        <fieldset className="field">
-          <legend className="field-label">{t('web.sai_auto_topics')}</legend>
-          <p className="muted small">{t('web.sai_auto_topics_hint')}</p>
-          <div className="grid-2">
-            {SUPPORT_AI_SAFE_TOPICS.map((topic) => (
-              <label key={topic} className="check">
-                <input
-                  type="checkbox"
-                  name="support-ai-auto-topic"
-                  checked={draft.autoTopics.includes(topic)}
-                  onChange={(event) =>
-                    set(
-                      'autoTopics',
-                      event.target.checked
-                        ? // Kept in the contract's order, so a toggle back and forth is not dirty.
-                          SUPPORT_AI_SAFE_TOPICS.filter(
-                            (each) => each === topic || draft.autoTopics.includes(each),
-                          )
-                        : draft.autoTopics.filter((each) => each !== topic),
-                    )
-                  }
-                />{' '}
-                {t(SAI_AUTO_TOPIC_LABELS[topic])}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        <Field
-          label={t('web.sai_auto_min_confidence')}
-          htmlFor="sai-auto-min-confidence"
-          hint={t('web.sai_auto_min_confidence_hint')}
+        <SettingsSection
+          title={t('web.sai_chain')}
+          description={t('web.sai_chain_hint')}
+          changed={sectionChanged(['primary', 'fallbacks', 'visionEnabled'])}
         >
-          <select
-            id="sai-auto-min-confidence"
-            className="input"
-            value={draft.autoMinConfidence}
-            onChange={(event) =>
-              set('autoMinConfidence', event.target.value as SupportAiAutoMinConfidence)
+          <SettingRow
+            title={t('web.sai_chain')}
+            changed={isChanged('primary') || isChanged('fallbacks')}
+            control={
+              <div className="stack-sm">
+                <StepFields
+                  id="sai-primary"
+                  label={t('web.sai_primary')}
+                  step={draft.primary}
+                  options={providerOptions}
+                  onChange={(next) => set('primary', next)}
+                />
+                {draft.fallbacks.map((step, index) => (
+                  <StepFields
+                    // Position IS the identity of a fallback: it is the order the chain tries.
+                    key={index}
+                    id={`sai-fallback-${index}`}
+                    label={`${t('web.sai_fallback')} ${index + 1}`}
+                    step={step}
+                    options={providerOptions}
+                    onChange={(next) =>
+                      set(
+                        'fallbacks',
+                        draft.fallbacks.map((current, at) => (at === index ? next : current)),
+                      )
+                    }
+                    onRemove={() =>
+                      set(
+                        'fallbacks',
+                        draft.fallbacks.filter((_, at) => at !== index),
+                      )
+                    }
+                  />
+                ))}
+                {draft.fallbacks.length < SUPPORT_AI_LIMITS.maxFallbacks && (
+                  <button
+                    type="button"
+                    className="btn sm sai-fallback-add"
+                    onClick={() =>
+                      set('fallbacks', [...draft.fallbacks, { provider: '', model: '' }])
+                    }
+                  >
+                    <Icon name="plus" />
+                    {t('web.sai_fallback_add')}
+                  </button>
+                )}
+              </div>
             }
-          >
-            {SUPPORT_AI_AUTO_MIN_CONFIDENCES.map((confidence) => (
-              <option key={confidence} value={confidence}>
-                {t(SAI_AUTO_MIN_CONFIDENCE_LABELS[confidence])}
-              </option>
-            ))}
-          </select>
-        </Field>
-        {widened && (
-          <Banner tone="warn">
-            {t(mayAutoReply ? 'web.sai_auto_widen_entering' : 'web.sai_auto_widen_needs_owner')}
-          </Banner>
-        )}
+          />
+          <SwitchSettingRow
+            title={t('web.sai_vision')}
+            checked={draft.visionEnabled}
+            changed={isChanged('visionEnabled')}
+            onChange={(next) => set('visionEnabled', next)}
+          />
+        </SettingsSection>
 
-        <Disclosure summary={t('web.sai_advanced')} variant="boxed">
-          <p className="muted small">{t('web.sai_advanced_hint')}</p>
-          <div className="grid-2">
-            {NUMERIC_FIELDS.map(({ field, label, help, min, max }) => (
-              <Field
-                key={field}
-                label={t(label)}
-                htmlFor={`sai-${field}`}
-                hint={`${help === undefined ? '' : `${t(help)} `}${t('web.sai_range')} ${min} – ${max}`}
+        <SettingsSection
+          title={t('web.sai_auto_topics')}
+          description={t('web.sai_auto_topics_hint')}
+          changed={sectionChanged(['autoTopics', 'autoMinConfidence'])}
+        >
+          {restrictive && (
+            <Banner
+              tone="info"
+              action={
+                <button type="button" className="btn sm" onClick={applyPreset}>
+                  {t('web.sai_preset_apply')}
+                </button>
+              }
+            >
+              {t('web.sai_preset_banner')}
+            </Banner>
+          )}
+          <SettingRow
+            title={t('web.sai_auto_topics')}
+            changed={isChanged('autoTopics')}
+            control={
+              <div className="grid-2" role="group" aria-label={t('web.sai_auto_topics')}>
+                {SUPPORT_AI_SAFE_TOPICS.map((topic) => (
+                  <label key={topic} className="check">
+                    <input
+                      type="checkbox"
+                      name="support-ai-auto-topic"
+                      checked={draft.autoTopics.includes(topic)}
+                      onChange={(event) =>
+                        set(
+                          'autoTopics',
+                          event.target.checked
+                            ? // Kept in the contract's order, so a toggle back and forth is not dirty.
+                              SUPPORT_AI_SAFE_TOPICS.filter(
+                                (each) => each === topic || draft.autoTopics.includes(each),
+                              )
+                            : draft.autoTopics.filter((each) => each !== topic),
+                        )
+                      }
+                    />{' '}
+                    {t(SAI_AUTO_TOPIC_LABELS[topic])}
+                  </label>
+                ))}
+              </div>
+            }
+          />
+          <SettingRow
+            title={
+              <label htmlFor="sai-auto-min-confidence">{t('web.sai_auto_min_confidence')}</label>
+            }
+            description={t('web.sai_auto_min_confidence_hint')}
+            changed={isChanged('autoMinConfidence')}
+            control={
+              <select
+                id="sai-auto-min-confidence"
+                className="input"
+                value={draft.autoMinConfidence}
+                onChange={(event) =>
+                  set('autoMinConfidence', event.target.value as SupportAiAutoMinConfidence)
+                }
               >
+                {SUPPORT_AI_AUTO_MIN_CONFIDENCES.map((confidence) => (
+                  <option key={confidence} value={confidence}>
+                    {t(SAI_AUTO_MIN_CONFIDENCE_LABELS[confidence])}
+                  </option>
+                ))}
+              </select>
+            }
+          />
+          {widened && (
+            <Banner tone="warn">
+              {t(mayAutoReply ? 'web.sai_auto_widen_entering' : 'web.sai_auto_widen_needs_owner')}
+            </Banner>
+          )}
+        </SettingsSection>
+
+        <SettingsSection
+          title={t('web.sai_advanced')}
+          description={t('web.sai_advanced_hint')}
+          defaultOpen={false}
+          changed={sectionChanged(NUMERIC_FIELDS.map(({ field }) => field))}
+        >
+          {NUMERIC_FIELDS.map(({ field, label, help, min, max }) => (
+            <SettingRow
+              key={field}
+              title={<label htmlFor={`sai-${field}`}>{t(label)}</label>}
+              description={`${help === undefined ? '' : `${t(help)} `}${t('web.sai_range')} ${min} – ${max}`}
+              changed={isChanged(field)}
+              control={
                 <input
                   id={`sai-${field}`}
                   className="input"
@@ -794,31 +860,29 @@ function ConfigCard({
                   value={draft[field]}
                   onChange={(event) => set(field, event.target.value)}
                 />
-              </Field>
-            ))}
-          </div>
-        </Disclosure>
+              }
+            />
+          ))}
+        </SettingsSection>
 
-        <Field label={t('web.sai_tone')} htmlFor="sai-tone" hint={t('web.sai_tone_hint')}>
-          <textarea
-            id="sai-tone"
-            className="input"
-            rows={4}
-            maxLength={SUPPORT_AI_LIMITS.toneInstructionsChars}
-            value={draft.toneInstructions}
-            onChange={(event) => set('toneInstructions', event.target.value)}
+        <SettingsSection title={t('web.sai_tone')} changed={sectionChanged(['toneInstructions'])}>
+          <SettingRow
+            title={<label htmlFor="sai-tone">{t('web.sai_tone')}</label>}
+            description={t('web.sai_tone_hint')}
+            changed={isChanged('toneInstructions')}
+            control={
+              <textarea
+                id="sai-tone"
+                className="input"
+                rows={4}
+                maxLength={SUPPORT_AI_LIMITS.toneInstructionsChars}
+                value={draft.toneInstructions}
+                onChange={(event) => set('toneInstructions', event.target.value)}
+              />
+            }
           />
-        </Field>
+        </SettingsSection>
 
-        {issues.length > 0 && (
-          <Banner tone="warn">
-            <ul className="plain">
-              {issues.map((key) => (
-                <li key={key}>{t(key)}</li>
-              ))}
-            </ul>
-          </Banner>
-        )}
         {stale && (
           <Banner
             tone="warn"
@@ -831,22 +895,32 @@ function ConfigCard({
             {t('web.sai_stale')}
           </Banner>
         )}
-        {save.error !== null && (
-          <Banner tone="danger" role="alert">
-            {supportAiFault(save.error)}
-            <ErrorRef error={save.error} />
-          </Banner>
-        )}
-        <div className="form-actions">
-          <button
-            type="submit"
-            className="btn primary"
-            disabled={!parsed.success || noTopics || !dirty || save.isPending}
-          >
-            <Icon name="check" />
-            {t('web.sai_save')}
-          </button>
-        </div>
+        <StickySaveBar
+          changes={changedKeys.length}
+          onSave={submit}
+          onCancel={reload}
+          saving={save.isPending}
+          saveDisabled={!parsed.success || noTopics}
+          error={
+            issues.length > 0 || save.error !== null ? (
+              <>
+                {issues.length > 0 && (
+                  <ul className="plain">
+                    {issues.map((key) => (
+                      <li key={key}>{t(key)}</li>
+                    ))}
+                  </ul>
+                )}
+                {save.error !== null && (
+                  <span role="alert">
+                    {supportAiFault(save.error)}
+                    <ErrorRef error={save.error} />
+                  </span>
+                )}
+              </>
+            ) : undefined
+          }
+        />
       </form>
     </Card>
   );

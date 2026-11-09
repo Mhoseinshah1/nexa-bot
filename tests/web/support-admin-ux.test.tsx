@@ -281,8 +281,10 @@ describe('model picker, advanced settings and mode consequences', () => {
     ]);
     renderPage(<SupportAiPage denied={false} mayAutoReply={false} />);
     const summary = await screen.findByText(t('web.sai_advanced'));
-    const details = summary.closest('details')!;
-    expect(details.open).toBe(false);
+    const toggle = summary.closest('button')!;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    const details = summary.closest('section')!;
+    expect(details.querySelector('.settings-section-body')!.hasAttribute('hidden')).toBe(true);
     expect(details.querySelectorAll('input[inputmode="numeric"]')).toHaveLength(7);
     for (const key of [
       'web.sai_timeout_ms_hint',
