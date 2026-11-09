@@ -54,14 +54,6 @@ export interface ActivationDraft {
   readonly requestTimeoutSeconds: string;
 }
 
-export const EMPTY_ACTIVATION_DRAFT: ActivationDraft = {
-  protocols: [],
-  tags: {},
-  subscriptionDomain: '',
-  inboundId: '',
-  requestTimeoutSeconds: '',
-};
-
 /**
  * Whether a provider's activation takes a per-panel request timeout (R10 C2).
  *

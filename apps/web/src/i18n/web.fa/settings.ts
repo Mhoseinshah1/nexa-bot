@@ -6,6 +6,7 @@
 export const WEB_FA_SETTINGS = {
   // Settings
   'web.settings_title': 'تنظیمات',
+  'web.settings_about_fold': 'دربارهٔ این صفحه',
   'web.settings_intro': 'تنظیمات موردنظر را تغییر دهید و ذخیره کنید.',
   'web.restart_required': 'نیازمند راه‌اندازی مجدد',
   /*

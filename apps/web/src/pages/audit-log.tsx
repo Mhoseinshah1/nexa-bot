@@ -172,11 +172,6 @@ export function auditLogQuery(
   };
 }
 
-/** What `/audit-log` asks on arrival from the sidebar: no filter, the newest page. */
-export function auditLogFirstScreen(): readonly PageQuery[] {
-  return [auditLogQuery(auditFiltersOf(new URLSearchParams()), undefined)];
-}
-
 interface Draft {
   readonly actor: string;
   readonly action: string;

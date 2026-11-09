@@ -749,7 +749,9 @@ describe('the settings page', () => {
     ).toBeInTheDocument();
     expect(visibleText(container)).not.toContain('future.setting');
     expect(
-      within(container.querySelector('details') as HTMLElement).getByText('future.setting'),
+      within(container.querySelector('.settings-rows details') as HTMLElement).getByText(
+        'future.setting',
+      ),
     ).toBeInTheDocument();
   });
 });

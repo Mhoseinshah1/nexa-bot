@@ -581,7 +581,6 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
     <>
       <PageHead
         title={t('web.nc_title')}
-        subtitle={t('web.nc_intro')}
         actions={
           categories.length > 0 && inboxFeed ? (
             <Button
@@ -595,6 +594,9 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
           ) : undefined
         }
       />
+      <Disclosure size="sm" summary={t('web.nc_about_fold')}>
+        <p className="muted small">{t('web.nc_intro')}</p>
+      </Disclosure>
       {/* Red while an alert is open; nothing at all otherwise. */}
       {mayAlerts && hasOpen && (
         <AttentionStrip

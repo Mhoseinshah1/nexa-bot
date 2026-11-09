@@ -7,7 +7,6 @@ import { ActionPanel } from '../../apps/web/src/ui/action-panel';
 import { Button, Tabs } from '../../apps/web/src/ui/kit';
 import { DotTabs } from '../../apps/web/src/pages/dot-tabs';
 import { DotTabs as EditorDotTabs } from '../../apps/web/src/pages/editor-layout';
-import { SectionTabs } from '../../apps/web/src/pages/ops-b-layout';
 import { scrollTabIntoStrip } from '../../apps/web/src/ui/tab-strip';
 import { renderPage } from './harness';
 
@@ -234,7 +233,7 @@ describe('B6: the selected tab is brought into view inside its strip', () => {
     expect(pageScroll).not.toHaveBeenCalled();
   });
 
-  it('does the same for the dotted and section strips', () => {
+  it('does the same for the dotted strips', () => {
     const { scrolled } = layOut();
     const strips = [
       (value: string) => (
@@ -242,9 +241,6 @@ describe('B6: the selected tab is brought into view inside its strip', () => {
       ),
       (value: string) => (
         <EditorDotTabs value={value} onChange={() => {}} items={ITEMS} panelId="e" />
-      ),
-      (value: string) => (
-        <SectionTabs value={value} onChange={() => {}} items={ITEMS} panelId="s" label="s" />
       ),
     ];
     for (const strip of strips) {
