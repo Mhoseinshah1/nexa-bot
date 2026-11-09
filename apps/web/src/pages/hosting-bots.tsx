@@ -262,7 +262,11 @@ function BotCard({
           </span>
         </div>
       )}
-      {bot.state === 'ACTIVE' && <ActivationSection bot={bot} />}
+      {/* SFR A5: also for a bot the owner stopped — its token is entered again HERE, while it
+          is still stopped, and only then may ACTIVATE bring it back. */}
+      {(bot.state === 'ACTIVE' || bot.state === 'SUSPENDED' || bot.state === 'DELETED') && (
+        <ActivationSection bot={bot} />
+      )}
       {!closed && (
         <Disclosure summary={t('web.hosting_action_limits')} size="sm">
           <LimitsEditor bot={bot} onSaved={onLimitSaved} />

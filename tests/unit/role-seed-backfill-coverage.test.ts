@@ -193,13 +193,16 @@ describe('role seed backfill coverage', () => {
     ]);
   });
 
-  it('accounts for the Recovery Kit release exactly: three CRITICAL keys, owner only', () => {
-    // ADR-0032, migration 0160. Named, for the reason the case above gives.
+  it('retires the Recovery Kit grants: 0160 backfilled three, 0328 deletes all three (SFR A1)', () => {
+    // ADR-0032 added them; the kit is removed. MUTATION: dropping a DELETE from 0328 leaves its
+    // key standing here and fails this.
     const kit = [...backfilled].filter((p) => /:recovery\.(kit|key)\./.test(p)).sort();
-    expect(kit).toEqual([
-      'owner:recovery.key.remove',
-      'owner:recovery.kit.export',
-      'owner:recovery.kit.import',
+    expect(kit).toEqual([]);
+    const retiring = backfills.find((entry) => entry.file === '0328_drop_recovery_kit_grants.sql');
+    expect([...(retiring?.retired ?? [])].sort()).toEqual([
+      'recovery.key.remove',
+      'recovery.kit.export',
+      'recovery.kit.import',
     ]);
   });
 });

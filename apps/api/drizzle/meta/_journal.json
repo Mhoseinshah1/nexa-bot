@@ -2297,6 +2297,13 @@
       "when": 1794111371645,
       "tag": "0327_secret_reentry_items",
       "breakpoints": true
+    },
+    {
+      "idx": 328,
+      "version": "7",
+      "when": 1794197970591,
+      "tag": "0328_drop_recovery_kit_grants",
+      "breakpoints": true
     }
   ]
 }

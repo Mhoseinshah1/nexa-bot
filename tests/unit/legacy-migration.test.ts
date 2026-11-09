@@ -29,6 +29,7 @@ import {
 } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration.service';
 import {
   completedStatusOf,
+  exhaustedCause,
   LegacyMigrationExecutor,
   type LegacyMigrationExecutorDeps,
 } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration-executor';
@@ -1648,6 +1649,76 @@ describe('LegacyMigrationExecutor', () => {
       keyCiphertext: null,
     });
     expect(h.calls).toEqual([]);
+  });
+
+  it('SFR A2: a dry run closed at the bound says MEMORY when a heap peak was recorded, UNKNOWN otherwise', async () => {
+    // MUTATION: dropping `attemptsExhaustedCause` from the bound's `fail`, or answering
+    // UNKNOWN regardless of `memoryPeak`, fails this.
+    const h = executorHarness();
+    const oom = seed(h, {
+      status: 'DRY_RUN_RUNNING',
+      progress: {
+        ...emptyRow().progress,
+        phase: 'DRY_RUN',
+        dryRunAttempts: 5,
+        memoryPeak: { heapUsedMb: 1250, heapLimitMb: 1536 },
+      },
+    });
+    await h.executor.tick();
+    expect(h.repository.rows.get(oom)).toMatchObject({
+      status: 'DRY_RUN_FAILED',
+      errorCode: 'IMPORT_FAILED',
+    });
+    expect(h.repository.rows.get(oom)?.progress.attemptsExhaustedCause).toBe('MEMORY');
+    // The attempt bound itself is unchanged.
+    expect(h.repository.rows.get(oom)?.progress.dryRunAttempts).toBe(5);
+    const other = seed(h, {
+      status: 'DRY_RUN_RUNNING',
+      progress: { ...emptyRow().progress, phase: 'DRY_RUN', dryRunAttempts: 5 },
+    });
+    await h.executor.tick();
+    expect(h.repository.rows.get(other)?.progress.attemptsExhaustedCause).toBe('UNKNOWN');
+    expect(exhaustedCause({ ...emptyRow().progress, memoryPeak: null })).toBe('UNKNOWN');
+  });
+
+  it('SFR A2: a step near its heap limit records the peak on the lease port; a calm one records nothing', async () => {
+    // MUTATION: removing the memory watch from `run`, or recording below the ratio, fails this.
+    for (const [ratio, expected] of [
+      [0.9, true],
+      [0.5, false],
+    ] as const) {
+      const peaks: { heapUsedMb: number; heapLimitMb: number }[] = [];
+      const h = executorHarness({
+        deps: {
+          memoryProbeMs: 1,
+          heapProbe: () => ({ usedBytes: ratio * 1536 * 1_048_576, limitBytes: 1536 * 1_048_576 }),
+          leases: {
+            heartbeat: async () => true,
+            release: async () => {},
+            recordMemoryPeak: async (input) => {
+              peaks.push({ heapUsedMb: input.heapUsedMb, heapLimitMb: input.heapLimitMb });
+            },
+          },
+        },
+      });
+      const id = seed(h, { status: 'DRY_RUN_REQUESTED' });
+      const dryRun = h.runner.dryRun;
+      h.runner = {
+        ...h.runner,
+        dryRun: async (context) => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          return dryRun(context);
+        },
+      };
+      await h.executor.tick();
+      expect(status(h, id)).toBe('DRY_RUN_DONE');
+      if (expected) {
+        // One write per new high, not one per reading.
+        expect(peaks).toEqual([{ heapUsedMb: 1382, heapLimitMb: 1536 }]);
+      } else {
+        expect(peaks).toEqual([]);
+      }
+    }
   });
 
   it('a dry run whose workspace cannot be made is counted and failed at the bound', async () => {

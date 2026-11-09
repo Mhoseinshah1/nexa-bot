@@ -9,7 +9,7 @@ import { withinAcknowledged } from '../../apps/api/src/modules/platform/recovery
 import { unreadableRefusalFa } from '../../apps/api/src/backup.cli';
 import { heldKeyLines, verifyReport } from '../../apps/api/src/secrets.cli';
 import { InstallationKeyring } from '../../apps/api/src/infrastructure/crypto/installation-keyring';
-import { kekFingerprint } from '../../apps/api/src/infrastructure/crypto/recovery-kit';
+import { kekFingerprint } from '../../apps/api/src/infrastructure/crypto/kek';
 import type { SecretTrialReport } from '../../apps/api/src/infrastructure/crypto/secret-trial';
 
 /** NEXA-FIX-RESTORE-SECRETS §2.3/§2.5: the rules a refused restore and the CLI rest on. */
@@ -86,13 +86,15 @@ describe('botctl output', () => {
     expect(verifyReport(trial(0)).text).not.toContain('دوباره وارد کنید در');
   });
 
-  it('`botctl restore` refuses in Persian, with kinds, counts and both choices for an old archive', () => {
+  it('`botctl restore` refuses in Persian, with kinds, counts and the one way on — never a kit', () => {
     const text = unreadableRefusalFa(trial(2), false);
     expect(text).toContain('توکن ربات (bot_instance.token): 2');
-    expect(text).toContain('«بارگذاری کیت بازیابی سرور قبلی»');
     expect(text).toContain('«ادامه؛ این‌ها را دوباره وارد می‌کنم»');
     expect(text).not.toMatch(/[A-Z]{4,}/);
-    // An archive that carried its keys: the kit cannot help, so it is not offered.
+    // SFR A1: the kit is removed — never offered; an old archive is told why.
+    expect(text).not.toContain('«بارگذاری کیت بازیابی سرور قبلی»');
+    expect(text).not.toContain('--kit');
+    expect(text).toContain('کیت بازیابی حذف شده است');
     expect(unreadableRefusalFa(trial(2), true)).not.toContain('کیت بازیابی');
   });
 

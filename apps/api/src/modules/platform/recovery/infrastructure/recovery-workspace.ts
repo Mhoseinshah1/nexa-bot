@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import type { RecoveryWorkspace, RecoveryWorkspaceFactory } from '../application/ports.js';
@@ -21,6 +21,10 @@ import type { RecoveryWorkspace, RecoveryWorkspaceFactory } from '../application
  * cleaned by a timer nobody here controls, and frequently a tmpfs a real
  * database will not fit in.
  */
+/** `<uuid>-<16 hex>`: the name `create` gives a workspace. */
+const UPLOAD_DIRECTORY =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-[0-9a-f]{16}$/;
+
 export class FilesystemRecoveryWorkspaces implements RecoveryWorkspaceFactory {
   constructor(private readonly root: string) {}
 
@@ -33,6 +37,42 @@ export class FilesystemRecoveryWorkspaces implements RecoveryWorkspaceFactory {
     const directory = join(this.root, `${recoveryId}-${randomBytes(8).toString('hex')}`);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     return new DirectoryRecoveryWorkspace(directory);
+  }
+
+  /**
+   * SFR A3: every upload workspace under the root — `<recovery id>-<16 hex>`, nothing else
+   * (the cutover journal lives beside them) — with the recovery id its name carries and when
+   * anything in it was last written. A root that does not exist holds none.
+   */
+  async uploadDirectories(): Promise<
+    readonly {
+      readonly directory: string;
+      readonly recoveryId: string;
+      readonly lastWrittenAt: Date;
+    }[]
+  > {
+    let entries: string[];
+    try {
+      entries = await readdir(this.root);
+    } catch (error) {
+      if ((error as { code?: unknown }).code === 'ENOENT') return [];
+      throw error;
+    }
+    const found: { directory: string; recoveryId: string; lastWrittenAt: Date }[] = [];
+    for (const entry of entries) {
+      const match = UPLOAD_DIRECTORY.exec(entry);
+      if (match === null) continue;
+      const directory = join(this.root, entry);
+      const info = await stat(directory).catch(() => null);
+      if (info === null || !info.isDirectory()) continue;
+      let latest = info.mtimeMs;
+      for (const file of await readdir(directory).catch(() => [] as string[])) {
+        const inner = await stat(join(directory, file)).catch(() => null);
+        if (inner !== null && inner.mtimeMs > latest) latest = inner.mtimeMs;
+      }
+      found.push({ directory, recoveryId: match[1] as string, lastWrittenAt: new Date(latest) });
+    }
+    return found;
   }
 
   /**

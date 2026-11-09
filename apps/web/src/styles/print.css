@@ -1,0 +1,99 @@
+/*
+ * Printing a page — «چاپ» or «ذخیره به‌صورت PDF» from the browser (SFR A4).
+ *
+ * The screen layout is a two-column grid (the sidebar and the page) inside a fixed-height
+ * frame whose content scrolls. Printed as is, the page column got the paper width minus the
+ * sidebar, and anything past its far edge — in RTL the LEFT, where the dry-run report's numbers
+ * sit — was clipped: the owner's printout showed only the labels. In print the chrome goes, the
+ * page takes the whole width, nothing scrolls or clips, and key/value rows and tables wrap to
+ * fit. Logical properties only, so RTL holds; both themes print the same light page, because
+ * paper is white whatever the screen theme.
+ */
+@media print {
+  :root,
+  :root[data-theme='dark'],
+  :root[data-theme='light'] {
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    height: auto;
+    overflow: visible;
+    background: #fff;
+    color: #000;
+  }
+
+  .sidebar,
+  .topbar,
+  .bottom-nav,
+  .sidebar-scrim,
+  .incident-banner,
+  .btn-group,
+  .btn {
+    display: none;
+  }
+
+  .app {
+    display: block;
+    height: auto;
+    padding: 0;
+  }
+
+  .main,
+  .content,
+  .content-inner {
+    display: block;
+    height: auto;
+    max-width: none;
+    width: auto;
+    min-width: 0;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .card,
+  .banner,
+  .notice {
+    background: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    border-color: #999;
+    color: #000;
+    break-inside: avoid-page;
+  }
+
+  /* A label may wrap; its value never leaves the page. */
+  .kv {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    color: #000;
+  }
+  .kv dt {
+    white-space: normal;
+    color: #333;
+  }
+  .kv dd {
+    color: #000;
+  }
+
+  .tbl-wrap {
+    overflow: visible;
+  }
+  .tbl-wrap table,
+  table {
+    width: 100%;
+    table-layout: auto;
+  }
+  th,
+  td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    color: #000;
+  }
+
+  .muted,
+  .card-subtitle {
+    color: #333;
+  }
+}

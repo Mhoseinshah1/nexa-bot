@@ -553,24 +553,6 @@ export const PERMISSIONS = [
   p('backup.run', 'Take a backup now', 'HIGH'),
   p('backup.download', 'Download an encrypted backup archive', 'CRITICAL'),
   p('recovery.restore', 'Restore this installation from a backup', 'CRITICAL'),
-  // The Recovery Kit (ADR-0032). Three keys, all CRITICAL, all owner-only, and
-  // deliberately not folded into `recovery.restore`:
-  //
-  //   - EXPORT hands every key-encryption key this installation holds to whoever
-  //     knows a passphrase. With `backup.download` beside it, that is the whole
-  //     database in plaintext — so it is its own grant, and the request also
-  //     needs the administrator's own account password.
-  //   - IMPORT adds decrypt-only keys. It cannot change which key encrypts, but
-  //     it does decide which foreign archives this installation will open.
-  //   - REMOVE makes anything still sealed under that key unreadable, which is
-  //     destructive in the one way a backup must never be.
-  p(
-    'recovery.kit.export',
-    'Export the Recovery Kit (every encryption key, passphrase-sealed)',
-    'CRITICAL',
-  ),
-  p('recovery.kit.import', 'Import a Recovery Kit as decrypt-only keys', 'CRITICAL'),
-  p('recovery.key.remove', 'Remove an imported decrypt-only key', 'CRITICAL'),
 
   /*
    * Mirza migration PR2 — the legacy product review (`docs/legacy-product-review-design.md`

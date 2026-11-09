@@ -42,7 +42,7 @@ x-app-common: &app-common
     # exists every process connects as the owner, where row-level security is inert.
     - path: ${NEXA_CONFIG_DIR:-/etc/nexa}/app-database.env
       required: false
-  environment:
+  environment: &app-environment
     # THE installation's data network, handed to the application by the same
     # file and the same expression that define the network below. The panel
     # HTTP policy refuses it unconditionally, so a panel can never be pointed
@@ -641,8 +641,18 @@ services:
   recovery:
     <<: *app-common
     # Phase 6A PR-2: memory limit from the host's RAM, and above postgres for the OOM killer.
-    mem_limit: ${NEXA_MEM_RECOVERY:-655m}
+    mem_limit: ${NEXA_MEM_RECOVERY:-1638m}
     oom_score_adj: 300
+    # SFR A2: the V8 heap of THIS role alone, about 75 % of the limit above (botctl computes
+    # NEXA_HEAP_RECOVERY_MB beside NEXA_MEM_RECOVERY in deploy.env; the default is the 8 GB
+    # host's). A Mirza dry run of a large .nxpkg holds its read sets in memory and died with
+    # "JavaScript heap out of memory" at V8's own default. Set in `environment`, which WINS
+    # over `env_file`, so a NODE_OPTIONS left in nexa.env cannot lower or drop it here; the
+    # other roles do not set it at all. `environment` replaces the anchor's map rather than
+    # merging it, hence the explicit merge of the shared one.
+    environment:
+      <<: *app-environment
+      NODE_OPTIONS: --max-old-space-size=${NEXA_HEAP_RECOVERY_MB:-1228}
     volumes: *app-volumes
     command: ['node', 'dist/main.recovery.js']
     # The same heartbeat shape the worker and monitor use, for the same reason:

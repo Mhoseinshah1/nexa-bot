@@ -104,9 +104,13 @@ function ActivationPanel({ bot }: { bot: HostedBotView }) {
   });
   const view = query.data;
   const configured = view !== undefined && view.domain !== null;
+  // SFR A5: a stopped bot takes its token again and nothing else; the checks run once it is
+  // active.
+  const stopped = bot.state !== 'ACTIVE';
   return (
     <div className="stack hosting-act">
       <p className="muted small">{t('web.hosting_act_intro')}</p>
+      {stopped && <Banner tone="warn">{t('web.hosting_act_stopped_token_first')}</Banner>}
       <StateSwitch query={query}>
         {view !== undefined && (
           <>
@@ -128,7 +132,7 @@ function ActivationPanel({ bot }: { bot: HostedBotView }) {
                   key={step}
                   step={view.steps.find((entry) => entry.step === step) as HostedActivationStepView}
                   running={run.isPending && run.variables === RUNNABLE[step]}
-                  disabled={!configured || run.isPending}
+                  disabled={!configured || stopped || run.isPending}
                   onRun={() => {
                     const runnable = RUNNABLE[step];
                     if (runnable !== undefined) run.mutate(runnable);

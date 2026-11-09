@@ -97,6 +97,7 @@ describe('the split stylesheet', () => {
       './styles/pages/w-resellers.css',
       './styles/pages/demo-bot.css',
       './styles/pages/hosting.css',
+      './styles/print.css',
     ]);
     expect(CSS).not.toMatch(/@import/);
     // The token sets and the kit arrived: one rule from each end of the chain.

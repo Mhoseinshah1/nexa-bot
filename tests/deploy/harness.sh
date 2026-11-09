@@ -643,6 +643,10 @@ case "${1:-}" in
         # v0.9.7: the Docker limits the backup-verify container was CREATED with.
         printf '%s %s\n' "$(read_state verify_nanocpus 700000000)" "$(read_state verify_memory 536870912)"
         ;;
+      *'{{.HostConfig.Memory}}'*)
+        # SFR A2: the memory limit the recovery container was CREATED with.
+        printf '%s\n' "$(read_state recovery_memory 1717567488)"
+        ;;
       *'{{.Image}}'*)
         # The image a container was created FROM, which is what makes the
         # provenance comparison possible: `status` asks whether the API's build

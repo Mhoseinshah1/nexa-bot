@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUDIT_CRITICAL_ACTION_CODES,
   AUDIT_CRITICAL_ACTIONS,
+  AUDIT_LEGACY_CRITICAL_ACTIONS,
+  PERMISSION_KEYS,
   LEGACY_CUTOVER_AUDIT_ACTIONS,
   auditLogExportQuerySchema,
   auditLogListQuerySchema,
@@ -27,6 +30,26 @@ describe('the CRITICAL action table', () => {
     for (const action of Object.values(LEGACY_CUTOVER_AUDIT_ACTIONS)) {
       expect(AUDIT_CRITICAL_ACTIONS[action], action).toEqual(['legacy.cutover.approve']);
       expect(auditSecurityClasses({ action, result: 'SUCCESS' })).toEqual(['CRITICAL']);
+    }
+  });
+
+  it('SFR A1: rows of the removed Recovery Kit stay CRITICAL in the badge and the filter', () => {
+    // MUTATION: dropping a code from AUDIT_LEGACY_CRITICAL_ACTIONS, or the badge or the
+    // filter no longer reading the list, fails this.
+    for (const action of [
+      'recovery_kit.exported',
+      'recovery_kit.imported',
+      'installation_key.removed',
+    ]) {
+      expect(AUDIT_LEGACY_CRITICAL_ACTIONS, action).toContain(action);
+      expect(auditSecurityClasses({ action, result: 'SUCCESS' }), action).toEqual(['CRITICAL']);
+      expect(AUDIT_CRITICAL_ACTION_CODES, action).toContain(action);
+      // Legacy precisely because its permission is gone: never also in the live table.
+      expect(Object.hasOwn(AUDIT_CRITICAL_ACTIONS, action), action).toBe(false);
+    }
+    const keys = new Set<string>(PERMISSION_KEYS);
+    for (const removed of ['recovery.kit.export', 'recovery.kit.import', 'recovery.key.remove']) {
+      expect(keys.has(removed), removed).toBe(false);
     }
   });
 

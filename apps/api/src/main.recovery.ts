@@ -14,6 +14,8 @@ import { stalledAfterGrace } from './modules/platform/opslog/application/loop-st
 
 /** The executor's name in the operations log: `job.loop_stalled:recovery-executor`. */
 const RECOVERY_EXECUTOR_LOOP = 'recovery-executor';
+/** SFR A3: how often the recovery role sweeps refused and orphaned restore uploads. */
+const UPLOAD_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /**
  * Process role: `recovery`.
@@ -165,6 +167,20 @@ async function main(): Promise<void> {
 
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  // SFR A3: the uploads of refused restores, and workspaces no request names, are removed at
+  // start-up and every few hours; a restore in progress is never touched. Never fatal.
+  const sweepUploads = (): void => {
+    void container.recoveryUploadSweeper.sweep().catch((error: unknown) => {
+      container.logger.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        'the recovery upload sweep failed; it runs again later',
+      );
+    });
+  };
+  sweepUploads();
+  const uploadSweep = setInterval(sweepUploads, UPLOAD_SWEEP_INTERVAL_MS);
+  uploadSweep.unref();
 
   container.recoveryExecutor.start();
   executorStartedAt = container.clock.now().getTime();

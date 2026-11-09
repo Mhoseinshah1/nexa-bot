@@ -1114,13 +1114,21 @@ nexa_record_pg_tuning() {
 #   NEXA_MEM_MONITOR,
 #   NEXA_MEM_PROVISIONER,
 #   NEXA_MEM_ASSISTANT      4 %, 256 MB .. 1 GB each
-#   NEXA_MEM_RECOVERY       8 %, 384 MB .. 2 GB     (idle unless a restore runs)
+#   NEXA_MEM_RECOVERY      20 %, 1536 MB .. 3 GB    (idle at 200-300 MB; a Mirza dry run of a
+#                                                   133 MB .nxpkg peaked at ~800 MB RSS and died
+#                                                   at the old 8 % = 655 MB on an 8 GB host)
 #   NEXA_MEM_REDIS         128 MB                   (maxmemory 64mb)
 #   NEXA_MEM_CADDY          3 %, 128 MB .. 512 MB
+#   NEXA_HEAP_RECOVERY_MB  75 % of NEXA_MEM_RECOVERY, the recovery role's V8 heap
+#                          (--max-old-space-size, pinned in compose for that role ALONE): the
+#                          rest is native memory, buffers and the 7-Zip / pg_restore children.
+#                          Without it V8 sizes its heap from its own defaults and dies with
+#                          "JavaScript heap out of memory" long before the container limit.
 #
-# Limits, not reservations: together they exceed nothing in the normal case, and a runaway
-# process is killed INSIDE its own container instead of the kernel picking a victim for the
-# whole host. Which victim the kernel picks when the host itself runs out is the other half:
+# Limits, not reservations — the recovery share in particular is a CAP on a role that sits
+# mostly idle, not memory taken from the others: together they exceed nothing in the normal
+# case, and a runaway process is killed INSIDE its own container instead of the kernel
+# picking a victim for the whole host. Which victim the kernel picks when the host itself runs out is the other half:
 # compose gives postgres a negative oom_score_adj and the application roles a positive one,
 # so the database is the last process the OOM killer considers. Pure, so the arithmetic is
 # tested without Docker.
@@ -1138,13 +1146,18 @@ nexa_container_memory_limits() {
     '' | *[!0-9]*) return 1 ;;
   esac
   [ "$mb" -gt 0 ] || return 1
+  local recovery
   _nexa_mem_share NEXA_MEM_POSTGRES "$mb" 40 512 0
   _nexa_mem_share NEXA_MEM_API "$mb" 12 384 4096
   _nexa_mem_share NEXA_MEM_WORKER "$mb" 10 512 3072
   _nexa_mem_share NEXA_MEM_MONITOR "$mb" 4 256 1024
   _nexa_mem_share NEXA_MEM_PROVISIONER "$mb" 4 256 1024
   _nexa_mem_share NEXA_MEM_ASSISTANT "$mb" 4 256 1024
-  _nexa_mem_share NEXA_MEM_RECOVERY "$mb" 8 384 2048
+  recovery="$(_nexa_mem_share NEXA_MEM_RECOVERY "$mb" 20 1536 3072)"
+  printf '%s\n' "$recovery"
+  recovery="${recovery#NEXA_MEM_RECOVERY=}"
+  recovery="${recovery%m}"
+  printf 'NEXA_HEAP_RECOVERY_MB=%s\n' "$((recovery * 75 / 100))"
   printf 'NEXA_MEM_REDIS=128m\n'
   _nexa_mem_share NEXA_MEM_CADDY "$mb" 3 128 512
 }
@@ -1412,6 +1425,28 @@ nexa_db_tuning_report() {
   done
   printf '  %-30s %s\n' 'postgres shared_preload' 'pg_stat_statements'
   printf '  %-30s %s\n' 'redis' 'maxmemory 64mb, allkeys-lru'
+}
+
+# The recovery role's memory as status prints it: the container limit and the V8 heap inside
+# it, as deploy.env records them (or the compose defaults), plus what the running container
+# was created with. The heap is pinned in compose for this role alone, so a NODE_OPTIONS left
+# in nexa.env cannot change it.
+nexa_recovery_memory_report() {
+  local file="${NEXA_CONFIG_DIR}/deploy.env" limit heap id running=""
+  limit="$(nexa_env_value "$file" NEXA_MEM_RECOVERY 2>/dev/null || true)"
+  heap="$(nexa_env_value "$file" NEXA_HEAP_RECOVERY_MB 2>/dev/null || true)"
+  printf '
+recovery role memory (deploy.env; applied when recovery is next recreated):\n'
+  printf '  %-30s %s\n' NEXA_MEM_RECOVERY "${limit:-1638m (not recorded; compose default)}"
+  printf '  %-30s %s\n' NEXA_HEAP_RECOVERY_MB "${heap:-1228 (not recorded; compose default)}"
+  id="$(nexa_compose ps -q recovery 2>/dev/null || true)"
+  if [ -n "$id" ]; then
+    running="$(docker inspect "$id" --format '{{.HostConfig.Memory}}' 2>/dev/null || true)"
+  fi
+  case "$running" in
+    '' | *[!0-9]*) printf '  %-30s %s\n' 'running container' 'not running' ;;
+    *) printf '  %-30s memory %sm\n' 'running container' "$((running / 1048576))" ;;
+  esac
 }
 
 nexa_set_deploy_image() {

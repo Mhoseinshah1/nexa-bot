@@ -7100,7 +7100,7 @@ export type BackupStatusResponse = z.infer<typeof backupStatusResponseSchema>;
 /**
  * Sets (or replaces) the owner's backup password (E4).
  *
- * Typed twice, and behind the account-password step-up the Recovery Kit uses: whoever sets
+ * Typed twice, and behind the account-password step-up: whoever sets
  * it decides what every future archive opens with. Stored with `SecretCipher`; the response
  * says only that it is set. A replaced password is kept (superseded, never shown) so the
  * archives it sealed still open on this server.
@@ -7222,9 +7222,9 @@ export const recoveryCapabilitiesResponseSchema = z.object({
   uploadEnabled: z.boolean(),
   maxUploadBytes: z.number().int().positive(),
   /**
-   * True since the Recovery Kit (ADR-0032): an archive from another installation
-   * restores once that installation's kit has been imported. Still a field, so a
-   * client built against the refusal keeps parsing.
+   * True: an archive from another installation restores when it was made with a backup
+   * password (it carries its own keys, wrapped by that password). A keyring `.nxb` from
+   * another installation is still refused (`recovery.archive_foreign_key`).
    */
   foreignInstallationSupported: z.boolean(),
   /** The phrase the server will compare against. The surface shows it; it never decides it. */

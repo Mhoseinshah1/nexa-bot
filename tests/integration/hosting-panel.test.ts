@@ -22,6 +22,7 @@ import {
   admins,
   auditLogs,
   botInstances,
+  hostedBotActivations,
   hostedBots,
   hostingTotpFactors,
   operationalEvents,
@@ -442,6 +443,29 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
     });
   });
 
+  /**
+   * SFR A5: the creator entered the bot's token again (and Telegram accepted it) NOW. The
+   * real step — «فعال‌سازی» → token, over a fake Telegram — is proven in
+   * hosted-activation.test.ts; here only its mark matters, the gate ACTIVATE reads.
+   */
+  async function tokenReentered(hostedTenantId: string): Promise<void> {
+    offsetMs += 1_000; // strictly after the stop, whatever the wall clock's resolution
+    const at = now();
+    await api.container.database.db
+      .insert(hostedBotActivations)
+      .values({
+        tenantId: tenantA.tenantId,
+        hostedTenantId,
+        tokenVerifiedAt: at,
+        createdAt: at,
+        updatedAt: at,
+      })
+      .onConflictDoUpdate({
+        target: [hostedBotActivations.tenantId, hostedBotActivations.hostedTenantId],
+        set: { tokenVerifiedAt: at, updatedAt: at },
+      });
+  }
+
   describe('the actions', () => {
     it('creates a HOSTED tenant with its own Web Admin owner, audited in the owner’s log only', async () => {
       const panel = await openPanel();
@@ -590,6 +614,18 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
         );
       expect(changed).toHaveLength(1);
 
+      // SFR A5: not before its token is entered again — the bot stays stopped.
+      expect(
+        await codeOf(
+          api.container.hosting.activate(tenantA, ownerActor, panel.token, id, {
+            idempotencyKey: key(),
+            proof: { code: code(panel.secret) },
+          }),
+        ),
+      ).toBe(HOSTING_ERROR_CODES.TOKEN_REENTRY_REQUIRED);
+      expect((await tenantRow(id))?.status).toBe('STOPPED');
+      await tokenReentered(id);
+
       // Activated again: everything is back.
       const activated = await api.container.hosting.activate(tenantA, ownerActor, panel.token, id, {
         idempotencyKey: key(),
@@ -630,8 +666,12 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
       const deleted = await act('delete');
       expect(deleted.bot).toMatchObject({ state: 'DELETED', tenantStatus: 'DISABLED' });
       expect(deleted.bot.deletedAt).not.toBeNull();
+      // SFR A5: a deleted bot is restored only after its token is entered again.
+      expect(await codeOf(act('activate'))).toBe(HOSTING_ERROR_CODES.TOKEN_REENTRY_REQUIRED);
+      await tokenReentered(id);
       expect((await act('activate')).bot).toMatchObject({ state: 'ACTIVE', deletedAt: null });
       await act('delete');
+      await tokenReentered(id);
 
       // A deleted bot whose date has passed: ACTIVATE refuses it until the date changes, and
       // changing the date leaves it deleted (the Web Admin offers the expiry action there).

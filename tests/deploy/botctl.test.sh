@@ -6601,7 +6601,13 @@ assert_contains 'wal_compression not recorded' "$deploy_env" 'NEXA_PG_WAL_COMPRE
 assert_contains 'the update did not cap backup-verify' "$deploy_env" 'NEXA_BACKUP_VERIFY_CPUS=0.70'
 assert_contains 'the update did not size backup-verify' "$deploy_env" 'NEXA_BACKUP_VERIFY_MEMORY=1000m'
 assert_contains 'the image was lost' "$deploy_env" "NEXA_IMAGE="
+# SFR A2: the recovery role's limit and heap are recomputed by the update, like the others.
+assert_contains 'the update did not size recovery' "$deploy_env" 'NEXA_MEM_RECOVERY=1600m'
+assert_contains 'the update did not record the recovery heap' "$deploy_env" 'NEXA_HEAP_RECOVERY_MB=1200'
 run_botctl status
+assert_contains 'status has no recovery memory heading' "$BOTCTL_OUTPUT" 'recovery role memory'
+assert_contains 'status does not show the recovery limit' "$BOTCTL_OUTPUT" 'NEXA_MEM_RECOVERY              1600m'
+assert_contains 'status does not show the recovery heap' "$BOTCTL_OUTPUT" 'NEXA_HEAP_RECOVERY_MB          1200'
 assert_contains 'status does not show shared_buffers' "$BOTCTL_OUTPUT" 'NEXA_PG_SHARED_BUFFERS         2000MB'
 assert_contains 'status does not show max_wal_size' "$BOTCTL_OUTPUT" 'NEXA_PG_MAX_WAL_SIZE           4000MB'
 assert_contains 'status does not show wal_compression' "$BOTCTL_OUTPUT" 'NEXA_PG_WAL_COMPRESSION        lz4'
@@ -6633,6 +6639,18 @@ assert_contains '4 GB: the worker keeps room for a backup' "$(nexa_container_mem
 assert_contains '64 GB: api is capped' "$(nexa_container_memory_limits 65536)" 'NEXA_MEM_API=4096m'
 assert_contains '64 GB: postgres has no cap' "$(nexa_container_memory_limits 65536)" 'NEXA_MEM_POSTGRES=26214m'
 assert_equals 'not a number is refused' 1 "$(nexa_container_memory_limits 8g >/dev/null; echo $?)"
+
+test_case 'SFR A2: the recovery role gets 20 % of RAM within 1.5..3 GB, and a heap of 75 % of it'
+limits_4g="$(nexa_container_memory_limits 4096)"
+limits_16g="$(nexa_container_memory_limits 16384)"
+assert_contains '4 GB: recovery keeps its 1536 MB floor' "$limits_4g" 'NEXA_MEM_RECOVERY=1536m'
+assert_contains '4 GB: recovery heap is 75 % of it' "$limits_4g" 'NEXA_HEAP_RECOVERY_MB=1152'
+assert_contains '8 GB: recovery 20 %' "$limits_8g" 'NEXA_MEM_RECOVERY=1638m'
+assert_contains '8 GB: recovery heap' "$limits_8g" 'NEXA_HEAP_RECOVERY_MB=1228'
+assert_contains '16 GB: recovery 20 %' "$limits_16g" 'NEXA_MEM_RECOVERY=3072m'
+assert_contains '16 GB: recovery heap' "$limits_16g" 'NEXA_HEAP_RECOVERY_MB=2304'
+assert_contains '64 GB: recovery is capped at 3 GB' "$(nexa_container_memory_limits 65536)" 'NEXA_MEM_RECOVERY=3072m'
+assert_contains '1 GB: recovery floor still applies' "$(nexa_container_memory_limits 1024)" 'NEXA_HEAP_RECOVERY_MB=1152'
 
 test_case 'phase 6A: postgres is the last process the OOM killer considers'
 compose_text="$(cat "${REPO}/deploy/compose.yml")"
@@ -6672,6 +6690,13 @@ test_case 'db tuning: a restart records it too (the first update into R12 runs t
 printf 'MemTotal:       4096000 kB\n' >"$MEMINFO_FIXTURE"
 run_botctl restart
 assert_equals 'the restart failed' 0 "$BOTCTL_STATUS"
+# SFR A2: a hand-written recovery limit (the owner's 2048m workaround) is recomputed too, and the
+# heap follows the limit the restart records — never a stale one.
+nexa_set_deploy_values 'NEXA_MEM_RECOVERY=2048m' 'NEXA_HEAP_RECOVERY_MB=99'
+run_botctl restart
+assert_equals 'the second restart failed' 0 "$BOTCTL_STATUS"
+assert_contains 'restart did not recompute the recovery limit' "$(cat "${NEXA_CONFIG_DIR}/deploy.env")" 'NEXA_MEM_RECOVERY=1600m'
+assert_contains 'restart did not recompute the recovery heap' "$(cat "${NEXA_CONFIG_DIR}/deploy.env")" 'NEXA_HEAP_RECOVERY_MB=1200'
 assert_contains 'restart did not record the sizing' "$(cat "${NEXA_CONFIG_DIR}/deploy.env")" 'NEXA_PG_SHARED_BUFFERS=1000MB'
 
 test_case 'db tuning: a host whose memory cannot be read keeps what deploy.env has'

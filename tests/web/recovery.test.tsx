@@ -5,11 +5,11 @@ import {
   API_PREFIX,
   BACKUP_ROUTES,
   RECOVERY_CONFIRMATION_PHRASE,
-  RECOVERY_KIT_ROUTES,
   RECOVERY_ROUTES,
   type PermissionKey,
 } from '@nexa/contracts';
 import { RecoveryPage } from '../../apps/web/src/pages/recovery';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { NEXA_ARCHIVE_BYTES, renderPage, stubApi } from './harness';
 
@@ -31,15 +31,7 @@ import { NEXA_ARCHIVE_BYTES, renderPage, stubApi } from './harness';
 
 const route = { path: '/recovery', query: new URLSearchParams() };
 
-const ALL: PermissionKey[] = [
-  'backup.view',
-  'backup.run',
-  'backup.download',
-  'recovery.restore',
-  'recovery.kit.export',
-  'recovery.kit.import',
-  'recovery.key.remove',
-];
+const ALL: PermissionKey[] = ['backup.view', 'backup.run', 'backup.download', 'recovery.restore'];
 
 /** The one recovery request every fixture below is a state of. */
 const RECOVERY_ID = '01a05e35-c9ad-7e93-bef3-1ed9b55292d9';
@@ -101,23 +93,6 @@ function recovery(overrides: Record<string, unknown> = {}): Record<string, unkno
   };
 }
 
-/** A key as the list endpoint reports it. The default is the active configured one. */
-function installationKey(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    keyId: 'prod-2026',
-    fingerprint: 'f'.repeat(32),
-    origin: 'CONFIGURED_ACTIVE',
-    encrypts: true,
-    importedAt: null,
-    importedBy: null,
-    available: true,
-    dependencies: { secrets: 3, wrappedKeys: 0, retainedArchives: 2, openRecoveries: 0 },
-    arrivedByRestore: false,
-    removable: false,
-    ...overrides,
-  };
-}
-
 const status = (overrides: Record<string, unknown> = {}) => ({
   scheduleEnabled: true,
   intervalMs: 86_400_000,
@@ -155,14 +130,9 @@ function routes(
     runs?: Record<string, unknown>[];
     caps?: Record<string, unknown>;
     recoveries?: Record<string, unknown>[];
-    keys?: Record<string, unknown>[];
   } = {},
 ) {
   return [
-    {
-      url: `${API_PREFIX}${RECOVERY_KIT_ROUTES.keys}`,
-      body: { keys: over.keys ?? [installationKey()] },
-    },
     { url: `${API_PREFIX}${BACKUP_ROUTES.status}`, body: over.status ?? status() },
     {
       url: `${API_PREFIX}${RECOVERY_ROUTES.capabilities}`,
@@ -404,217 +374,15 @@ describe('the recovery page', () => {
     expect(await screen.findByText('پاک‌سازی ناقص')).toBeInTheDocument();
   });
 
-  describe('the Recovery Kit (ADR-0032)', () => {
-    it('warns that a backup file alone may not restore on a new server', async () => {
-      stubApi(routes());
+  describe('archives the server refuses (the Recovery Kit is removed, SFR A1)', () => {
+    it('draws no Recovery Kit card, and never asks for its endpoints', async () => {
+      // MUTATION: putting the kit card back on the page fails this.
+      const api = stubApi(routes());
       renderPage(<RecoveryPage route={route} permissions={ALL} />);
-      expect(
-        await screen.findByText('فایل پشتیبان به‌تنهایی برای بازیابی روی سرور جدید کافی نیست'),
-      ).toBeInTheDocument();
-      // The crypto vocabulary is behind the disclosure, not in the operator's way.
-      expect(screen.getByText('جزئیات فنی')).toBeInTheDocument();
-    });
-
-    it('exports only with the account password and the passphrase typed twice, in the body', async () => {
-      const api = stubApi([
-        ...routes(),
-        { url: `${API_PREFIX}${RECOVERY_KIT_ROUTES.export}`, body: {} },
-      ]);
-      const created = vi.fn(() => 'blob:kit');
-      vi.stubGlobal(
-        'URL',
-        Object.assign(URL, { createObjectURL: created, revokeObjectURL: vi.fn() }),
-      );
-      renderPage(<RecoveryPage route={route} permissions={ALL} />);
-
-      // W3: the form opens on the kit card's button, in a dialog.
-      fireEvent.click(await screen.findByRole('button', { name: 'ساخت و دریافت کیت' }));
-      const dialog = await screen.findByRole('dialog');
-      const button = within(dialog).getByRole('button', { name: 'ساخت و دریافت کیت' });
-      expect(button).toBeDisabled();
-      fireEvent.change(within(dialog).getByLabelText('رمز ورود حساب شما'), {
-        target: { value: 'my-account-password' },
-      });
-      fireEvent.change(screen.getByLabelText('رمز کیت (دست‌کم 12 نویسه)'), {
-        target: { value: 'short' },
-      });
-      expect(
-        await screen.findByText('رمز کیت باید دست‌کم 12 نویسه باشد و با فاصله شروع یا تمام نشود.'),
-      ).toBeInTheDocument();
-      fireEvent.change(screen.getByLabelText('رمز کیت (دست‌کم 12 نویسه)'), {
-        target: { value: 'a long enough passphrase' },
-      });
-      fireEvent.change(screen.getByLabelText('تکرار رمز کیت'), {
-        target: { value: 'a long enough passphrasE' },
-      });
-      expect(await screen.findByText('دو رمز یکسان نیستند.')).toBeInTheDocument();
-      expect(button).toBeDisabled();
-      fireEvent.change(screen.getByLabelText('تکرار رمز کیت'), {
-        target: { value: 'a long enough passphrase' },
-      });
-      expect(button).toBeEnabled();
-      fireEvent.click(button);
-
-      await waitFor(() =>
-        expect(api.calls.some((call) => call.url.endsWith(RECOVERY_KIT_ROUTES.export))).toBe(true),
-      );
-      const call = api.calls.find((c) => c.url.endsWith(RECOVERY_KIT_ROUTES.export));
-      expect(call?.method).toBe('POST');
-      expect(call?.body).toEqual({
-        accountPassword: 'my-account-password',
-        passphrase: 'a long enough passphrase',
-        passphraseConfirmation: 'a long enough passphrase',
-      });
-      // Never in a URL.
-      expect(api.calls.every((c) => !c.url.includes('passphrase'))).toBe(true);
-      expect(await screen.findByText(/کیت بازیابی دریافت شد/)).toBeInTheDocument();
-      vi.unstubAllGlobals();
-    });
-
-    /**
-     * Review of #235: the import key follows the chosen File OBJECT. The same file pressed
-     * again after an unanswered failure is the same command; a newly chosen file with the
-     * same name, size and date is a different kit and must not reuse the key (the server
-     * would refuse it as a payload mismatch).
-     */
-    it('keeps the import key for the same file and mints one for a newly chosen file', async () => {
-      const api = stubApi([
-        ...routes(),
-        {
-          url: `${API_PREFIX}${RECOVERY_KIT_ROUTES.import}`,
-          status: 503,
-          body: {
-            error: { kind: 'unavailable', code: 'x', message: 'x', correlationId: 'c1' },
-          },
-        },
-      ]);
-      renderPage(<RecoveryPage route={route} permissions={ALL} />);
-      fireEvent.click(await screen.findByRole('button', { name: 'وارد کردن کیت' }));
-      const dialog = await screen.findByRole('dialog');
-      const picker = within(dialog).getByLabelText('فایل کیت بازیابی (.nxkit)');
-      const importButton = within(dialog).getByRole('button', { name: 'وارد کردن کیت' });
-      const press = async (count: number) => {
-        fireEvent.change(screen.getByLabelText('رمز کیت'), { target: { value: 'a passphrase' } });
-        const passwords = screen.getAllByLabelText('رمز ورود حساب شما');
-        fireEvent.change(passwords[passwords.length - 1]!, { target: { value: 'my-password' } });
-        await waitFor(() => expect(importButton).toBeEnabled());
-        fireEvent.click(importButton);
-        await waitFor(() =>
-          expect(api.calls.filter((c) => c.url.includes(RECOVERY_KIT_ROUTES.import))).toHaveLength(
-            count,
-          ),
-        );
-      };
-      const at = 1_700_000_000_000;
-      const first = new File([new Uint8Array([1, 2, 3])], 'kit.nxkit', { lastModified: at });
-      fireEvent.change(picker, { target: { files: [first] } });
-      await press(1);
-      await press(2);
-      const other = new File([new Uint8Array([9, 9, 9])], 'kit.nxkit', { lastModified: at });
-      fireEvent.change(picker, { target: { files: [other] } });
-      await press(3);
-      const keys = api.calls
-        .filter((c) => c.url.includes(RECOVERY_KIT_ROUTES.import))
-        .map((c) => (c.body as { idempotencyKey: string }).idempotencyKey);
-      expect(keys[1]).toBe(keys[0]);
-      expect(keys[2]).not.toBe(keys[0]);
-    });
-
-    it('says in Persian why a kit did not open', async () => {
-      stubApi([
-        ...routes(),
-        {
-          url: `${API_PREFIX}${RECOVERY_KIT_ROUTES.import}`,
-          status: 400,
-          body: {
-            error: {
-              kind: 'validation',
-              code: 'recovery_kit.auth_failed',
-              message: 'The Recovery Kit could not be opened.',
-              correlationId: 'c1',
-            },
-          },
-        },
-      ]);
-      renderPage(<RecoveryPage route={route} permissions={ALL} />);
-      fireEvent.click(await screen.findByRole('button', { name: 'وارد کردن کیت' }));
-      const dialog = await screen.findByRole('dialog');
-      fireEvent.change(within(dialog).getByLabelText('فایل کیت بازیابی (.nxkit)'), {
-        target: { files: [new File([new Uint8Array([1, 2, 3])], 'old.nxkit')] },
-      });
-      fireEvent.change(screen.getByLabelText('رمز کیت'), { target: { value: 'wrong one' } });
-      const importButton = within(dialog).getByRole('button', { name: 'وارد کردن کیت' });
-      // The step-up (PR #144 review): no import without the account password.
-      expect(importButton).toBeDisabled();
-      const passwords = screen.getAllByLabelText('رمز ورود حساب شما');
-      fireEvent.change(passwords[passwords.length - 1]!, { target: { value: 'my-password' } });
-      expect(importButton).toBeEnabled();
-      fireEvent.click(importButton);
-      expect(
-        await screen.findByText('کیت باز نشد: یا رمز درست نیست یا فایل آسیب دیده است.'),
-      ).toBeInTheDocument();
-      expect(document.body.textContent).not.toContain('AEAD');
-    });
-
-    it('lists keys by role, and offers removal only for an imported key nothing needs', async () => {
-      stubApi(
-        routes({
-          keys: [
-            installationKey(),
-            installationKey({
-              keyId: 'old-server',
-              origin: 'IMPORTED',
-              encrypts: false,
-              importedAt: '2026-09-10T00:00:00.000Z',
-              dependencies: { secrets: 4, wrappedKeys: 0, retainedArchives: 0, openRecoveries: 0 },
-              removable: false,
-            }),
-            installationKey({
-              keyId: 'older-server',
-              origin: 'IMPORTED',
-              encrypts: false,
-              importedAt: '2026-09-10T00:00:00.000Z',
-              dependencies: { secrets: 0, wrappedKeys: 0, retainedArchives: 0, openRecoveries: 0 },
-              removable: true,
-            }),
-          ],
-        }),
-      );
-      renderPage(<RecoveryPage route={route} permissions={ALL} />);
-      expect(await screen.findByText('کلید فعلی سرور')).toBeInTheDocument();
-      expect(screen.getAllByText('واردشده — فقط برای باز کردن')).toHaveLength(2);
-      const removes = screen.getAllByRole('button', { name: 'حذف' });
-      // The configured key has no button at all; the one still in use is disabled.
-      expect(removes).toHaveLength(2);
-      expect(removes[0]).toBeDisabled();
-      expect(removes[1]).toBeEnabled();
-
-      fireEvent.click(removes[1]!);
-      const confirm = await screen.findByRole('button', { name: 'حذف کلید' });
-      expect(confirm).toBeDisabled();
-      fireEvent.change(screen.getByLabelText(/برای حذف، نام کلید را دقیقاً تایپ کنید/), {
-        target: { value: 'old-server' },
-      });
-      expect(confirm).toBeDisabled();
-      fireEvent.change(screen.getByLabelText(/برای حذف، نام کلید را دقیقاً تایپ کنید/), {
-        target: { value: 'older-server' },
-      });
-      expect(confirm).toBeEnabled();
-    });
-
-    it('refuses each kit action to an actor without its permission, rather than hiding it', async () => {
-      stubApi(routes());
-      renderPage(
-        <RecoveryPage
-          route={route}
-          permissions={['backup.view', 'backup.run', 'recovery.restore']}
-        />,
-      );
-      expect(
-        await screen.findByText('شما اجازه‌ی دریافت کیت بازیابی را ندارید.'),
-      ).toBeInTheDocument();
-      expect(screen.getByText('شما اجازه‌ی وارد کردن کیت بازیابی را ندارید.')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'ساخت و دریافت کیت' })).toBeNull();
+      await screen.findByLabelText('انتخاب فایل');
+      expect(screen.queryByText(/کیت بازیابی/)).toBeNull();
+      expect(screen.queryByText(/\.nxkit/)).toBeNull();
+      expect(api.calls.some((call) => call.url.includes('recovery-kit'))).toBe(false);
     });
 
     it('explains a foreign archive in words and says what to do', async () => {
@@ -644,7 +412,10 @@ describe('the recovery page', () => {
       fireEvent.click(
         await screen.findByRole('button', { name: 'راستی‌آزمایی و آزمون بازگردانی' }),
       );
-      expect(await screen.findByText(/کیت بازیابی همان سرور را/)).toBeInTheDocument();
+      expect(await screen.findByText(t('web.recovery_failure_foreign'))).toBeInTheDocument();
+      // Refused for good, and said so: no kit to import, the self-contained way named.
+      expect(t('web.recovery_failure_foreign')).toContain('کیت بازیابی حذف شده است');
+      expect(t('web.recovery_failure_foreign')).toContain('«رمز فایل بکاپ»');
     });
 
     // Review of #300: the password field follows the file that was UPLOADED, not whatever

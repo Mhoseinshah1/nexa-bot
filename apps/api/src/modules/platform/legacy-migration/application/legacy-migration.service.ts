@@ -529,7 +529,16 @@ export class LegacyMigrationService {
             now: this.deps.clock.now(),
             // A new dry run starts its own count: the executor counts every start, from
             // DRY_RUN_REQUESTED on, against LEGACY_MIGRATION_MAX_STEP_ATTEMPTS.
-            patch: { ...CLEAR_DRY_RUN, progress: { ...row.progress, dryRunAttempts: 0 } },
+            // SFR A2: and its own memory evidence — a reading from the run before is not this one's.
+            patch: {
+              ...CLEAR_DRY_RUN,
+              progress: {
+                ...row.progress,
+                dryRunAttempts: 0,
+                memoryPeak: null,
+                attemptsExhaustedCause: null,
+              },
+            },
           },
           tx,
         );

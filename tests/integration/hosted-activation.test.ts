@@ -6,6 +6,7 @@ import {
   HOSTED_ACTIVATION_ROUTES,
   HOSTED_DOMAIN_CHECK_PATH,
   HOSTING_ACTIVATION_ERROR_CODES as CODES,
+  HOSTING_ERROR_CODES,
   isNexaError,
   systemContext,
   type ActorContext,
@@ -537,13 +538,67 @@ describe('hosted bot activation (phase 6A PR-4)', () => {
       expect(stepOf(await status(id), 'TOKEN').state).toBe('FAILED');
     });
 
-    it('nothing is set up for a bot that is not active', async () => {
+    it('nothing is set up for an expired bot; a stopped one takes its token and nothing else', async () => {
       const id = await createHosted();
+      await db()
+        .update(hostedBots)
+        .set({ state: 'EXPIRED' })
+        .where(eq(hostedBots.hostedTenantId, id));
+      expect(await codeOf(configure(id))).toBe(CODES.BOT_NOT_ACTIVE);
+      // SFR A5: a SUSPENDED bot takes its token (that is how it comes back), but no check runs.
       await db()
         .update(hostedBots)
         .set({ state: 'SUSPENDED' })
         .where(eq(hostedBots.hostedTenantId, id));
-      expect(await codeOf(configure(id))).toBe(CODES.BOT_NOT_ACTIVE);
+      await configure(id);
+      expect(await codeOf(run(id, 'token'))).toBe(CODES.BOT_NOT_ACTIVE);
+    });
+
+    it('SFR A5: a bot the owner stopped stays stopped until its token is entered again, then comes back', async () => {
+      // MUTATION: dropping `assertTokenReenteredSinceStop` from HostingService.transition, or
+      // counting a token entered BEFORE the stop, fails this.
+      const id = await createHosted();
+      await configure(id);
+      const act = (action: 'suspend' | 'activate' | 'delete') =>
+        api.container.hosting[action](tenantA, ownerActor, panel.token, id, {
+          idempotencyKey: key(),
+          proof: { code: code(panel.secret) },
+        });
+      const tenantStatus = async () =>
+        (await db().select().from(tenants).where(eq(tenants.id, id)))[0]?.status;
+      await act('suspend');
+      expect(await tenantStatus()).toBe('STOPPED');
+      // The token entered before the stop does not count.
+      expect(await codeOf(act('activate'))).toBe(HOSTING_ERROR_CODES.TOKEN_REENTRY_REQUIRED);
+      expect(await tenantStatus()).toBe('STOPPED');
+      // Entering it again changes nothing about the stop by itself.
+      await configure(id);
+      expect(await tenantStatus()).toBe('STOPPED');
+      expect((await act('activate')).bot).toMatchObject({
+        state: 'ACTIVE',
+        tenantStatus: 'ACTIVE',
+      });
+      expect(await tenantStatus()).toBe('ACTIVE');
+      // A token that Telegram no longer accepts is not "entered again".
+      await act('suspend');
+      telegram.revoke(TELEGRAM_ID, { keepWebhook: true });
+      expect(await codeOf(configure(id))).toBe(CODES.TOKEN_REJECTED);
+      expect(await codeOf(act('activate'))).toBe(HOSTING_ERROR_CODES.TOKEN_REENTRY_REQUIRED);
+      expect(await tenantStatus()).toBe('STOPPED');
+      // The same gate for a deleted bot's restore.
+      const other = await createHosted('beta');
+      await api.container.hosting.delete(tenantA, ownerActor, panel.token, other, {
+        idempotencyKey: key(),
+        proof: { code: code(panel.secret) },
+      });
+      expect(
+        await codeOf(
+          api.container.hosting.activate(tenantA, ownerActor, panel.token, other, {
+            idempotencyKey: key(),
+            proof: { code: code(panel.secret) },
+          }),
+        ),
+      ).toBe(HOSTING_ERROR_CODES.TOKEN_REENTRY_REQUIRED);
     });
   });
 

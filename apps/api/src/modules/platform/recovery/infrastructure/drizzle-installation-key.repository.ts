@@ -1,26 +1,14 @@
-import { and, asc, eq, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
-import { RECOVERY_TERMINAL_STATES, type InstallationKeySource } from '@nexa/contracts';
+import { and, asc, eq, isNotNull, sql } from 'drizzle-orm';
+import type { InstallationKeySource } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import {
-  installationKeys,
-  recoveryRequests,
-} from '../../../../infrastructure/persistence/schema.js';
+import { installationKeys } from '../../../../infrastructure/persistence/schema.js';
 import { SECRET_COLUMNS } from '../../../../infrastructure/crypto/secret-registry.js';
 import type {
   InstallationKeyRepository,
   InstallationKeyRow,
 } from '../application/installation-key.ports.js';
 import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
-
-/**
- * The advisory-lock class every writer of `installation_keys` takes.
- *
- * ASCII "IK". One lock for the table, not one per key: an import decides about
- * several ids at once, and a collision check that locked them one at a time
- * could interleave with another import's.
- */
-export const INSTALLATION_KEY_LOCK_CLASS = 0x494b;
 
 /** A physical identifier from the registry, checked before it is interpolated. */
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
@@ -59,82 +47,6 @@ export class DrizzleInstallationKeyRepository implements InstallationKeyReposito
       .from(installationKeys)
       .orderBy(asc(installationKeys.importedAt), asc(installationKeys.keyId));
     return rows.map(toRow);
-  }
-
-  async lock(tx: unknown): Promise<void> {
-    await executorOf(this.db, tx).execute(
-      sql`SELECT pg_advisory_xact_lock(${INSTALLATION_KEY_LOCK_CLASS}, 0)`,
-    );
-  }
-
-  /**
-   * Writes an imported key: a new row, or a TOMBSTONE revived by importing its
-   * key again. Never overwrites a live row — that is a collision, and the caller
-   * has already refused it; false here means a race lost.
-   */
-  async upsertImported(tx: unknown, row: InstallationKeyRow): Promise<boolean> {
-    const written = await executorOf(this.db, tx)
-      .insert(installationKeys)
-      .values({
-        id: row.id,
-        keyId: row.keyId,
-        fingerprint: row.fingerprint,
-        wrappedMaterial: row.wrappedMaterial,
-        wrappedUnderKeyId: row.wrappedUnderKeyId,
-        source: row.source,
-        kitId: row.kitId,
-        importedAt: row.importedAt,
-        importedByAdminId: row.importedByAdminId,
-        importedByLabel: row.importedByLabel,
-        removedAt: null,
-        removedByLabel: null,
-        restoredAt: null,
-      })
-      .onConflictDoUpdate({
-        target: installationKeys.keyId,
-        set: {
-          fingerprint: row.fingerprint,
-          wrappedMaterial: row.wrappedMaterial,
-          wrappedUnderKeyId: row.wrappedUnderKeyId,
-          source: row.source,
-          kitId: row.kitId,
-          importedAt: row.importedAt,
-          importedByAdminId: row.importedByAdminId,
-          importedByLabel: row.importedByLabel,
-          removedAt: null,
-          removedByLabel: null,
-          restoredAt: null,
-        },
-        where: isNotNull(installationKeys.removedAt),
-      })
-      .returning({ id: installationKeys.id });
-    return written.length > 0;
-  }
-
-  async tombstone(
-    tx: unknown,
-    keyId: string,
-    fingerprint: string,
-    at: Date,
-    byLabel: string,
-  ): Promise<boolean> {
-    const updated = await executorOf(this.db, tx)
-      .update(installationKeys)
-      .set({
-        wrappedMaterial: null,
-        wrappedUnderKeyId: null,
-        removedAt: at,
-        removedByLabel: byLabel,
-      })
-      .where(
-        and(
-          eq(installationKeys.keyId, keyId),
-          eq(installationKeys.fingerprint, fingerprint),
-          isNull(installationKeys.removedAt),
-        ),
-      )
-      .returning({ id: installationKeys.id });
-    return updated.length > 0;
   }
 
   async rewrap(
@@ -181,19 +93,6 @@ export class DrizzleInstallationKeyRepository implements InstallationKeyReposito
       }
     }
     return counts;
-  }
-
-  async openRecoveryWorkspaces(tx?: unknown): Promise<readonly string[]> {
-    const rows = await executorOf(this.db, tx)
-      .select({ path: recoveryRequests.workspacePath })
-      .from(recoveryRequests)
-      .where(
-        and(
-          notInArray(recoveryRequests.state, [...RECOVERY_TERMINAL_STATES]),
-          isNotNull(recoveryRequests.workspacePath),
-        ),
-      );
-    return rows.map((row) => row.path).filter((path): path is string => path !== null);
   }
 
   /** For `secrets status`: live imported keys grouped by the configured key that wraps them. */

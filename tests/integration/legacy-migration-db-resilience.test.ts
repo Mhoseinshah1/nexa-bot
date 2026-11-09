@@ -383,6 +383,55 @@ describe('legacy migration: the import survives a slow disk', () => {
 
   // --- 3. the failure log: the cause's kind, never the SQL or a value ----------------------
 
+  it('SFR A2: records a memory peak on the claimed row only, only when higher, without touching the rest of the progress', async () => {
+    const id = await uploadedImport();
+    await db().execute(
+      sql`UPDATE legacy_nxpkg_imports SET claimed_by = 'recovery:a', lease_until = now() + interval '1 hour', progress = jsonb_set(progress, '{verifyAttempts}', '3'::jsonb) WHERE id = ${id}`,
+    );
+    const repository = new DrizzleLegacyNxpkgImportRepository(db());
+    const peakOf = async () =>
+      (await importRow(id)).progress as { memoryPeak?: unknown; verifyAttempts: number };
+    await repository.recordMemoryPeak({
+      id,
+      leaseOwner: 'recovery:b',
+      heapUsedMb: 900,
+      heapLimitMb: 1000,
+    });
+    expect((await peakOf()).memoryPeak, 'another owner wrote a peak').toBeUndefined();
+    await repository.recordMemoryPeak({
+      id,
+      leaseOwner: 'recovery:a',
+      heapUsedMb: 900,
+      heapLimitMb: 1000,
+    });
+    expect(await peakOf()).toMatchObject({
+      memoryPeak: { heapUsedMb: 900, heapLimitMb: 1000 },
+      verifyAttempts: 3,
+    });
+    await repository.recordMemoryPeak({
+      id,
+      leaseOwner: 'recovery:a',
+      heapUsedMb: 850,
+      heapLimitMb: 1000,
+    });
+    expect((await peakOf()).memoryPeak, 'a lower reading replaced a higher one').toEqual({
+      heapUsedMb: 900,
+      heapLimitMb: 1000,
+    });
+    await repository.recordMemoryPeak({
+      id,
+      leaseOwner: 'recovery:a',
+      heapUsedMb: 950,
+      heapLimitMb: 1000,
+    });
+    expect((await peakOf()).memoryPeak).toEqual({ heapUsedMb: 950, heapLimitMb: 1000 });
+    // And the row still parses as the contract's progress.
+    expect((await repository.byIdUnscoped(id))?.progress.memoryPeak).toEqual({
+      heapUsedMb: 950,
+      heapLimitMb: 1000,
+    });
+  });
+
   it('logs the cause type, code and message class of a failed step, never the SQL text or a bound value', async () => {
     await uploadedImport();
     const lines: RigLogLine[] = [];

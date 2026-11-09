@@ -381,9 +381,9 @@ async function main(): Promise<void> {
   const container = createContainer(config, 'worker', { connection: 'owner' });
 
   try {
-    // The decrypt-only keys imported from Recovery Kits (ADR-0032). After a
-    // restore from another installation the stored bot token is sealed under
-    // one of them, and this command reads it. Not `refreshQuietly`: a CLI that
+    // The decrypt-only keys imported from Recovery Kits before the kit was removed
+    // (SFR A1). After an older kit-assisted restore the stored bot token can still
+    // be sealed under one of them, and this command reads it. Not `refreshQuietly`: a CLI that
     // could not load them should say so, not fail later as an unknown key.
     await container.installationKeyLoader.refresh();
     const tenant =

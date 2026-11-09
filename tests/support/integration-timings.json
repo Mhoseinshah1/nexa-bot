@@ -189,8 +189,6 @@
     "tests/integration/receipt-review-push.test.ts": 15.1,
     "tests/integration/recovery-executor.test.ts": 179.9,
     "tests/integration/recovery-failure-drills.test.ts": 142.9,
-    "tests/integration/recovery-kit-restore.test.ts": 31,
-    "tests/integration/recovery-kit.test.ts": 14.8,
     "tests/integration/recovery-permission-backfill.test.ts": 9.7,
     "tests/integration/referral-signup-gift.test.ts": 23.9,
     "tests/integration/referrals.test.ts": 56.4,

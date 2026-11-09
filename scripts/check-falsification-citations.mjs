@@ -113,7 +113,6 @@ const RECORDS = [
   'docs/round-t-t2-falsification.md',
   'docs/round-t-t3-falsification.md',
   'docs/tonpays-telegram-falsification.md',
-  'docs/recovery-kit-falsification.md',
   'docs/phase2/button-icons-falsification.md',
   'docs/phase2/category-icons-falsification.md',
   'docs/custom-gateway-falsification.md',
@@ -184,8 +183,10 @@ const RECORDS = [
  * stamp, only from SENT, is taken back), R11A8-18 (never past the customer window), one
  * citation each (+5).
  * 2860 → 2861: Codex on #356 — R11A8-19, no retry row whose spacing ends after the window (+1).
+ * 2854 → 2827: SFR A1 removed the Recovery Kit, and with it `docs/recovery-kit-falsification.md`
+ * (its RK rows cite the deleted kit suites) leaves this check (−27). The record stays as history.
  */
-const EXPECTED = 2854;
+const EXPECTED = 2827;
 /**
  * A table whose last column is one of these is making citations.
  *

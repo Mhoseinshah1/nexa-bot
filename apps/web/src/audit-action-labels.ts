@@ -40,6 +40,7 @@ export const AUDIT_SUBJECT_LABELS: Readonly<Record<string, WebKey>> = {
   service_location: 'web.audit_subj_service_location',
   role: 'web.audit_subj_role',
   referral: 'web.audit_subj_referral',
+  // Kept after the Recovery Kit was removed (SFR A1): its historical audit rows still render.
   installation_key: 'web.audit_subj_installation_key',
   gateway_receipt: 'web.audit_subj_gateway_receipt',
   discount: 'web.audit_subj_discount',
@@ -50,6 +51,7 @@ export const AUDIT_SUBJECT_LABELS: Readonly<Record<string, WebKey>> = {
   ticket_category: 'web.audit_subj_ticket_category',
   tenant_media: 'web.audit_subj_tenant_media',
   templates: 'web.audit_subj_templates',
+  // Kept for historical rows: the Recovery Kit is removed (SFR A1).
   recovery_kit: 'web.audit_subj_recovery_kit',
   product: 'web.audit_subj_product',
   legacy_import: 'web.audit_subj_legacy_import',

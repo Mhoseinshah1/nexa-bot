@@ -1165,6 +1165,8 @@ cmd_status() {
   nexa_db_tuning_report
   # v0.9.7: the verification server's CPU and memory limits, and the setting they follow.
   nexa_backup_verify_report
+  # SFR A2: the recovery role's container limit and V8 heap (a Mirza dry run needs both).
+  nexa_recovery_memory_report
 
   printf '\nreadiness: '
   if nexa_wait_ready 5; then

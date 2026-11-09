@@ -12,11 +12,12 @@ import type {
 } from '../../../../infrastructure/crypto/secret-clearing.js';
 
 /**
- * Ports for the Recovery Kit's key lifecycle (ADR-0032).
+ * Ports for the decrypt-only keys an installation still holds from a Recovery Kit it
+ * imported before the kit was removed (SFR A1), and for the recovery's view of the keyring.
  *
- * In their own file rather than in `ports.ts` because they describe a keyring,
- * not a recovery request — the recovery module is merely where the only reader
- * of an imported key (a restore) lives.
+ * Nothing imports a key any more; `installation_keys` is read (the keyring loader, the
+ * executor's carry and tombstones, `secrets rewrap`) and never grows. In their own file
+ * rather than in `ports.ts` because they describe a keyring, not a recovery request.
  */
 
 /** One imported key, as stored. `wrappedMaterial` is ciphertext; nothing here is a key. */
@@ -41,32 +42,6 @@ export interface InstallationKeyRow {
 export interface InstallationKeyRepository {
   /** Every stored key. On the pool, or inside the caller's transaction. */
   all(tx?: unknown): Promise<readonly InstallationKeyRow[]>;
-  /**
-   * Serialises every writer of this table for the rest of the transaction.
-   *
-   * A transaction-scoped advisory lock rather than a row lock, because the
-   * thing being decided — "is this id free, does this key collide" — is about
-   * rows that do not exist yet.
-   */
-  lock(tx: unknown): Promise<void>;
-  /**
-   * Writes an imported key, or revives a tombstone of the same id. Never
-   * overwrites a LIVE row; returns false if one is there.
-   */
-  upsertImported(tx: unknown, row: InstallationKeyRow): Promise<boolean>;
-  /**
-   * Removes a key by turning its row into a TOMBSTONE: the wrapped bytes are
-   * erased, the id and fingerprint kept. Only if the row still holds the key
-   * that was checked. A deleted row would let a restore of an older backup
-   * bring the key straight back.
-   */
-  tombstone(
-    tx: unknown,
-    keyId: string,
-    fingerprint: string,
-    at: Date,
-    byLabel: string,
-  ): Promise<boolean>;
   /** Replaces a row's wrap, only if it is still the one that was read. For `secrets rewrap`. */
   rewrap(
     tx: unknown,
@@ -79,43 +54,6 @@ export interface InstallationKeyRepository {
    * column `SECRET_COLUMNS` names — the same walk `secrets retire-check` counts.
    */
   secretCountsByKeyId(tx?: unknown): Promise<ReadonlyMap<string, number>>;
-  /** Workspaces of recoveries that have not finished. Paths on this host, never shown. */
-  openRecoveryWorkspaces(tx?: unknown): Promise<readonly string[]>;
-}
-
-/** One encrypted archive still on this server's disk, as its cleartext header and name describe it. */
-export interface RetainedArchive {
-  /** The key that sealed it. */
-  readonly keyId: string;
-  /** When it was taken: the UUIDv7 backup id's own timestamp, else the file's mtime. */
-  readonly takenAt: Date;
-}
-
-/**
- * The encrypted archives still on this server's disk.
- *
- * Read from each archive's CLEARTEXT header, which names its key without
- * anything being decrypted. Never a path.
- */
-export interface RetainedArchiveScanner {
-  /**
-   * Every archive on disk, and how many could NOT be read.
-   *
-   * FAIL CLOSED. Only a CONFIRMED-absent archive is no dependency: a directory
-   * holding an archive whose header cannot be read (an I/O error, a permission,
-   * an upload still arriving) is counted as `unreadable`, and the caller treats
-   * each one as a dependency of every key. Throws when the root itself cannot be
-   * listed for any reason other than not existing.
-   */
-  retainedArchives(): Promise<{
-    readonly archives: readonly RetainedArchive[];
-    readonly unreadable: number;
-  }>;
-  /**
-   * The key a single archive (a recovery's upload) names; null only when the file
-   * is confirmed ABSENT. Throws when it exists and cannot be read.
-   */
-  archiveKeyId(archivePath: string): Promise<string | null>;
 }
 
 /**

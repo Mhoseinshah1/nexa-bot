@@ -109,6 +109,12 @@ export const HOSTING_ERROR_CODES = {
   STATE_CONFLICT: 'hosting.state_conflict',
   /** Activating needs an expiry in the future (or none). */
   EXPIRY_PASSED: 'hosting.expiry_passed',
+  /**
+   * SFR A5: a bot the owner stopped (SUSPENDED or DELETED) is activated again only after its
+   * Telegram token was entered and verified SINCE that stop («فعال‌سازی» → token). Until then
+   * it stays stopped.
+   */
+  TOKEN_REENTRY_REQUIRED: 'hosting.token_reentry_required',
   SLUG_TAKEN: 'hosting.slug_taken',
   /** Creating hosted bots is closed on this installation (the release gate). */
   CREATE_DISABLED: 'hosting.create_disabled',

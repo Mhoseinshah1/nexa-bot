@@ -701,6 +701,16 @@ export const LEGACY_MIGRATION_BLOCKERS = [
 ] as const;
 export type LegacyMigrationBlocker = (typeof LEGACY_MIGRATION_BLOCKERS)[number];
 
+/** SFR A2: why a step was closed at its attempt bound (`progress.attemptsExhaustedCause`). */
+export const LEGACY_MIGRATION_EXHAUSTED_CAUSES = ['MEMORY', 'UNKNOWN'] as const;
+export type LegacyMigrationExhaustedCause = (typeof LEGACY_MIGRATION_EXHAUSTED_CAUSES)[number];
+/**
+ * SFR A2: the share of the heap limit above which the importing role records a `memoryPeak`.
+ * 0.8 because V8 starts failing allocations, and spending most of its time in GC, well before
+ * 100 %.
+ */
+export const LEGACY_MIGRATION_MEMORY_PRESSURE_RATIO = 0.8;
+
 export const LEGACY_MIGRATION_BACKUP_OUTCOMES = [
   'TAKEN',
   'BUSY',
@@ -739,6 +749,19 @@ export const legacyMigrationProgressSchema = z.object({
   backup: z.enum(LEGACY_MIGRATION_BACKUP_OUTCOMES).nullable(),
   /** What the role is waiting for, or null. */
   blocker: z.enum(LEGACY_MIGRATION_BLOCKERS).nullable(),
+  /**
+   * SFR A2: the highest V8 heap use the importing role observed during a step, recorded only
+   * once it crossed `LEGACY_MIGRATION_MEMORY_PRESSURE_RATIO` of the role's heap limit. A step
+   * whose process then stopped without an outcome most likely ran out of memory; absent or
+   * null means it never came close.
+   */
+  memoryPeak: z.object({ heapUsedMb: count, heapLimitMb: count }).nullable().optional(),
+  /**
+   * SFR A2: why a step was closed for reaching `LEGACY_MIGRATION_MAX_STEP_ATTEMPTS` with no
+   * outcome of its own: `MEMORY` when a `memoryPeak` was recorded (the role's memory was not
+   * enough), `UNKNOWN` otherwise. Null or absent on every other failure.
+   */
+  attemptsExhaustedCause: z.enum(LEGACY_MIGRATION_EXHAUSTED_CAUSES).nullable().optional(),
 });
 export type LegacyMigrationProgress = z.infer<typeof legacyMigrationProgressSchema>;
 

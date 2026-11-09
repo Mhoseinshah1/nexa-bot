@@ -528,7 +528,10 @@ export const secretReentryItems = pgTable(
 );
 
 /**
- * Decrypt-only key-encryption keys imported from a Recovery Kit (ADR-0032).
+ * Decrypt-only key-encryption keys imported from a Recovery Kit (ADR-0032), READ-ONLY since
+ * the kit was removed (SFR A1): nothing inserts a row; the keyring still reads them because a
+ * kit-assisted restore before v0.9.10 could leave live secrets sealed under one. A later
+ * release drops the table once `botctl secrets rewrap` has moved every secret off them.
  *
  * INSTALLATION-WIDE, and the one table here with neither `tenant_id` nor a
  * tenant-bound encryption context, for a reason that is the whole point of it:

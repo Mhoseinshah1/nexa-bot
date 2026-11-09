@@ -6,7 +6,6 @@ import {
   API_PREFIX,
   BACKUP_SCHEDULE_SETTING_KEYS,
   CONTROL_ROUTES,
-  RECOVERY_KIT_ROUTES,
   featureFlagSchema,
   settingDefinition,
   templateDefinition,
@@ -19,7 +18,6 @@ import { ProductCategoriesPage } from '../../apps/web/src/pages/product-categori
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { BackupScheduleCard } from '../../apps/web/src/pages/backup-schedule';
 import { ContentPage } from '../../apps/web/src/pages/content';
-import { RecoveryKitSection } from '../../apps/web/src/pages/recovery-kit';
 import { AuditLogPage } from '../../apps/web/src/pages/audit-log';
 import { NotificationsPage } from '../../apps/web/src/pages/alerts';
 import { FeaturesPage } from '../../apps/web/src/pages/features';
@@ -350,21 +348,6 @@ const SITES: readonly Site[] = [
     reference: true,
   },
   {
-    name: 'recovery kit: export',
-    refused: { url: `${API_PREFIX}${RECOVERY_KIT_ROUTES.export}`, method: 'POST' },
-    routes: () => [],
-    render: () => <RecoveryKitSection permissions={['recovery.kit.export']} />,
-    act: async () => {
-      fireEvent.click(await screen.findByRole('button', { name: t('web.kit_export_button') }));
-      const dialog = await screen.findByRole('dialog');
-      fill(t('web.kit_account_password'), 'account-password');
-      fill(t('web.kit_passphrase'), 'a long recovery passphrase');
-      fill(t('web.kit_passphrase_again'), 'a long recovery passphrase');
-      fireEvent.click(within(dialog).getByRole('button', { name: t('web.kit_export_button') }));
-    },
-    reference: true,
-  },
-  {
     name: 'audit log: the list',
     refused: { url: '/audit-log', method: 'GET' },
     routes: () => [],
@@ -440,7 +423,7 @@ const SITES: readonly Site[] = [
   },
   {
     name: 'recovery: the page',
-    refused: { url: '/recovery', method: 'GET' },
+    refused: { url: '/recoveries', method: 'GET' },
     routes: () => [],
     render: () => (
       <RecoveryPage
