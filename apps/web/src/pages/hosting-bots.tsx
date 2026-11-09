@@ -263,7 +263,7 @@ function BotCard({
         </div>
       )}
       {/* SFR A5: also for a bot the owner stopped — its token is entered again HERE, while it
-          is still stopped, and only then may «فعال‌سازی» bring it back. */}
+          is still stopped, and only then may ACTIVATE bring it back. */}
       {(bot.state === 'ACTIVE' || bot.state === 'SUSPENDED' || bot.state === 'DELETED') && (
         <ActivationSection bot={bot} />
       )}
