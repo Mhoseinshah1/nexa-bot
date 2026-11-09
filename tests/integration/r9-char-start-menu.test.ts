@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { applyRtlMarks } from '@nexa/i18n';
 import { tenantA } from './harness';
 import { makePin, makeRig, viewOf, type View } from './r9-char-support';
 
@@ -17,7 +18,20 @@ import { makePin, makeRig, viewOf, type View } from './r9-char-support';
 const CUSTOMER = '931001';
 const ADMIN = '931002';
 
-const pin = makePin(expectedViews(), (actual, expected, label) =>
+/**
+ * The pins are written as the catalogue words them. B2 puts a RIGHT-TO-LEFT MARK in front of each
+ * Persian line the client would draw left-aligned, so the expected TEXT goes through the same
+ * rule; the rest of a view (buttons, keyboard labels, keys) is pinned literally.
+ */
+const marked = (views: Record<string, View>): Record<string, View> =>
+  Object.fromEntries(
+    Object.entries(views).map(([name, view]) => [
+      name,
+      { ...view, text: applyRtlMarks(view.text) },
+    ]),
+  );
+
+const pin = makePin(marked(expectedViews()), (actual, expected, label) =>
   expect(actual, label).toEqual(expected),
 );
 
@@ -173,7 +187,7 @@ function expectedViews(): Record<string, View> {
       intent: 'USERNAME_TEXT',
       key: 'bot.unknown_command',
       // B1: the last message drawn is the main menu that follows the unknown sentence.
-      text: '\u200F👋 سلام x، خوش برگشتی\n\n\u200F📱 ۰ سرویس فعال داری\n\nاگه سرویست داره تموم می\u200cشه، از «📱 سرویس\u200cهای من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
+      text: '👋 سلام x، خوش برگشتی\n\n📱 ۰ سرویس فعال داری\n\nاگه سرویست داره تموم می\u200cشه، از «📱 سرویس\u200cهای من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
       buttons: [],
       replyKeyboard: [
         ['🔐 خرید اشتراک'],
@@ -187,7 +201,7 @@ function expectedViews(): Record<string, View> {
       intent: 'USERNAME_TEXT',
       key: 'bot.unknown_command',
       // B1: the last message drawn is the main menu that follows the unknown sentence.
-      text: '\u200F👋 سلام x، خوش برگشتی\n\n\u200F📱 ۰ سرویس فعال داری\n\nاگه سرویست داره تموم می\u200cشه، از «📱 سرویس\u200cهای من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
+      text: '👋 سلام x، خوش برگشتی\n\n📱 ۰ سرویس فعال داری\n\nاگه سرویست داره تموم می\u200cشه، از «📱 سرویس\u200cهای من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
       buttons: [],
       replyKeyboard: [
         ['🔐 خرید اشتراک'],

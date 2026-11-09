@@ -27,6 +27,7 @@ import {
   tenantB,
   testConfig,
 } from './harness';
+import { customerText } from '../support/customer-text';
 
 /**
  * The customer's PAYMENT flow over Telegram, against a real socket standing in for
@@ -559,7 +560,9 @@ describe('the customer payment flow over Telegram', () => {
      * second tap is the ORDINARY case rather than an edge, and the sentence it gets is
      * the one thing this test is for.
      */
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.not_awaiting_payment']);
+    expect(lastMessage()?.body['text']).toBe(
+      customerText(CATALOGUE_FA['bot.order.not_awaiting_payment']),
+    );
     expect((await entries()).filter((e) => e['reason'] === 'PURCHASE')).toHaveLength(1);
   });
 
@@ -1352,7 +1355,7 @@ describe('the customer payment flow over Telegram', () => {
     await tap(`w:${orderId}`);
     await tap(`m:${orderId}`);
 
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.blocked']));
     expect(await payments()).toHaveLength(0);
     expect((await entries()).filter((e) => e['reason'] === 'PURCHASE')).toHaveLength(0);
     expect((await orders())[0]?.['state']).toBe('AWAITING_PAYMENT');
@@ -1465,7 +1468,9 @@ describe('the customer payment flow over Telegram', () => {
   it('answers an unknown message as an unknown command, menu or no menu', async () => {
     sent = [];
     await command('چطور می‌توانم اشتراک بخرم؟');
-    expect(String(unknownAnswer()?.body['text'])).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(String(unknownAnswer()?.body['text'])).toBe(
+      customerText(CATALOGUE_FA['bot.unknown_command']),
+    );
   });
 
   // -------------------------------------------------------------------------

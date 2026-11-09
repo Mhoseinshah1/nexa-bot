@@ -30,6 +30,7 @@ import {
   tenantA,
   testConfig,
 } from './harness';
+import { customerText } from '../support/customer-text';
 
 /**
  * The customer-facing Telegram turn, end to end.
@@ -360,7 +361,9 @@ describe('the customer Telegram turn', () => {
     for (const label of ['🎁 دعوت و پاداش', CATALOGUE_FA['bot.menu.referral']]) {
       sent = [];
       await start({ text: label });
-      expect(sent.at(-1)?.body['text']).toBe(CATALOGUE_FA['bot.referral.unconfigured']);
+      expect(sent.at(-1)?.body['text']).toBe(
+        customerText(CATALOGUE_FA['bot.referral.unconfigured']),
+      );
     }
     // The hidden trial button still routes: a keyboard drawn while a panel offered one.
     sent = [];
@@ -398,12 +401,12 @@ describe('the customer Telegram turn', () => {
 
     sent = [];
     await start({ text: '/admin' });
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.admin.panel']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.admin.panel']));
 
     // Blocking is still enforced for everything a CUSTOMER can do.
     sent = [];
     await start();
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.blocked']));
   });
 
   it('gives the installer-bootstrapped owner the admin menu on /start, and the panel on /admin', async () => {
@@ -440,7 +443,7 @@ describe('the customer Telegram turn', () => {
       text: '/admin',
       from: { id: Number(OWNER_TELEGRAM_ID), is_bot: false, first_name: 'Mamad' },
     });
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.admin.panel']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.admin.panel']));
   });
 
   it('revokes Telegram admin access on the next update once the binding is removed', async () => {
@@ -461,7 +464,7 @@ describe('the customer Telegram turn', () => {
     );
     sent = [];
     await start({ text: '/admin' });
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.admin.panel']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.admin.panel']));
 
     await api.container.adminManagement.setTelegramBinding(
       tenantA,
@@ -496,7 +499,7 @@ describe('the customer Telegram turn', () => {
     );
     sent = [];
     await start({ text: '/admin' });
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.blocked']));
   });
 
   it('draws the receipt decision buttons only for an administrator who may decide', async () => {
@@ -628,7 +631,7 @@ describe('the customer Telegram turn', () => {
 
     await start();
 
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.blocked']));
     expect(sent[0]?.body['reply_markup']).toBeUndefined();
   });
 
@@ -1187,7 +1190,7 @@ describe('the customer Telegram turn', () => {
     // same reason the blocked case is.
     // B1: the unknown sentence, then the main menu with its keyboard and no extra tap.
     expect(sent).toHaveLength(2);
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.unknown_command']));
     expect(String(sent[1]?.body['text'])).toContain('خوش برگشتی');
     expect(
       (sent[1]?.body['reply_markup'] as { keyboard?: unknown } | undefined)?.keyboard,

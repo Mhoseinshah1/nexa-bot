@@ -26,6 +26,7 @@ import {
   tenantB,
   testConfig,
 } from './harness';
+import { customerText } from '../support/customer-text';
 
 /**
  * The customer's purchase flow, end to end, against a REAL socket standing in for
@@ -286,7 +287,7 @@ describe('the customer purchase flow over Telegram', () => {
     // nothing, which is the distinction `bot.catalog.empty` exists to draw.
     expect((await command('/catalog')).statusCode).toBe(201);
     expect(messages()).toHaveLength(1);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.empty']);
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.catalog.empty']));
     expect(lastMessage()?.body['reply_markup']).toBeUndefined();
   });
 
@@ -327,7 +328,9 @@ describe('the customer purchase flow over Telegram', () => {
     const sellable = await product(tenantA, 'ACTIVE');
 
     await command('/catalog');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.categories_heading']);
+    expect(lastMessage()?.body['text']).toBe(
+      customerText(CATALOGUE_FA['bot.catalog.categories_heading']),
+    );
     const buttons = buttonsOf(lastMessage());
     expect(buttons.map((b) => b.callback_data)).toStrictEqual([`ck:${SEEDED_CATEGORY()}.0`]);
     // Nothing on the first level is a product: a `p:` here would be the flat list back.
@@ -344,7 +347,7 @@ describe('the customer purchase flow over Telegram', () => {
     await product(tenantA, 'ACTIVE', { panelId: null });
 
     await tap(`ck:${SEEDED_CATEGORY()}.0`);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.heading']);
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.catalog.heading']));
 
     const buttons = buttonsOf(lastMessage());
     const products = buttons.filter((b) => b.callback_data.startsWith('p:'));
@@ -616,7 +619,9 @@ describe('the customer purchase flow over Telegram', () => {
   it('answers a category emptied between two taps with a sentence and a way back', async () => {
     const withdrawn = await category({ name: 'موقت' });
     await tap(`ck:${withdrawn}.0`);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.category_empty']);
+    expect(lastMessage()?.body['text']).toBe(
+      customerText(CATALOGUE_FA['bot.catalog.category_empty']),
+    );
     expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toStrictEqual(['cg:0']);
   });
 
@@ -626,7 +631,9 @@ describe('the customer purchase flow over Telegram', () => {
     await setCategory(SEEDED_CATEGORY(), 'status', 'INACTIVE');
 
     await tap(`ck:${SEEDED_CATEGORY()}.0`);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.category_empty']);
+    expect(lastMessage()?.body['text']).toBe(
+      customerText(CATALOGUE_FA['bot.catalog.category_empty']),
+    );
     expect(buttonsOf(lastMessage()).some((b) => b.callback_data.startsWith('p:'))).toBe(false);
   });
 
@@ -648,7 +655,7 @@ describe('the customer purchase flow over Telegram', () => {
     await product(tenantB, 'ACTIVE', { panelId: panelB as never });
 
     await command('/catalog');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.empty']);
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.catalog.empty']));
   });
 
   // -------------------------------------------------------------------------
@@ -676,7 +683,9 @@ describe('the customer purchase flow over Telegram', () => {
      * the summary on the reply to the product tap stopped being right when the username
      * step landed; this test had not followed.
      */
-    expect(String(lastMessage()?.body['text'])).toBe(CATALOGUE_FA['bot.username.choose']);
+    expect(String(lastMessage()?.body['text'])).toBe(
+      customerText(CATALOGUE_FA['bot.username.choose']),
+    );
     expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
       `j:${String(rows[0]?.['id'])}`,
       `Z:${String(rows[0]?.['id'])}`,
@@ -767,14 +776,14 @@ describe('the customer purchase flow over Telegram', () => {
 
     // Before the window, a code is just a message nobody asked for.
     await command('SPRING');
-    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.unknown_command']));
 
     await tap(`dc:${orderId}`);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.ask']);
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.discount.ask']));
 
     // A code that will not apply: one sentence, and the window stays open for another.
     await command('WRONG');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.rejected']);
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.discount.rejected']));
 
     await command('spring');
     const text = String(lastMessage()?.body['text']);
@@ -792,7 +801,7 @@ describe('the customer purchase flow over Telegram', () => {
 
     // The window closed on the accepted code: the next message is ordinary again.
     await command('SPRING');
-    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.unknown_command']));
 
     await tap(`dx:${orderId}`);
     expect(String(lastMessage()?.body['text'])).not.toContain('تخفیف');
@@ -813,7 +822,7 @@ describe('the customer purchase flow over Telegram', () => {
     await tap(`Z:${orderId}`);
 
     await tap(`dc:${orderId}`);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.ask']);
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.discount.ask']));
     expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([`ib:${orderId}`, 'iz:']);
     expect(buttonsOf(lastMessage()).map((b) => b.text)).toEqual([
       CATALOGUE_FA['bot.order.input_back_button'],
@@ -829,7 +838,7 @@ describe('the customer purchase flow over Telegram', () => {
       'mm:',
     ]);
     await command('SPRING');
-    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.unknown_command']));
     expect((await orders())[0]?.['total_amount']).toBe(250_000n);
 
     // Cancel: the main menu, window closed, order left alone.
@@ -837,7 +846,7 @@ describe('the customer purchase flow over Telegram', () => {
     await tap('iz:');
     expect(String(lastMessage()?.body['text'])).toContain('خوش برگشتی');
     await command('SPRING');
-    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.unknown_command']));
     expect((await orders())[0]?.['state']).toBe('DRAFT');
     expect((await orders())[0]?.['total_amount']).toBe(250_000n);
   });
@@ -849,7 +858,7 @@ describe('the customer purchase flow over Telegram', () => {
     const orderId = String((await orders())[0]?.['id']);
     await tap(`Z:${orderId}`);
     await tap(`dc:${orderId}`);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.ask']);
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.discount.ask']));
 
     // The confirm button on the summary above the prompt is still live.
     await tap(`c:${orderId}`);
@@ -858,13 +867,13 @@ describe('the customer purchase flow over Telegram', () => {
     // The first message after it is ordinary, and it closed the window for good: a
     // refusal would have rolled the close back and caught this message and every next one.
     await command('SPRING');
-    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.unknown_command']));
     const windows = await api.container.database.db.execute(
       sql`SELECT close_reason FROM discount_code_captures WHERE order_id = ${orderId}`,
     );
     expect(windows.rows).toEqual([{ close_reason: 'SUPERSEDED' }]);
     await command('hello');
-    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.unknown_command']));
   });
 
   it('explains an automatic discount on the summary, and refuses to confirm it once withdrawn', async () => {
@@ -884,7 +893,9 @@ describe('the customer purchase flow over Telegram', () => {
       sql`UPDATE discounts SET status = 'INACTIVE' WHERE id = ${id}`,
     );
     await tap(`c:${orderId}`);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.no_longer_valid']);
+    expect(lastMessage()?.body['text']).toBe(
+      customerText(CATALOGUE_FA['bot.discount.no_longer_valid']),
+    );
     expect((await orders())[0]?.['state']).toBe('DRAFT');
   });
 
@@ -1015,7 +1026,9 @@ describe('the customer purchase flow over Telegram', () => {
     await tap(`d:${orderId}`);
 
     expect((await orders())[0]?.['state'], 'the ask writes nothing').toBe('AWAITING_PAYMENT');
-    expect(String(lastMessage()?.body['text'])).toBe(CATALOGUE_FA['bot.order.cancel_confirm']);
+    expect(String(lastMessage()?.body['text'])).toBe(
+      customerText(CATALOGUE_FA['bot.order.cancel_confirm']),
+    );
     const confirm = buttonsOf(lastMessage());
     expect(confirm.map((b) => b.callback_data)).toEqual([`f:${orderId}`]);
     sent = [];
@@ -1107,7 +1120,7 @@ describe('the customer purchase flow over Telegram', () => {
      */
     const reseller = await product(tenantA, 'ACTIVE', { audience: 'RESELLERS_ONLY' });
     await command('/catalog');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.empty']);
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.catalog.empty']));
 
     await tap(`p:${reseller.id}`);
     // Deliberately the SAME sentence as every other refusal: a distinct one would teach
@@ -1209,7 +1222,7 @@ describe('the customer purchase flow over Telegram', () => {
 
     // Answered, never silent; and nothing moved — the order is a DRAFT at the old quote.
     expect(messages()).toHaveLength(before + 1);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.terms_changed']);
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.order.terms_changed']));
     expect((await orders())[0]).toMatchObject({ state: 'DRAFT', total_amount: 200_000n });
     expect(
       (
@@ -1246,7 +1259,7 @@ describe('the customer purchase flow over Telegram', () => {
       UPDATE customers SET status = 'BLOCKED', blocked_at = now()`);
 
     await tap(`p:${sellable.id}`);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.blocked']));
     expect(await orders()).toHaveLength(0);
   });
 

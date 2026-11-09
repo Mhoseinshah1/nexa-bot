@@ -9,7 +9,7 @@ import {
   type ProductId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
-import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
+import { customerText as plain } from '../support/customer-text';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -405,7 +405,7 @@ describe('Item 12: an old MirzaBot button, through the webhook', () => {
 
   it('keeps a typed unknown message on its own answer: the stale sentence is for buttons only', async () => {
     await command('backuser');
-    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(plain(CATALOGUE_FA['bot.unknown_command']));
 
     // A message with no text at all (a sticker) is UNSUPPORTED like an unreadable tap, and
     // still is not a tap: no stale sentence. (R12 F3 item 3, "no dead ends", gives the
@@ -427,7 +427,7 @@ describe('Item 12: an old MirzaBot button, through the webhook', () => {
         },
       },
     });
-    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(plain(CATALOGUE_FA['bot.unknown_command']));
     expect(buttonsOf(unknownAnswer()).map((button) => button.callback_data)).toEqual(['mm:']);
   });
 
