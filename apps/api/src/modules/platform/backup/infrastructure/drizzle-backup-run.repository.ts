@@ -54,7 +54,8 @@ type Row = typeof backupRuns.$inferSelect;
  */
 const INSTALLATION_RUN = eq(backupRuns.archiveScope, 'INSTALLATION');
 
-function toRow(row: Row): BackupRunRow {
+/** The row mapper, shared with `DrizzleHostedArchiveRuns` (the TENANT runs' reads). */
+export function toRow(row: Row): BackupRunRow {
   return {
     id: row.id,
     trigger: row.trigger as BackupTrigger,

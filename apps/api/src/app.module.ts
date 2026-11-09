@@ -46,6 +46,7 @@ import { PaymentGatewaysController } from './surfaces/web/payment-gateways.contr
 import { FxController } from './surfaces/web/fx.controller.js';
 import { CapacityController } from './surfaces/web/capacity.controller.js';
 import { HostingController } from './surfaces/web/hosting.controller.js';
+import { HostedBackupController } from './surfaces/web/hosted-backup.controller.js';
 import { DataExportController } from './surfaces/web/data-export.controller.js';
 import { HostingActivationController } from './surfaces/web/hosting-activation.controller.js';
 import {
@@ -172,6 +173,8 @@ export class AppModule implements NestModule {
         FxController as never,
         CapacityController as never,
         HostingController as never,
+        // Phase 6B PR-2: hosted-bot backups and «بازیابی ربات از فایل».
+        HostedBackupController as never,
         DataExportController as never,
         HostingActivationController as never,
         HostedActivationController as never,

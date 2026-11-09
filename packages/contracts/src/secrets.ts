@@ -79,6 +79,12 @@
  * `hosting_totp_factors`), separate from the sign-in factor's `admin.totp_secret` so a secret
  * moved between the two tables fails authentication; the entity is the factor row's id.
  * Declared with its producer, `HostingSectionService.enrol`.
+ *
+ * `hosting.archive_password` is the password that seals one hosted bot's tenant archives
+ * (Phase 6B, ADR-0039 § 7), set by the installation owner only, on that bot's
+ * `hosted_bot_backup_policies` row in the INSTALLATION tenant (never in the hosted tenant's
+ * own `backup_archive_passwords`, which its owner's backup page writes); the entity is the
+ * policy row's id. Never returned by any response once stored.
  */
 export const SECRET_PURPOSES = [
   'bot_instance.token',
@@ -95,6 +101,7 @@ export const SECRET_PURPOSES = [
   'backup.archive_password',
   'gift_card.batch_export',
   'hosting.totp_secret',
+  'hosting.archive_password',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 

@@ -178,3 +178,31 @@
   overflow-wrap: anywhere;
   user-select: all;
 }
+
+/* Phase 6B PR-2: a hosted bot's backups, and «بازیابی ربات از فایل» */
+.hosted-backup h4 {
+  margin: 4px 0 0;
+}
+.hosted-backup-archives,
+.hosted-restores {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.hosted-backup-archive {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
+}
+.hosted-restore {
+  display: grid;
+  gap: 8px;
+}

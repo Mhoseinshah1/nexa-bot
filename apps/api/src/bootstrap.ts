@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import {
   RECOVERY_ROUTES,
+  HOSTED_BACKUP_ROUTES,
   LEGACY_MIGRATION_DECISIONS_MAX_BYTES,
   LEGACY_MIGRATION_ROUTES,
   routePattern,
@@ -376,6 +377,10 @@ export async function createApiApp(
      * no length and this check cannot fire for one.
      */
     if (route.url.endsWith(RECOVERY_ROUTES.upload)) {
+      route.bodyLimit = config.RECOVERY_UPLOAD_MAX_BYTES;
+    }
+    // Phase 6B PR-2: a hosted archive for «بازیابی ربات از فایل», under the same ceiling.
+    if (route.url.endsWith(HOSTED_BACKUP_ROUTES.upload)) {
       route.bodyLimit = config.RECOVERY_UPLOAD_MAX_BYTES;
     }
     /*

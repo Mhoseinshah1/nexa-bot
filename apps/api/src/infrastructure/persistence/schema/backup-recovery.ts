@@ -707,6 +707,11 @@ export const tenantRestores = pgTable(
     dryRun: jsonb('dry_run'),
     requestedByAdminId: uuid('requested_by_admin_id').notNull(),
     confirmedAt: timestamptz('confirmed_at'),
+    /**
+     * Phase 6B PR-2: the owner confirmed this VERIFIED dry run in «میزبانی‌ها» (a fresh code). The
+     * recovery role picks the row up from here and applies it — never the HTTP request.
+     */
+    confirmRequestedAt: timestamptz('confirm_requested_at'),
     /** REPLACE only: the verified PRE_REPLACE tenant archive of the rows being replaced. */
     preReplaceRunId: uuid('pre_replace_run_id').references(() => backupRuns.id),
     failureCode: text('failure_code'),

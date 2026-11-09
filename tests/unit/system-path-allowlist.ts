@@ -76,6 +76,15 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleHeavyJobQueueRepository.heartbeat',
   'DrizzleHeavyJobQueueRepository.purgeFinished',
   'DrizzleHeavyJobQueueRepository.tryStart',
+  // Phase 6B PR-2 (ADR-0039 § 7): ONE hosted tenant's archive runs. `backup_runs` carries no
+  // tenant (ADR-0037's list), so these are installation reads by nature; every statement names
+  // the subject tenant and `archive_scope = 'TENANT'`.
+  'DrizzleHostedArchiveRuns.byId',
+  'DrizzleHostedArchiveRuns.lastAttemptAt',
+  'DrizzleHostedArchiveRuns.lastVerifiedAt',
+  'DrizzleHostedArchiveRuns.markPruned',
+  'DrizzleHostedArchiveRuns.pruneCandidates',
+  'DrizzleHostedArchiveRuns.recent',
   'DrizzleHostedDomainDirectory.certificateAllowed',
   'DrizzleHostedDomainDirectory.findLinkByHash',
   'DrizzleHostedDomainDirectory.resolveHost',
@@ -194,6 +203,9 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'reason: hosting: bind the bot of a hosted tenant',
   'reason: hosting: bot identity held by another tenant',
   'reason: hosting: close a hosted tenant for purge',
+  // Phase 6B PR-2: the hosted owner's own backup page reads whether the HOST left its backups
+  // on — one row of the installation's policy table, named by the hosted tenant's id.
+  'reason: hosting: hosted backup policy for the hosted owner view',
   'reason: hosting: last successful installation backup',
   'reason: hosting: mark the hosted owner activated',
   'reason: hosting: may a certificate be issued for a host',

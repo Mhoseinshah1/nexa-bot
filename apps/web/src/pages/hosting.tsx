@@ -14,6 +14,7 @@ import { Banner, Button, Card, Disclosure, KV, Ltr, Meter, PageHead, StateSwitch
 import { ErrorRef } from '../ui/technical-details';
 import { HostingGate } from './hosting-gate';
 import { HostedBots } from './hosting-bots';
+import { HostedRestoreSection } from './hosting-restore';
 import {
   CodePromptDialog,
   HOSTING_STATUS_KEY,
@@ -71,6 +72,7 @@ function HostingPanel({
       <SessionCard status={status} session={session} onRecoveryCodes={onRecoveryCodes} />
       <ServerCard />
       <HostedBots fallbackCreate={status.create} />
+      <HostedRestoreSection />
     </>
   );
 }
