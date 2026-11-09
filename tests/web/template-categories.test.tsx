@@ -51,7 +51,9 @@ const TERMS = 'bot.terms.accept_button';
 
 const nameOf = (key: TemplateKey) => TEMPLATE_COPY_FA[key]?.[0] ?? key;
 const hidden = (key: string) =>
-  (document.getElementById(`template-item-${key}`) as HTMLElement).closest('[hidden]') !== null;
+  // B5: a row the filters leave out is not drawn at all, which reads as hidden just the same.
+  document.getElementById(`template-item-${key}`) === null ||
+  document.getElementById(`template-item-${key}`)?.closest('[hidden]') !== null;
 const search = () => document.getElementById('templates-search') as HTMLInputElement;
 const chip = (id: string) =>
   document.querySelector(`.tcat-chip[data-category="${id}"]`) as HTMLButtonElement;
