@@ -450,9 +450,15 @@ construction.
       with the typed bundle password is the confirmation, as ADR-0025 records for `botctl
 restore`; the confirmation is still bound to the member's SHA-256;
    5. for each hosted member: its tenant is already in the restored installation (§ 6), so the
-      member is **verified against the live rows** (counts and SHA-256 per table, read bound to
-      that tenant) and must match exactly — both were taken in the same freeze. A tenant that is
-      absent is restored through § 4. Any mismatch stops the import and names the tenant;
+      member is **verified against the live rows** (counts per table, and a SHA-256 over a
+      CANONICAL form, read bound to that tenant) and must match — both were taken in the same
+      freeze. The canonical form is NOT the stored bytes: secret columns are decrypted and
+      compared as plaintext with key id and wrap metadata dropped (the member's installation-key
+      ciphertext, the archive's fresh-key ciphertext and the destination's active-key rewrap all
+      differ for identical plaintext), and columns the forward migration of a newer release
+      legitimately changes are normalised by a per-table list kept with the migration that
+      changes them. A tenant that is absent is restored through § 4. Any mismatch stops the
+      import and names the tenant and table;
    6. clears every hosted activation's DNS/TLS/webhook marks (earned on the old server) through
       the system path;
    7. prints the checklist.
@@ -531,10 +537,15 @@ Purge closes a tenant for good (ADR-0038); its rows stay. Erasing them needs:
 3. **The tenant rewrite allowance** (shared with replace, § 4). Every append-only guard
    (`nexa_reject_mutation` and the table-specific guard functions, from
    `0001_append_only_guards.sql` on; 41 distinct trigger functions exist today) gains one DELETE branch that returns `OLD` when
-   `nexa_tenant_rewrite_allowed(OLD.tenant_id)` is true. That `SECURITY DEFINER` function is true
-   only on the system path (`current_user = 'nexa_system'`, so a reason is bound), when
-   `nexa.tenant_rewrite` names an authority row (`tenant_erasures` or `tenant_restores`) that is
-   APPLYING for exactly that tenant and was claimed by the current transaction id. UPDATE stays
+   `nexa_tenant_rewrite_allowed(OLD.tenant_id)` is true. The role check lives OUTSIDE the privileged
+   function: the guard (`SECURITY INVOKER`, the trigger function) requires `current_user =
+'nexa_system'` and a bound reason (`current_user` inside a `SECURITY DEFINER` function is the
+   function owner, so it cannot authenticate the caller), then calls
+   `nexa_tenant_rewrite_allowed(OLD.tenant_id)`. That function is `SECURITY DEFINER`, owned by the
+   migration owner (which can read the authority tables), `EXECUTE` revoked from PUBLIC and
+   granted to `nexa_system` only, with a pinned `search_path`; it only does the lookup: true
+   when `nexa.tenant_rewrite` names an authority row (`tenant_erasures` or `tenant_restores`)
+   that is APPLYING for exactly that tenant and was claimed by the current transaction id. UPDATE stays
    refused. A test per guard proves it refuses without the allowance and accepts with it.
 4. **Order and batches.** Children first (the inventory's load order reversed), in short batches,
    resumable from a cursor like the legacy compaction; `processed_messages` and
