@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { and, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CAPACITY_ERROR_CODES,
   MINIAPP_API_PREFIX,
@@ -81,6 +81,21 @@ describe('capacity guards (phase 6A PR-2)', () => {
     held.clear();
     for (const go of releases.splice(0)) go();
   };
+
+  /**
+   * The new-customer window is one wall-clock minute. A test that makes several admissions and
+   * expects the later ones refused fails if the run crosses a minute boundary between them, so
+   * those tests pin `Date` (and with it the app's `Clock`) to the middle of a minute. Only
+   * `Date` is faked: timers, sockets and the database driver keep running.
+   */
+  const freezeAt = (secondsIntoMinute: number, minutesAhead = 0) => {
+    const minuteStart = Math.floor(Date.now() / 60_000) * 60_000;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(minuteStart + (minutesAhead * 60 + secondsIntoMinute) * 1000);
+  };
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   const inject = (options: Record<string, unknown>) =>
     api.app
@@ -260,6 +275,7 @@ describe('capacity guards (phase 6A PR-2)', () => {
     // First in this file: the new-customer window is per process and per minute, so it
     // must see this bot's first customers of the minute.
     it('over the new-customer rate: 429 with nothing written, and a returning customer is never counted', async () => {
+      freezeAt(30);
       await setLimit(owner, tenantA, SEED_IDS.tenantB, 'NEW_CUSTOMERS_PER_MINUTE', {
         mode: 'LIMITED',
         value: 1,
@@ -277,6 +293,7 @@ describe('capacity guards (phase 6A PR-2)', () => {
       for (let i = 0; i < 3; i += 1) expect((await start(BOT_A, 930_000 + i)).statusCode).toBe(201);
     });
     it('security review of #410: the Mini App launch is held to the same rate — 429, no customer; only INTERNAL is exempt', async () => {
+      freezeAt(30);
       const flag = await api.container.featureFlagResolver.resolve(tenantB, 'mini_app');
       await api.container.featureFlags.set(tenantB, hostedOwner, {
         key: 'mini_app',
@@ -324,6 +341,18 @@ describe('capacity guards (phase 6A PR-2)', () => {
         },
       );
       expect(await customerOf(SEED_IDS.tenantB, 950_001)).toBe(1);
+    });
+
+    it('a minute boundary is deterministic: the window refuses within a minute and starts over in the next', async () => {
+      freezeAt(59, 7);
+      await setLimit(owner, tenantA, SEED_IDS.tenantB, 'NEW_CUSTOMERS_PER_MINUTE', {
+        mode: 'LIMITED',
+        value: 1,
+      });
+      expect((await start(BOT_B, 960_001)).statusCode).toBe(201);
+      expect((await start(BOT_B, 960_002)).statusCode).toBe(429);
+      vi.setSystemTime(Date.now() + 2000);
+      expect((await start(BOT_B, 960_002)).statusCode).toBe(201);
     });
 
     it('queues a bot’s update over its concurrency and processes it; another bot is not slowed', async () => {
