@@ -52,3 +52,5 @@ ADR says so explicitly.
 | [0035](0035-support-knowledge-and-controlled-learning.md)          | Support knowledge, and why nothing is learned without a reviewer           | Accepted for implementation — TB0            |
 | [0036](0036-custom-main-menu-buttons.md)                           | Owner-defined main-menu buttons, and why the layout became version 2       | Accepted — R10 D2                            |
 | [0037](0037-row-level-security.md)                                 | Row-level security for tenant isolation                                    | Accepted — supersedes 0004                   |
+| [0038](0038-hosted-bots.md)                                        | Hosted bots and the creator panel («میزبانی‌ها»)                           | Accepted — Phase 6A                          |
+| [0039](0039-tenant-backup-and-server-move.md)                      | Hosted-bot backups, restore, server move, enter and erasure                | Accepted — Phase 6B, refines 0038            |
