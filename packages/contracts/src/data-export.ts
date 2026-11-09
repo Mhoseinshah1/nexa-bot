@@ -1,3 +1,6 @@
+import { z } from 'zod';
+import { secondFactorProofSchema } from './admin-security.js';
+
 /**
  * Phase 6B PR-3 (ADR-0039, "The open data export") — «خروجی داده».
  *
@@ -45,3 +48,60 @@ export const DATA_EXPORT_ERROR_CODES = {
 } as const;
 export type DataExportErrorCode =
   (typeof DATA_EXPORT_ERROR_CODES)[keyof typeof DATA_EXPORT_ERROR_CODES];
+
+// ---------------------------------------------------------------------------
+// Over HTTP
+// ---------------------------------------------------------------------------
+
+/**
+ * Routes, relative to `API_PREFIX`. The first three are a hosted bot's own owner in their own
+ * Web Admin (`data.export`); the last three are the installation owner's, from «میزبانی‌ها»
+ * (the section session and a fresh code on the request).
+ */
+export const DATA_EXPORT_ROUTES = {
+  own: '/data-exports',
+  ownDownload: '/data-exports/:id/download',
+  hosted: '/hosting/bots/:tenantId/data-exports',
+  hostedDownload: '/hosting/bots/:tenantId/data-exports/:id/download',
+} as const;
+
+const idempotencyKey = z.string().min(8).max(255);
+
+/** A hosted bot's owner asks for an export of their own tenant. */
+export const dataExportRequestSchema = z.object({ idempotencyKey });
+export type DataExportRequest = z.infer<typeof dataExportRequestSchema>;
+
+/** The installation owner asks for one of a hosted bot, with a fresh second-factor proof. */
+export const dataExportHostRequestSchema = z.object({
+  idempotencyKey,
+  proof: secondFactorProofSchema,
+});
+export type DataExportHostRequest = z.infer<typeof dataExportHostRequestSchema>;
+
+export interface DataExportView {
+  readonly id: string;
+  readonly state: DataExportState;
+  readonly requestedAt: string;
+  /** Asked for by the installation owner from «میزبانی‌ها», not by the bot's own owner. */
+  readonly requestedByHost: boolean;
+  /** When the file was finished (READY, EXPIRED), else null. */
+  readonly readyAt: string | null;
+  /** The download deadline (READY, EXPIRED), else null. */
+  readonly expiresAt: string | null;
+  /** The ZIP's size in bytes once made. */
+  readonly bytes: number | null;
+  /** The stable reason of a FAILED export. */
+  readonly failureCode: string | null;
+  /** Whether the file can be downloaded now (READY and before the deadline). */
+  readonly downloadable: boolean;
+}
+
+export interface DataExportsResponse {
+  readonly exports: readonly DataExportView[];
+}
+
+export interface DataExportRequestResponse {
+  readonly export: DataExportView;
+  /** The same key was used before: the first result. */
+  readonly replayed: boolean;
+}
