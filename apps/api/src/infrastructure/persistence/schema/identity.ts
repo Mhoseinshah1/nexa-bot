@@ -65,7 +65,7 @@ export const admins = pgTable(
     /**
      * `OPERATOR` (everyone who signs in) or `HOST` (phase 6B «ورود به پنل»: the installation
      * owner's principal in a hosted tenant, one per tenant, never edited by its admins — the
-     * `nexa_host_admin_guard` trigger, migration 0334_host_admin_guard).
+     * `nexa_host_admin_guard` trigger, migration 0335_host_admin_guard).
      */
     kind: text('kind').notNull().default('OPERATOR'),
     /**
