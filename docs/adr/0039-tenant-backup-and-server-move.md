@@ -891,6 +891,7 @@ activation marks after import` was therefore not needed.
 to verify it after import`.
 - **Contract items**: `RECOVERY_SOURCES` + `MOVE`; `MOVE_ERROR_CODES`. No template key: the
   Persian text is the operator's CLI output, never a customer's.
+
 ## As built in PR-5 (`feat/6b-enter`, «ورود به پنل»)
 
 § 9 as designed, with these decisions (binding on later work):
