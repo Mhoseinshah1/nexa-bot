@@ -123,6 +123,7 @@ export const ERROR_TEXT = {
   'admin.second_factor_not_pending': 'web.err_admin_second_factor_not_pending',
   'admin.self_modification_denied': 'web.err_admin_self_modification_denied',
   'admin.session_not_found': 'web.err_admin_session_not_found',
+  'identity.impersonation_forbidden': 'web.err_identity_impersonation_forbidden',
   'admin.telegram_id_taken': 'web.err_admin_telegram_id_taken',
   'admin.username_taken': 'web.err_admin_username_taken',
   'appearance.admin_not_bound': 'web.err_appearance_admin_not_bound',
@@ -216,7 +217,8 @@ export const ERROR_TEXT = {
   'hosting.slug_taken': 'web.err_hosting_slug_taken',
   'hosting.create_disabled': 'web.err_hosting_create_disabled',
   'hosting.purge_confirmation_mismatch': 'web.err_hosting_purge_confirmation_mismatch',
-  'hosting.enter_not_implemented': 'web.err_hosting_enter_not_implemented',
+  'hosting.enter_domain_required': 'web.err_hosting_enter_domain_required',
+  'hosting.enter_token_invalid': 'web.err_hosting_enter_token_invalid',
   // Phase 6A PR-4: the activation of a hosted bot.
   'hosting.activation_not_configured': 'web.err_hosting_act_not_configured',
   'hosting.activation_bot_not_active': 'web.err_hosting_act_bot_not_active',

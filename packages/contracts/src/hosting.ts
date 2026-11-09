@@ -120,8 +120,17 @@ export const HOSTING_ERROR_CODES = {
   CREATE_DISABLED: 'hosting.create_disabled',
   /** The typed confirmation did not match the bot's slug. */
   PURGE_CONFIRMATION_MISMATCH: 'hosting.purge_confirmation_mismatch',
-  /** «ورود به پنل» is designed for 6B and not built yet. */
-  ENTER_NOT_IMPLEMENTED: 'hosting.enter_not_implemented',
+  /**
+   * Phase 6B «ورود به پنل»: the bot must be ACTIVE with a DNS-verified domain — the entered
+   * session lives on the hosted domain, where the owner's own cookies do not reach.
+   */
+  ENTER_DOMAIN_REQUIRED: 'hosting.enter_domain_required',
+  /**
+   * The ONE answer for every way an enter token fails (unknown, used, expired, another
+   * domain or tenant, the section or the owner's session ended), as
+   * `backup.archive_auth_failed` collapses its causes: a guesser learns nothing.
+   */
+  ENTER_TOKEN_INVALID: 'hosting.enter_token_invalid',
 } as const;
 
 // ---------------------------------------------------------------------------

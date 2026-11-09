@@ -516,6 +516,13 @@ export const IDENTITY_ERROR_CODES = {
   ADMIN_SECOND_FACTOR_NOT_PENDING: 'admin.second_factor_not_pending',
   /** A session id that is not one of the caller's own. Another admin's reads the same. */
   ADMIN_SESSION_NOT_FOUND: 'admin.session_not_found',
+  /**
+   * Phase 6B «ورود به پنل» (ADR-0039 § 9 refinement 3): the installation owner, acting inside
+   * a hosted tenant through an entered session, tried to seal a new secret (the bot token,
+   * panel, gateway or support-AI credentials, a second factor, …) or change an account's
+   * own security. Every secret writer refuses it; a permission alone could not.
+   */
+  IMPERSONATION_FORBIDDEN: 'identity.impersonation_forbidden',
 } as const;
 
 /**
