@@ -185,6 +185,21 @@
   margin-top: 8px;
 }
 
+/* PR-10: the settings pattern — a setting whose control is a group takes the row's full width. */
+.sai-config .setting-row {
+  flex-wrap: wrap;
+}
+.sai-config .setting-row .ctl {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.sai-config .setting-row .ctl > .input {
+  inline-size: 100%;
+}
+.sai-config .setting-row .txt {
+  flex: 1 1 220px;
+}
+
 /* The provider keys: one block per provider, divided by a rule, as the demo lists them. */
 .sai-keys {
   list-style: none;
@@ -327,10 +342,6 @@
 .sk-quick {
   display: flex;
   padding: 10px 12px;
-}
-/* «ذخیرهٔ پیکربندی» closes the form on its end side, as the demo places it. */
-.sai-config > .form-actions {
-  justify-content: flex-end;
 }
 
 /* Phase 4 PR-5: the readiness card, the test console, and the mode consequences. */

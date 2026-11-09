@@ -412,12 +412,15 @@ export function StickySaveBar({
   onSave,
   onCancel,
   saving = false,
+  saveDisabled = false,
   error,
 }: {
   changes: number;
   onSave: () => void;
   onCancel: () => void;
   saving?: boolean;
+  /** The page's own validation refuses the save (the reason is shown in `error`). */
+  saveDisabled?: boolean;
   error?: ReactNode;
 }) {
   if (changes <= 0) return null;
@@ -431,7 +434,7 @@ export function StickySaveBar({
       <Button variant="ghost" onClick={onCancel} disabled={saving}>
         {t('web.kit_settings_cancel')}
       </Button>
-      <Button variant="primary" onClick={onSave} disabled={saving}>
+      <Button variant="primary" onClick={onSave} disabled={saving || saveDisabled}>
         {saving ? t('web.kit_settings_saving') : t('web.kit_settings_save')}
       </Button>
     </div>

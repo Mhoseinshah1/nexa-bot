@@ -69,7 +69,7 @@ const FIELDS = [
 const input = async (label: (typeof FIELDS)[number]['label']) =>
   (await screen.findByLabelText(t(label))) as HTMLInputElement;
 const saveButton = () =>
-  screen.getByRole('button', { name: t('web.sai_save') }) as HTMLButtonElement;
+  screen.getByRole('button', { name: t('web.kit_settings_save') }) as HTMLButtonElement;
 const sentConfig = async (api: ReturnType<typeof stubApi>) => {
   await waitFor(() => expect(api.calls.filter((call) => call.method === 'PUT')).toHaveLength(1));
   const put = api.calls.find((call) => call.method === 'PUT')!;
