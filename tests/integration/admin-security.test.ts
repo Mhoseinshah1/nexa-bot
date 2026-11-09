@@ -1342,6 +1342,8 @@ describe('security review fixes (#151)', () => {
 
   it('setting the backup password needs a code when the owner’s factor is on', async () => {
     // SFR A1: it replaced the removed Recovery Kit export as the step-up's other caller.
+    // ADR-0039 F1: the installation's password is set in the installation tenant only.
+    ctx.container.setInstallationTenant(tenantA.tenantId);
     const { secret, actor } = await enableFor(owner);
     const setWith = (stepUp: { password: string; code?: string }) =>
       ctx.container.backupPasswords.set(
