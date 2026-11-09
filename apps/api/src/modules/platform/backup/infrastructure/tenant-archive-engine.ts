@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, statfs, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import {
@@ -65,6 +65,12 @@ export interface TenantArchiveEngineDeps {
   readonly release: string;
   readonly migrationsFolder: string;
   readonly now: () => Date;
+  /**
+   * Security review of PR-1: the most part bytes one archive may declare, never taken from the
+   * archive (default 32 GiB), and the free space kept beside it on the work volume (1 GiB).
+   */
+  readonly maxExtractedBytes?: number;
+  readonly headroomBytes?: number;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -190,6 +196,14 @@ export class PostgresTenantArchiveEngine implements TenantArchiveEngine, TenantR
       password: input.password,
       directory: input.directory,
       sevenZip: this.deps.sevenZip,
+      limits: {
+        maxExtractedBytes: this.deps.maxExtractedBytes ?? 32 * 1024 ** 3,
+        headroomBytes: this.deps.headroomBytes ?? 1024 ** 3,
+        freeBytes: async () => {
+          const info = await statfs(input.directory).catch(() => null);
+          return info === null ? null : Number(info.bavail) * Number(info.bsize);
+        },
+      },
     });
     try {
       await onOpened(opened);

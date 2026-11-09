@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -123,6 +123,7 @@ function engineFor(input: {
   cipher: SecretCipher;
   installationTenantId: string;
   folder?: string;
+  maxExtractedBytes?: number;
 }): PostgresTenantArchiveEngine {
   const deps: TenantArchiveEngineDeps = {
     app: input.app,
@@ -141,6 +142,9 @@ function engineFor(input: {
     release: 'test',
     migrationsFolder: input.folder ?? migrationsFolder(),
     now: () => new Date(),
+    ...(input.maxExtractedBytes === undefined
+      ? {}
+      : { maxExtractedBytes: input.maxExtractedBytes }),
   };
   return new PostgresTenantArchiveEngine(deps);
 }
@@ -620,6 +624,161 @@ describe('tenant archive (Phase 6B PR-1) — export, verify, restore, as nexa_ap
         mode: 'REPLACE',
       }),
     ).rejects.toMatchObject({ code: TENANT_ARCHIVE_ERROR_CODES.REPLACE_UNAVAILABLE });
+  }, 600_000);
+
+  /**
+   * Security review of PR-1: an archive is only as trustworthy as whoever holds its password.
+   * HOSTED_2's archive, opened and re-sealed with chosen edits (the manifest's own SHA-256 per
+   * part recomputed, as a forger would): the edits must not reach the register, the tenant's
+   * kind, a shared sequence, or the disk.
+   */
+  async function crafted(
+    edit: (directory: string, manifest: Record<string, any>) => Promise<void>,
+  ): Promise<string> {
+    const ws = await engine.workspace(HOSTED_2, uuidv7Like());
+    await engine.dump({
+      tenantId: HOSTED_2,
+      directory: ws.plainDirectory,
+      archiveId: `crafted-${randomBytes(3).toString('hex')}`,
+      createdAt: new Date(),
+      password: PASSWORD,
+    });
+    const manifestPath = join(ws.plainDirectory, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, any>;
+    await edit(ws.plainDirectory, manifest);
+    for (const table of manifest.tables as { file: string; bytes: number; sha256: string }[]) {
+      const bytes = await readFile(join(ws.plainDirectory, table.file));
+      table.bytes = bytes.length;
+      table.sha256 = createHash('sha256').update(bytes).digest('hex');
+    }
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    await engine.seal({
+      directory: ws.plainDirectory,
+      archivePath: ws.archivePath,
+      password: PASSWORD,
+    });
+    const out = join(root, `crafted-${randomBytes(3).toString('hex')}.7z`);
+    await copyFile(ws.archivePath, out);
+    await ws.discardAll();
+    return out;
+  }
+
+  /** Rewrites one column of one table's part. */
+  async function rewrite(
+    directory: string,
+    manifest: Record<string, any>,
+    table: string,
+    column: string,
+    value: string,
+  ): Promise<void> {
+    const part = (
+      manifest.tables as { name: string; file: string; columns: { name: string }[] }[]
+    ).find((t) => t.name === table);
+    if (part === undefined) throw new Error(`no ${table} part`);
+    const at = part.columns.findIndex((c) => c.name === column);
+    const path = join(directory, part.file);
+    const lines = (await readFile(path, 'utf8')).split('\n').filter((line) => line !== '');
+    await writeFile(
+      path,
+      lines
+        .map((line) =>
+          line
+            .split('\t')
+            .map((v, i) => (i === at ? value : v))
+            .join('\t'),
+        )
+        .join('\n') + '\n',
+    );
+  }
+
+  async function dryThenApply(path: string, on = targetEngine()) {
+    const service = restoreService(on, target.app);
+    const dry = await service.restore({
+      installationTenantId: SEED_IDS.tenantA,
+      actorAdminId: target.actor,
+      archivePath: path,
+      password: PASSWORD,
+      directory: join(root, `dry-${randomBytes(3).toString('hex')}`),
+      mode: 'NEW',
+    });
+    if (dry === null) throw new Error('not admitted');
+    return service.restore({
+      installationTenantId: SEED_IDS.tenantA,
+      actorAdminId: target.actor,
+      archivePath: path,
+      password: PASSWORD,
+      directory: join(root, `apply-${randomBytes(3).toString('hex')}`),
+      mode: 'NEW',
+      confirmRequestId: dry.requestId,
+    });
+  }
+
+  it('a crafted archive cannot exhaust a shared sequence, name a foreign owner, or overrun the disk', async () => {
+    const tenantRows = async () =>
+      (
+        (
+          await target.owner.db.execute(
+            sql`SELECT count(*)::int AS n FROM tenants WHERE id = ${HOSTED_2}`,
+          )
+        ).rows[0] as { n: number }
+      ).n;
+    // A ticket numbered near the end of the shared integer sequence: refused, rolled back.
+    const huge = await crafted((dir, m) => rewrite(dir, m, 'tickets', 'number', '2147483000'));
+    await expect(dryThenApply(huge)).rejects.toMatchObject({
+      code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+    });
+    expect(await tenantRows()).toBe(0);
+    // An owner who is not an admin of the archived tenant: refused in the dry run.
+    const foreign = await crafted(async (_dir, m) => {
+      m.host.ownerAdminId = target.actor;
+    });
+    await expect(dryThenApply(foreign)).rejects.toMatchObject({
+      code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+    });
+    // More data than this installation opens: refused before anything is extracted.
+    const small = engineFor({
+      app: target.app,
+      ownerUrl: urlFor(targetName),
+      root,
+      cipher: target.cipher,
+      installationTenantId: SEED_IDS.tenantA,
+      maxExtractedBytes: 16,
+    });
+    await expect(dryThenApply(archivePath, small)).rejects.toMatchObject({
+      code: PLATFORM_ERROR_CODES.BACKUP_ARCHIVE_MALFORMED,
+    });
+    expect(await tenantRows()).toBe(0);
+  }, 600_000);
+
+  it('a crafted archive lands HOSTED, with no expiry and no capacity limits of its own choosing', async () => {
+    const forged = await crafted(async (dir, m) => {
+      m.host.expiresAt = '2000-01-01T00:00:00.000Z';
+      m.host.capacityLimits = [{ resource: 'UPDATE_CONCURRENCY', mode: 'UNLIMITED', value: null }];
+      await rewrite(dir, m, 'tenants', 'kind', 'RESELLER_BOT');
+    });
+    await dryThenApply(forged);
+    const tenant = (
+      await target.owner.db.execute(
+        sql`SELECT kind, parent_tenant_id, status FROM tenants WHERE id = ${HOSTED_2}`,
+      )
+    ).rows[0];
+    expect(tenant).toEqual({
+      kind: 'HOSTED',
+      parent_tenant_id: SEED_IDS.tenantA,
+      status: 'STOPPED',
+    });
+    const register = (
+      await target.owner.db.execute(
+        sql`SELECT state, expires_at FROM hosted_bots WHERE hosted_tenant_id = ${HOSTED_2}`,
+      )
+    ).rows[0];
+    expect(register).toEqual({ state: 'SUSPENDED', expires_at: null });
+    const limits = (
+      await target.owner.db.execute(
+        sql`SELECT count(*)::int AS n FROM tenant_capacity_limits WHERE tenant_id = ${HOSTED_2}`,
+      )
+    ).rows[0] as { n: number };
+    expect(limits.n).toBe(0);
   }, 600_000);
 
   it('the schema-version policy: equal, older, newer and diverged heads', () => {

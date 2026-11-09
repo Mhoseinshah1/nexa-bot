@@ -12,7 +12,21 @@
  * Pure data: no database, no I/O.
  */
 
+import { AGGREGATE_OWNERSHIP } from '@nexa/contracts';
+
 export type TenantArchiveClass = 'TENANT' | 'INSTALLATION' | 'NEVER';
+
+/**
+ * The aggregate types whose counter is the INSTALLATION's, shared by every tenant
+ * (`AGGREGATE_OWNERSHIP`): their `aggregate_sequences` rows are never exported, and a restore
+ * renumbers the archive's outbox messages of them after the target's own counter.
+ */
+export const SHARED_AGGREGATE_TYPES: readonly string[] = Object.entries(AGGREGATE_OWNERSHIP)
+  .filter(([, owner]) => owner === 'SHARED_KEY')
+  .map(([type]) => type)
+  .sort();
+/** The same list as fixed SQL (contract constants, never input). */
+const SHARED_AGGREGATES_SQL = SHARED_AGGREGATE_TYPES.map((type) => `'${type}'`).join(', ');
 
 /**
  * The installation's own state, or the owner's register of what he hosts. Never in a tenant
@@ -67,6 +81,7 @@ export const TENANT_KEYED_OTHERWISE: Readonly<Record<string, string>> = {
   tenants: 'id = $1',
   processed_messages: 'message_id IN (SELECT o.id FROM outbox_messages o WHERE o.tenant_id = $1)',
   aggregate_sequences:
+    `aggregate_type NOT IN (${SHARED_AGGREGATES_SQL}) AND ` +
     '(aggregate_type, aggregate_id) IN (SELECT o.aggregate_type, o.aggregate_id FROM outbox_messages o WHERE o.tenant_id = $1)',
 };
 
@@ -385,7 +400,8 @@ export const GLOBAL_UNIQUE_KEYS: readonly GlobalUniqueKey[] = [
     table: 'outbox_messages',
     index: 'outbox_messages_aggregate_sequence_key',
     columns: ['aggregate_type', 'aggregate_id', 'sequence'],
-    where: null,
+    // A shared aggregate's messages are renumbered on restore, so cannot collide.
+    where: `aggregate_type NOT IN (${SHARED_AGGREGATES_SQL})`,
     kind: 'GLOBAL',
   },
   {

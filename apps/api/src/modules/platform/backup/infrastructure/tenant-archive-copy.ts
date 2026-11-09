@@ -463,3 +463,32 @@ export function orderSelfReferenced(
   }
   return out;
 }
+
+/**
+ * Security review of PR-1: the most rows (and bytes) a self-referencing table may hold in
+ * memory while it is ordered parents-first. Fixed here, never taken from the archive: an
+ * upload that declares a huge table is refused rather than buffered.
+ */
+export const SELF_REFERENCE_BUFFER_LIMITS = { rows: 200_000, bytes: 256 * 1024 * 1024 } as const;
+
+/** Adds `rows` to `buffer` within `limits`, or refuses the archive. */
+export function bufferWithin(
+  buffer: (string | null)[][],
+  rows: readonly (string | null)[][],
+  state: { bytes: number },
+  table: string,
+  limits: { readonly rows: number; readonly bytes: number } = SELF_REFERENCE_BUFFER_LIMITS,
+): void {
+  for (const row of rows) {
+    state.bytes += row.reduce((sum, value) => sum + (value?.length ?? 0), 0);
+    buffer.push(row);
+    if (buffer.length > limits.rows || state.bytes > limits.bytes) {
+      throw new NexaError({
+        kind: 'PRECONDITION_FAILED',
+        code: PLATFORM_ERROR_CODES.BACKUP_ARCHIVE_MALFORMED,
+        message: 'A self-referencing table in a tenant archive is larger than a restore orders.',
+        details: { table },
+      });
+    }
+  }
+}

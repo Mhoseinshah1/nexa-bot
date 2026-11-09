@@ -12,8 +12,12 @@ import {
   withSystemScope,
   withTenantScopeIn,
 } from '../../../../infrastructure/persistence/database-scope.js';
-import { GLOBAL_UNIQUE_KEYS } from '../application/tenant-archive-inventory.js';
 import {
+  GLOBAL_UNIQUE_KEYS,
+  SHARED_AGGREGATE_TYPES,
+} from '../application/tenant-archive-inventory.js';
+import {
+  bufferWithin,
   ident,
   insertRows,
   orderSelfReferenced,
@@ -100,6 +104,21 @@ export async function preflightRestore(input: {
     sql`SELECT username, telegram_bot_id::text AS telegram_bot_id FROM bot_instances
          WHERE tenant_id = ${tenantId}::uuid`,
   );
+  // Security review of PR-1: the host facts are the archive's word. The owner admin it names
+  // must be an admin of the archived tenant itself (the register's foreign key would refuse
+  // anything else too); a bot it names that the tenant does not hold is dropped.
+  const owners = await rowsOf<{ n: number }>(
+    input.scratch.db,
+    sql`SELECT count(*)::int AS n FROM admins
+         WHERE tenant_id = ${tenantId}::uuid AND id = ${input.manifest.host.ownerAdminId}::uuid`,
+  );
+  if ((owners[0]?.n ?? 0) !== 1) {
+    throw new NexaError({
+      kind: 'PRECONDITION_FAILED',
+      code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+      message: "The archive's host facts name an owner who is not an admin of its tenant.",
+    });
+  }
   const keyTuples = new Map<string, string[][]>();
   for (const key of GLOBAL_UNIQUE_KEYS) {
     if (key.kind !== 'GLOBAL' || key.table === 'tenants' || key.table === 'bot_instances') continue;
@@ -196,15 +215,85 @@ export async function preflightRestore(input: {
 /** Tables the tenant binding cannot write (no `tenant_id`): written in the same transaction. */
 const UNBOUND = new Set(['tenants']);
 
-/** Raises each identity sequence of `shape` past the restored tenant's largest value. */
+/**
+ * Security review of PR-1: how far past the live sequence a restored identity value may sit.
+ * The sequences are SHARED by every tenant, so an archive must never be able to move one to
+ * the end of its range: a restored value more than this above the live value — or past half
+ * the column type's range — refuses the restore (the transaction rolls back).
+ */
+export const IDENTITY_RESTORE_HEADROOM = 10_000_000n;
+const IDENTITY_TYPE_MAX: Readonly<Record<string, bigint>> = {
+  smallint: 32_767n,
+  integer: 2_147_483_647n,
+  bigint: 9_223_372_036_854_775_807n,
+};
+
+/** Raises each identity sequence of `shape` past the restored tenant's largest value, bounded. */
 async function advanceIdentities(executor: SqlExecutor, shape: TableShape): Promise<void> {
   for (const column of shape.columns.filter((c) => c.identity)) {
-    // `nextval` first, so a sequence already past the restored values is never moved back.
-    await executor.execute(sql`
-      SELECT setval(pg_get_serial_sequence(${shape.name}, ${column.name}),
-                    GREATEST(nextval(pg_get_serial_sequence(${shape.name}, ${column.name})), m.top))
-        FROM (SELECT max(${ident(column.name)}) AS top FROM ${ident(shape.name)}) AS m
-       WHERE m.top IS NOT NULL`);
+    const [row] = await rowsOf<{ top: string | null; last: string | null }>(
+      executor,
+      sql`SELECT max(${ident(column.name)})::text AS top,
+                 pg_sequence_last_value(pg_get_serial_sequence(${shape.name}, ${column.name})::regclass)::text AS last
+            FROM ${ident(shape.name)}`,
+    );
+    if (row?.top === null || row?.top === undefined) continue;
+    const top = BigInt(row.top);
+    const last = row.last === null ? 0n : BigInt(row.last);
+    const typeMax = IDENTITY_TYPE_MAX[column.type] ?? IDENTITY_TYPE_MAX['integer']!;
+    if (top > last + IDENTITY_RESTORE_HEADROOM || top > typeMax / 2n) {
+      throw new NexaError({
+        kind: 'PRECONDITION_FAILED',
+        code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+        message:
+          'The archive carries a numbered row far past this installation’s shared sequence; ' +
+          'restoring it would exhaust the numbering of every tenant.',
+        details: { table: shape.name, column: column.name },
+      });
+    }
+    if (top > last) {
+      await executor.execute(
+        sql`SELECT setval(pg_get_serial_sequence(${shape.name}, ${column.name}), ${top.toString()}::bigint)`,
+      );
+    }
+  }
+}
+
+/**
+ * A SHARED_KEY aggregate's counter is the installation's (`AGGREGATE_OWNERSHIP`): the archive's
+ * messages of it are given the next numbers of THIS installation's counter, in their order,
+ * rather than the source's — which another tenant here may already hold. The counter row is
+ * locked for the transaction and advanced once every message is in.
+ */
+async function renumberShared(
+  executor: SqlExecutor,
+  columns: readonly string[],
+  rows: (string | null)[][],
+  counters: Map<string, bigint>,
+): Promise<void> {
+  const type = columns.indexOf('aggregate_type');
+  const id = columns.indexOf('aggregate_id');
+  const sequence = columns.indexOf('sequence');
+  for (const row of rows) {
+    const aggregateType = row[type] ?? '';
+    if (!SHARED_AGGREGATE_TYPES.includes(aggregateType)) continue;
+    const aggregateId = row[id] ?? '';
+    const key = `${aggregateType}\u0000${aggregateId}`;
+    let last = counters.get(key);
+    if (last === undefined) {
+      await executor.execute(sql`
+        INSERT INTO aggregate_sequences (aggregate_type, aggregate_id, last_sequence)
+        VALUES (${aggregateType}, ${aggregateId}, 0) ON CONFLICT DO NOTHING`);
+      const [locked] = await rowsOf<{ last: string }>(
+        executor,
+        sql`SELECT last_sequence::text AS last FROM aggregate_sequences
+             WHERE aggregate_type = ${aggregateType} AND aggregate_id = ${aggregateId} FOR UPDATE`,
+      );
+      last = BigInt(locked?.last ?? '0');
+    }
+    last += 1n;
+    counters.set(key, last);
+    row[sequence] = last.toString();
   }
 }
 
@@ -254,8 +343,18 @@ export async function applyRestore(input: {
         tenantId,
         async (columns, rows) => {
           const at = (name: string) => columns.indexOf(name);
+          // Security review of PR-1: exactly the archive's one tenant row, by its own id, and
+          // whatever the archive says its kind is, it lands as a HOSTED child of this install.
+          if (rows.length !== 1 || rows[0]?.[at('id')] !== tenantId) {
+            throw new NexaError({
+              kind: 'PRECONDITION_FAILED',
+              code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+              message: "The archive's tenant row is not the tenant its manifest names.",
+            });
+          }
           const fixed = rows.map((row) => {
             const out = [...row];
+            out[at('kind')] = 'HOSTED';
             out[at('parent_tenant_id')] = input.installationTenantId;
             out[at('status')] = 'STOPPED';
             out[at('slug')] = input.slug;
@@ -266,6 +365,7 @@ export async function applyRestore(input: {
       );
 
       // Every tenant row, bound to the restored tenant: RLS refuses a row of anyone else.
+      const counters = new Map<string, bigint>();
       await withTenantScopeIn(tx, tenantScope, async () => {
         for (const table of order) {
           if (UNBOUND.has(table)) continue;
@@ -280,6 +380,7 @@ export async function applyRestore(input: {
               const slots = secretSlots(table, columns);
               for (const row of rows)
                 resealRow(row, slots, input.archiveCipher, input.targetCipher);
+              if (table === 'outbox_messages') await renumberShared(tx, columns, rows, counters);
               await insertRows(
                 tx,
                 live,
@@ -292,24 +393,33 @@ export async function applyRestore(input: {
         }
       });
 
+      // The shared counters move past the messages renumbered onto them (locked above).
+      for (const [key, last] of counters) {
+        const [type, id] = key.split('\u0000') as [string, string];
+        await tx.execute(sql`
+          UPDATE aggregate_sequences SET last_sequence = GREATEST(last_sequence, ${last.toString()}::bigint)
+           WHERE aggregate_type = ${type} AND aggregate_id = ${id}`);
+      }
+
       // The register, in the installation tenant, from the host facts: SUSPENDED, no marks.
       const host = input.manifest.host;
       await tx.execute(sql`
         INSERT INTO hosted_bots (tenant_id, hosted_tenant_id, state, expires_at, owner_admin_id,
                                  created_by_admin_id, created_at, state_changed_at, updated_at)
         VALUES (${input.installationTenantId}::uuid, ${tenantId}::uuid, 'SUSPENDED',
-                ${host.expiresAt}::timestamptz, ${host.ownerAdminId}::uuid, ${input.actorAdminId}::uuid,
+                NULL, ${host.ownerAdminId}::uuid, ${input.actorAdminId}::uuid,
                 ${input.now}, ${input.now}, ${input.now})`);
       await tx.execute(sql`
         INSERT INTO hosted_bot_activations (tenant_id, hosted_tenant_id, bot_instance_id, domain,
                                             created_at, updated_at)
-        VALUES (${input.installationTenantId}::uuid, ${tenantId}::uuid, ${host.botInstanceId}::uuid,
+        VALUES (${input.installationTenantId}::uuid, ${tenantId}::uuid,
+                (SELECT b.id FROM bot_instances b
+                  WHERE b.tenant_id = ${tenantId}::uuid AND b.id = ${host.botInstanceId}::uuid),
                 ${host.domain}, ${input.now}, ${input.now})`);
-      for (const limit of host.capacityLimits) {
-        await tx.execute(sql`
-          INSERT INTO tenant_capacity_limits (tenant_id, resource, mode, value, updated_at)
-          VALUES (${tenantId}::uuid, ${limit.resource}, ${limit.mode}, ${limit.value}, ${input.now})`);
-      }
+      // Security review of PR-1: the expiry and the capacity limits are the HOST's policy, set
+      // by this owner in «میزبانی‌ها» — never taken from an archive anyone with its password could
+      // have written. The restored bot gets no expiry and this installation's default limits;
+      // the manifest's values are informational only.
 
       // The copy is counted and compared, inside the transaction: a difference rolls it back.
       const actual = await withTenantScopeIn(tx, tenantScope, async () => {
@@ -369,12 +479,13 @@ async function withScratchRows(
       async (stx) => {
         await pinSession(stx);
         const buffered: (string | null)[][] = [];
+        const bufferedBytes = { bytes: 0 };
         await readByCursor(
           stx,
           selectTenantRows(scratchShape, columns, tenantId),
           columns.length,
           async (rows) => {
-            if (whole) buffered.push(...rows);
+            if (whole) bufferWithin(buffered, rows, bufferedBytes, live.name);
             else await onRows(columns, rows);
           },
         );

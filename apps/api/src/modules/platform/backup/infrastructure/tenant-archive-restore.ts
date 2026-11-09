@@ -24,6 +24,7 @@ import {
 } from '../../../../infrastructure/persistence/database.js';
 import type { ExpectedMigration } from '../../../../infrastructure/persistence/migration-state.js';
 import {
+  bufferWithin,
   decodeCopyLine,
   encodeCopyLine,
   insertRows,
@@ -38,6 +39,7 @@ import {
   type TableShape,
 } from './tenant-archive-copy.js';
 import { archiveCipher, canonicalRow, secretSlots } from './tenant-archive-secrets.js';
+import { SHARED_AGGREGATE_TYPES } from '../application/tenant-archive-inventory.js';
 import { extractSevenZipEntry, listSevenZipEntries, type SevenZipOptions } from './seven-zip.js';
 
 /**
@@ -91,6 +93,17 @@ export async function openTenantArchive(input: {
   readonly password: string;
   readonly directory: string;
   readonly sevenZip: SevenZipOptions;
+  /**
+   * Security review of PR-1: bounds that do NOT come from the archive. The parts a manifest
+   * declares may total at most `maxExtractedBytes`, and must fit the free space of the work
+   * volume (`freeBytes`, null when unknown) with `headroomBytes` to spare; otherwise nothing
+   * is extracted. Each part is then cut off at its declared size.
+   */
+  readonly limits: {
+    readonly maxExtractedBytes: number;
+    readonly headroomBytes: number;
+    readonly freeBytes: () => Promise<number | null>;
+  };
 }): Promise<OpenedTenantArchive> {
   const entries = await listSevenZipEntries({
     archivePath: input.archivePath,
@@ -145,6 +158,19 @@ export async function openTenantArchive(input: {
   }
 
   try {
+    const declared = manifest.data.tables.reduce((sum, table) => sum + table.bytes, 0);
+    if (declared > input.limits.maxExtractedBytes) {
+      throw malformed('it declares more data than this installation restores');
+    }
+    const free = await input.limits.freeBytes();
+    if (free !== null && declared + input.limits.headroomBytes > free) {
+      throw new NexaError({
+        kind: 'PRECONDITION_FAILED',
+        code: PLATFORM_ERROR_CODES.BACKUP_DISK_INSUFFICIENT,
+        message: 'There is not enough free disk space to open this tenant archive.',
+        details: { declaredBytes: declared, freeBytes: free },
+      });
+    }
     const files = new Set(manifest.data.tables.map((table) => table.file));
     for (const entry of entries) {
       if (DATA_ENTRY.test(entry) && !files.has(entry))
@@ -296,9 +322,14 @@ export async function loadScratch(
       const columns = table.columns.map((column) => column.name);
       const selfReferencing = shape.selfReferences.length > 0;
       let batch: (string | null)[][] = [];
+      const buffered = { bytes: 0 };
       for await (const line of partLines(join(opened.directory, table.file))) {
+        if (selfReferencing) {
+          bufferWithin(batch, [decodeCopyLine(line)], buffered, table.name);
+          continue;
+        }
         batch.push(decodeCopyLine(line));
-        if (!selfReferencing && batch.length >= 500) {
+        if (batch.length >= 500) {
           await insertRows(tx, shape, columns, batch);
           batch = [];
         }
@@ -415,8 +446,20 @@ export async function canonicalDigests(
     if (shape === undefined) continue;
     const columns = shape.columns.map((column) => column.name);
     const slots = secretSlots(table, columns);
+    // A shared aggregate's outbox sequence is the target's own after a restore (renumbered):
+    // the canonical form compares the message, not the number the installation gave it.
+    const type = columns.indexOf('aggregate_type');
+    const sequence = columns.indexOf('sequence');
+    const masked = (row: (string | null)[]): (string | null)[] => {
+      if (table !== 'outbox_messages' || !SHARED_AGGREGATE_TYPES.includes(row[type] ?? '')) {
+        return row;
+      }
+      const out = [...row];
+      out[sequence] = null;
+      return out;
+    };
     const digest = await digestTable(executor, shape, columns, tenantId, (row) =>
-      canonicalRow(row, slots, cipher),
+      masked(canonicalRow(row, slots, cipher)),
     );
     out[table] = `${String(digest.rows)}:${digest.hex()}`;
   }
