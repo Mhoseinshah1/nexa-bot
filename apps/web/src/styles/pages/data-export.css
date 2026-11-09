@@ -1,0 +1,43 @@
+/*
+ * data-export — «خروجی داده», the open data export (phase 6B PR-3).
+ *
+ * Page-scoped classes only; every colour and size is a token, so both themes follow. One
+ * column on a phone: the list stacks, the download button takes the line, and nothing is
+ * wider than the 390px viewport.
+ */
+.data-export-page,
+.data-export-host {
+  min-width: 0;
+}
+.data-export-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: var(--gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.data-export-item {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-width: 0;
+  padding: 14px;
+}
+.data-export-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.data-export-download {
+  justify-self: start;
+  min-height: 44px;
+  text-decoration: none;
+}
+@media (max-width: 480px) {
+  .data-export-download {
+    justify-self: stretch;
+    justify-content: center;
+  }
+}

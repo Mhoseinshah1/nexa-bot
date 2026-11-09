@@ -46,6 +46,7 @@ import { PaymentGatewaysController } from './surfaces/web/payment-gateways.contr
 import { FxController } from './surfaces/web/fx.controller.js';
 import { CapacityController } from './surfaces/web/capacity.controller.js';
 import { HostingController } from './surfaces/web/hosting.controller.js';
+import { DataExportController } from './surfaces/web/data-export.controller.js';
 import { HostingActivationController } from './surfaces/web/hosting-activation.controller.js';
 import {
   HostedActivationController,
@@ -171,6 +172,7 @@ export class AppModule implements NestModule {
         FxController as never,
         CapacityController as never,
         HostingController as never,
+        DataExportController as never,
         HostingActivationController as never,
         HostedActivationController as never,
         HostedDomainCheckController as never,

@@ -2322,15 +2322,29 @@
     {
       "idx": 331,
       "version": "7",
-      "when": 1794245424356,
-      "tag": "0331_hosting_enter",
+      "when": 1794244923637,
+      "tag": "0331_tenant_data_exports",
       "breakpoints": true
     },
     {
       "idx": 332,
       "version": "7",
-      "when": 1794245440514,
-      "tag": "0332_host_admin_guard",
+      "when": 1794244944292,
+      "tag": "0332_data_export_permission_grant",
+      "breakpoints": true
+    },
+    {
+      "idx": 333,
+      "version": "7",
+      "when": 1794250381313,
+      "tag": "0333_hosting_enter",
+      "breakpoints": true
+    },
+    {
+      "idx": 334,
+      "version": "7",
+      "when": 1794250381452,
+      "tag": "0334_host_admin_guard",
       "breakpoints": true
     }
   ]

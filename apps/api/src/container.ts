@@ -1029,6 +1029,9 @@ import { HeavyJobGate } from './modules/platform/capacity/application/heavy-job-
 import { CapacityMonitor } from './modules/platform/capacity/application/capacity-monitor.js';
 // Phase 6A PR-3: the creator panel.
 import { buildHosting } from './modules/platform/hosting/infrastructure/build-hosting.js';
+import { buildDataExport } from './modules/platform/data-export/infrastructure/build-data-export.js';
+import type { DataExportService } from './modules/platform/data-export/application/data-export.service.js';
+import type { DataExportRunner } from './modules/platform/data-export/application/data-export.runner.js';
 import { buildHostedActivation } from './modules/platform/hosting/infrastructure/build-hosted-activation.js';
 import type { HostedActivationService } from './modules/platform/hosting/application/hosted-activation.service.js';
 import type { HostedOwnerActivationService } from './modules/platform/hosting/application/hosted-owner-activation.service.js';
@@ -1351,6 +1354,10 @@ export interface Container {
   readonly capacityMonitorLoop: CapacityMonitorLoop;
   /** Phase 6A PR-3: the creator panel (owner only, behind its own second factor). */
   readonly hostingSection: HostingSectionService;
+  /** Phase 6B PR-3: the open data export (`data.export`, and «میزبانی‌ها» for the host). */
+  readonly dataExport: DataExportService;
+  /** Phase 6B PR-3: its worker loop, started in the worker role. */
+  readonly dataExportRunner: DataExportRunner;
   readonly hostedActivation: HostedActivationService;
   readonly hostedOwnerActivation: HostedOwnerActivationService;
   /** Phase 6B «ورود به پنل»: mint (the owner, fresh code) and redeem (the hosted domain). */
@@ -9154,6 +9161,30 @@ export function createContainer(
     logger,
   });
 
+  // Phase 6B PR-3: the open data export — requests from the two doors, and the worker's loop
+  // that makes each ZIP through the heavy-job queue.
+  const { dataExport, dataExportRunner } = buildDataExport({
+    database,
+    db: database.db,
+    workDir: config.BACKUP_WORK_DIR,
+    leaseOwner,
+    uow,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    hostedBots: hostingRepository,
+    section: hostingSection,
+    owner: hostingOwner,
+    heavyJobs,
+    clock,
+    ids,
+    installationTenantId: () => installationTenantId,
+    logger,
+  });
+
   /*
    * Backup housekeeping (E5): archive retention, the plaintext-debris sweep, and
    * the disk-space and overdue conditions. In the worker, beside the scheduler,
@@ -9543,6 +9574,8 @@ export function createContainer(
     capacityLimits,
     capacityResolver,
     hostingSection,
+    dataExport,
+    dataExportRunner,
     hosting,
     hostedActivation,
     hostedOwnerActivation,
@@ -10164,6 +10197,7 @@ export function createContainer(
       );
       backupScheduler.stop();
       backupHousekeeping.stop();
+      dataExportRunner.stop();
       await capacityMonitorLoop.stop();
       legacyCompactionExecutor.stop();
       recoveryExecutor.stop();
