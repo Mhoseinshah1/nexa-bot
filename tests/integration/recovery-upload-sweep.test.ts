@@ -1,5 +1,6 @@
-import { readdir, stat, utimes } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { mkdtemp, readdir, rm, stat, utimes } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ActorContext } from '@nexa/contracts';
@@ -20,13 +21,17 @@ import {
 describe('recovery: refused uploads are removed, uploads in progress are not', () => {
   let ctx: TestContext;
   let owner: ActorContext;
+  let recoveryRoot: string;
   const DAY = 24 * 60 * 60 * 1000;
 
   beforeAll(async () => {
-    ctx = await createTestContext();
+    // The default root is under /var/lib/nexa, which a CI runner cannot create.
+    recoveryRoot = await mkdtemp(join(tmpdir(), 'nexa-upload-sweep-'));
+    ctx = await createTestContext({ RECOVERY_WORK_DIR: recoveryRoot });
   }, 120_000);
   afterAll(async () => {
     await ctx?.close();
+    if (recoveryRoot) await rm(recoveryRoot, { recursive: true, force: true });
   });
   beforeEach(async () => {
     await ctx.reset();
@@ -98,13 +103,19 @@ describe('recovery: refused uploads are removed, uploads in progress are not', (
       }),
     ).toBe(false);
     await ctx.container.database.db.execute(
-      sql`UPDATE recovery_requests SET confirmed_at = now() WHERE id = ${begun.request.id}`,
+      sql`UPDATE recovery_requests
+             SET confirmed_at = now(), confirmed_by_admin_id = ${owner.id},
+                 confirmed_checksum = 'c', confirmation_expires_at = now() + interval '1 hour'
+           WHERE id = ${begun.request.id}`,
     );
     expect(
       await repository.releaseKeptUpload({ id: begun.request.id, workspacePath: directory, now }),
     ).toBe(false);
     await ctx.container.database.db.execute(
-      sql`UPDATE recovery_requests SET confirmed_at = NULL WHERE id = ${begun.request.id}`,
+      sql`UPDATE recovery_requests
+             SET confirmed_at = NULL, confirmed_by_admin_id = NULL,
+                 confirmed_checksum = NULL, confirmation_expires_at = NULL
+           WHERE id = ${begun.request.id}`,
     );
     expect(
       await repository.releaseKeptUpload({ id: begun.request.id, workspacePath: directory, now }),
