@@ -286,7 +286,9 @@ export class TenantArchiveService {
         detail: 'Kept on this server: hosted archives are not sent to the owner’s topic.',
         attemptedAt: null,
       };
-      if (this.deps.delivery !== undefined) {
+      // A server-move member (ADR-0039 § 8) is sealed with the bundle password and leaves the
+      // server only inside the bundle: never to the hosted bot's group.
+      if (this.deps.delivery !== undefined && input.trigger !== 'MOVE') {
         try {
           delivered = await this.deps.delivery.deliver({
             tenantId: input.tenantId,

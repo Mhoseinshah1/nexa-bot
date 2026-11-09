@@ -333,8 +333,23 @@ export class BackupService {
        * Recorded nowhere else: the run is an ordinary, complete, verified backup.
        */
       readonly title?: string;
+      /**
+       * Phase 6B PR-4 (ADR-0039 § 8): a server-move member — sealed with this password (the
+       * bundle password the operator typed) instead of the stored one, and verified by opening
+       * it with exactly that password. Only with `deliver: false`: a member never leaves the
+       * server except inside the bundle.
+       */
+      readonly sealPassword?: string;
     } = {},
   ): Promise<BackupOutcome> {
+    if (options.sealPassword !== undefined && options.deliver !== false) {
+      throw new NexaError({
+        kind: 'INTERNAL',
+        code: PLATFORM_ERROR_CODES.BACKUP_VERIFICATION_FAILED,
+        message: 'A backup sealed with a one-time password is never delivered.',
+      });
+    }
+    const sealPassword = options.sealPassword;
     // Release any lock whose owner died before it could. Done first, and by
     // FAILING the abandoned run rather than adopting it: its files belong to a
     // process that may still be writing them.
@@ -462,9 +477,10 @@ export class BackupService {
       // Both read the stored backup password: one that does not decrypt refuses the run HERE,
       // before the dump, with the owner's reason rather than the cipher's (§2.7).
       const plannedFormat =
-        (await this.passwordReadable(() => this.deps.archiver.nextFormat?.())) ?? 'NXB';
+        (await this.passwordReadable(() => this.deps.archiver.nextFormat?.(sealPassword))) ??
+        'NXB';
       // A host that cannot compress is refused now, before an hour of dumping (Round 5B).
-      await this.passwordReadable(() => this.deps.archiver.preflight?.());
+      await this.passwordReadable(() => this.deps.archiver.preflight?.(sealPassword));
       await this.assertDiskRoom();
       const dump = await this.deps.tools.dump(workspace.dumpPath, {
         uncompressed: plannedFormat === 'SEVEN_ZIP',
@@ -531,6 +547,7 @@ export class BackupService {
         archivePath: workspace.archivePath,
         ...(workspace.sevenZipPath === undefined ? {} : { sevenZipPath: workspace.sevenZipPath }),
         manifest,
+        ...(sealPassword === undefined ? {} : { password: sealPassword }),
       });
       archiveBytes = BigInt(sealed.archiveBytes);
       archiveFormat = sealed.format ?? 'NXB';
@@ -563,7 +580,13 @@ export class BackupService {
         leaseOwner: this.deps.leaseOwner,
         now: this.deps.clock.now(),
       });
-      const verified = await this.verify(workspace, archivePath, checksum, digest.bytes);
+      const verified = await this.verify(
+        workspace,
+        archivePath,
+        checksum,
+        digest.bytes,
+        sealPassword,
+      );
       verifiedAt = this.deps.clock.now();
       lap('VERIFY_RESTORE');
       this.deps.logger.info(
@@ -832,12 +855,15 @@ export class BackupService {
     archivePath: string,
     expectedChecksum: string,
     expectedBytes: number,
+    /** A server-move member: opened with exactly the password it was sealed with. */
+    sealPassword?: string,
   ): Promise<{ tableCount: number }> {
     // The archive that was sealed — `.nxb` or `.7z` — opened by the same `open` a restore
     // uses, which picks the container by the file's own magic bytes.
     const opened = await this.deps.archiver.open({
       archivePath,
       dumpPath: workspace.verifyDumpPath,
+      ...(sealPassword === undefined ? {} : { passwords: [sealPassword] }),
     });
 
     if (opened.dumpChecksum !== expectedChecksum || opened.dumpBytes !== expectedBytes) {
