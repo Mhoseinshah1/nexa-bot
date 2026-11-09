@@ -1,5 +1,5 @@
 {
-  "id": "b1918edc-c965-48cd-809b-507178c40443",
+  "id": "beb54178-c152-4abc-a8c5-5e85988b4815",
   "prevId": "aa94154a-6fa9-440f-91ed-d4edfeb6af39",
   "version": "7",
   "dialect": "postgresql",
@@ -8260,7 +8260,7 @@
       "checkConstraints": {
         "recovery_requests_source_check": {
           "name": "recovery_requests_source_check",
-          "value": "source IN ('UPLOAD', 'LOCAL_RUN', 'MOVE')"
+          "value": "source IN ('UPLOAD', 'LOCAL_RUN')"
         },
         "recovery_requests_state_check": {
           "name": "recovery_requests_state_check",
@@ -8284,7 +8284,7 @@
         },
         "recovery_requests_confirmation_check": {
           "name": "recovery_requests_confirmation_check",
-          "value": "CASE WHEN source = 'MOVE'\n            THEN confirmed_by_admin_id IS NULL\n             AND num_nonnulls(confirmed_at, confirmed_checksum, confirmation_expires_at) IN (0, 3)\n            ELSE num_nonnulls(confirmed_at, confirmed_by_admin_id, confirmed_checksum, confirmation_expires_at) IN (0, 4)\n          END"
+          "value": "num_nonnulls(confirmed_at, confirmed_by_admin_id, confirmed_checksum, confirmation_expires_at) IN (0, 4)"
         }
       },
       "isRLSEnabled": false
@@ -8484,6 +8484,12 @@
         "pre_replace_run_id": {
           "name": "pre_replace_run_id",
           "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rewrite_xact_id": {
+          "name": "rewrite_xact_id",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": false
         },

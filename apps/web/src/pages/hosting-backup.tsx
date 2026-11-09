@@ -11,6 +11,7 @@ import {
   downloadHostedArchive,
   fetchHostedBackup,
   requestHostedBackupRun,
+  restoreHostedArchiveHere,
   setHostedBackupPassword,
   setHostedBackupSchedule,
 } from '../api/client';
@@ -30,6 +31,7 @@ import {
   useToast,
 } from '../ui/kit';
 import { CodePromptDialog } from './hosting-parts';
+import { RESTORES_KEY } from './hosting-restore';
 
 /**
  * Phase 6B PR-2 (ADR-0039 § 7): one hosted bot's backups, inside its card in «میزبانی‌ها».
@@ -43,7 +45,8 @@ type Dialog =
   | { readonly kind: 'schedule' }
   | { readonly kind: 'password' }
   | { readonly kind: 'run' }
-  | { readonly kind: 'download'; readonly archive: HostedBackupArchiveView };
+  | { readonly kind: 'download'; readonly archive: HostedBackupArchiveView }
+  | { readonly kind: 'restore-here'; readonly archive: HostedBackupArchiveView };
 
 export function hostedBackupKey(tenantId: string) {
   return ['hosting', 'bots', tenantId, 'backup'] as const;
@@ -63,9 +66,11 @@ export function HostedBackupSection({ bot }: { bot: HostedBotView }) {
   const [keep, setKeep] = useState<string | null>(null);
   const [password, setPassword] = useState('');
   const [repeat, setRepeat] = useState('');
+  const [archivePassword, setArchivePassword] = useState('');
   const keepId = useId();
   const passwordId = useId();
   const repeatId = useId();
+  const archivePasswordId = useId();
 
   const draft = {
     enabled: enabled ?? policy?.enabled ?? true,
@@ -177,16 +182,13 @@ export function HostedBackupSection({ bot }: { bot: HostedBotView }) {
                     key={archive.id}
                     archive={archive}
                     onDownload={() => setDialog({ kind: 'download', archive })}
+                    {...(bot.state === 'PURGED'
+                      ? {}
+                      : { onRestoreHere: () => setDialog({ kind: 'restore-here', archive }) })}
                   />
                 ))}
               </ul>
             )}
-            <div className="hosting-inline">
-              <Button size="sm" icon="refresh" disabled>
-                {t('web.hosted_backup_restore_here')}
-              </Button>
-              <span className="muted small">{t('web.hosted_backup_restore_here_unavailable')}</span>
-            </div>
           </>
         )}
       </StateSwitch>
@@ -256,6 +258,39 @@ export function HostedBackupSection({ bot }: { bot: HostedBotView }) {
           onDone={done}
         />
       )}
+      {dialog?.kind === 'restore-here' && (
+        <CodePromptDialog
+          title={t('web.hosted_backup_restore_here_title')}
+          hint={t('web.hosted_backup_restore_here_hint')}
+          confirmLabel={t('web.hosted_restore_dry_run')}
+          valid={archivePassword !== ''}
+          danger
+          run={({ proof }) =>
+            restoreHostedArchiveHere(bot.tenantId, dialog.archive.id, {
+              proof,
+              password: archivePassword,
+            })
+          }
+          onClose={() => {
+            setArchivePassword('');
+            setDialog(null);
+          }}
+          onDone={() => {
+            setArchivePassword('');
+            setDialog(null);
+            void queryClient.invalidateQueries({ queryKey: RESTORES_KEY });
+            toast({ tone: 'ok', message: t('web.hosted_backup_restore_here_done') });
+          }}
+        >
+          <Field label={t('web.hosted_backup_restore_here_password')} htmlFor={archivePasswordId}>
+            <SecretInput
+              id={archivePasswordId}
+              value={archivePassword}
+              onChange={(event) => setArchivePassword(event.target.value)}
+            />
+          </Field>
+        </CodePromptDialog>
+      )}
       {dialog?.kind === 'download' && (
         <CodePromptDialog
           title={t('web.hosted_backup_download_title')}
@@ -281,9 +316,12 @@ export function HostedBackupSection({ bot }: { bot: HostedBotView }) {
 function ArchiveRow({
   archive,
   onDownload,
+  onRestoreHere,
 }: {
   archive: HostedBackupArchiveView;
   onDownload: () => void;
+  /** Restore this archive over the same bot; absent for a purged bot (closed for good). */
+  onRestoreHere?: () => void;
 }) {
   const size = archive.archiveBytes === null ? null : splitBytes(BigInt(archive.archiveBytes));
   const status =
@@ -316,9 +354,16 @@ function ArchiveRow({
         <span className="muted small">{t('web.hosted_backup_delivery_group')}</span>
       )}
       {archive.available && (
-        <Button size="sm" icon="download" onClick={onDownload}>
-          {t('web.hosted_backup_download')}
-        </Button>
+        <div className="hosting-actions">
+          <Button size="sm" icon="download" onClick={onDownload}>
+            {t('web.hosted_backup_download')}
+          </Button>
+          {onRestoreHere !== undefined && (
+            <Button size="sm" icon="refresh" onClick={onRestoreHere}>
+              {t('web.hosted_backup_restore_here')}
+            </Button>
+          )}
+        </div>
       )}
     </li>
   );

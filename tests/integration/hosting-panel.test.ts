@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   API_PREFIX,
@@ -685,6 +685,46 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
           }),
         ),
       ).toBe(HOSTING_ERROR_CODES.STATE_CONFLICT);
+    });
+
+    it('while a REPLACE of the bot is in progress no transition and no expiry moves it (Phase 6B)', async () => {
+      const panel = await openPanel();
+      const at = new Date(now().getTime() + 3600_000).toISOString();
+      const id = (await createBot(panel, 'replacing', { expiresAt: at })).bot.tenantId;
+      const restore = api.container.ids.uuid();
+      await api.container.database.db.execute(sql`
+        INSERT INTO tenant_restores (id, tenant_id, hosted_tenant_id, mode, state, stage,
+                                     artifact_sha256, requested_by_admin_id, created_at, updated_at)
+        VALUES (${restore}, ${tenantA.tenantId}, ${id}, 'REPLACE', 'APPLYING', 'APPLY',
+                ${'b'.repeat(64)}, ${ownerActor.id}, now(), now())`);
+      const act = (action: 'suspend' | 'delete' | 'activate') =>
+        api.container.hosting[action](tenantA, ownerActor, panel.token, id, {
+          idempotencyKey: key(),
+          proof: { code: code(panel.secret) },
+        });
+      expect(await codeOf(act('suspend'))).toBe(HOSTING_ERROR_CODES.REPLACE_IN_PROGRESS);
+      expect(await codeOf(act('delete'))).toBe(HOSTING_ERROR_CODES.REPLACE_IN_PROGRESS);
+      // The expiry sweep leaves it alone too.
+      offsetMs += 3600_000;
+      expect(await api.container.hostedBotExpiry.runOnce(tenantA)).toBe(0);
+      expect((await tenantRow(id))?.status).toBe('ACTIVE');
+      // Once the replace ends, the bot is the owner's again.
+      await api.container.database.db.execute(sql`
+        UPDATE tenant_restores SET state = 'FAILED', failure_code = 'x', finished_at = now()
+         WHERE id = ${restore}`);
+      expect(await api.container.hostedBotExpiry.runOnce(tenantA)).toBe(1);
+      expect((await tenantRow(id))?.status).toBe('STOPPED');
+      // A held (stopped) bot being replaced is not re-opened from the panel either.
+      await api.container.database.db.execute(sql`
+        UPDATE tenant_restores SET state = 'VERIFYING', failure_code = NULL, finished_at = NULL
+         WHERE id = ${restore}`);
+      await api.container.hosting.setExpiry(tenantA, ownerActor, panel.token, id, {
+        idempotencyKey: key(),
+        proof: { code: code(panel.secret) },
+        expiresAt: null,
+      });
+      expect(await codeOf(act('activate'))).toBe(HOSTING_ERROR_CODES.REPLACE_IN_PROGRESS);
+      expect((await tenantRow(id))?.status).toBe('STOPPED');
     });
 
     it('deletes softly (restorable), and purges only a deleted bot with its slug typed', async () => {

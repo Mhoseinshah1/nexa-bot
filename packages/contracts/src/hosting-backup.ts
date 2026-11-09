@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import { BACKUP_ARCHIVE_PASSWORD_MIN_LENGTH, BACKUP_DAILY_TIME_PATTERN } from './backup.js';
 import { hostedBotSlugSchema, hostingProofSchema } from './hosting.js';
-import type { TenantRestoreStage, TenantRestoreState } from './tenant-archive.js';
+import {
+  TENANT_RESTORE_MODES,
+  type TenantRestoreMode,
+  type TenantRestoreStage,
+  type TenantRestoreState,
+} from './tenant-archive.js';
 
 /**
  * Phase 6B PR-2 (ADR-0039 § 7): hosted-bot backups in «میزبانی‌ها» — every hosted bot's
@@ -32,6 +37,12 @@ export const HOSTED_BACKUP_ROUTES = {
   password: '/hosting/bots/:tenantId/backup/password',
   run: '/hosting/bots/:tenantId/backup/run',
   download: '/hosting/bots/:tenantId/backup/archives/:runId/download',
+  /**
+   * «بازیابی روی همین سرور»: one of this bot's own verified archives, dry-run as a REPLACE of
+   * the same bot (ADR-0039 § 4). Answers the restore request, VERIFIED; it is confirmed and
+   * cancelled like an upload's.
+   */
+  restoreHere: '/hosting/bots/:tenantId/backup/archives/:runId/restore',
   /** «بازیابی ربات از فایل». */
   restores: '/hosting/restores',
   upload: '/hosting/restores/upload',
@@ -67,6 +78,12 @@ export const hostedBackupRunRequestSchema = z.object({
 });
 
 export const hostedBackupDownloadRequestSchema = z.object({ proof: hostingProofSchema });
+
+/** «بازیابی روی همین سرور»: the archive's password (the one it was sealed with). */
+export const hostedBackupRestoreHereRequestSchema = z.object({
+  proof: hostingProofSchema,
+  password: z.string().min(1).max(1024),
+});
 
 export interface HostedBackupArchiveView {
   readonly id: string;
@@ -114,8 +131,14 @@ export const tenantRestoreDryRunRequestSchema = z.object({
   proof: hostingProofSchema,
   /** The archive's password; used for this dry run and its confirmation, never stored plain. */
   password: z.string().min(1).max(1024),
-  /** A new slug, when the archive's is taken here by another tenant. */
+  /** A new slug, when the archive's is taken here by another tenant. NEW only. */
   slug: hostedBotSlugSchema.optional(),
+  /**
+   * `NEW` (the default): a hosted bot this server does not have. `REPLACE`: the SAME hosted
+   * bot of this installation (any state but PURGED), its rows replaced by the archive's after
+   * a PRE_REPLACE archive of them verifies. A REPLACE keeps the bot's slug.
+   */
+  mode: z.enum(TENANT_RESTORE_MODES).default('NEW'),
 });
 
 export const tenantRestoreConfirmRequestSchema = z.object({
@@ -130,6 +153,10 @@ export interface TenantRestoreView {
   readonly state: TenantRestoreState;
   readonly stage: TenantRestoreStage;
   readonly hostedTenantId: string;
+  /** NEW: a new hosted bot. REPLACE: the same bot's rows replaced (ADR-0039 § 4). */
+  readonly mode: TenantRestoreMode;
+  /** REPLACE: the verified archive of the replaced rows, once taken. */
+  readonly preReplaceRunId: string | null;
   readonly slug: string | null;
   readonly head: 'EQUAL' | 'OLDER' | null;
   /** Rows per table, from the verified scratch (dry run) or the live copy (applied). */

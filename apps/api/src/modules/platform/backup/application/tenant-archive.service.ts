@@ -175,6 +175,19 @@ export class TenantArchiveService {
     return admitted.ran ? admitted.result : { kind: 'NOT_ADMITTED' };
   }
 
+  /**
+   * One archive taken INSIDE a heavy job that is already admitted — the PRE_REPLACE archive a
+   * replace takes while it holds the exclusive RESTORE ticket (a second ticket would wait on
+   * the first forever). The same pipeline, stages and run row as `run`.
+   */
+  async runInsideAdmittedJob(input: {
+    readonly tenantId: string;
+    readonly trigger: BackupTrigger;
+    readonly password: string;
+  }): Promise<TenantArchiveOutcome> {
+    return this.runAdmitted(input);
+  }
+
   private async runAdmitted(input: {
     readonly tenantId: string;
     readonly trigger: BackupTrigger;
@@ -287,8 +300,14 @@ export class TenantArchiveService {
         attemptedAt: null,
       };
       // A server-move member (ADR-0039 § 8) is sealed with the bundle password and leaves the
-      // server only inside the bundle: never to the hosted bot's group.
-      if (this.deps.delivery !== undefined && input.trigger !== 'MOVE') {
+      // server only inside the bundle: never to the hosted bot's group. A PRE_REPLACE archive
+      // stays on this server too: it is the replace's safety copy, and its delivery would write
+      // into the very bot the replace compares row for row.
+      if (
+        this.deps.delivery !== undefined &&
+        input.trigger !== 'MOVE' &&
+        input.trigger !== 'PRE_REPLACE'
+      ) {
         try {
           delivered = await this.deps.delivery.deliver({
             tenantId: input.tenantId,
@@ -419,6 +438,11 @@ export interface TenantRestoreEngine {
     readonly installationTenantId: string;
     readonly actorAdminId: string;
     readonly slug?: string;
+    /** Absent: NEW. REPLACE runs `applyReplace` under `requestId`'s allowance. */
+    readonly mode?: TenantRestoreMode;
+    readonly requestId?: string;
+    /** REPLACE apply: the held bot, as it must still be under the replace's lock. */
+    readonly held?: ReplaceHeld;
     readonly apply: boolean;
     readonly onOpened: (manifest: TenantArchiveManifest) => Promise<void>;
     readonly onStage: (stage: TenantRestoreStage) => Promise<void>;
@@ -451,10 +475,22 @@ export interface TenantRestoreRepository {
     input: {
       readonly id: string;
       readonly artifactSha256: string;
+      /** The confirmation is of a dry run of this mode only. */
+      readonly mode: TenantRestoreMode;
       readonly leaseOwner: string;
       readonly now: Date;
     },
   ): Promise<{ readonly hostedTenantId: string } | null>;
+  /** REPLACE: the verified PRE_REPLACE archive of the rows about to be replaced. */
+  setPreReplaceRun(
+    scope: TenantContext,
+    input: {
+      readonly id: string;
+      readonly runId: string;
+      readonly leaseOwner: string;
+      readonly now: Date;
+    },
+  ): Promise<void>;
   /** Refreshes the lease of a request this process is working on. */
   heartbeat(
     scope: TenantContext,
@@ -492,11 +528,51 @@ export interface TenantRestoreRepository {
   ): Promise<void>;
 }
 
+/**
+ * What a REPLACE needs besides the engine (ADR-0039 § 4): the bot held still while its rows are
+ * archived and replaced, the PRE_REPLACE archive itself, and the bot returned to the status its
+ * register state holds — after a success (the apply does it in its own transaction), a failure,
+ * or a crash (the next admitted restore reconciles).
+ */
+export interface TenantReplaceHooks {
+  /**
+   * An ACTIVE hosted bot stops taking work (its tenant STOPPED; the register is untouched).
+   * Answers the register state it was held in.
+   */
+  hold(installationTenantId: string, hostedTenantId: string): Promise<string>;
+  /**
+   * The held bot's rows (count and canonical digest per table), read BEFORE its PRE_REPLACE
+   * archive. The replace's transaction compares them again under its lock and refuses
+   * (`tenant_archive.changed_during_replace`) when anything moved: a row written after the
+   * archive's snapshot is never deleted.
+   */
+  snapshot(hostedTenantId: string, state: string): Promise<ReplaceHeld>;
+  /**
+   * The tenant back at the status its register state holds (`HOSTED_BOT_TENANT_STATUS`); null
+   * reconciles every hosted bot of the installation (a crashed replace's hold).
+   */
+  release(installationTenantId: string, hostedTenantId: string | null): Promise<void>;
+  /**
+   * The PRE_REPLACE archive of the bot's current rows, through the unmodified tenant pipeline,
+   * inside the admitted job. Answers its run id once it SUCCEEDED and verified; throws
+   * `tenant_archive.pre_replace_failed` otherwise — and then nothing is replaced.
+   */
+  preReplace(hostedTenantId: string): Promise<string>;
+}
+
+/** What a held bot was before its PRE_REPLACE archive (`TenantReplaceHooks.snapshot`). */
+export interface ReplaceHeld {
+  readonly state: string;
+  readonly digests: Readonly<Record<string, string>>;
+}
+
 export class TenantRestoreService {
   constructor(
     private readonly deps: {
       readonly engine: TenantRestoreEngine;
       readonly requests: TenantRestoreRepository;
+      /** Absent: a REPLACE is refused (`tenant_archive.pre_replace_failed`). */
+      readonly replace?: TenantReplaceHooks;
       readonly heavyJobs: HeavyJobRunner;
       readonly clock: Clock;
       readonly ids: IdGenerator;
@@ -510,8 +586,13 @@ export class TenantRestoreService {
    * One restore of an uploaded tenant archive. Without `confirmRequestId` it is the dry run:
    * everything up to and including the refusal checks, nothing written to the live database,
    * the request row left VERIFIED. With it — the owner's confirmation of that row, for the same
-   * file (its SHA-256) — the whole verification is repeated and then applied. `REPLACE` is refused until the tenant
-   * rewrite allowance exists (ADR-0039 § 10).
+   * file (its SHA-256) — the whole verification is repeated and then applied.
+   *
+   * `REPLACE` (ADR-0039 § 4): the dry run is a NEW one's, with the same bot of this
+   * installation as its target. The apply holds an ACTIVE bot still, takes the PRE_REPLACE
+   * archive (which must verify, or nothing happens), repeats the verification and replaces the
+   * rows in ONE transaction under the tenant rewrite allowance (§ 10); whatever happens, the
+   * bot ends at the status its register state holds.
    */
   async restore(input: {
     readonly installationTenantId: string;
@@ -526,13 +607,12 @@ export class TenantRestoreService {
     /** A dry run's request id, chosen by the caller (its upload is filed under it). */
     readonly requestId?: string;
   }): Promise<{ readonly requestId: string; readonly summary: TenantRestoreSummary } | null> {
-    if (input.mode === 'REPLACE') {
+    const replace = input.mode === 'REPLACE' ? this.deps.replace : undefined;
+    if (input.mode === 'REPLACE' && replace === undefined) {
       throw new NexaError({
         kind: 'PRECONDITION_FAILED',
-        code: TENANT_ARCHIVE_ERROR_CODES.REPLACE_UNAVAILABLE,
-        message:
-          'Restoring over an existing hosted tenant needs the tenant rewrite allowance, which is ' +
-          'not built (ADR-0039 § 10). Restore it as a new hosted bot.',
+        code: TENANT_ARCHIVE_ERROR_CODES.PRE_REPLACE_FAILED,
+        message: 'This process cannot take the archive a replace needs first.',
       });
     }
     const scope: TenantContext = {
@@ -558,6 +638,8 @@ export class TenantRestoreService {
           staleBefore: new Date(now0.getTime() - BACKUP_LEASE_STALE_AFTER_MS),
           now: now0,
         });
+        // A replace whose process died may have left its bot held: back to its register's status.
+        await this.deps.replace?.release(input.installationTenantId, null);
         await this.deps.engine.sweepAbandonedScratch();
         if (apply) {
           // Confirm only once admitted: a refused admission must leave the row VERIFIED (retryable),
@@ -565,6 +647,7 @@ export class TenantRestoreService {
           const confirmed = await this.deps.requests.confirm(scope, {
             id,
             artifactSha256,
+            mode: input.mode,
             leaseOwner,
             now: this.deps.clock.now(),
           });
@@ -585,7 +668,24 @@ export class TenantRestoreService {
             .catch(() => undefined);
         }, BACKUP_LEASE_HEARTBEAT_MS);
         beat.unref?.();
+        let held: string | null = null;
+        let heldAs: ReplaceHeld | undefined;
         try {
+          if (apply && replace !== undefined && confirmedTenant !== null) {
+            // ADR-0039 § 4 step 2: the rows about to be replaced, archived and VERIFIED first,
+            // with the bot held still so the archive is what the replace deletes — and its rows
+            // read before the archive, so the replace can prove nothing was written since.
+            held = confirmedTenant;
+            const state = await replace.hold(input.installationTenantId, confirmedTenant);
+            heldAs = await replace.snapshot(confirmedTenant, state);
+            const runId = await replace.preReplace(confirmedTenant);
+            await this.deps.requests.setPreReplaceRun(scope, {
+              id,
+              runId,
+              leaseOwner,
+              now: this.deps.clock.now(),
+            });
+          }
           const summary = await this.deps.engine.restore({
             archivePath: input.archivePath,
             // Finding 5: the bytes the engine reads are the bytes this request is bound to.
@@ -595,6 +695,9 @@ export class TenantRestoreService {
             installationTenantId: input.installationTenantId,
             actorAdminId: input.actorAdminId,
             ...(input.slug === undefined ? {} : { slug: input.slug }),
+            mode: input.mode,
+            requestId: id,
+            ...(heldAs === undefined ? {} : { held: heldAs }),
             apply,
             onOpened: async (manifest) => {
               if (apply) {
@@ -659,6 +762,11 @@ export class TenantRestoreService {
           throw error;
         } finally {
           clearInterval(beat);
+          // Success already set it in the replace's own transaction; this is idempotent.
+          // A release that fails leaves the hold to the next admitted restore's reconcile.
+          if (held !== null) {
+            await replace?.release(input.installationTenantId, held).catch(() => undefined);
+          }
         }
       },
       this.deps.queue,

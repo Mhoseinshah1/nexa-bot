@@ -2357,8 +2357,15 @@
     {
       "idx": 336,
       "version": "7",
-      "when": 1794254957042,
-      "tag": "0336_recovery_move_source",
+      "when": 1794254318346,
+      "tag": "0336_tenant_rewrite_xact",
+      "breakpoints": true
+    },
+    {
+      "idx": 337,
+      "version": "7",
+      "when": 1794254327654,
+      "tag": "0337_tenant_rewrite_allowance",
       "breakpoints": true
     }
   ]

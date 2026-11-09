@@ -692,7 +692,7 @@ Changes to the design above, each decided in PR-1 and binding on later PRs:
   is bound to the uploaded file's SHA-256, repeats the whole verification and applies. A
   `VERIFIED` row nobody confirms holds the slot: cancelling and expiring it is NOT built in
   PR-1 — PR-2's restore page must offer «لغو» and expire a stale `VERIFIED` row (open).
-- **Replace — NOT DONE in PR-1.** `mode: 'REPLACE'` is refused
+- **Replace — NOT DONE in PR-1** (built later, § As built: replace). `mode: 'REPLACE'` is refused
   (`tenant_archive.replace_unavailable`). The rewrite allowance of § 10 needs a DELETE branch
   and a refusing/accepting test in each of the 41 append-only guard functions; that was not
   built and proven in this PR, so a new-tenant restore is the only mode.
@@ -765,7 +765,7 @@ Changes to the design above, each decided in PR-2 and binding on later PRs:
   `hosting.archive_password`, entity = the restore id). «لغو» and a 24-hour expiry withdraw an
   unconfirmed VERIFIED row (`tenant_archive.restore_cancelled` / `.dry_run_expired`), closing
   PR-1's open item; uploads are removed once their request finishes, orphans after a day (A3).
-- **«بازیابی روی همین سرور» is NOT built.** On the same server the bot's tenant id is present, so
+- **«بازیابی روی همین سرور» is NOT built** (built later, § As built: replace). On the same server the bot's tenant id is present, so
   only REPLACE could restore it, and REPLACE is not built (PR-1). The button is drawn disabled
   with that reason.
 - **Password change** replaces the stored ciphertext; earlier archives open with the password
@@ -941,10 +941,131 @@ hosted tenant`). Outbox events and operational events of an entered session stil
 - **Inventory.** `hosting_enter_tokens` is INSTALLATION (a live token must not travel).
 - **Mutation checks:** `scripts/claude/hosting-enter-mutation.sh`.
 
+## As built: replace (`feat/6b-tenant-replace`) — restoring over the same hosted bot
+
+The owner added this to the phase: restoring a hosted archive over the SAME tenant on the same
+server, a `DELETED` bot included. § 4's replace and § 10's tenant rewrite allowance are now
+built; these decisions bind later work:
+
+- **Who may be replaced.** Only a tenant that is a `HOSTED` child of THIS installation with a
+  register row here, in any state but `PURGED` (`ACTIVE`, `SUSPENDED`, `EXPIRED`, `DELETED`);
+  anything else is `tenant_archive.replace_target_missing` or `.purged`. The archive's tenant id
+  IS the target — never another bot's. «بازیابی روی همین سرور» additionally requires the archive
+  to be that bot's own (a verified, unpruned run of it, the path derived from the two ids).
+- **Dry run.** Exactly a NEW restore's verification into scratch (open, head policy, load,
+  byte compare, secrets read), then the replace's refusals: the bot, domain and every GLOBAL
+  unique key may not be held by ANOTHER tenant (the bot's own rows are about to go). The slug
+  is the live bot's; a NEW slug is ignored. Nothing is written but the request row (mode
+  `REPLACE`), left VERIFIED. A confirmation is bound to the mode as well as the file's SHA-256.
+- **Apply, in the recovery role, inside ONE admitted exclusive `RESTORE` ticket.** In order:
+  1. **hold**: an `ACTIVE` bot's tenant is set `STOPPED` (every write path holds the tenant row
+     `FOR SHARE`, so in-flight work finishes and new work is refused); the register is untouched;
+  2. **PRE_REPLACE**: a tenant archive of the current rows through the unmodified pipeline
+     (`runInsideAdmittedJob`: the same run row and stages, no second ticket — it would wait on
+     the first forever), sealed with the bot's own backup password, kept under
+     `hosted/<tenant>/<run>/` like any other of its archives and named on the request
+     (`pre_replace_run_id`). No password, or anything short of a verified success:
+     `tenant_archive.pre_replace_failed`, and nothing is replaced. **Deviation from § 4's
+     order:** the PRE_REPLACE archive is taken BEFORE the uploaded archive is re-verified for
+     the apply (the dry run already verified it once, and the apply repeats all of it after):
+     a PRE_REPLACE run sweeps idle tenant scratch databases first, which would drop the
+     replace's own scratch if it were already open;
+  3. the archive is re-verified into scratch (as NEW);
+  4. **ONE transaction** (system path, reason `tenant archive: replace a hosted tenant's rows`):
+     locks the tenant and register rows `FOR UPDATE`; claims the allowance by writing
+     `pg_current_xact_id()` into its own request row (APPLYING, REPLACE, this tenant) and
+     naming it in `nexa.tenant_rewrite`; defers `hosted_bots_owner_admin_fk` (now `DEFERRABLE
+INITIALLY IMMEDIATE`); deletes the tenant's NEVER rows that reference its rows (every
+     sign-in session — the host's entered ones included — challenges, read windows, connect
+     codes, probe claims) and expires the host's unspent «ورود به پنل» tokens for it; deletes
+     every TENANT table's rows children first (`processed_messages` and `aggregate_sequences`
+     first, through the outbox) — a table an append-only guard protects on the system path,
+     where the guard admits only this tenant, and every other table bound to the tenant under
+     row-level security; updates the `tenants` row's settings from the archive (never its id,
+     kind, parent, slug or status); inserts every archive row exactly as a NEW restore does
+     (bound to the tenant, secrets resealed under the active key, unpublished outbox messages
+     landed exhausted, shared aggregates renumbered); points the register at the archive's
+     owner admin when the current one is not in it, and the activation at the archive's bot
+     (token and webhook marks cleared only when the bot changed; the domain and its DNS/TLS
+     marks stay); sets the tenant's status to what its register state holds; compares counts
+     and canonical digests of every table with the scratch; and only then commits. **Any
+     failure at any point rolls the whole transaction back: the old rows stay until the new
+     ones are in and counted**, and the PRE_REPLACE archive keeps them after a success.
+- **The bot's status afterwards** is `HOSTED_BOT_TENANT_STATUS[register state]` — the state
+  it had: an `ACTIVE` bot is `ACTIVE` again, a `DELETED` one stays `DELETED`/`DISABLED` until the
+  owner activates it (the existing `DELETED → ACTIVE` step, with its token re-entry). After a
+  failure the service releases the hold; after a crash the next admitted restore reconciles
+  every hosted tenant of the installation to its register's status (only the hosting system
+  path writes a hosted tenant's status, always to that mapping, so this undoes no decision).
+- **The window cannot lose a row** (lead review of #454, Codex P1). Two locks, either enough
+  alone:
+  - the hold answers the register state it held, and a **snapshot** of the bot is read right
+    after the hold and BEFORE the PRE_REPLACE archive: count and canonical digest of every
+    TENANT table (secrets by plaintext; the outbox's relay bookkeeping left out, a held bot's
+    messages may still be relayed). The replace's transaction, under its `FOR UPDATE` lock of
+    the tenant and register rows, requires the same register state, the held status, and the
+    same snapshot; anything else is `tenant_archive.changed_during_replace` and NOTHING is
+    deleted — a row written after the archive's snapshot is never lost. Inside that
+    transaction (READ COMMITTED) the comparison reads every row `FOR UPDATE`, so no compared
+    row can change or go before it ends; a row INSERTED meanwhile is caught by the count each
+    `DELETE` must report (exactly the compared rows, else the same refusal and a rollback) and
+    by the bot's tables being empty after the deletes. Most tables also cannot take such an
+    insert at all: their foreign key to `tenants` needs a KEY SHARE lock the replace's
+    `FOR UPDATE` of the tenant row refuses until it ends; the rest (`audit_logs`,
+    `operational_events`, `outbox_messages`, `request_idempotency`, and the two keyed through
+    the outbox) are covered by the counts. A higher isolation level was not used: SSI detects
+    nothing against a READ COMMITTED writer, and REPEATABLE READ would hide a concurrent
+    insert from the very DELETE that must see it. A PRE_REPLACE archive
+    is never delivered to the bot's group (delivery would write into the bot being compared);
+  - while a REPLACE of a bot is `VERIFYING` or `APPLYING`, no hosting transition moves it:
+    suspend, activate, delete and purge answer `hosting.replace_in_progress` (before the code
+    and again in the transaction), and the register `UPDATE` itself refuses, so the expiry
+    sweep leaves it too. Setting an expiry date is not a transition and stays allowed.
+- **The allowance (§ 10), as built** (migration `0337`). `nexa_tenant_rewrite_allowed(uuid)`:
+  `SECURITY DEFINER`, owned by the migration owner, `search_path = pg_catalog`, `EXECUTE`
+  revoked from PUBLIC (and from nexa_app, re-asserted with the role grants after a `--no-acl`
+  restore) and granted to nexa_system only; true only for a `tenant_restores` row named by
+  `nexa.tenant_rewrite` that is REPLACE, APPLYING, for exactly that tenant and claimed by the
+  current transaction. `nexa_tenant_rewrite_permits(uuid)`: `SECURITY INVOKER`, requires
+  `current_user = 'nexa_system'` and the replace's literal reason before calling it (nested
+  `IF`s: SQL does not order an `AND`). **12 guard functions fire on DELETE today** —
+  `nexa_reject_mutation` and the table-specific ones (gateway invoice cards, legacy cleanup,
+  legacy history, notification evidence, order cashback, order custom-service terms, order
+  referral commissions, referenced products, system roles, published terms, and PR-5's HOST
+  admin guard); each gained one branch at its top and is otherwise unchanged; UPDATE stays
+  refused. ADR § 10's "41" counted every trigger function: the other 29 fire only on INSERT or
+  UPDATE and cannot see a DELETE, so they are unchanged. The one other DELETE trigger, the
+  last-owner check, is a deferred constraint trigger and keeps refusing: a replace must commit
+  with an active owner. `tenant_erasures` is still not built; the function names only
+  `tenant_restores`.
+- **Proof.** `tests/integration/tenant-rewrite-allowance.test.ts` reads every (guard, table)
+  pair that fires on DELETE from `pg_trigger` (so a guard added without the branch fails) and
+  proves on a probe of each: refused outside the run; admitted inside; refused as nexa_app,
+  under another reason, for another tenant's row, with the request not APPLYING, with another
+  id named, and in a transaction that did not claim it; UPDATE refused inside. It also checks
+  the lookup's definer/search_path/grants. `tests/integration/isolation-proof/tenant-replace.test.ts`
+  replaces HOSTED_1 of the isolation world end to end (exact archive afterwards, the
+  installation and HOSTED_2 unchanged table by table, the HOST principal and its entered
+  session gone, PRE_REPLACE verified, the allowance dead after commit), fails a forged archive
+  mid-transaction with every old row intact, replaces a `DELETED` bot, and refuses no password,
+  `PURGED` and a foreign bot. Mutation checks: `scripts/claude/tenant-archive-mutation.sh`
+  (twelve source, six SQL).
+- **UI.** Each verified archive row in the bot's backups offers «بازیابی روی همین سرور» (fresh
+  code and the archive's password: a later password change does not reopen older archives),
+  which leaves a VERIFIED replace in «بازیابی ربات از فایل»; that page's dry run has
+  «جایگزینی ربات موجود», shows each request's mode and PRE_REPLACE archive, and confirms a
+  replace with its own warning. The owner's log records the dry run and the confirmation
+  (with the mode and the bot); the hosted tenant's audit log receives nothing of it (D5).
+- **Contract.** `tenant_archive.replace_unavailable` is removed; `.replace_target_missing`,
+  `.pre_replace_failed`, `.changed_during_replace` and `hosting.replace_in_progress` added; the dry run's `mode`, the view's `mode`/`preReplaceRunId`, the
+  `restoreHere` route; system-path reasons `tenant archive: replace a hosted tenant's rows`,
+  `…: the hosted bot a replace writes over`, `…: hold a hosted bot still for its replace`,
+  `…: return a hosted bot to its register status` (pinned).
+
 ## Open
 
 - Off-site (S3) copies of hosted archives: the destination and its credentials are the owner's;
   whether hosted archives go there is his call (`docs/open-questions.md`).
-- § 6 and § 10 as above.
+- § 6 as above; § 10's erasure itself (the allowance is built for replace only).
 - A hosted tenant with reseller children cannot be archived (`has_child_tenants`) until a subtree
   archive is designed.

@@ -351,11 +351,13 @@ async function digestTable(
   columns: readonly string[],
   tenantId: string,
   transform?: (row: (string | null)[]) => (string | null)[],
+  lockRows = false,
 ): Promise<LineDigest> {
   const digest = new LineDigest();
+  const select = selectTenantRows(shape, columns, tenantId);
   await readByCursor(
     executor,
-    selectTenantRows(shape, columns, tenantId),
+    lockRows ? sql`${select} FOR UPDATE` : select,
     columns.length,
     async (rows) => {
       for (const row of rows)
@@ -437,16 +439,21 @@ export async function tenantCounts(
 export function canonicalMask(
   table: string,
   columns: readonly string[],
+  ignoreRelayMarks = false,
 ): (row: (string | null)[]) => (string | null)[] {
   if (table !== 'outbox_messages') return (row) => row;
   const type = columns.indexOf('aggregate_type');
   const sequence = columns.indexOf('sequence');
   const published = columns.indexOf('published_at');
   const delivery = ['exhausted_at', 'last_error', 'next_attempt_at'].map((c) => columns.indexOf(c));
+  const relay = ['published_at', 'attempts', 'last_error', 'next_attempt_at', 'exhausted_at']
+    .map((c) => columns.indexOf(c))
+    .filter((at) => at >= 0);
   return (row) => {
     const out = [...row];
     if (SHARED_AGGREGATE_TYPES.includes(row[type] ?? '')) out[sequence] = null;
     if (row[published] === null) for (const at of delivery) if (at >= 0) out[at] = null;
+    if (ignoreRelayMarks) for (const at of relay) out[at] = null;
     return out;
   };
 }
@@ -464,22 +471,41 @@ export async function canonicalDigests(
   tables: readonly string[],
   tenantId: string,
   cipher: SecretCipher,
-  columnsOf?: (table: string) => readonly string[] | undefined,
+  options: {
+    /**
+     * Phase 6B replace: compare the outbox without the relay's bookkeeping (publication,
+     * attempts, errors, retries) — a held bot's messages may still be relayed, which is not a
+     * change of its data.
+     */
+    readonly ignoreRelayMarks?: boolean;
+    /**
+     * Phase 6B replace: every row read is locked `FOR UPDATE` until the transaction ends, so
+     * nothing compared can change before it is deleted.
+     */
+    readonly lockRows?: boolean;
+    /** Phase 6B PR-4 (server move): read a table over this column list instead of its own. */
+    readonly columnsOf?: (table: string) => readonly string[] | undefined;
+  } = {},
 ): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const table of tables) {
     const shape = catalogue.get(table);
     if (shape === undefined) continue;
     const own = shape.columns.map((column) => column.name);
-    const columns = columnsOf?.(table) ?? own;
+    const columns = options.columnsOf?.(table) ?? own;
     if (columns.some((column) => !own.includes(column))) {
       out[table] = 'missing-column';
       continue;
     }
     const slots = secretSlots(table, columns);
-    const masked = canonicalMask(table, columns);
-    const digest = await digestTable(executor, shape, columns, tenantId, (row) =>
-      masked(canonicalRow(row, slots, cipher)),
+    const masked = canonicalMask(table, columns, options.ignoreRelayMarks === true);
+    const digest = await digestTable(
+      executor,
+      shape,
+      columns,
+      tenantId,
+      (row) => masked(canonicalRow(row, slots, cipher)),
+      options.lockRows === true,
     );
     out[table] = `${String(digest.rows)}:${digest.hex()}`;
   }

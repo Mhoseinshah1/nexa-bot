@@ -182,6 +182,11 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleTenantRepository.findById',
   'DrizzleTenantRepository.findBySlug',
   'DrizzleTenantRepository.findPrimary',
+  // Phase 6B replace: holding a hosted bot still for its replace and returning it to its
+  // register's status are installation work on a hosted tenant's row (each also names its
+  // own literal reason below); the reconcile after a crash spans every hosted bot.
+  'DrizzleTenantReplaceHold.hold',
+  'DrizzleTenantReplaceHold.release',
   'DrizzleTicketRepository.purgeReplyFileContentBefore',
   'OutboxRelay.isFresh',
   'OutboxRelay.isHealthy',
@@ -251,4 +256,16 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'reason: tenant archive: bind a hosted tenant for export',
   'reason: tenant archive: create the restored tenant and its register',
   'reason: tenant archive: global key collisions before restore',
+  // Phase 6B, replace (ADR-0039 § 4, § 10): restoring a hosted archive over the SAME hosted
+  // bot. Installation work on a hosted tenant's rows: the dry run reads the bot it writes over
+  // (a HOSTED child of this installation, never PURGED); an ACTIVE bot is held still (its
+  // tenant STOPPED) for the PRE_REPLACE archive and the replace, and returned to the status its
+  // register state holds after it (or after a crash, by the next admitted restore); and the
+  // replace's ONE transaction runs under its own reason, which the append-only guards compare
+  // verbatim before they admit a DELETE of that tenant's rows (the deletes of unguarded tables
+  // and every insert are bound to the tenant, under RLS).
+  "reason: tenant archive: replace a hosted tenant's rows",
+  'reason: tenant archive: the hosted bot a replace writes over',
+  'reason: tenant archive: hold a hosted bot still for its replace',
+  'reason: tenant archive: return a hosted bot to its register status',
 ];

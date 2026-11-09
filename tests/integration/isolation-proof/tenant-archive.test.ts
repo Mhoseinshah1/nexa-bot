@@ -607,7 +607,7 @@ describe('tenant archive (Phase 6B PR-1) — export, verify, restore, as nexa_ap
     expect(request).toEqual({ state: 'SUCCEEDED', stage: 'DONE', confirmed: true });
   }, 600_000);
 
-  it('refuses the same tenant twice, never merging, and refuses replace', async () => {
+  it('refuses the same tenant twice, never merging; a replace needs the PRE_REPLACE archive', async () => {
     const service = restoreService(targetEngine(), target.app);
     await expect(
       service.restore({
@@ -641,7 +641,9 @@ describe('tenant archive (Phase 6B PR-1) — export, verify, restore, as nexa_ap
         directory: join(root, 'restore-replace'),
         mode: 'REPLACE',
       }),
-    ).rejects.toMatchObject({ code: TENANT_ARCHIVE_ERROR_CODES.REPLACE_UNAVAILABLE });
+      // This service is not wired to take the PRE_REPLACE archive: replace refuses outright
+      // (the replace itself is proven in tenant-replace.test.ts).
+    ).rejects.toMatchObject({ code: TENANT_ARCHIVE_ERROR_CODES.PRE_REPLACE_FAILED });
   }, 600_000);
 
   /**

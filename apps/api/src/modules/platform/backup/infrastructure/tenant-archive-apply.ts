@@ -1,10 +1,11 @@
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import {
   HOSTING_ERROR_CODES,
   NexaError,
   TENANT_ARCHIVE_ERROR_CODES,
   type SecretCipher,
   type TenantArchiveManifest,
+  type TenantRestoreMode,
 } from '@nexa/contracts';
 import type { DatabaseHandle } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -15,6 +16,8 @@ import {
 import {
   GLOBAL_UNIQUE_KEYS,
   SHARED_AGGREGATE_TYPES,
+  TENANT_KEYED_OTHERWISE,
+  tenantRowPredicate,
 } from '../application/tenant-archive-inventory.js';
 import {
   bufferWithin,
@@ -53,7 +56,11 @@ export interface PreflightResult {
   readonly counts: Readonly<Record<string, number>>;
 }
 
-function refuse(code: string, message: string, details?: Record<string, unknown>): NexaError {
+export function refuse(
+  code: string,
+  message: string,
+  details?: Record<string, unknown>,
+): NexaError {
   return new NexaError({
     kind: 'CONFLICT',
     code,
@@ -92,9 +99,13 @@ export async function preflightRestore(input: {
   readonly scratch: DatabaseHandle;
   readonly manifest: TenantArchiveManifest;
   readonly slug?: string;
+  /** Absent: NEW. REPLACE: the same hosted bot of `installationTenantId` (ADR-0039 § 4). */
+  readonly mode?: TenantRestoreMode;
+  readonly installationTenantId?: string;
 }): Promise<PreflightResult> {
   const tenantId = input.manifest.tenant.id;
-  const slug = input.slug ?? input.manifest.tenant.slug;
+  const replace = input.mode === 'REPLACE';
+  let slug = input.slug ?? input.manifest.tenant.slug;
   const scratchCatalogue = await readCatalogue(input.scratch.db);
   const order = await tenantLoadOrder(input.scratch.db, scratchCatalogue);
   const counts = await tenantCounts(input.scratch.db, scratchCatalogue, order, tenantId);
@@ -129,20 +140,29 @@ export async function preflightRestore(input: {
   }
   const liveCatalogue = await readCatalogue(input.app.db);
 
+  if (replace) {
+    // The replaced bot keeps its own slug: the archive's is a label, and the bot is the same.
+    slug = (await replaceTarget(input.app, tenantId, input.installationTenantId ?? '')).slug;
+  }
   await withSystemScope('tenant archive: global key collisions before restore', async () => {
-    const exists = await rowsOf<{ n: number }>(
-      input.app.db,
-      sql`SELECT count(*)::int AS n FROM tenants WHERE id = ${tenantId}::uuid`,
-    );
-    if ((exists[0]?.n ?? 0) > 0) {
-      throw refuse(TENANT_ARCHIVE_ERROR_CODES.TENANT_EXISTS, 'این ربات همین حالا روی این سرور هست');
-    }
-    const slugTaken = await rowsOf<{ n: number }>(
-      input.app.db,
-      sql`SELECT count(*)::int AS n FROM tenants WHERE slug = ${slug}`,
-    );
-    if ((slugTaken[0]?.n ?? 0) > 0) {
-      throw refuse(HOSTING_ERROR_CODES.SLUG_TAKEN, 'The slug is taken here; choose another.');
+    if (!replace) {
+      const exists = await rowsOf<{ n: number }>(
+        input.app.db,
+        sql`SELECT count(*)::int AS n FROM tenants WHERE id = ${tenantId}::uuid`,
+      );
+      if ((exists[0]?.n ?? 0) > 0) {
+        throw refuse(
+          TENANT_ARCHIVE_ERROR_CODES.TENANT_EXISTS,
+          'این ربات همین حالا روی این سرور هست',
+        );
+      }
+      const slugTaken = await rowsOf<{ n: number }>(
+        input.app.db,
+        sql`SELECT count(*)::int AS n FROM tenants WHERE slug = ${slug}`,
+      );
+      if ((slugTaken[0]?.n ?? 0) > 0) {
+        throw refuse(HOSTING_ERROR_CODES.SLUG_TAKEN, 'The slug is taken here; choose another.');
+      }
     }
     for (const bot of bots) {
       const taken = await rowsOf<{ n: number }>(
@@ -161,7 +181,8 @@ export async function preflightRestore(input: {
     if (input.manifest.host.domain !== null) {
       const domain = await rowsOf<{ n: number }>(
         input.app.db,
-        sql`SELECT count(*)::int AS n FROM hosted_bot_activations WHERE domain = ${input.manifest.host.domain}`,
+        sql`SELECT count(*)::int AS n FROM hosted_bot_activations
+             WHERE domain = ${input.manifest.host.domain} AND hosted_tenant_id <> ${tenantId}::uuid`,
       );
       if ((domain[0]?.n ?? 0) > 0) {
         throw refuse(
@@ -178,6 +199,12 @@ export async function preflightRestore(input: {
         (column) => shape.columns.find((c) => c.name === column)?.type ?? 'text',
       );
       const hasTenant = shape.columns.some((column) => column.name === 'tenant_id');
+      // A REPLACE deletes the tenant's own rows first: a key it already holds is not a
+      // collision. A table with no tenant column names them by its fixed predicate.
+      const own =
+        replace && !hasTenant && Object.hasOwn(TENANT_KEYED_OTHERWISE, key.table)
+          ? sql`AND NOT (${predicateFor(key.table, tenantId)})`
+          : sql``;
       for (let start = 0; start < tuples.length; start += 500) {
         const values = sql.join(
           tuples.slice(start, start + 500).map(
@@ -197,7 +224,7 @@ export async function preflightRestore(input: {
                  sql`, `,
                )}) IN (VALUES ${values})
                  ${key.where === null ? sql`` : sql`AND ${sql.raw(key.where)}`}
-                 ${hasTenant ? sql`AND tenant_id <> ${tenantId}::uuid` : sql``}`,
+                 ${hasTenant ? sql`AND tenant_id <> ${tenantId}::uuid` : sql``} ${own}`,
         );
         if ((hit[0]?.n ?? 0) > 0) {
           throw refuse(
@@ -339,17 +366,14 @@ export async function applyRestore(input: {
   readonly targetCipher: SecretCipher;
 }): Promise<Record<string, number>> {
   const tenantId = input.manifest.tenant.id;
-  const tenantScope = { tenantId: tenantId as never, botInstanceId: null };
   const scratchCatalogue = await readCatalogue(input.scratch.db);
   const order = await tenantLoadOrder(input.scratch.db, scratchCatalogue);
-  const expectedCounts = await tenantCounts(input.scratch.db, scratchCatalogue, order, tenantId);
-  const compared = order.filter((table) => table !== 'tenants');
-  const expectedDigests = await input.scratch.db.transaction(
-    async (tx) => {
-      await pinSession(tx);
-      return canonicalDigests(tx, scratchCatalogue, compared, tenantId, input.archiveCipher);
-    },
-    { isolationLevel: 'repeatable read', accessMode: 'read only' },
+  const expected = await scratchExpectation(
+    input.scratch,
+    scratchCatalogue,
+    order,
+    tenantId,
+    input.archiveCipher,
   );
 
   return withSystemScope('tenant archive: create the restored tenant and its register', () =>
@@ -388,45 +412,7 @@ export async function applyRestore(input: {
         },
       );
 
-      // Every tenant row, bound to the restored tenant: RLS refuses a row of anyone else.
-      const counters = new Map<string, bigint>();
-      await withTenantScopeIn(tx, tenantScope, async () => {
-        for (const table of order) {
-          if (UNBOUND.has(table)) continue;
-          const live = liveCatalogue.get(table);
-          if (live === undefined) continue;
-          await withScratchRows(
-            input.scratch,
-            scratchCatalogue.get(table),
-            live,
-            tenantId,
-            async (columns, rows) => {
-              const slots = secretSlots(table, columns);
-              for (const row of rows)
-                resealRow(row, slots, input.archiveCipher, input.targetCipher);
-              if (table === 'outbox_messages') {
-                await renumberShared(tx, columns, rows, counters);
-                holdUnpublished(columns, rows, input.now);
-              }
-              await insertRows(
-                tx,
-                live,
-                columns,
-                live.selfReferences.length > 0 ? orderSelfReferenced(live, columns, rows) : rows,
-              );
-            },
-          );
-          await advanceIdentities(tx, live);
-        }
-      });
-
-      // The shared counters move past the messages renumbered onto them (locked above).
-      for (const [key, last] of counters) {
-        const [type, id] = key.split('\u0000') as [string, string];
-        await tx.execute(sql`
-          UPDATE aggregate_sequences SET last_sequence = GREATEST(last_sequence, ${last.toString()}::bigint)
-           WHERE aggregate_type = ${type} AND aggregate_id = ${id}`);
-      }
+      await copyArchiveRows(tx, input, scratchCatalogue, liveCatalogue, order);
 
       // The register, in the installation tenant, from the host facts: SUSPENDED, no marks.
       const host = input.manifest.host;
@@ -449,31 +435,7 @@ export async function applyRestore(input: {
       // the manifest's values are informational only.
 
       // The copy is counted and compared, inside the transaction: a difference rolls it back.
-      const actual = await withTenantScopeIn(tx, tenantScope, async () => {
-        const counts = await tenantCounts(tx, liveCatalogue, order, tenantId);
-        const digests = await canonicalDigests(
-          tx,
-          liveCatalogue,
-          compared,
-          tenantId,
-          input.targetCipher,
-        );
-        return { counts, digests };
-      });
-      const differing = order.filter(
-        (table) =>
-          actual.counts[table] !== expectedCounts[table] ||
-          (table !== 'tenants' && actual.digests[table] !== expectedDigests[table]),
-      );
-      if (differing.length > 0) {
-        throw new NexaError({
-          kind: 'INTERNAL',
-          code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
-          message: 'The restored copy does not match the verified scratch; nothing was kept.',
-          details: { tables: differing },
-        });
-      }
-      return actual.counts;
+      return compareWithScratch(tx, tenantId, liveCatalogue, order, expected, input.targetCipher);
     }),
   );
 }
@@ -482,7 +444,7 @@ export async function applyRestore(input: {
  * The scratch's rows of one table in the LIVE table's columns (the scratch is at the target's
  * head, so they are the same), handed over in pages; a self-referencing table in one page.
  */
-async function withScratchRows(
+export async function withScratchRows(
   scratch: DatabaseHandle,
   scratchShape: TableShape | undefined,
   live: TableShape,
@@ -521,4 +483,182 @@ async function withScratchRows(
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     ),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Shared by NEW and REPLACE: the copy and its in-transaction comparison
+// ---------------------------------------------------------------------------
+
+export interface ScratchExpectation {
+  readonly counts: Readonly<Record<string, number>>;
+  readonly digests: Readonly<Record<string, string>>;
+}
+
+/** What the live copy must read back as: the verified scratch's counts and canonical digests. */
+export async function scratchExpectation(
+  scratch: DatabaseHandle,
+  catalogue: ReadonlyMap<string, TableShape>,
+  order: readonly string[],
+  tenantId: string,
+  cipher: SecretCipher,
+): Promise<ScratchExpectation> {
+  const counts = await tenantCounts(scratch.db, catalogue, order, tenantId);
+  const digests = await scratch.db.transaction(
+    async (tx) => {
+      await pinSession(tx);
+      return canonicalDigests(
+        tx,
+        catalogue,
+        order.filter((table) => table !== 'tenants'),
+        tenantId,
+        cipher,
+      );
+    },
+    { isolationLevel: 'repeatable read', accessMode: 'read only' },
+  );
+  return { counts, digests };
+}
+
+/**
+ * Every tenant row but the `tenants` one, from the scratch into the live transaction, BOUND TO
+ * THE RESTORED TENANT: row-level security's WITH CHECK refuses a row of anyone else. Secrets are
+ * re-sealed under this server's active key; unpublished outbox messages land exhausted and
+ * shared aggregates take this installation's next numbers.
+ */
+export async function copyArchiveRows(
+  tx: SqlExecutor,
+  input: {
+    readonly scratch: DatabaseHandle;
+    readonly manifest: TenantArchiveManifest;
+    readonly now: Date;
+    readonly archiveCipher: SecretCipher;
+    readonly targetCipher: SecretCipher;
+  },
+  scratchCatalogue: ReadonlyMap<string, TableShape>,
+  liveCatalogue: ReadonlyMap<string, TableShape>,
+  order: readonly string[],
+): Promise<void> {
+  const tenantId = input.manifest.tenant.id;
+  const counters = new Map<string, bigint>();
+  await withTenantScopeIn(tx, { tenantId: tenantId as never, botInstanceId: null }, async () => {
+    for (const table of order) {
+      if (UNBOUND.has(table)) continue;
+      const live = liveCatalogue.get(table);
+      if (live === undefined) continue;
+      await withScratchRows(
+        input.scratch,
+        scratchCatalogue.get(table),
+        live,
+        tenantId,
+        async (columns, rows) => {
+          const slots = secretSlots(table, columns);
+          for (const row of rows) resealRow(row, slots, input.archiveCipher, input.targetCipher);
+          if (table === 'outbox_messages') {
+            await renumberShared(tx, columns, rows, counters);
+            holdUnpublished(columns, rows, input.now);
+          }
+          await insertRows(
+            tx,
+            live,
+            columns,
+            live.selfReferences.length > 0 ? orderSelfReferenced(live, columns, rows) : rows,
+          );
+        },
+      );
+      await advanceIdentities(tx, live);
+    }
+  });
+  // The shared counters move past the messages renumbered onto them (locked above).
+  for (const [key, last] of counters) {
+    const [type, id] = key.split('\u0000') as [string, string];
+    await tx.execute(sql`
+      UPDATE aggregate_sequences SET last_sequence = GREATEST(last_sequence, ${last.toString()}::bigint)
+       WHERE aggregate_type = ${type} AND aggregate_id = ${id}`);
+  }
+}
+
+/**
+ * The live copy counted and compared with the scratch, inside the caller's transaction and
+ * bound to the tenant: any difference throws, and the transaction rolls back with it.
+ */
+export async function compareWithScratch(
+  tx: SqlExecutor,
+  tenantId: string,
+  liveCatalogue: ReadonlyMap<string, TableShape>,
+  order: readonly string[],
+  expected: ScratchExpectation,
+  targetCipher: SecretCipher,
+): Promise<Record<string, number>> {
+  const actual = await withTenantScopeIn(
+    tx,
+    { tenantId: tenantId as never, botInstanceId: null },
+    async () => ({
+      counts: await tenantCounts(tx, liveCatalogue, order, tenantId),
+      digests: await canonicalDigests(
+        tx,
+        liveCatalogue,
+        order.filter((table) => table !== 'tenants'),
+        tenantId,
+        targetCipher,
+      ),
+    }),
+  );
+  const differing = order.filter(
+    (table) =>
+      actual.counts[table] !== expected.counts[table] ||
+      (table !== 'tenants' && actual.digests[table] !== expected.digests[table]),
+  );
+  if (differing.length > 0) {
+    throw new NexaError({
+      kind: 'INTERNAL',
+      code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+      message: 'The restored copy does not match the verified scratch; nothing was kept.',
+      details: { tables: differing },
+    });
+  }
+  return actual.counts;
+}
+
+/** The system-path reason of the replace's one transaction; the guards compare it verbatim. */
+export const TENANT_REPLACE_REASON = "tenant archive: replace a hosted tenant's rows";
+
+/** `TENANT_KEYED_OTHERWISE[table]` with the tenant bound for `$1`. */
+export function predicateFor(table: string, tenantId: string): SQL {
+  return sql.join(
+    tenantRowPredicate(table)
+      .split('$1')
+      .map((part) => sql.raw(part)),
+    sql`${tenantId}::uuid`,
+  );
+}
+
+/**
+ * The hosted bot a REPLACE writes over: a `HOSTED` tenant of exactly this installation with a
+ * register row in it, never `PURGED`. Read on the system path (the tenant is not the caller's).
+ */
+export async function replaceTarget(
+  app: DatabaseHandle,
+  tenantId: string,
+  installationTenantId: string,
+): Promise<{ readonly slug: string; readonly state: string }> {
+  const [row] = await withSystemScope('tenant archive: the hosted bot a replace writes over', () =>
+    rowsOf<{ slug: string; state: string }>(
+      app.db,
+      sql`SELECT t.slug, b.state FROM tenants t
+            JOIN hosted_bots b ON b.hosted_tenant_id = t.id
+                              AND b.tenant_id = ${installationTenantId}::uuid
+           WHERE t.id = ${tenantId}::uuid AND t.kind = 'HOSTED'
+             AND t.parent_tenant_id = ${installationTenantId}::uuid`,
+    ),
+  );
+  if (row === undefined) {
+    throw refuse(
+      TENANT_ARCHIVE_ERROR_CODES.REPLACE_TARGET_MISSING,
+      'The archive’s bot is not a hosted bot of this server; restore it as a new hosted bot.',
+    );
+  }
+  if (row.state === 'PURGED') {
+    throw refuse(TENANT_ARCHIVE_ERROR_CODES.PURGED, 'A purged hosted bot is closed for good.');
+  }
+  return row;
 }

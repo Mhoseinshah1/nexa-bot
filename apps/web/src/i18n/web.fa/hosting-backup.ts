@@ -47,8 +47,12 @@ export const WEB_FA_HOSTING_BACKUP = {
   'web.hosted_backup_download_hint':
     'فایل رمزگذاری‌شده است و با رمز بکاپ همین ربات باز می‌شود. این دانلود در گزارش کارهای شما ثبت می‌شود.',
   'web.hosted_backup_restore_here': 'بازیابی روی همین سرور',
-  'web.hosted_backup_restore_here_unavailable':
-    'جایگزینی ربات موجود با یک بکاپ هنوز ساخته نشده است؛ فعلاً فقط «بازیابی ربات از فایل» روی سروری که این ربات را ندارد ممکن است.',
+  'web.hosted_backup_restore_here_title': 'بازیابی این بکاپ روی همین ربات',
+  'web.hosted_backup_restore_here_hint':
+    'همهٔ داده‌های فعلی این ربات با داده‌های این بکاپ جایگزین می‌شود. اول فایل بررسی می‌شود و چیزی تغییر نمی‌کند؛ بعد از تأیید شما، ربات در مدت کار متوقف می‌ماند، از داده‌های فعلی‌اش بکاپ گرفته می‌شود و تا داده‌های تازه کامل و شمرده نشده‌اند داده‌های قبلی پاک نمی‌شوند. همهٔ ورودهای مدیران این ربات بسته می‌شود.',
+  'web.hosted_backup_restore_here_password': 'رمزی که این بکاپ با آن گرفته شده',
+  'web.hosted_backup_restore_here_done':
+    'فایل بررسی شد؛ برای جایگزینی، آن را در «بازیابی ربات از فایل» تأیید کنید.',
   'web.hosted_backup_delivery_group': 'به گروه خود ربات هم فرستاده شد',
   'web.hosted_backup_saved': 'ذخیره شد.',
   // «بازیابی ربات از فایل»
@@ -71,6 +75,17 @@ export const WEB_FA_HOSTING_BACKUP = {
   'web.hosted_restore_head_equal': 'نسخهٔ فایل با این سرور یکی است',
   'web.hosted_restore_head_older': 'فایل از نسخهٔ قدیمی‌تر است و به‌روز می‌شود',
   'web.hosted_restore_confirm': 'بازیابی به‌عنوان ربات تازه',
+  'web.hosted_restore_replace_switch': 'جایگزینی ربات موجود (همین ربات روی این سرور)',
+  'web.hosted_restore_replace_hint':
+    'داده‌های فعلی همان ربات با داده‌های فایل جایگزین می‌شود؛ پیش از آن از داده‌های فعلی‌اش بکاپ گرفته می‌شود. ربات حذف‌شده هم برمی‌گردد.',
+  'web.hosted_restore_mode': 'نوع',
+  'web.hosted_restore_mode_new': 'ربات تازه',
+  'web.hosted_restore_mode_replace': 'جایگزینی ربات موجود',
+  'web.hosted_restore_pre_replace': 'بکاپ پیش از جایگزینی گرفته شد',
+  'web.hosted_restore_replace_confirm': 'جایگزینی داده‌های ربات',
+  'web.hosted_restore_replace_confirm_title': 'تأیید جایگزینی',
+  'web.hosted_restore_replace_confirm_hint':
+    'در پس‌زمینه: ربات متوقف می‌شود، از داده‌های فعلی‌اش بکاپ گرفته می‌شود، داده‌ها در یک مرحله جایگزین و با فایل مقایسه می‌شوند و ربات به وضعیت قبلی‌اش برمی‌گردد. اگر هر مرحله‌ای ناموفق باشد داده‌های فعلی دست‌نخورده می‌مانند.',
   'web.hosted_restore_confirm_title': 'تأیید بازیابی',
   'web.hosted_restore_confirm_hint':
     'بازیابی در پس‌زمینه انجام می‌شود؛ ربات تازه متوقف ساخته می‌شود.',

@@ -232,7 +232,7 @@ export async function liveTenantDigest(
           named,
           tenantId,
           cipher,
-          (table) => columns.get(table),
+          { columnsOf: (table) => columns.get(table) },
         );
         for (const table of named) digests[table] ??= 'missing-table';
         const others = (await tenantLoadOrder(executor, catalogue)).filter(

@@ -1,7 +1,9 @@
+import { copyFile } from 'node:fs/promises';
 import { storedFailureMessage } from '../../backup/application/stored-failure.js';
 import { refuseImpersonatedSecretWrite } from '../../identity/application/impersonation.js';
 import {
   errors,
+  hostedBackupRestoreHereRequestSchema,
   HOSTING_ERROR_CODES,
   NexaError,
   TENANT_ARCHIVE_ERROR_CODES,
@@ -18,6 +20,7 @@ import {
   type ScopeContext,
   type SecretCipher,
   type TenantContext,
+  type TenantRestoreMode,
   type TenantRestoreStage,
   type TenantRestoreState,
   type TenantRestoreView,
@@ -34,6 +37,8 @@ import type { HostingOwnerGuard } from './hosting-owner-guard.js';
 export interface TenantRestoreRecord {
   readonly id: string;
   readonly hostedTenantId: string;
+  readonly mode: string;
+  readonly preReplaceRunId: string | null;
   readonly state: string;
   readonly stage: string;
   readonly dryRun: unknown;
@@ -95,6 +100,15 @@ export interface TenantRestoreAdminDeps {
   readonly requests: TenantRestoreRequests;
   readonly workspaces: TenantRestoreWorkspaces;
   readonly cipher: SecretCipher;
+  /**
+   * «بازیابی روی همین سرور»: the file of one of a hosted bot's own VERIFIED archives on this
+   * server (`BACKUP_WORK_DIR/hosted/<tenant>/<run>/`), or null when it is not one or is gone.
+   */
+  readonly hostedArchive: (
+    installation: TenantContext,
+    hostedTenantId: string,
+    runId: string,
+  ) => Promise<string | null>;
   readonly idempotency: IdempotencyStore;
   readonly audit: AuditWriter;
   readonly clock: Clock;
@@ -177,13 +191,96 @@ export class TenantRestoreAdminService {
     if (!(await workspace.exists()) || (await this.deps.requests.byId(installation, restoreId))) {
       throw errors.notFound(HOSTING_ERROR_CODES.ARCHIVE_NOT_FOUND, 'No such uploaded archive.');
     }
-    await this.deps.section.withFreshProof(
+    return this.dryRunIn(installation, actor, token, restoreId, 'hosting.tenant_restore_dry_run', {
+      proof: command.proof,
+      password: command.password,
+      mode: command.mode,
+      ...(command.slug === undefined || command.mode === 'REPLACE' ? {} : { slug: command.slug }),
+    });
+  }
+
+  /**
+   * «بازیابی روی همین سرور» (ADR-0039 § 4): one of this bot's own verified archives, copied into
+   * a fresh restore directory and dry-run as a REPLACE of the same bot — exactly the dry run an
+   * uploaded file gets; confirmed and cancelled the same way. The owner types the password the
+   * archive was sealed with (a later password change does not reopen earlier archives).
+   */
+  async restoreHere(
+    scope: ScopeContext,
+    actor: ActorContext,
+    token: string | null,
+    hostedTenantIdInput: string,
+    runIdInput: string,
+    input: unknown,
+  ): Promise<TenantRestoreView> {
+    const hostedTenantId = parseId(hostedTenantIdInput);
+    const runId = parseId(runIdInput);
+    const installation = await this.deps.section.requireSection(
+      scope,
+      actor,
+      token,
+      'hosting.tenant_replace_dry_run',
+      hostedTenantId,
+    );
+    const command = hostedBackupRestoreHereRequestSchema.parse(input);
+    const source = await this.deps.hostedArchive(installation, hostedTenantId, runId);
+    if (source === null) {
+      throw errors.notFound(
+        HOSTING_ERROR_CODES.ARCHIVE_NOT_FOUND,
+        'This archive is not on this server.',
+      );
+    }
+    const restoreId = this.deps.ids.uuid();
+    const { archivePath } = await this.deps.workspaces.create(restoreId);
+    try {
+      await copyFile(source, archivePath);
+    } catch (error) {
+      await this.deps.workspaces.open(restoreId).remove();
+      throw error;
+    }
+    return this.dryRunIn(
       installation,
       actor,
-      command.proof,
-      'hosting.tenant_restore_dry_run',
-      async (tx) => this.inTransaction(installation, actor, token, tx),
+      token,
+      restoreId,
+      'hosting.tenant_replace_dry_run',
+      { proof: command.proof, password: command.password, mode: 'REPLACE' },
+      hostedTenantId,
     );
+  }
+
+  /**
+   * The dry run of an archive already in `restoreId`'s directory: a fresh code, then the whole
+   * verification through the heavy-job queue, nothing written to the live database; a refused
+   * archive's directory goes at once (A3). `expectTenant`: the archive must be that bot's.
+   */
+  private async dryRunIn(
+    installation: TenantContext,
+    actor: ActorContext,
+    token: string | null,
+    restoreId: string,
+    action: 'hosting.tenant_restore_dry_run' | 'hosting.tenant_replace_dry_run',
+    command: {
+      readonly proof: Parameters<HostingSectionService['withFreshProof']>[2];
+      readonly password: string;
+      readonly mode: TenantRestoreMode;
+      readonly slug?: string;
+    },
+    expectTenant?: string,
+  ): Promise<TenantRestoreView> {
+    const workspace = this.deps.workspaces.open(restoreId);
+    try {
+      await this.deps.section.withFreshProof(
+        installation,
+        actor,
+        command.proof,
+        action,
+        async (tx) => this.inTransaction(installation, actor, token, tx),
+      );
+    } catch (error) {
+      if (expectTenant !== undefined) await workspace.remove();
+      throw error;
+    }
     try {
       const outcome = await this.deps.restores.restore({
         installationTenantId: installation.tenantId,
@@ -191,7 +288,7 @@ export class TenantRestoreAdminService {
         archivePath: workspace.archivePath,
         password: command.password,
         directory: workspace.scratchDirectory,
-        mode: 'NEW',
+        mode: command.mode,
         requestId: restoreId,
         ...(command.slug === undefined ? {} : { slug: command.slug }),
       });
@@ -199,6 +296,18 @@ export class TenantRestoreAdminService {
         throw errors.conflict(
           TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
           'Another heavy job holds the server; try the dry run again shortly.',
+        );
+      }
+      if (expectTenant !== undefined && outcome.summary.hostedTenantId !== expectTenant) {
+        await this.deps.requests.withdraw(installation, {
+          id: restoreId,
+          failureCode: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+          failureMessage: 'The archive is not this hosted bot’s.',
+          now: this.deps.clock.now(),
+        });
+        throw errors.conflict(
+          TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+          'The archive is not this hosted bot’s.',
         );
       }
       // Verified: the password waits for the recovery role, sealed under this server's key.
@@ -214,9 +323,10 @@ export class TenantRestoreAdminService {
       await this.audit(
         installation,
         actor,
-        'hosting.tenant_restore_dry_run',
+        action,
         restoreId,
         {
+          mode: command.mode,
           failureCode:
             error instanceof NexaError ? error.code : 'tenant_archive.verification_failed',
         },
@@ -224,7 +334,8 @@ export class TenantRestoreAdminService {
       );
       throw error;
     }
-    await this.audit(installation, actor, 'hosting.tenant_restore_dry_run', restoreId, {
+    await this.audit(installation, actor, action, restoreId, {
+      mode: command.mode,
       verified: true,
     });
     return this.view(installation, restoreId);
@@ -267,12 +378,13 @@ export class TenantRestoreAdminService {
             'There is no verified dry run of this archive to confirm.',
           );
         }
+        const row = await this.deps.requests.byId(installation, restoreId);
         await this.audit(
           installation,
           actor,
           'hosting.tenant_restore_confirm',
           restoreId,
-          { proof: method },
+          { proof: method, mode: row?.mode ?? null, hostedTenantId: row?.hostedTenantId ?? null },
           'SUCCESS',
           tx,
         );
@@ -408,7 +520,7 @@ export class TenantRestoreAdminService {
         archivePath: workspace.archivePath,
         password,
         directory: workspace.scratchDirectory,
-        mode: 'NEW',
+        mode: row.mode === 'REPLACE' ? 'REPLACE' : 'NEW',
         confirmRequestId: row.id,
         // The slug the owner chose at the dry run: the apply must not fall back to the archive's.
         ...(typeof (row.dryRun as { slug?: unknown } | null)?.slug === 'string'
@@ -516,6 +628,8 @@ function toView(row: TenantRestoreRecord): TenantRestoreView {
     state: row.state as TenantRestoreState,
     stage: row.stage as TenantRestoreStage,
     hostedTenantId: row.hostedTenantId,
+    mode: row.mode === 'REPLACE' ? 'REPLACE' : 'NEW',
+    preReplaceRunId: row.preReplaceRunId,
     slug: dryRun.slug ?? null,
     head: dryRun.head ?? null,
     counts: dryRun.counts ?? {},

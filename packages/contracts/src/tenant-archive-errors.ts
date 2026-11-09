@@ -24,8 +24,23 @@ export const TENANT_ARCHIVE_ERROR_CODES = {
   NOT_HOSTED: 'tenant_archive.not_hosted',
   /** A PURGED tenant is closed for good: not archived, not replaced. */
   PURGED: 'tenant_archive.purged',
-  /** Replace needs the tenant rewrite allowance (ADR-0039 § 10), not built. */
-  REPLACE_UNAVAILABLE: 'tenant_archive.replace_unavailable',
+  /**
+   * A REPLACE names a tenant that is not a hosted bot of THIS installation (absent, not
+   * `HOSTED`, or another installation's child): there is nothing here to replace. Restore it
+   * as a new hosted bot instead.
+   */
+  REPLACE_TARGET_MISSING: 'tenant_archive.replace_target_missing',
+  /**
+   * A REPLACE needs the hosted bot's backup password set: the rows being replaced are first
+   * archived (PRE_REPLACE) with it, and that archive must verify, or nothing is replaced.
+   */
+  PRE_REPLACE_FAILED: 'tenant_archive.pre_replace_failed',
+  /**
+   * The hosted bot changed between the hold and the replace's transaction: its register
+   * state or status moved, or a row of it was written after the PRE_REPLACE archive's snapshot.
+   * Nothing is deleted (a newer row would be lost); the owner runs the replace again.
+   */
+  CHANGED_DURING_REPLACE: 'tenant_archive.changed_during_replace',
   /** A live table this release does not classify. */
   UNCLASSIFIED_TABLE: 'tenant_archive.unclassified_table',
   /** The export's or the restore's connection bypasses row-level security. */
