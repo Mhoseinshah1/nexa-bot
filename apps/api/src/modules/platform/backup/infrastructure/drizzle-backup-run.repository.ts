@@ -742,6 +742,7 @@ export class DrizzleBackupRunRepository
         leaseHeartbeatAt: backupRuns.leaseHeartbeatAt,
         verifiedAt: backupRuns.verifiedAt,
         failureCode: backupRuns.failureCode,
+        subjectTenantId: backupRuns.subjectTenantId,
       })
       .from(backupRuns)
       .where(inArray(backupRuns.id, [...ids]));
@@ -752,6 +753,7 @@ export class DrizzleBackupRunRepository
       leaseHeartbeatAt: row.leaseHeartbeatAt,
       verifiedAt: row.verifiedAt,
       failureCode: row.failureCode,
+      subjectTenantId: row.subjectTenantId,
     }));
   }
 }

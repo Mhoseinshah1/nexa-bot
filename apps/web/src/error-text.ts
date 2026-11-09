@@ -175,6 +175,7 @@ export const ERROR_TEXT = {
   'tenant_archive.rls_bypassed': 'web.err_tenant_archive_rls_bypassed',
   'tenant_archive.restore_cancelled': 'web.err_tenant_archive_restore_cancelled',
   'tenant_archive.dry_run_expired': 'web.err_tenant_archive_dry_run_expired',
+  'tenant_archive.lease_expired': 'web.err_tenant_archive_lease_expired',
   'backup.checksum_mismatch': 'web.err_backup_checksum_mismatch',
   'backup.run_missing': 'web.err_backup_run_missing',
   'backup.installation_only': 'web.err_backup_installation_only',

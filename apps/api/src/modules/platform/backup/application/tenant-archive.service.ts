@@ -17,6 +17,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import type { BackupRunRepository, BackupRunRow } from './ports.js';
+import { storedFailureMessage } from './stored-failure.js';
 
 /**
  * Phase 6B (ADR-0039 § 2, § 4, § 5): the TENANT archive pipeline and its restore.
@@ -82,6 +83,18 @@ export interface TenantArchiveEngine {
   }): Promise<{ readonly tables: number; readonly rows: number }>;
   /** Scratch databases a drop could not remove. */
   readonly leaked: readonly string[];
+  /**
+   * Drops the tenant scratch databases a KILLED run or restore left on the verify server
+   * (security review of PR #447, finding 2). Called only inside an admitted EXCLUSIVE heavy
+   * job, when no other archive or restore can own one; a database with a session is kept.
+   */
+  sweepAbandonedScratch(): Promise<ScratchSweep>;
+}
+
+/** What a scratch sweep dropped, and what it found and could not drop. */
+export interface ScratchSweep {
+  readonly dropped: readonly string[];
+  readonly survived: readonly string[];
 }
 
 /** The heavy-job queue (`HeavyJobGate`), as this service uses it. */
@@ -213,6 +226,15 @@ export class TenantArchiveService {
     let checksum: string | null = null;
     let verifiedAt: Date | null = null;
     try {
+      // The claim and the exclusive ticket make this the only archive or restore: a tenant
+      // scratch database still on the verify server is a killed one's (finding 2).
+      const swept = await this.deps.engine.sweepAbandonedScratch();
+      if (swept.dropped.length > 0 || swept.survived.length > 0) {
+        this.deps.logger.error(
+          { backupId: id, dropped: swept.dropped, survived: swept.survived },
+          'tenant scratch databases a killed archive or restore left behind',
+        );
+      }
       // ---- DUMP ------------------------------------------------------------
       workspace = await this.deps.engine.workspace(input.tenantId, id);
       const dumped = await this.deps.engine.dump({
@@ -312,7 +334,8 @@ export class TenantArchiveService {
       });
     } catch (error) {
       const failureCode = error instanceof NexaError ? error.code : 'backup.failed';
-      const failureMessage = error instanceof Error ? error.message : String(error);
+      // Never the raw message: a failed statement's carries the row's values (finding 1).
+      const failureMessage = storedFailureMessage(error);
       this.deps.logger.error(
         { backupId: id, tenantId: input.tenantId, stage, failureCode },
         'tenant archive run failed',
@@ -380,9 +403,16 @@ export interface TenantRestoreEngine {
    * Opens and verifies the archive in a scratch database at its head, migrates the scratch up
    * to this release's head, runs every refusal check, and — only when `apply` — copies it into
    * the live database in one transaction. The scratch is dropped either way.
+   *
+   * Security review of PR #447, finding 5: the archive is first copied into the private
+   * `directory` through a SHA-256, and every later read is of that copy; a copy whose hash is
+   * not `expectedSha256` (the file the request or its confirmation is bound to) is refused
+   * before anything is opened. Finding 4: a connection that bypasses row-level security is
+   * refused before anything else.
    */
   restore(input: {
     readonly archivePath: string;
+    readonly expectedSha256: string;
     readonly password: string;
     readonly directory: string;
     readonly installationTenantId: string;
@@ -392,6 +422,8 @@ export interface TenantRestoreEngine {
     readonly onOpened: (manifest: TenantArchiveManifest) => Promise<void>;
     readonly onStage: (stage: TenantRestoreStage) => Promise<void>;
   }): Promise<TenantRestoreSummary>;
+  /** As `TenantArchiveEngine.sweepAbandonedScratch`. */
+  sweepAbandonedScratch(): Promise<ScratchSweep>;
 }
 
 export interface TenantRestoreRepository {
@@ -404,28 +436,44 @@ export interface TenantRestoreRepository {
       readonly artifactSha256: string;
       readonly archiveId: string;
       readonly requestedByAdminId: string;
+      readonly leaseOwner: string;
       readonly now: Date;
     },
   ): Promise<void>;
   /**
-   * The owner's confirmation of a VERIFIED dry run: VERIFIED → VERIFYING with `confirmed_at`,
-   * only for the same archive file (its SHA-256). Returns the hosted tenant, or null when no
-   * such verified request exists.
+   * The owner's confirmation of a VERIFIED dry run: VERIFIED → VERIFYING with `confirmed_at`
+   * and this process's lease, only for the same archive file (its SHA-256). Returns the hosted
+   * tenant, or null when no such verified request exists.
    */
   confirm(
     scope: TenantContext,
     input: {
       readonly id: string;
       readonly artifactSha256: string;
+      readonly leaseOwner: string;
       readonly now: Date;
     },
   ): Promise<{ readonly hostedTenantId: string } | null>;
+  /** Refreshes the lease of a request this process is working on. */
+  heartbeat(
+    scope: TenantContext,
+    input: { readonly id: string; readonly leaseOwner: string; readonly now: Date },
+  ): Promise<void>;
+  /**
+   * Finding 3: FAILS (`tenant_archive.lease_expired`) every in-progress request whose lease
+   * was last refreshed before `staleBefore` — never adopts one — and returns how many.
+   */
+  reclaimStale(
+    scope: TenantContext,
+    input: { readonly staleBefore: Date; readonly now: Date },
+  ): Promise<number>;
   stage(
     scope: TenantContext,
     input: {
       readonly id: string;
       readonly stage: TenantRestoreStage;
       readonly applying: boolean;
+      readonly leaseOwner: string;
       readonly now: Date;
     },
   ): Promise<void>;
@@ -437,6 +485,7 @@ export interface TenantRestoreRepository {
       readonly dryRun?: Readonly<Record<string, unknown>>;
       readonly failureCode?: string;
       readonly failureMessage?: string;
+      readonly leaseOwner: string;
       readonly now: Date;
     },
   ): Promise<void>;
@@ -450,6 +499,8 @@ export class TenantRestoreService {
       readonly heavyJobs: HeavyJobRunner;
       readonly clock: Clock;
       readonly ids: IdGenerator;
+      /** Names this process on the request rows it works on (ADR-0025's lease). */
+      readonly leaseOwner: string;
       readonly queue: TenantArchiveServiceDeps['queue'];
     },
   ) {}
@@ -487,21 +538,33 @@ export class TenantRestoreService {
       tenantId: input.installationTenantId as TenantContext['tenantId'],
       botInstanceId: null,
     };
+    const leaseOwner = this.deps.leaseOwner;
     const artifactSha256 = await this.deps.engine.sha256(input.archivePath);
     const apply = input.confirmRequestId !== undefined;
     const id = input.confirmRequestId ?? input.requestId ?? this.deps.ids.uuid();
     let confirmedTenant: string | null = null;
-    let created = apply;
+    let created = false;
     const admitted = await this.deps.heavyJobs.runWhenAdmitted(
       'RESTORE',
       input.installationTenantId,
       async () => {
+        // Finding 3: a restore whose process died holds the one restore slot until its lease
+        // is taken over — by FAILING it, never by adopting it (ADR-0025). The ticket is an
+        // exclusive kind, so no live restore or archive runs beside this one; its scratch
+        // databases likewise (finding 2).
+        const now0 = this.deps.clock.now();
+        await this.deps.requests.reclaimStale(scope, {
+          staleBefore: new Date(now0.getTime() - BACKUP_LEASE_STALE_AFTER_MS),
+          now: now0,
+        });
+        await this.deps.engine.sweepAbandonedScratch();
         if (apply) {
           // Confirm only once admitted: a refused admission must leave the row VERIFIED (retryable),
           // not stranded in VERIFYING behind the single-active-restore index.
           const confirmed = await this.deps.requests.confirm(scope, {
             id,
             artifactSha256,
+            leaseOwner,
             now: this.deps.clock.now(),
           });
           if (confirmed === null) {
@@ -512,10 +575,20 @@ export class TenantRestoreService {
             });
           }
           confirmedTenant = confirmed.hostedTenantId;
+          created = true;
         }
+        const beat = setInterval(() => {
+          if (!created) return;
+          void this.deps.requests
+            .heartbeat(scope, { id, leaseOwner, now: this.deps.clock.now() })
+            .catch(() => undefined);
+        }, BACKUP_LEASE_HEARTBEAT_MS);
+        beat.unref?.();
         try {
           const summary = await this.deps.engine.restore({
             archivePath: input.archivePath,
+            // Finding 5: the bytes the engine reads are the bytes this request is bound to.
+            expectedSha256: artifactSha256,
             password: input.password,
             directory: input.directory,
             installationTenantId: input.installationTenantId,
@@ -542,6 +615,7 @@ export class TenantRestoreService {
                 artifactSha256,
                 archiveId: manifest.archiveId,
                 requestedByAdminId: input.actorAdminId,
+                leaseOwner,
                 now: this.deps.clock.now(),
               });
               created = true;
@@ -553,6 +627,7 @@ export class TenantRestoreService {
                 id,
                 stage,
                 applying: stage === 'APPLY',
+                leaseOwner,
                 now: this.deps.clock.now(),
               });
             },
@@ -561,6 +636,7 @@ export class TenantRestoreService {
             id,
             state: apply ? 'SUCCEEDED' : 'VERIFIED',
             dryRun: { head: summary.head, slug: summary.slug, counts: summary.counts },
+            leaseOwner,
             now: this.deps.clock.now(),
           });
           return { requestId: id, summary };
@@ -573,11 +649,15 @@ export class TenantRestoreService {
                 error instanceof NexaError
                   ? error.code
                   : TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
-              failureMessage: error instanceof Error ? error.message : String(error),
+              // Never the raw message: a failed INSERT's carries the archive's row (finding 1).
+              failureMessage: storedFailureMessage(error),
+              leaseOwner,
               now: this.deps.clock.now(),
             });
           }
           throw error;
+        } finally {
+          clearInterval(beat);
         }
       },
       this.deps.queue,

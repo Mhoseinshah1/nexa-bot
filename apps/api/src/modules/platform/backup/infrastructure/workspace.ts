@@ -29,6 +29,14 @@ export const PLAINTEXT_FILES = ['dump.pgcustom', 'verify.pgcustom', 'manifest.js
 export const RUN_DIRECTORY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Phase 6B (ADR-0039): a tenant archive run works in `<root>/hosted/<tenantId>/<runId>/`, and its
+ * plaintext is two directories there — the exported parts and the verification's extraction
+ * (`tenant-archive-engine.ts`). Never `archive.7z`, which retention decides.
+ */
+export const HOSTED_DIRECTORY = 'hosted';
+export const HOSTED_PLAINTEXT = ['plain', 'verify'] as const;
+
+/**
  * Creates a fresh 0700 directory under the backup root for one CLI command.
  *
  * `mkdtemp` creates it 0700 and with an unpredictable name; the root is created
@@ -84,13 +92,20 @@ export class FilesystemBackupDebris implements BackupDebrisStore {
         // mtime changes only when an entry is added or removed, so a CLI restore
         // streaming a large dump into it for an hour leaves the directory "old"
         // while its file is being written that minute.
-        if ((await newestMtime(path, info.mtimeMs)) >= cutoff) {
+        if ((await newestWrite(path, info.mtimeMs, 1)) >= cutoff) {
           pending += 1;
           continue;
         }
         const left = await removeAll([path]);
         if (left.length === 0) removed.push(path);
         else survived.push(...left);
+        continue;
+      }
+      if (entry === HOSTED_DIRECTORY) {
+        const hosted = await this.sweepHostedPlaintext(path, cutoff, input.skipIds);
+        removed.push(...hosted.removed);
+        survived.push(...hosted.survived);
+        pending += hosted.pending;
         continue;
       }
       // A RUNNING run's directory is being written. Skipped by id, whatever the
@@ -107,6 +122,40 @@ export class FilesystemBackupDebris implements BackupDebrisStore {
         const left = await removeAll([file]);
         if (left.length === 0) removed.push(file);
         else survived.push(...left);
+      }
+    }
+    return { removed, survived, pending };
+  }
+
+  /**
+   * Security review of PR #447, finding 2: the plaintext a KILLED tenant archive run left in
+   * `hosted/<tenantId>/<runId>/{plain,verify}`, on the same terms as an installation run's —
+   * a RUNNING run skipped by id, and nothing written inside for the grace window.
+   */
+  private async sweepHostedPlaintext(
+    hosted: string,
+    cutoff: number,
+    skipIds: ReadonlySet<string>,
+  ): Promise<BackupDebrisSweep> {
+    const removed: string[] = [];
+    const survived: string[] = [];
+    let pending = 0;
+    for (const tenantId of await readdir(hosted).catch(() => [] as string[])) {
+      if (!RUN_DIRECTORY.test(tenantId)) continue;
+      for (const runId of await readdir(join(hosted, tenantId)).catch(() => [] as string[])) {
+        if (!RUN_DIRECTORY.test(runId) || skipIds.has(runId)) continue;
+        for (const name of HOSTED_PLAINTEXT) {
+          const directory = join(hosted, tenantId, runId, name);
+          const info = await stat(directory).catch(() => null);
+          if (info === null) continue;
+          if ((await newestWrite(directory, info.mtimeMs, 2)) >= cutoff) {
+            pending += 1;
+            continue;
+          }
+          const left = await removeAll([directory]);
+          if (left.length === 0) removed.push(directory);
+          else survived.push(...left);
+        }
       }
     }
     return { removed, survived, pending };
@@ -137,13 +186,20 @@ export class FilesystemBackupDebris implements BackupDebrisStore {
   }
 }
 
-/** The latest mtime among a directory and its direct entries. */
-async function newestMtime(directory: string, own: number): Promise<number> {
+/**
+ * The latest mtime among a directory and its entries, `depth` levels down (1: its direct
+ * entries). A tenant archive's parts are written two levels below its run directory.
+ */
+export async function newestWrite(directory: string, own: number, depth: number): Promise<number> {
   let newest = own;
+  if (depth <= 0) return newest;
   const names = await readdir(directory).catch(() => [] as string[]);
   for (const name of names) {
-    const info = await stat(join(directory, name)).catch(() => null);
-    if (info !== null && info.mtimeMs > newest) newest = info.mtimeMs;
+    const path = join(directory, name);
+    const info = await stat(path).catch(() => null);
+    if (info === null) continue;
+    const at = info.isDirectory() ? await newestWrite(path, info.mtimeMs, depth - 1) : info.mtimeMs;
+    if (at > newest) newest = at;
   }
   return newest;
 }

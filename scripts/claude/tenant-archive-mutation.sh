@@ -47,6 +47,17 @@ MUTATIONS=(
   "buffer-cap|$B/infrastructure/tenant-archive-copy.ts|s/if \\(buffer.length > limits.rows \\x7c\\x7c state.bytes > limits.bytes\\)/if (false)/|tests/unit/tenant-archive-copy.test.ts"
   "outbox-not-relayed|$B/infrastructure/tenant-archive-apply.ts|s/holdUnpublished\\(columns, rows, input.now\\);//|$ARCHIVE_SUITE"
   "shared-renumber|$B/infrastructure/tenant-archive-apply.ts|s/if \\(table === 'outbox_messages'\\) await renumberShared/if (false) await renumberShared/|$ARCHIVE_SUITE"
+  # The security review of PR #447 (fix/6b-tenant-archive-review), each fix reverted.
+  "stored-failure|$B/application/tenant-archive.service.ts|s/failureMessage: storedFailureMessage\\(error\\)/failureMessage: error instanceof Error ? error.message : String(error)/|$ARCHIVE_SUITE"
+  "stored-failure-run|$B/application/tenant-archive.service.ts|s/const failureMessage = storedFailureMessage\\(error\\);/const failureMessage = error instanceof Error ? error.message : String(error);/|tests/unit/tenant-archive-stored-failure.test.ts"
+  "hosted-orphan-sweep|$B/infrastructure/run-directories.ts|s/await readdir\\(hosted\\)\\.catch\\(\\(\\) => \\[\\] as string\\[\\]\\)/[] as string[]/|tests/unit/backup-orphan-sweep.test.ts"
+  "hosted-orphan-row|$B/application/backup-orphan-sweep.ts|s/if \\(row.subjectTenantId !== directory.subjectTenantId\\) return 'KEEP';//|tests/unit/backup-orphan-sweep.test.ts"
+  "hosted-debris|$B/infrastructure/workspace.ts|s/if \\(entry === HOSTED_DIRECTORY\\) \\{/if (false) {/|tests/unit/backup-housekeeping.test.ts"
+  "scratch-sweep|$B/infrastructure/pg-tools.ts|s/\\x60DROP DATABASE IF EXISTS \\\$\\{quoteIdent\\(name\\)\\}\\x60\\]/\\x60SELECT 1\\x60]/|$ARCHIVE_SUITE"
+  "scratch-sweep-force|$B/infrastructure/pg-tools.ts|s/\\x60DROP DATABASE IF EXISTS \\\$\\{quoteIdent\\(name\\)\\}\\x60\\]/\\x60DROP DATABASE IF EXISTS \\\$\\{quoteIdent(name)\\} WITH (FORCE)\\x60]/|$ARCHIVE_SUITE"
+  "restore-lease|$B/infrastructure/drizzle-tenant-restore.repository.ts|s/IN \\('REQUESTED', 'VERIFYING', 'APPLYING'\\)/IN ('REQUESTED')/|$ARCHIVE_SUITE"
+  "restore-rls|$B/infrastructure/tenant-archive-engine.ts|s/\\!== 'enforcing'\\)/=== 'never')/|$ARCHIVE_SUITE"
+  "artifact-binding|$B/infrastructure/tenant-archive-engine.ts|s/if \\(copied !== input.expectedSha256\\)/if (false)/|$ARCHIVE_SUITE"
 )
 
 run_suite() {

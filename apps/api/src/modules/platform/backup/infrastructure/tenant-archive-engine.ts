@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readFile, readdir, rm, statfs, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import {
   NexaError,
@@ -15,6 +16,7 @@ import { KEY_BUNDLE_ENTRY, sealKeyBundle } from '../../../../infrastructure/cryp
 import type { KdfProfile } from '../../../../infrastructure/crypto/kek.js';
 import { expectedMigrations } from '../../../../infrastructure/persistence/migration-state.js';
 import type {
+  ScratchSweep,
   TenantArchiveEngine,
   TenantArchiveWorkspace,
   TenantRestoreEngine,
@@ -34,6 +36,7 @@ import {
 } from './tenant-archive-restore.js';
 import { archiveCipher, archiveKeyId } from './tenant-archive-secrets.js';
 import { sealSevenZipEntries, type SevenZipOptions } from './seven-zip.js';
+import { HOSTED_DIRECTORY, HOSTED_PLAINTEXT } from './workspace.js';
 
 /**
  * Phase 6B (ADR-0039): the tenant archive engine — the export, the 7z, the scratch
@@ -48,6 +51,8 @@ export interface ScratchDatabases {
   dropScratchDatabase(name: string): Promise<{ readonly dropped: boolean }>;
   readonly databaseName: string;
   readonly leaked: readonly string[];
+  /** Drops idle tenant scratch databases a killed process left (`PostgresDatabaseTools`). */
+  dropAbandonedScratchDatabases(): Promise<ScratchSweep>;
 }
 
 export interface TenantArchiveEngineDeps {
@@ -81,6 +86,28 @@ async function sha256File(path: string): Promise<string> {
   return hash.digest('hex');
 }
 
+/**
+ * Copies `source` to `destination` (created 0600, never over an existing file) through a
+ * SHA-256, and returns the copy's hash: the hash of exactly the bytes every later read sees.
+ */
+async function copyThroughSha256(source: string, destination: string): Promise<string> {
+  const hash = createHash('sha256');
+  await pipeline(
+    createReadStream(source),
+    new Transform({
+      transform(chunk: Buffer, _encoding, done) {
+        hash.update(chunk);
+        done(null, chunk);
+      },
+    }),
+    createWriteStream(destination, { flags: 'wx', mode: 0o600 }),
+  );
+  return hash.digest('hex');
+}
+
+/** The private copy of an uploaded archive, inside the restore's own work directory. */
+const RESTORE_ARCHIVE_COPY = 'upload.7z';
+
 async function removeAll(paths: readonly string[]): Promise<string[]> {
   const left: string[] = [];
   for (const path of paths) {
@@ -104,10 +131,12 @@ export class PostgresTenantArchiveEngine implements TenantArchiveEngine, TenantR
         message: 'A tenant archive workspace is named by two uuids.',
       });
     }
-    const directory = join(this.deps.root, 'hosted', tenantId, runId);
+    const directory = join(this.deps.root, HOSTED_DIRECTORY, tenantId, runId);
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    const plainDirectory = join(directory, 'plain');
-    const verifyDirectory = join(directory, 'verify');
+    // The orphan and debris sweeps (`run-directories.ts`, `workspace.ts`) know these names.
+    const [plainName, verifyName] = HOSTED_PLAINTEXT;
+    const plainDirectory = join(directory, plainName);
+    const verifyDirectory = join(directory, verifyName);
     await mkdir(plainDirectory, { mode: 0o700 });
     await mkdir(verifyDirectory, { mode: 0o700 });
     return {
@@ -277,8 +306,13 @@ export class PostgresTenantArchiveEngine implements TenantArchiveEngine, TenantR
     return sha256File(archivePath);
   }
 
+  sweepAbandonedScratch(): Promise<ScratchSweep> {
+    return this.deps.scratch.dropAbandonedScratchDatabases();
+  }
+
   async restore(input: {
     readonly archivePath: string;
+    readonly expectedSha256: string;
     readonly password: string;
     readonly directory: string;
     readonly installationTenantId: string;
@@ -288,9 +322,36 @@ export class PostgresTenantArchiveEngine implements TenantArchiveEngine, TenantR
     readonly onOpened: (manifest: TenantArchiveManifest) => Promise<void>;
     readonly onStage: (stage: TenantRestoreStage) => Promise<void>;
   }): Promise<TenantRestoreSummary> {
+    // Security review of PR #447, finding 4: the restore writes as the restored tenant and
+    // relies on RLS `WITH CHECK` to refuse any row of another; an owner connection would not.
+    if ((await this.deps.app.scopeEnforcement()) !== 'enforcing') {
+      throw new NexaError({
+        kind: 'PRECONDITION_FAILED',
+        code: TENANT_ARCHIVE_ERROR_CODES.RLS_BYPASSED,
+        message:
+          'The restore connection bypasses row-level security; a tenant archive is restored as nexa_app.',
+      });
+    }
     await mkdir(input.directory, { recursive: true, mode: 0o700 });
+    // Finding 5: the request (or its confirmation) is bound to the file's SHA-256, and 7-Zip
+    // reads the archive once per entry. Every read is of a private copy hashed as it was
+    // written, so a file swapped after the confirmation is refused, never opened.
+    const archivePath = join(input.directory, RESTORE_ARCHIVE_COPY);
+    try {
+      const copied = await copyThroughSha256(input.archivePath, archivePath);
+      if (copied !== input.expectedSha256) {
+        throw new NexaError({
+          kind: 'PRECONDITION_FAILED',
+          code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+          message: 'The archive file changed after its restore was requested or confirmed.',
+        });
+      }
+    } catch (error) {
+      await removeAll([input.directory]);
+      throw error;
+    }
     return this.inVerifiedScratch(
-      input,
+      { ...input, archivePath },
       input.onStage,
       (opened) => input.onOpened(opened.manifest),
       async (opened, scratch, scratchUrl, head) => {

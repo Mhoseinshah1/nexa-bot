@@ -8,6 +8,7 @@ import {
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
+import { redactStoredText } from '../../../../infrastructure/redaction.js';
 import { tenantRestores } from '../../../../infrastructure/persistence/schema.js';
 import {
   requireTenantId,
@@ -18,13 +19,22 @@ import type { TenantRestoreRepository } from '../application/tenant-archive.serv
 /**
  * Phase 6B (ADR-0039 § 4): the `tenant_restores` request row, in the INSTALLATION tenant's own
  * scope (it is the owner's record). Every transition is a conditional UPDATE naming its `from`
- * states; the single-active index refuses a second active restore.
+ * states and, while the request is in progress, the lease owner; the single-active index
+ * refuses a second active restore.
+ *
+ * Security review of PR #447, finding 3: the row carries ADR-0025's lease (`lease_owner`,
+ * `lease_heartbeat_at`). A restore whose process died stops refreshing it, and the next
+ * restore takes the slot over by FAILING the row (`tenant_archive.lease_expired`), never by
+ * adopting it. A VERIFIED row waits for the owner and has no live worker: it is not reclaimed
+ * here (its expiry is PR-2's, ADR-0039 § As built).
  */
 export type TenantRestoreRow = typeof tenantRestores.$inferSelect;
 
 function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
 }
+
+const IN_PROGRESS = sql`${tenantRestores.state} IN ('VERIFYING', 'APPLYING')`;
 
 @ScopeBound()
 export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
@@ -39,6 +49,7 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
       readonly artifactSha256: string;
       readonly archiveId: string;
       readonly requestedByAdminId: string;
+      readonly leaseOwner: string;
       readonly now: Date;
     },
   ): Promise<void> {
@@ -52,6 +63,8 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
       artifactSha256: input.artifactSha256,
       archiveId: input.archiveId,
       requestedByAdminId: input.requestedByAdminId,
+      leaseOwner: input.leaseOwner,
+      leaseHeartbeatAt: input.now,
       createdAt: input.now,
       updatedAt: input.now,
     });
@@ -59,11 +72,23 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
 
   async confirm(
     scope: TenantContext,
-    input: { readonly id: string; readonly artifactSha256: string; readonly now: Date },
+    input: {
+      readonly id: string;
+      readonly artifactSha256: string;
+      readonly leaseOwner: string;
+      readonly now: Date;
+    },
   ): Promise<{ readonly hostedTenantId: string } | null> {
     const [row] = await this.db
       .update(tenantRestores)
-      .set({ state: 'VERIFYING', stage: 'OPEN', confirmedAt: input.now, updatedAt: input.now })
+      .set({
+        state: 'VERIFYING',
+        stage: 'OPEN',
+        confirmedAt: input.now,
+        leaseOwner: input.leaseOwner,
+        leaseHeartbeatAt: input.now,
+        updatedAt: input.now,
+      })
       .where(
         and(
           eq(tenantRestores.tenantId, requireTenantId(scope)),
@@ -76,12 +101,57 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
     return row ?? null;
   }
 
+  async heartbeat(
+    scope: TenantContext,
+    input: { readonly id: string; readonly leaseOwner: string; readonly now: Date },
+  ): Promise<void> {
+    await this.db
+      .update(tenantRestores)
+      .set({ leaseHeartbeatAt: input.now })
+      .where(
+        and(
+          eq(tenantRestores.tenantId, requireTenantId(scope)),
+          eq(tenantRestores.id, input.id),
+          eq(tenantRestores.leaseOwner, input.leaseOwner),
+          IN_PROGRESS,
+        ),
+      );
+  }
+
+  async reclaimStale(
+    scope: TenantContext,
+    input: { readonly staleBefore: Date; readonly now: Date },
+  ): Promise<number> {
+    // A row written before the lease existed has no heartbeat: its last update stands in.
+    const rows = await this.db
+      .update(tenantRestores)
+      .set({
+        state: 'FAILED',
+        failureCode: TENANT_ARCHIVE_ERROR_CODES.LEASE_EXPIRED,
+        failureMessage:
+          'This restore stopped reporting progress and its lease expired. The process that ' +
+          'owned it is presumed gone; its work directory was left in place.',
+        updatedAt: input.now,
+        finishedAt: input.now,
+      })
+      .where(
+        and(
+          eq(tenantRestores.tenantId, requireTenantId(scope)),
+          sql`${tenantRestores.state} IN ('REQUESTED', 'VERIFYING', 'APPLYING')`,
+          sql`coalesce(${tenantRestores.leaseHeartbeatAt}, ${tenantRestores.updatedAt}) < ${input.staleBefore}`,
+        ),
+      )
+      .returning({ id: tenantRestores.id });
+    return rows.length;
+  }
+
   async stage(
     scope: TenantContext,
     input: {
       readonly id: string;
       readonly stage: TenantRestoreStage;
       readonly applying: boolean;
+      readonly leaseOwner: string;
       readonly now: Date;
     },
   ): Promise<void> {
@@ -96,7 +166,8 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
         and(
           eq(tenantRestores.tenantId, requireTenantId(scope)),
           eq(tenantRestores.id, input.id),
-          sql`${tenantRestores.state} IN ('VERIFYING', 'APPLYING')`,
+          eq(tenantRestores.leaseOwner, input.leaseOwner),
+          IN_PROGRESS,
         ),
       )
       .returning({ id: tenantRestores.id });
@@ -117,6 +188,7 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
       readonly dryRun?: Readonly<Record<string, unknown>>;
       readonly failureCode?: string;
       readonly failureMessage?: string;
+      readonly leaseOwner: string;
       readonly now: Date;
     },
   ): Promise<void> {
@@ -128,7 +200,8 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
         stage: input.state === 'FAILED' ? sql`${tenantRestores.stage}` : 'DONE',
         ...(input.dryRun === undefined ? {} : { dryRun: input.dryRun }),
         failureCode: input.failureCode ?? null,
-        failureMessage: input.failureMessage?.slice(0, 2000) ?? null,
+        // The caller stores no raw error text (finding 1); redacted once more, as a run's is.
+        failureMessage: redactStoredText(input.failureMessage?.slice(0, 2000) ?? null),
         updatedAt: input.now,
         finishedAt: terminal ? input.now : null,
       })
@@ -136,7 +209,8 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
         and(
           eq(tenantRestores.tenantId, requireTenantId(scope)),
           eq(tenantRestores.id, input.id),
-          sql`${tenantRestores.state} IN ('VERIFYING', 'APPLYING')`,
+          eq(tenantRestores.leaseOwner, input.leaseOwner),
+          IN_PROGRESS,
         ),
       );
   }

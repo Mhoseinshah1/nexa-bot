@@ -28,7 +28,7 @@ export const TENANT_ARCHIVE_ERROR_CODES = {
   REPLACE_UNAVAILABLE: 'tenant_archive.replace_unavailable',
   /** A live table this release does not classify. */
   UNCLASSIFIED_TABLE: 'tenant_archive.unclassified_table',
-  /** The export's connection bypasses row-level security. */
+  /** The export's or the restore's connection bypasses row-level security. */
   RLS_BYPASSED: 'tenant_archive.rls_bypassed',
   /** Phase 6B PR-2: the owner withdrew a verified dry run («لغو») before confirming it. */
   RESTORE_CANCELLED: 'tenant_archive.restore_cancelled',
@@ -37,6 +37,11 @@ export const TENANT_ARCHIVE_ERROR_CODES = {
    * one restore slot, so it is released (the upload is removed with it).
    */
   DRY_RUN_EXPIRED: 'tenant_archive.dry_run_expired',
+  /**
+   * A restore stopped reporting (its lease heartbeat went stale) and the next restore took the
+   * installation's one restore slot over by FAILING it — never by adopting it (ADR-0025).
+   */
+  LEASE_EXPIRED: 'tenant_archive.lease_expired',
 } as const;
 export type TenantArchiveErrorCode =
   (typeof TENANT_ARCHIVE_ERROR_CODES)[keyof typeof TENANT_ARCHIVE_ERROR_CODES];
