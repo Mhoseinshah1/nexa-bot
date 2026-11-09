@@ -138,6 +138,8 @@ hosted archive bundles ONE per-archive key, never this server's keyring (ADR-003
 
 ## Open
 
+- ~~«ورود به پنل» (enter), the per-tenant backups and the open export.~~ Closed in Phase 6B
+  (ADR-0039 § "As built"; `docs/round-reports/phase-6b.md`). Still open below: erasure.
 - Purge closes the tenant for good (sessions revoked, bots disabled, `PURGED`); the physical
   erasure of its rows is not built — append-only tables (audit, operational events, outbox) refuse
   per-tenant deletes, so erasure needs its own design — designed (not built) in
