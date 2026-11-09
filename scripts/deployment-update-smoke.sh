@@ -24,6 +24,8 @@ set -euo pipefail
 
 REPO="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$REPO"
+# shellcheck source=scripts/image-build.sh
+. "$REPO/scripts/image-build.sh"
 
 REGISTRY_PORT="${REGISTRY_PORT:-5000}"
 REGISTRY="127.0.0.1:${REGISTRY_PORT}"
@@ -152,11 +154,10 @@ step "three releases: A, B, and one that never becomes ready"
 COMMIT="$(git rev-parse HEAD)"
 build_release() {
   local version="$1"
-  docker build \
+  nexa_build_image "${IMAGE_REPO}:${version}" \
     --build-arg "BUILD_VERSION=${version}" \
     --build-arg "BUILD_COMMIT=${COMMIT}" \
-    --build-arg "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    -t "${IMAGE_REPO}:${version}" . >/dev/null || fail "building ${version} failed"
+    --build-arg "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null || fail "building ${version} failed"
   docker push --quiet "${IMAGE_REPO}:${version}" >/dev/null || fail "pushing ${version} failed"
 }
 build_release v1.0.0

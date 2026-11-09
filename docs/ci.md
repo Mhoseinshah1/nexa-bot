@@ -217,6 +217,77 @@ and the largest count whose run stays under the free plan's 20 concurrent jobs
 with nothing else running; twelve already peaks at 21, so a second pull
 request at the same moment would queue behind it.
 
+## The 2026-11 image cache, and the docs-only question
+
+### Was a 33-minute run on a docs-only merge a bug? No — by design
+
+PR #440 changed one file, `docs/round-reports/web-redesign.md`. Its
+`pull_request` run (`42550059160`) took 10.5 min and **skipped** the ten
+integration shards, both legacy jobs and both deployment smokes — `changes`
+printed `heavy=false` (`docs/**/*.md` matches nested paths: the shell `case`
+pattern `docs/*.md` lets `*` cross `/`, so `docs/round-reports/x.md` is docs).
+What it still ran is what reads Markdown: its longest job was `web`
+(7 min), then `static` (5.8) and `deploy-logic` (4.4).
+
+The 33-minute run (`42551072700`, 02:27 → 03:01) is the **`push` to main** of
+its merge commit. A push is what `release.yml` accepts as evidence that a commit
+passed CI, so `ci-docs-only.sh` returns `heavy=true` for every event but
+`pull_request` and nothing is skipped; the aggregate refuses a skip on a push
+independently of the script. That is unchanged: a main commit whose evidence is
+partial could be tagged and released. (A merge-commit push that is provably
+identical in content to a tree whose full run already passed would be safe to
+skip, but the release gate matches runs by SHA and the new SHA has no run;
+making that sound needs the gate to learn "evidence by tree", which is its own
+change, not a CI-speed tweak.)
+
+### The layer cache
+
+Before, both deployment jobs ran a plain `docker build` on a fresh runner: every
+run re-downloaded the apt packages and re-installed every dependency, and the
+update smoke built the image twice with different build arguments, which
+invalidated the apt layer (it sat after `ENV BUILD_*`) both times.
+
+- The `Dockerfile` now has two stages that depend on neither the sources nor the
+  build identity — `deps` (the pnpm install) and `system` (PostgreSQL client and
+  7-Zip) — and the apt layer no longer follows `ARG`/`ENV BUILD_*`.
+- Both deployment jobs set up buildx (the pin `release.yml` already uses) and
+  warm those two stages through `docker/build-push-action` with the GitHub
+  Actions cache (scopes `nexa-image-deps`, `nexa-image-system`).
+  A `run` step cannot read the Actions cache credentials without an extra
+  third-party action, so the warm-up is done by actions already pinned here
+  rather than by `--cache-to type=gha` in the scripts; `scripts/image-build.sh`
+  also passes `--cache-from type=gha` when the credentials are present.
+- `scripts/deployment-smoke.sh` and `scripts/deployment-update-smoke.sh` still
+  build the FULL image, with their own build arguments, and run every assertion
+  on it; with `NEXA_CI_BUILDX` unset (a laptop) it is the plain `docker build`.
+- `release.yml` is untouched. Reusing one built image between the two jobs was
+  not done: the two jobs start together, so a hand-over would serialise one
+  behind the other on the critical path.
+
+`tests/unit/ci-workflow.test.ts` fails if the warm-up is dropped, runs after the
+smoke, or the apt layer moves behind the build identity.
+
+### Measurement
+
+Wall times in minutes, from `created_at` to `updated_at` of the CI run, and the
+two deployment jobs from their own job timestamps. Every run is a full
+(`heavy=true`) run.
+
+| run                  | event / what  | wall | update smoke | smoke |
+| -------------------- | ------------- | ---: | -----------: | ----: |
+| before `42571534164` | PR head, full | 30.6 |         13.3 |   5.7 |
+| before `42547476576` | PR head, full | 28.1 |         13.3 |   5.8 |
+| before `42551072700` | main push     | 33.4 |         14.0 |   6.4 |
+| after (first push)   | to be filled  |      |              |       |
+| after (later push)   | to be filled  |      |              |       |
+
+The slowest integration shard was 28.6 and 26.4 min in the two PR runs, the
+fastest 11.4 and 12.8: the suite, not the image build, is the critical path of
+a full run today. `tests/support/integration-timings.json` was refreshed from the
+shard logs of main runs `42551072700` and `42550025488` (the artifact download
+host is not reachable from the authoring session; the logs carry the same
+per-file durations).
+
 ## Where pnpm comes from
 
 One pin: `packageManager` in the root `package.json`. Every job that needs pnpm

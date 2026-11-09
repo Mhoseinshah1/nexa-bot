@@ -16,6 +16,8 @@ set -euo pipefail
 
 REPO="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$REPO"
+# shellcheck source=scripts/image-build.sh
+. "$REPO/scripts/image-build.sh"
 
 VERSION_A="${VERSION_A:-v0.0.1-smoke}"
 VERSION_B="${VERSION_B:-v0.0.2-smoke}"
@@ -100,11 +102,10 @@ step "1. the production image builds"
 # ---------------------------------------------------------------------------
 COMMIT_A="$(git rev-parse HEAD)"
 BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-docker build \
+nexa_build_image "${IMAGE_REPO}:${VERSION_A}" \
   --build-arg "BUILD_VERSION=${VERSION_A}" \
   --build-arg "BUILD_COMMIT=${COMMIT_A}" \
-  --build-arg "BUILD_TIME=${BUILT_AT}" \
-  -t "${IMAGE_REPO}:${VERSION_A}" . >/dev/null ||
+  --build-arg "BUILD_TIME=${BUILT_AT}" >/dev/null ||
   fail "the production image did not build"
 pass "the production image builds"
 
