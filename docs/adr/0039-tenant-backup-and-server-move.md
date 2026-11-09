@@ -733,6 +733,76 @@ when it is reverted (`scripts/claude/tenant-archive-mutation.sh`):
   work directory through a SHA-256 and reads only that copy; a copy whose hash is not the one
   the request or its confirmation names is refused before it is opened.
 
+## As built in PR-3 (`feat/6b-data-export`) — the open data export
+
+Decisions of PR-3, binding on later PRs (the design above, "The open data export", is unchanged):
+
+- **Two doors, one service** (`DataExportService`). A hosted bot's owner, in their own Web Admin
+  («خروجی داده», `/data-export`), holding `data.export` in their own tenant; the installation
+  owner, from «میزبانی‌ها», inside a bot's card, with the section session and a FRESH code on the
+  request. The request row belongs to the EXPORTED tenant (`tenant_data_exports.tenant_id`), so
+  it is under that tenant's row-level security; the audit row belongs to the ACTOR's log: the
+  owner's own for the host, the bot's own for its owner. The host's request writes NO row to the
+  hosted tenant's audit log (D5). `requested_by_host` keeps the two apart: a hosted owner's list
+  and download never show what the host asked for.
+- **Who is "hosted".** The installation's own tenant is refused (`data_export.not_hosted`) and
+  its session is not shown `data.export` (`withoutInstallationDataExport`, as `hosting.manage`
+  is withheld from a hosted owner). Every other tenant is a hosted bot's, as in the capacity
+  tiers. A SUSPENDED or DELETED hosted bot can still be exported by the host (its data is the
+  reason to export it before a purge); a PURGED one is not found.
+- **A column allow-list, not a filter.** `data-export-inventory.ts` decides EVERY column of
+  every exported table: exported with its Persian description (the README is generated from the
+  same data) or excluded with a reason. The export selects exactly the exported columns (never
+  `SELECT *`), so a column added later is in no file until somebody decides it.
+  `tests/unit/data-export-inventory.test.ts` fails the build for an undecided column and for an
+  exported column whose name reads as a secret (hash, token, key, credential, bearer link) unless
+  allowed by name. Left out on purpose: `services.subscription_url` (a bearer link),
+  `subscription_ref` and `provider_client_id` (what the customer's configuration authenticates
+  with), Telegram file ids, idempotency keys and request hashes, the pricing snapshot JSON and
+  the import provenance JSON. Attachments are not exported, only their names, types and sizes.
+- **Files.** `customers`, `wallet_ledger`, `wallet_balances` (the ledger's total per customer
+  and currency: the balance is never stored), `orders`, `services`, `payments`, `products`,
+  `product_categories`, `resellers`, `tickets`, `ticket_messages`, `ticket_categories`, and
+  `README.fa.md`. Money is `col::text` of the stored `bigint`: exact minor units beside the
+  currency column, proved past 2^53. Instants are ISO 8601 UTC. A text cell that starts with
+  `= + - @` is written with a leading `'`; numbers are never guarded.
+- **One snapshot, bound and named.** The ZIP is read in one `REPEATABLE READ READ ONLY`
+  transaction under the tenant's scope (`nexa_app`, `app.current_tenant_id`) with
+  `tenant_id = $1` in every statement. No system-path reason was needed for the read (the
+  `data export: bind the exported tenant` reason of the list above is not used): the worker's
+  four cross-tenant sweeps are scope-less `@ScopeBound` methods, pinned as
+  `DrizzleDataExportRepository.claimNext`, `.expireDue`, `.failAbandoned` and `.pendingRemoval`.
+- **The host door is on the system path.** The installation owner's door reads and writes a
+  HOSTED tenant's export rows, so it never binds that tenant's scope: `hostList`, `hostFind`,
+  `hostActive` and `hostInsert` run under the literal reasons `data-export: host lists the
+exports of a hosted bot`, `…host finds an export of a hosted bot`, `…host checks the active
+export of a hosted bot` and `…host requests an export for a hosted bot` (each pinned in
+  `tests/unit/system-path-allowlist.ts`; `withSystemScope` on the pool, `withSystemScopeIn` on
+  the owner's own transaction for the request), with the hosted tenant as the predicate of every
+  statement. The hosted owner's own door stays tenant-bound. An integration probe (a trigger on
+  the table) asserts the request is written as `nexa_system` under its reason; the mutation
+  `host-tenant-bound` of `scripts/claude/data-export-mutation.sh` turns it red.
+- **The worker** (`DataExportRunner`, in the worker role, 15 s tick, fresh while idle or working):
+  expires and removes, fails abandoned work (three attempts), claims the oldest request
+  (`FOR UPDATE SKIP LOCKED`, a lease it refreshes), waits for the heavy-job queue
+  (`HeavyJobGate`, kind `EXPORT`, so never beside a backup or a restore), streams the ZIP to
+  `<BACKUP_WORK_DIR>/data-exports/<tenant>/<id>.zip` (a streamed, deflated ZIP, no ZIP64: a
+  file past 4 GiB fails with `data_export.too_large`), and ends READY with the SHA-256, the size
+  and a deadline 24 h out. Not admitted: back to REQUESTED, still first in line. One export
+  being made per tenant, by a partial unique index.
+- **The 24 h link** is an authenticated, same-origin download route, not a bearer URL: the file
+  is streamed with `no-store`, only to the requester's session, until `expires_at`; after it the
+  answer is `data_export.expired` and the next worker pass removes the file (and retries a
+  removal that failed). A file gone from disk under a READY row answers `expired` too.
+- **Contract items** (each its own commit): the `data.export` permission (CRITICAL, owner, with
+  the backfill migration `0331`), the states and the deadline, the error codes `not_ready`,
+  `expired`, `not_found`, `not_hosted`, `in_progress` and the two failure codes `failed`,
+  `too_large`, the routes and shapes, and the table `tenant_data_exports` (`0330`; the tenant
+  archive inventory classes it NEVER: a file on this server means nothing on another).
+- **Not done / open.** The installation owner's download uses the section session, not a second
+  fresh code (the request spends the code). No template key was needed (Persian text is Web
+  Admin chrome, `web.*`). The export carries no attachments and no files of the media library.
+
 ## Open
 
 - Off-site (S3) copies of hosted archives: the destination and its credentials are the owner's;

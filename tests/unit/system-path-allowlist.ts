@@ -53,6 +53,22 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleDataCompactionRepository.finish',
   'DrizzleDataCompactionRepository.latest',
   'DrizzleDataCompactionRepository.start',
+  // Phase 6B PR-3: the installation owner's door to a hosted bot's export rows (ADR-0038
+  // «Cross-tenant work»): another tenant's rows, so the system path under its own reason, with
+  // the hosted tenant as the predicate of every statement.
+  'reason: data-export: host checks the active export of a hosted bot',
+  'reason: data-export: host finds an export of a hosted bot',
+  'reason: data-export: host lists the exports of a hosted bot',
+  'reason: data-export: host requests an export for a hosted bot',
+  // Phase 6B PR-3 (ADR-0039, the open data export): the worker's sweeps across tenants. The
+  // claim takes the oldest requested export of ANY tenant (the queue is the installation's, one
+  // at a time), the abandoned-work sweep and the 24 h deadline sweep and the removal list of
+  // expired files read the same rows; each export is then worked on bound to its own tenant.
+  'DrizzleDataExportRepository.claimNext',
+  'DrizzleDataExportRepository.expireDue',
+  'DrizzleDataExportRepository.failAbandoned',
+  'DrizzleDataExportRepository.pendingRemoval',
+  'DrizzleDataExportRepository.statesOf',
   'DrizzleDirectMessageRepository.purgeFileContentBefore',
   'DrizzleGatewayInvoiceRepository.providerOrderIdTaken',
   'DrizzleHeavyJobQueueRepository.enqueue',

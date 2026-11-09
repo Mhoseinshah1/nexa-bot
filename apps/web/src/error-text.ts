@@ -39,6 +39,7 @@ import type {
   TONPAYS_ERROR_CODES,
   TONPAYS_TELEGRAM_ERROR_CODES,
   TENANT_ARCHIVE_ERROR_CODES,
+  DATA_EXPORT_ERROR_CODES,
 } from '@nexa/contracts';
 import { ApiError } from './api/client';
 import { t, type WebKey } from './i18n/web.fa';
@@ -99,6 +100,7 @@ export type ContractErrorCode =
   | CodesOf<typeof TONPAYS_ERROR_CODES>
   | CodesOf<typeof TONPAYS_TELEGRAM_ERROR_CODES>
   | CodesOf<typeof TENANT_ARCHIVE_ERROR_CODES>
+  | CodesOf<typeof DATA_EXPORT_ERROR_CODES>
   | 'request.invalid'
   | 'http.error'
   | 'internal.unhandled'
@@ -168,6 +170,13 @@ export const ERROR_TEXT = {
   'tenant_archive.unique_collision': 'web.err_tenant_archive_unique_collision',
   'tenant_archive.verification_failed': 'web.err_tenant_archive_verification_failed',
   'tenant_archive.has_child_tenants': 'web.err_tenant_archive_has_child_tenants',
+  'data_export.not_ready': 'web.err_data_export_not_ready',
+  'data_export.expired': 'web.err_data_export_expired',
+  'data_export.not_found': 'web.err_data_export_not_found',
+  'data_export.not_hosted': 'web.err_data_export_not_hosted',
+  'data_export.in_progress': 'web.err_data_export_in_progress',
+  'data_export.failed': 'web.err_data_export_failed',
+  'data_export.too_large': 'web.err_data_export_too_large',
   'tenant_archive.not_hosted': 'web.err_tenant_archive_not_hosted',
   'tenant_archive.purged': 'web.err_tenant_archive_purged',
   'tenant_archive.replace_unavailable': 'web.err_tenant_archive_replace_unavailable',
