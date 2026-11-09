@@ -8,7 +8,6 @@ import {
   LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
   RECOVERY_CONFIRMATION_PHRASE,
-  RECOVERY_KIT_ROUTES,
   RECOVERY_ROUTES,
   type PermissionKey,
 } from '@nexa/contracts';
@@ -224,7 +223,6 @@ function page(
   } = {},
 ) {
   const api = stubApi([
-    { url: `${API_PREFIX}${RECOVERY_KIT_ROUTES.keys}`, body: { keys: [] } },
     {
       url: `${API_PREFIX}${BACKUP_ROUTES.status}`,
       body: {

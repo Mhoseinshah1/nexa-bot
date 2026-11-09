@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { copyFile, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ActorContext } from '@nexa/contracts';
@@ -10,6 +10,8 @@ import { type Container } from '../../apps/api/src/container';
 import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { AesGcmSecretCipher } from '../../apps/api/src/infrastructure/crypto/secret-cipher';
+import { kekFingerprint } from '../../apps/api/src/infrastructure/crypto/kek';
+import { wrapInstallationKey } from '../../apps/api/src/infrastructure/crypto/installation-keyring';
 import {
   trialDecryptSecrets,
   type SecretRowQueryable,
@@ -24,13 +26,12 @@ import { createTestContainer, adminActorFor, createAdmin, tenantA, testConfig } 
  * were named `install-20261107`, with different bytes. A backup of A restored on B;
  * the id-only check found the name, cut over, and every secret failed
  * authentication. Each case builds THROWAWAY live databases, because the cutover
- * renames the database it runs against (as `recovery-kit-restore.test.ts` does).
+ * renames the database it runs against.
  */
 
 const SAME_ID = 'install-20261107';
 const OWNER_PASSWORD = 'the-owners-real-password';
 const BACKUP_PASSWORD = 'the backup password A used';
-const KIT_PASSPHRASE = 'the old server had a long passphrase';
 
 describe('a restore never brings back secrets this install cannot read', () => {
   let created: string[];
@@ -268,7 +269,6 @@ describe('a restore never brings back secrets this install cannot read', () => {
       expect(tested.request.state).toBe('RESTORE_TEST_PASSED');
       expect(tested.request.restoreTest).toMatchObject({
         unreadableSecrets: [],
-        canUploadKit: false,
       });
       expect(tested.request.restoreTest?.bundledKeys).toBeGreaterThan(0);
       // Nothing was persisted as a key: the bundle's keys live for one recovery.
@@ -316,9 +316,12 @@ describe('a restore never brings back secrets this install cannot read', () => {
     expect(await durableText(b.database)).not.toContain('not the backup password');
   }, 300_000);
 
-  it('an old archive (no bundled keys) under a same-named key is REFUSED before cut-over; the old kit then lets it through', async () => {
+  it('SFR A1: an old archive (no bundled keys) is REFUSED, never half-restored, and a key a removed kit left here does not let it through', async () => {
+    // MUTATION: the restore trial reading the installation's imported keys again (the Recovery
+    // Kit's restore fallback, `KeyringRecoveryKeyCoverage.trialDecrypt` on `this.keyring`)
+    // lets step 2 pass and fails this.
     const keyA = randomBytes(32);
-    const a = await installation(SAME_ID, keyA);
+    const a = await installation('kek-a', keyA);
     await setBackupPassword(a);
     // A release from before self-contained backups: its 7z carried no keys.
     (a.container.backupArchiver as unknown as { keyBundle?: unknown }).keyBundle = undefined;
@@ -328,61 +331,56 @@ describe('a restore never brings back secrets this install cannot read', () => {
       encoding: 'utf8',
     });
     expect(listing).not.toContain('keys.json');
-    const inA = await trialWithOnly(a.database, SAME_ID, keyA);
+    const inA = await trialWithOnly(a.database, 'kek-a', keyA);
     const expected = inA.byPurpose
       .filter((entry) => entry.readable > 0)
       .map((entry) => ({ purpose: entry.purpose, count: entry.readable }));
     expect(expected.length).toBeGreaterThan(0);
-    const before = await plaintexts(a.database, onlyKey(SAME_ID, keyA));
-    const kit = await a.container.installationKeys.exportKit(
-      tenantA,
-      a.owner,
-      {
-        accountPassword: OWNER_PASSWORD,
-        passphrase: KIT_PASSPHRASE,
-        passphraseConfirmation: KIT_PASSPHRASE,
-      },
-      { ip: null },
-    );
     await a.container.shutdown();
     containers.splice(containers.indexOf(a.container), 1);
 
     const keyB = randomBytes(32);
-    const b = await installation(SAME_ID, keyB);
-    const beforeB = await plaintexts(b.database, onlyKey(SAME_ID, keyB));
+    const b = await installation('kek-b', keyB);
+    const beforeB = await plaintexts(b.database, onlyKey('kek-b', keyB));
 
-    // 1. Refused, with the right kinds and counts, and the kit offered.
+    // 1. Refused, with the right kinds and counts, no kit offered, nothing cut over.
     const refused = await upload(b, archivePath, BACKUP_PASSWORD);
     expect(refused.failureCode).toBe('recovery.candidate_secrets_unreadable');
     expect(refused.request.state).toBe('FAILED');
     expect(refused.request.restoreTest?.unreadableSecrets).toEqual(expected);
-    expect(refused.request.restoreTest?.canUploadKit).toBe(true);
     expect(refused.request.restoreTest?.cutoverPermitted).toBe(false);
-    // Nothing was cut over: B's own secrets, under B's own key, untouched.
-    expect(await plaintexts(b.database, onlyKey(SAME_ID, keyB))).toEqual(beforeB);
+    expect(refused.request.restoreTest).not.toHaveProperty('canUploadKit');
+    expect(await plaintexts(b.database, onlyKey('kek-b', keyB))).toEqual(beforeB);
     expect(refused.request.candidateDatabase ?? null).toBeNull();
 
-    // 2. A's kit: the same id, a different fingerprint — imported decrypt-only.
-    const imported = await b.container.installationKeys.importKit(tenantA, b.owner, {
-      kit: kit.bytes.toString('base64'),
-      passphrase: KIT_PASSPHRASE,
-      accountPassword: OWNER_PASSWORD,
-      idempotencyKey: 'kit-import-same-id-1',
-    });
-    expect(imported.imported.map((k) => k.keyId)).toEqual([SAME_ID]);
-    expect(b.container.keyring.keys.get(SAME_ID)?.equals(keyB)).toBe(true);
-
-    // 3. The restore test again (a fresh request: the re-run endpoint is D5's).
-    const passed = await upload(b, archivePath, BACKUP_PASSWORD);
-    expect(passed.failureCode).toBeNull();
-    expect(passed.request.restoreTest?.unreadableSecrets).toEqual([]);
-    const row = await confirmAndExecute(b, passed.request);
-    expect(row?.failureCode ?? null).toBeNull();
-    expect(row?.state).toBe('SUCCEEDED');
-
-    // Every secret reads, and under B's ACTIVE key alone after the rewrap.
-    expect((await trialWithOnly(b.database, SAME_ID, keyB)).unreadableTotal).toBe(0);
-    expect(await plaintexts(b.database, onlyKey(SAME_ID, keyB))).toEqual(before);
+    // 2. B holds A's key as a decrypt-only key a Recovery Kit imported before the kit was
+    //    removed (seeded as the import stored it: wrapped under B's active key).
+    await withDb(b.database, (client) =>
+      client.query(
+        `INSERT INTO installation_keys
+           (id, key_id, fingerprint, wrapped_material, wrapped_under_key_id, source, imported_at)
+         VALUES ($1, 'kek-a', $2, $3, 'kek-b', 'RECOVERY_KIT', now())`,
+        [
+          randomUUID(),
+          kekFingerprint(keyA),
+          wrapInstallationKey({
+            keyId: 'kek-a',
+            material: keyA,
+            wrappingKeyId: 'kek-b',
+            wrappingKey: keyB,
+          }),
+        ],
+      ),
+    );
+    await b.container.installationKeyLoader.refresh();
+    expect(b.container.keyring.importedKeys.get('kek-a')?.equals(keyA)).toBe(true);
+    // The live installation still reads with it — but a restore does not.
+    const again = await upload(b, archivePath, BACKUP_PASSWORD);
+    expect(again.failureCode).toBe('recovery.candidate_secrets_unreadable');
+    expect(again.request.restoreTest?.unreadableSecrets).toEqual(expected);
+    expect(again.request.restoreTest?.cutoverPermitted).toBe(false);
+    expect(await plaintexts(b.database, onlyKey('kek-b', keyB))).toEqual(beforeB);
+    expect(again.request.candidateDatabase ?? null).toBeNull();
   }, 300_000);
 
   it('the trial reads only the database it is pointed at — the restored one — and never the live one', async () => {

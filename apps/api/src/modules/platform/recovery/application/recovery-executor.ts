@@ -42,7 +42,7 @@ import type { SecretClearingReport } from '../../../../infrastructure/crypto/sec
 
 /**
  * Whether every purpose unreadable now was acknowledged, with no more values than the
- * owner accepted. Fewer is fine (a kit imported since); more, or another purpose, is not.
+ * owner accepted. Fewer is fine (a key configured since); more, or another purpose, is not.
  */
 export function withinAcknowledged(
   now: readonly { purpose: string; count: number }[],
@@ -1210,12 +1210,11 @@ export class RecoveryExecutor {
      * THE KEYS, before the renames. ADR-0032.
      *
      * `installation_keys` lives in the database being replaced, and the
-     * candidate is the OLD installation's database: without this, the Recovery
-     * Kit the operator imported to open this very archive would vanish at the
-     * cutover, and with it the only key that reads the restored credentials. So
-     * the current rows are written INTO THE CANDIDATE — atomically with the
-     * rename, in the sense that matters: they are there before it has the live
-     * name, and if anything fails here, nothing has been renamed.
+     * candidate is the OLD installation's database: the decrypt-only keys this
+     * installation still holds (imported before the Recovery Kit was removed,
+     * SFR A1) are written INTO THE CANDIDATE so they survive the cutover. Nothing
+     * restored depends on them — every restored secret is moved onto the active
+     * key below — but the rows are this installation's record, not the backup's.
      *
      * Then the restore-test's check again, authoritatively: every key the
      * candidate's secrets name must be held. The restore-test asked the same
@@ -1280,13 +1279,7 @@ export class RecoveryExecutor {
           acknowledged !== undefined &&
           withinAcknowledged(unreadableCounts(trial), acknowledged);
         if (!within) {
-          await this.recordUnreadable(
-            id,
-            inspection.tableCount,
-            compatibility,
-            trial,
-            sealedBundle,
-          );
+          await this.recordUnreadable(id, inspection.tableCount, compatibility, trial);
           throw new RecoveryAbort(
             'recovery.candidate_secrets_unreadable',
             `The candidate holds ${String(trial.unreadableTotal)} secret(s) no key held here decrypts.`,
@@ -1589,8 +1582,7 @@ export class RecoveryExecutor {
 
   /**
    * Records the trial's failures on the request before the abort, so the Web Admin
-   * can say which kinds of secret failed and whether a Recovery Kit could help — the
-   * same fields the restore test writes. Counts only; best effort (the abort that
+   * can say which kinds of secret failed — the same fields the restore test writes. Counts only; best effort (the abort that
    * follows is the authoritative outcome).
    */
   private async recordUnreadable(
@@ -1598,7 +1590,6 @@ export class RecoveryExecutor {
     tableCount: number,
     compatibility: Pick<CandidateCompatibility, 'verdict' | 'applied' | 'expected'>,
     trial: SecretTrialReport,
-    sealedBundle: string | null,
   ): Promise<void> {
     const unreadable = unreadableCounts(trial);
     this.deps.logger.error(
@@ -1620,7 +1611,6 @@ export class RecoveryExecutor {
             expectedMigrations: compatibility.expected,
             cutoverPermitted: false,
             unreadableSecrets: unreadable,
-            canUploadKit: sealedBundle === null,
           },
         },
       })

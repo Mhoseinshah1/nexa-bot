@@ -98,7 +98,7 @@ export interface AccountSecurityDependencies {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly throttle: CredentialThrottle;
-  /** The one password step-up: throttled, audited, shared with the Recovery Kit. */
+  /** The one password step-up: throttled, audited, shared with the backup password. */
   readonly verifyOwnPassword: (
     scope: ScopeContext,
     actor: ActorContext,

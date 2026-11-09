@@ -26,7 +26,7 @@ import { createTestContainer, adminActorFor, createAdmin, tenantA, testConfig } 
  * never sweeps by `LIKE`. Other suites and other agents may hold `nexa_drlive_*`,
  * `nexa_kitlive_*`, `nexa_candidate_*` or `nexa_pre_restore_*` databases right
  * now, and a pattern sweep here would drop them. Modelled on
- * `recovery-kit-restore.test.ts`.
+ * `restore-secret-keys.test.ts`.
  *
  * Each case builds a THROWAWAY live database, because the executor renames the
  * database it runs against — and because a mutation of the rules under test

@@ -1514,9 +1514,9 @@ export class AdminManagementService {
    * more than a session (step-up). Returns normally on success; throws on
    * failure. Changes nothing.
    *
-   * The first caller is the Recovery Kit export (ADR-0032), which hands every
-   * key-encryption key to whoever knows a passphrase: a stolen session must not
-   * be enough for that, and the password is what a session thief does not have.
+   * Its caller is setting the backup password, which decides what every future
+   * archive opens with: a stolen session must not be enough for that, and the
+   * password is what a session thief does not have.
    *
    * Throttled by the SAME counter login and `changeOwnPassword` use, keyed by
    * the same username, for the reason that method gives: a second, unthrottled

@@ -289,7 +289,7 @@ and sent with that digest as `x-amz-content-sha256` and its `Content-MD5`, so th
 refuses a body that differs. Then `index.json` (backup id, time, format, sizes and digests;
 no key, no credential), LAST: an index present means every part before it landed. Nothing
 is encrypted again: the archive is already ciphertext under the installation's key (or the
-7-Zip password), so the bucket holds nothing readable without the Recovery Kit.
+7-Zip password), so the bucket holds nothing readable without that key or that password.
 
 **Write-only.** The client is one hand-written Signature V4 `PutObject` (no SDK: the whole
 client is one request shape, pinned to AWS's own test vectors in
@@ -446,8 +446,8 @@ pnpm backup list [--limit N]                     # recent runs and their deliver
 pnpm backup verify --archive PATH                # decrypt and checksum; touches no database
 pnpm backup restore --archive PATH --target DB   # restore into an explicit, empty database
 
-# Another installation's archive (ADR-0032): add --kit; the passphrase comes on stdin.
-read -rs P; printf %s "$P" | pnpm backup verify --archive PATH --kit old.nxkit
+# Another installation's archive: a 7z made with a backup password, password on stdin.
+read -rs P; printf %s "$P" | pnpm backup verify --archive PATH.7z.001 --password-stdin
 ```
 
 `backup:dev` is the `tsx` variant for a development checkout. In a deployed
@@ -466,14 +466,14 @@ $C exec -T postgres createdb -U nexa nexa_restore_test
 $C exec -T api node dist/backup.cli.js restore \
     --archive /var/lib/nexa/backups/<id>/archive.nxb --target nexa_restore_test
 
-# Another installation's archive, with its Recovery Kit. Copy both IN, pipe the
-# passphrase on stdin (never an argument), and remove the copies afterwards.
-$C cp old.nxb api:/var/lib/nexa/backups/old.nxb
-$C cp old.nxkit api:/var/lib/nexa/backups/old.nxkit
-$C exec -T -u root api chown node:node /var/lib/nexa/backups/old.nxb /var/lib/nexa/backups/old.nxkit
+# Another installation's archive: a 7z made with a backup password. Copy it IN, pipe the
+# password on stdin (never an argument), and remove the copy afterwards. (--kit is refused:
+# the Recovery Kit is removed.)
+$C cp old.7z.001 api:/var/lib/nexa/backups/old.7z.001
+$C exec -T -u root api chown node:node /var/lib/nexa/backups/old.7z.001
 read -rs P; printf %s "$P" | $C exec -T api node dist/backup.cli.js verify \
-    --archive /var/lib/nexa/backups/old.nxb --kit /var/lib/nexa/backups/old.nxkit; unset P
-$C exec -T api rm /var/lib/nexa/backups/old.nxb /var/lib/nexa/backups/old.nxkit
+    --archive /var/lib/nexa/backups/old.7z.001 --password-stdin; unset P
+$C exec -T api rm /var/lib/nexa/backups/old.7z.001
 ```
 
 `exec` into the RUNNING api container, which already has the backup volume
@@ -546,7 +546,7 @@ active key; the summary says "rewrapped N secrets under <key id>". This holds ev
 other server's key has the **same id** with different material: ids alone are never trusted,
 the secrets are actually decrypted before anything is cut over. Only an **old archive**
 (made before this existed, no `keys.json`) or a keyring-only **`.nxb`** (no backup password)
-still needs the old server's Recovery Kit.
+from another server cannot be restored: the Recovery Kit that once opened them is removed.
 
 New installations name their key `install-<YYYYMMDD>-<8 hex>`; existing ids are unchanged.
 
@@ -634,9 +634,7 @@ directory that NO row names (for example the pre-restore archive of a recovery
 that cut over — its row lives in the displaced database) is never removed
 automatically; delete it by hand once you are sure.
 
-Removing an archive also removes it from the Recovery Kit's dependency count: a
-key only that archive needed becomes removable. Copies elsewhere (Telegram, a
-laptop) are not counted, as before.
+Copies elsewhere (Telegram, a laptop) are yours to manage.
 
 **Plaintext debris.** A run abandoned mid-dump keeps its plaintext by design (its
 process may still be writing), and a killed CLI `verify`/`restore` leaves a
@@ -848,21 +846,15 @@ A container REPLACED (new hostname) or down for more than 15 minutes goes throug
 the stale-lease path instead: `FAILED` with `recovery.lease_expired`, cutover
 facts kept on the row.
 
-### Another installation's archive: the Recovery Kit
+### Another installation's archive
 
-An archive from ANOTHER installation — the usual case after a server is rebuilt
-from scratch — is sealed under that installation's key, which a fresh install
-does not have. Without its **Recovery Kit** the upload fails as
-`recovery.archive_foreign_key` and the Web Admin says what to do. With it:
-
-1. On the fresh install, sign in as the owner and open **بکاپ و بازیابی**.
-2. Under **کیت بازیابی**, import the old server's `.nxkit` with its passphrase.
-   Its keys are added **decrypt-only**: this server's own key stays the one every
-   new secret and backup is sealed with.
-3. Upload the old `.nxb`, verify, confirm — the ordinary restore above.
-
-**When is the kit needed?** Only for an old archive or a keyring-only `.nxb`. A 7z archive
-made with a backup password carries its own keys: upload it and enter the password.
+**The Recovery Kit is removed (SFR A1, owner decision 2026-11-08): backups are self-contained.**
+A 7z archive made with a backup password carries every key its secrets are sealed under,
+wrapped by that password: on a fresh install, upload it and enter the password — nothing else.
+An archive from another installation that does NOT carry its keys — a keyring-only `.nxb`, or a
+7z from before self-contained backups — is refused: `recovery.archive_foreign_key` when the file
+itself cannot be opened, `recovery.candidate_secrets_unreadable` when it opens but its secrets
+do not. Nothing is restored in either case; the Web Admin says why in Persian.
 
 The restore-test tries to decrypt the secrets INSIDE the backup (bot tokens, panel
 credentials, payment-gateway keys, the backup password itself) with every key it can hold.
@@ -870,8 +862,9 @@ If any cannot be read it refuses with `recovery.candidate_secrets_unreadable` be
 is confirmed, listing each kind and how many (the older `recovery.candidate_keys_missing`
 only appears on old rows). You then have two choices:
 
-1. **Import the Recovery Kit** of the server the backup came from (offered only when the
-   archive carries no keys of its own), then re-run the restore test.
+1. Upload a backup made with a backup password instead (it carries its keys). The restore
+   test reads secrets with this server's CONFIGURED keys and the archive's own keys only —
+   never with a key a Recovery Kit imported before the kit was removed.
 2. **«ادامه؛ این‌ها را دوباره وارد می‌کنم»** — continue anyway. You confirm the exact list;
    the unreadable values are cleared in the restored database and listed as items to re-enter
    (bots, panels, payment methods, backup, AI support) on the pages where they live. Nothing
@@ -880,8 +873,8 @@ only appears on old rows). You then have two choices:
    `docs/recovery-kit-format.md`.
 
    Three consequences of choosing 2: a payment gateway's **refund card cannot be cleared**
-   (clearing it would change a refund), so a backup whose list contains one must be restored
-   with the old Recovery Kit; a **bot whose token was cleared is stopped** until its token is
+   (clearing it would change a refund), so a backup whose list contains one cannot be restored
+   here; a **bot whose token was cleared is stopped** until its token is
    entered again; and until every cleared value is re-entered the Web Admin shows an
    **attention strip** (`GET /secret-reentry`, `backup.view`) above every page, one row per
    value with a link to the page where it is entered. A row disappears as soon as its value
@@ -930,39 +923,16 @@ recovery executor closes every unfinished import created before it (`CANCELLED`,
 `SUPERSEDED_BY_RESTORE`, key erased, lease released); the Mirza executor does the same on its own
 ticks as a backstop. Nothing is re-imported, and later restores and uploads are not blocked.
 
-## The Recovery Kit — keep one, apart from the backups
+## The Recovery Kit — removed
 
-A Recovery Kit holds this server's keys. It is what opens **old archives** and keyring-only
-`.nxb` backups on another server; a password-protected backup made now does not need it. Keep
-one anyway for those.
+Removed in SFR A1 (owner decision 2026-11-08). A backup made with a backup password is
+self-contained; keep the password somewhere other than the server and the backups.
 
-**If the kit is lost**, the old archives that depend on it cannot be read. Restore with
-whichever archive can be read (a newer password-protected one is best), choose
-«ادامه؛ این‌ها را دوباره وارد می‌کنم» for the secrets that stay unreadable, re-enter them, and
-take a fresh backup. `botctl secrets verify` (read-only) lists, per kind, what is readable and
-what is not, and where to re-enter it.
-
-**A `.nxb` alone is not enough to restore on a new server.** Export a Recovery
-Kit from the Web Admin (owner, account password, a passphrase of at least 12
-characters typed twice), and keep it somewhere that is neither this server nor
-the place the backups go; keep the passphrase somewhere else again. Kit +
-passphrase + any backup is the whole database, so treat the kit like the KEK it
-contains. Export a new kit after every key rotation: a kit holds the keys that
-existed when it was made.
-
-Imported keys are listed with what still depends on each. An imported key can be
-removed only when no stored secret, other imported key, archive on this server's
-disk (sealed under it, or taken while it was held) or unfinished recovery needs
-it. Copies elsewhere (Telegram, a laptop) cannot be counted — and that includes
-this server's own older backups taken before a `secrets rewrap`, which may hold
-credentials still sealed under the key — so remove one only when you are sure.
-A removed key leaves a tombstone, so restoring an older backup does not bring it
-back; importing its kit again does. Import, like export, asks for your account
-password. Configured keys are never
-removed from the Web Admin; `botctl secrets retire-check --key ID` is the gate for
-those, and it counts imported keys wrapped under the key as dependencies.
-`botctl secrets rewrap` re-wraps imported keys under the active key along with
-everything else.
+An installation that imported a kit before then keeps the imported keys in `installation_keys`,
+read-only and decrypt-only: a kit-assisted restore before v0.9.10 could leave live secrets sealed
+under one. `sudo botctl secrets verify` lists what reads; `sudo botctl secrets rewrap` moves every
+secret onto the active key. Nothing imports, exports or removes a key any more, and
+`botctl backup verify|restore --kit` is refused with the reason.
 
 ## Relationship to `botctl backup`
 

@@ -11,10 +11,7 @@ import {
   type SecretKeyring,
 } from '../../apps/api/src/infrastructure/crypto/keyring';
 import { InstallationKeyring } from '../../apps/api/src/infrastructure/crypto/installation-keyring';
-import {
-  FAST_KIT_KDF,
-  kekFingerprint,
-} from '../../apps/api/src/infrastructure/crypto/recovery-kit';
+import { FAST_KDF, kekFingerprint } from '../../apps/api/src/infrastructure/crypto/kek';
 import { openKeyBundle, sealKeyBundle } from '../../apps/api/src/infrastructure/crypto/key-bundle';
 import {
   checksumFile,
@@ -200,7 +197,7 @@ describe('the key bundle a self-contained backup carries', () => {
       ],
       password,
       backupId,
-      profile: FAST_KIT_KDF,
+      profile: FAST_KDF,
     });
     const opened = await openKeyBundle({ bundle, password, backupId });
     expect(opened.map((k) => k.keyId)).toEqual([ID, ID]);
@@ -215,7 +212,7 @@ describe('the key bundle a self-contained backup carries', () => {
       keys: [{ keyId: ID, material }],
       password,
       backupId,
-      profile: FAST_KIT_KDF,
+      profile: FAST_KDF,
     });
     const text = bundle.toString('utf8');
     for (const encoding of ['base64', 'base64url', 'hex'] as const) {
@@ -230,7 +227,7 @@ describe('the key bundle a self-contained backup carries', () => {
       keys: [{ keyId: ID, material: randomBytes(32) }],
       password,
       backupId,
-      profile: FAST_KIT_KDF,
+      profile: FAST_KDF,
     });
     let caught: unknown;
     let opened: unknown;
@@ -253,7 +250,7 @@ describe('the key bundle a self-contained backup carries', () => {
       keys: [{ keyId: ID, material }],
       password,
       backupId,
-      profile: FAST_KIT_KDF,
+      profile: FAST_KDF,
     });
     const doc = JSON.parse(bundle.toString('utf8')) as {
       backupId: string;
@@ -298,7 +295,7 @@ describe('the key bundle a self-contained backup carries', () => {
       keys: [{ keyId: ID, material: randomBytes(32) }],
       password,
       backupId,
-      profile: FAST_KIT_KDF,
+      profile: FAST_KDF,
     });
     const doc = JSON.parse(bundle.toString('utf8')) as { kdf: Record<string, unknown> };
     // 256 MiB of scrypt, well inside the schema's bounds and not an accepted profile.
@@ -312,32 +309,6 @@ describe('the key bundle a self-contained backup carries', () => {
       ),
     ).toBe(PLATFORM_ERROR_CODES.BACKUP_ARCHIVE_MALFORMED);
     expect(Date.now() - started).toBeLessThan(200);
-  });
-
-  it('is not a Recovery Kit: a kit reader refuses it and it refuses a kit', async () => {
-    const bundle = await sealKeyBundle({
-      keys: [{ keyId: ID, material: randomBytes(32) }],
-      password: 'a long enough kit passphrase',
-      backupId,
-      profile: FAST_KIT_KDF,
-    });
-    const { openRecoveryKit, sealRecoveryKit } =
-      await import('../../apps/api/src/infrastructure/crypto/recovery-kit');
-    expect(await codeOf(openRecoveryKit(bundle, 'a long enough kit passphrase'))).toBe(
-      PLATFORM_ERROR_CODES.RECOVERY_KIT_MALFORMED,
-    );
-    const kit = await sealRecoveryKit({
-      keys: [{ keyId: ID, material: randomBytes(32) }],
-      passphrase: 'a long enough kit passphrase',
-      profile: FAST_KIT_KDF,
-      kitId: randomUUID(),
-      createdAt: new Date(),
-    });
-    expect(
-      await codeOf(
-        openKeyBundle({ bundle: kit, password: 'a long enough kit passphrase', backupId }),
-      ),
-    ).toBe(PLATFORM_ERROR_CODES.BACKUP_ARCHIVE_MALFORMED);
   });
 });
 

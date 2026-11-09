@@ -1,5 +1,9 @@
 # Recovery Kit — falsification record
 
+> **Retired (SFR A1, 2026-11-09).** The Recovery Kit was removed by the owner's decision of
+> 2026-11-08 (backups are self-contained). The suites cited below were deleted with it; this
+> record is history and is no longer checked by `scripts/check-falsification-citations.mjs`.
+
 Every production rule ADR-0032 added that a test claims to hold, reverted one at
 a time against the working tree, with the test that dies named. Mutations were
 applied by hand-scripted replacement of the exact text named below, the cited

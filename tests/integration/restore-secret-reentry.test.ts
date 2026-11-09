@@ -20,20 +20,20 @@ import {
 import { createTestContainer, adminActorFor, createAdmin, tenantA, testConfig } from './harness';
 
 /**
- * NEXA-FIX-RESTORE-SECRETS §2.3, the two choices after a refusal, end to end on real
- * installations, real backups, the real restore test and the real executor's cut-over:
+ * NEXA-FIX-RESTORE-SECRETS §2.3, what follows a refusal, end to end on real installations,
+ * real backups, the real restore test and the real executor's cut-over:
  *
- * 1. «بارگذاری کیت بازیابی سرور قبلی»: import the old kit, re-test the SAME request.
- * 2. «ادامه؛ این‌ها را دوباره وارد می‌کنم»: acknowledge the exact list; the executor clears
- *    those values in the candidate; the attention list shows them until re-entered.
+ * - a re-test of the SAME request (refused again while nothing changed);
+ * - «ادامه؛ این‌ها را دوباره وارد می‌کنم»: acknowledge the exact list; the executor clears
+ *   those values in the candidate; the attention list shows them until re-entered.
  *
- * Old archives only (no bundled keys): a self-contained one never needs either choice.
+ * The Recovery Kit import that was the other choice is removed (SFR A1). Old archives only
+ * (no bundled keys): a self-contained one never needs either.
  */
 
 const SAME_ID = 'install-20261107';
 const OWNER_PASSWORD = 'the-owners-real-password';
 const BACKUP_PASSWORD = 'the backup password A used';
-const KIT_PASSPHRASE = 'the old server had a long passphrase';
 
 describe('after a restore refused for unreadable secrets', () => {
   let created: string[];
@@ -185,19 +185,6 @@ describe('after a restore refused for unreadable secrets', () => {
     );
   }
 
-  async function exportKit(install: Install) {
-    return install.container.installationKeys.exportKit(
-      tenantA,
-      install.owner,
-      {
-        accountPassword: OWNER_PASSWORD,
-        passphrase: KIT_PASSPHRASE,
-        passphraseConfirmation: KIT_PASSPHRASE,
-      },
-      { ip: null },
-    );
-  }
-
   /** A → old archive, refused on B (same key id, other bytes). */
   async function refusedOnB() {
     const keyA = randomBytes(32);
@@ -205,7 +192,6 @@ describe('after a restore refused for unreadable secrets', () => {
     await setBackupPassword(a);
     const panelId = await addPanel(a);
     const archivePath = await oldBackupOf(a);
-    const kit = await exportKit(a);
     const ownerA = a.owner;
     await a.container.shutdown();
     containers.splice(containers.indexOf(a.container), 1);
@@ -215,7 +201,7 @@ describe('after a restore refused for unreadable secrets', () => {
     const refused = await upload(b, archivePath);
     expect(refused.failureCode).toBe('recovery.candidate_secrets_unreadable');
     expect(refused.request.state).toBe('FAILED');
-    return { b, keyA, keyB, kit, panelId, ownerA, refused: refused.request };
+    return { b, keyA, keyB, panelId, ownerA, refused: refused.request };
   }
 
   beforeEach(() => {
@@ -364,41 +350,15 @@ describe('after a restore refused for unreadable secrets', () => {
     ]);
   }, 300_000);
 
-  it('re-tests the SAME request after the old kit is imported, and everything ends under the active key', async () => {
-    const { b, keyB, kit, refused } = await refusedOnB();
-    expect(refused.restoreTest?.canUploadKit).toBe(true);
-
-    // Before the kit, a re-test is refused again (and keeps the upload for the next try).
+  it('re-tests the SAME request: refused again while nothing changed, the upload kept, no kit offered', async () => {
+    const { b, refused } = await refusedOnB();
+    expect(refused.restoreTest).not.toHaveProperty('canUploadKit');
     const again = await b.container.recoveryService.retest(tenantA, b.owner, refused.id, {
-      idempotencyKey: 'retest-before-kit',
+      idempotencyKey: 'retest-1',
     });
     expect(again.failureCode).toBe('recovery.candidate_secrets_unreadable');
     expect(again.request.id).toBe(refused.id);
-
-    await b.container.installationKeys.importKit(tenantA, b.owner, {
-      kit: kit.bytes.toString('base64'),
-      passphrase: KIT_PASSPHRASE,
-      accountPassword: OWNER_PASSWORD,
-      idempotencyKey: 'kit-import-retest-1',
-    });
-    const passed = await b.container.recoveryService.retest(tenantA, b.owner, refused.id, {
-      idempotencyKey: 'retest-after-kit',
-    });
-    expect(passed.failureCode).toBeNull();
-    expect(passed.request.id).toBe(refused.id);
-    expect(passed.request.state).toBe('RESTORE_TEST_PASSED');
-    expect(passed.request.restoreTest?.unreadableSecrets).toEqual([]);
-    // A replay of the key does not run it again.
-    const replay = await b.container.recoveryService.retest(tenantA, b.owner, refused.id, {
-      idempotencyKey: 'retest-after-kit',
-    });
-    expect(replay.request.state).toBe('RESTORE_TEST_PASSED');
-
-    const row = await confirmAndExecute(b, passed.request);
-    expect(row?.state).toBe('SUCCEEDED');
-    const live = await trialWithOnly(b.database, SAME_ID, keyB);
-    expect(live.unreadableTotal).toBe(0);
-    expect(live.readableTotal).toBeGreaterThan(0);
+    expect(again.request.candidateDatabase ?? null).toBeNull();
   }, 300_000);
 
   it('refuses a re-test or an acknowledgment of a request that did not fail for unreadable secrets', async () => {

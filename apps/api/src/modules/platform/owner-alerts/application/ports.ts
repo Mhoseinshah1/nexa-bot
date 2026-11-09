@@ -49,8 +49,7 @@ export interface AdminReadWindowStore {
 }
 
 /** What was exported (Phase 6A D0, `access.data_exported`). */
-export type DataExportKind =
-  'REPORT' | 'AUDIT_LOG' | 'GIFT_CARD_CODES' | 'RECOVERY_KIT' | 'BACKUP_ARCHIVE';
+export type DataExportKind = 'REPORT' | 'AUDIT_LOG' | 'GIFT_CARD_CODES' | 'BACKUP_ARCHIVE';
 
 /**
  * The one call every export path makes before its file leaves. Throws when the owner's alert

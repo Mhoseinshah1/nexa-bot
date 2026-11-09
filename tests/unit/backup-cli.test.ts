@@ -59,7 +59,6 @@ describe('the backup CLI arguments', () => {
       passwordStdin: false,
       target: 'nexa_drill',
       limit: 20,
-      kit: null,
     });
   });
 
@@ -104,24 +103,16 @@ describe('the backup CLI arguments', () => {
     ]);
   });
 
-  it('takes a Recovery Kit for verify and restore, and for nothing else', () => {
-    expect(parseArgs(['verify', '--archive', '/tmp/a.nxb', '--kit', '/tmp/k.nxkit']).kit).toBe(
-      '/tmp/k.nxkit',
-    );
-    expect(() => parseArgs(['run', '--kit', '/tmp/k.nxkit'])).toThrowError(/verify and restore/);
-  });
-
-  it('refuses a kit passphrase given as an argument', () => {
-    // argv is world-readable in /proc and lands in shell history.
-    expect(() =>
-      parseArgs(['verify', '--archive', '/tmp/a.nxb', '--kit', 'k', '--passphrase', 'x']),
-    ).toThrowError(/standard input/);
-  });
-
-  it('refuses a kit passphrase given as --passphrase=VALUE too', () => {
-    expect(() =>
-      parseArgs(['verify', '--archive', '/tmp/a.nxb', '--kit', 'k', '--passphrase=hunter2-long']),
-    ).toThrowError(/standard input/);
+  it('SFR A1: refuses --kit with the reason, for every command — the Recovery Kit is removed', () => {
+    // MUTATION: re-adding the --kit option (the CLI's kit fallback) fails this.
+    for (const argv of [
+      ['verify', '--archive', '/tmp/a.nxb', '--kit', '/tmp/k.nxkit'],
+      ['restore', '--archive', '/tmp/a.nxb', '--target', 'nexa_drill', '--kit', '/tmp/k'],
+      ['verify', '--archive', '/tmp/a.nxb', '--kit=/tmp/k.nxkit'],
+    ]) {
+      expect(() => parseArgs(argv)).toThrowError(/Recovery Kit was removed/);
+    }
+    expect(USAGE).not.toContain('--kit');
   });
 
   it('refuses an unknown command with the usage text', () => {

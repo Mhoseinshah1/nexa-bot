@@ -18,7 +18,7 @@ import {
   type InstallationKeyring,
 } from './infrastructure/crypto/installation-keyring.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
-import { kekFingerprint } from './infrastructure/crypto/recovery-kit.js';
+import { kekFingerprint } from './infrastructure/crypto/kek.js';
 import {
   trialDecryptSecrets,
   type SecretRowQueryable,
@@ -598,7 +598,7 @@ async function main(): Promise<void> {
       .join('  ');
     const preamble =
       configurationLines(keyring, config).join('\n') +
-      `imported keys  (decrypt-only, from Recovery Kits) wrapped under: ${imported || '-'}\n\n` +
+      `imported keys  (decrypt-only, from a removed Recovery Kit) wrapped under: ${imported || '-'}\n\n` +
       heldKeyLines(container.keyring).join('\n');
 
     if (args.command === 'status') {

@@ -1340,26 +1340,24 @@ describe('security review fixes (#151)', () => {
     });
   });
 
-  it('Recovery Kit export needs a code when the exporter’s factor is on', async () => {
+  it('setting the backup password needs a code when the owner’s factor is on', async () => {
+    // SFR A1: it replaced the removed Recovery Kit export as the step-up's other caller.
     const { secret, actor } = await enableFor(owner);
-    const exportWith = (extra: Record<string, string>) =>
-      ctx.container.installationKeys.exportKit(
+    const setWith = (stepUp: { password: string; code?: string }) =>
+      ctx.container.backupPasswords.set(
         tenantA,
         actor,
         {
-          accountPassword: OWNER_PASSWORD,
-          passphrase: 'a passphrase of decent length',
-          passphraseConfirmation: 'a passphrase of decent length',
-          ...extra,
+          idempotencyKey: `bp-${String(Math.random()).slice(2, 12)}`,
+          password: 'a backup password of decent length',
+          stepUp,
         },
         { ip: null },
       );
-    expect(await codeOf(exportWith({}))).toBe(IDENTITY_ERROR_CODES.AUTH_STEP_UP_FACTOR_REQUIRED);
-    expect(await codeOf(exportWith({ code: wrongFor(secret) }))).toBe(
-      'recovery_kit.reauthentication_failed',
+    expect(await codeOf(setWith({ password: OWNER_PASSWORD }))).toBe(
+      IDENTITY_ERROR_CODES.AUTH_STEP_UP_FACTOR_REQUIRED,
     );
-    const kit = await exportWith({ code: code(secret) });
-    expect(kit.keyCount).toBeGreaterThan(0);
+    await setWith({ password: OWNER_PASSWORD, code: code(secret) });
   });
 
   it('the password-only login writes nothing for a 2FA account', async () => {

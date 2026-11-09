@@ -1,5 +1,5 @@
 import { createReadStream, createWriteStream } from 'node:fs';
-import { readFile, rm, stat } from 'node:fs/promises';
+import { rm, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { isNexaError } from '@nexa/contracts';
@@ -23,7 +23,6 @@ import { SystemClock } from './infrastructure/clock.js';
 import type { AppConfig } from './infrastructure/config/config.schema.js';
 import { S3OffsiteUploader } from './modules/platform/backup/infrastructure/s3-offsite-uploader.js';
 import type { OffsiteUploadOutcome } from './modules/platform/backup/application/ports.js';
-import { openRecoveryKit } from './infrastructure/crypto/recovery-kit.js';
 import { unreadableCounts, type SecretTrialReport } from './infrastructure/crypto/secret-trial.js';
 import { secretKindLabelFa } from '@nexa/i18n';
 
@@ -71,12 +70,6 @@ const USAGE = [
   '  with --password-stdin, never from an argument:',
   '      read -rs P; printf %s "$P" | pnpm backup verify --archive A.7z.001 --password-stdin',
   '  restore without --password-stdin tries the passwords this installation stored.',
-  '',
-  '  verify and restore also take --kit PATH: a Recovery Kit (ADR-0032) whose keys',
-  '  open an archive another installation sealed. They are used for this command',
-  "  only and never become this installation's encryption key. The passphrase is",
-  '  read from standard input, never from an argument:',
-  '      read -rs P; printf %s "$P" | pnpm backup verify --archive A --kit K',
 ].join('\n');
 
 interface Args {
@@ -88,7 +81,6 @@ interface Args {
   readonly passwordStdin: boolean;
   readonly target: string | null;
   readonly limit: number;
-  readonly kit: string | null;
 }
 
 function parseArgs(argv: readonly string[]): Args {
@@ -134,20 +126,14 @@ function parseArgs(argv: readonly string[]): Args {
     );
   }
   const target = value('--target');
-  const kit = value('--kit');
-  if (kit !== null && passwordStdin) {
+  // SFR A1: the Recovery Kit is removed. Said plainly rather than "unknown flag", so an
+  // operator following an old runbook learns what replaced it.
+  if (argv.some((arg) => arg === '--kit' || arg.startsWith('--kit='))) {
     throw new UsageError(
-      '--kit and --password-stdin both read standard input. A 7-Zip archive needs no kit to open.',
+      'The Recovery Kit was removed: a backup made with a backup password carries its own ' +
+        'keys and opens with --password-stdin alone. An archive that needs another ' +
+        "server's kit cannot be restored by this release.",
     );
-  }
-  if (kit !== null && command !== 'verify' && command !== 'restore') {
-    throw new UsageError('--kit applies to verify and restore only.');
-  }
-  // Refused as an argument outright. argv is world-readable in /proc and lands
-  // in shell history; the passphrase is the only thing between a kit and every
-  // key in it.
-  if (argv.some((arg) => arg === '--passphrase' || arg.startsWith('--passphrase='))) {
-    throw new UsageError('The kit passphrase is read from standard input, never from an argument.');
   }
 
   // The requirements are checked HERE, not in `main`, for two reasons.
@@ -171,7 +157,7 @@ function parseArgs(argv: readonly string[]): Args {
     );
   }
 
-  return { command, archive, archives, passwordStdin, target, limit, kit };
+  return { command, archive, archives, passwordStdin, target, limit };
 }
 
 /** `name.7z.001` → its siblings `.002`, `.003` … that exist, in order. */
@@ -256,42 +242,6 @@ async function passwordsFrom(args: {
     .replace(/\r?\n$/, '');
   if (password === '') throw new UsageError('--password-stdin read an empty password.');
   return [password];
-}
-
-/** Reads the kit passphrase from standard input: everything up to EOF, one trailing newline dropped. */
-async function passphraseFromStdin(): Promise<string> {
-  if (process.stdin.isTTY) {
-    throw new UsageError(
-      'Pipe the kit passphrase on standard input (see `backup` with no arguments); it is not ' +
-        'read from a terminal prompt or an argument.',
-    );
-  }
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks)
-    .toString('utf8')
-    .replace(/\r?\n$/, '');
-}
-
-/**
- * Adds a Recovery Kit's keys to `keyring`, for this command's lifetime only.
- *
- * Nothing is written anywhere: the CLI's job is to open one archive. Importing
- * the keys so the restored installation can read its own credentials is the Web
- * Admin's import, which wraps them under the active key and audits it.
- */
-async function withKit(keyring: InstallationKeyring, kitPath: string): Promise<number> {
-  const opened = await openRecoveryKit(await readFile(kitPath), await passphraseFromStdin());
-  try {
-    // A kit key under a configured id with DIFFERENT bytes is held too, as a second
-    // candidate for that id (`replaceImported` drops an exact duplicate).
-    const next = new Map(keyring.importedKeys);
-    for (const key of opened.keys) next.set(key.keyId, key.material);
-    keyring.replaceImported(next);
-    return opened.keys.length;
-  } finally {
-    for (const key of opened.keys) key.material.fill(0);
-  }
 }
 
 /**
@@ -514,7 +464,6 @@ function backupWorkDirFromEnvironment(): string {
  */
 async function cmdVerify(
   archivePaths: string | readonly string[],
-  kitPath: string | null = null,
   passwordStdin = false,
 ): Promise<number> {
   const paths = typeof archivePaths === 'string' ? [archivePaths] : archivePaths;
@@ -538,11 +487,6 @@ async function cmdVerify(
       SECRETS_KEK_ID: process.env.SECRETS_KEK_ID,
     }),
   );
-  if (kitPath !== null) {
-    process.stdout.write(
-      `kit      ${String(await withKit(keyring, kitPath))} key(s), decrypt-only\n`,
-    );
-  }
   // No database here, so no stored password: a 7-Zip archive opens with the one given on
   // standard input, or not at all.
   const passwords = await passwordsFrom({ passwordStdin });
@@ -620,19 +564,13 @@ async function cmdRestore(
   container: Container,
   archivePaths: string | readonly string[],
   target: string,
-  kitPath: string | null = null,
   passwordStdin = false,
 ): Promise<number> {
   const paths = typeof archivePaths === 'string' ? [archivePaths] : archivePaths;
   const passwords = await passwordsFrom({ passwordStdin });
-  // The installation's imported keys, then the kit's, if one was given. Both
-  // only ever DECRYPT: the container's keyring encrypts with the configured key.
+  // The decrypt-only keys this installation still holds from before the kit was removed.
+  // They only ever DECRYPT: the container's keyring encrypts with the configured key.
   await container.installationKeyLoader.refreshQuietly();
-  if (kitPath !== null) {
-    process.stdout.write(
-      `Kit       ${String(await withKit(container.keyring, kitPath))} key(s), decrypt-only\n`,
-    );
-  }
   const directory = await privateScratchDirectory(container.config.BACKUP_WORK_DIR, 'restore');
   const alive = keepScratchAlive(directory);
   let bundled: readonly { keyId: string; material: Buffer }[] | null = null;
@@ -707,7 +645,7 @@ async function secureRestoredSecrets(
 
 /**
  * `botctl restore`'s refusal when restored secrets do not read (NEXA-FIX-RESTORE-SECRETS
- * §2.3), in Persian: each kind that failed with its count, and the owner's two ways on.
+ * §2.3), in Persian: each kind that failed with its count, and the owner's way on.
  * Counts and kinds only — never a value, a key id or a key.
  */
 export function unreadableRefusalFa(trial: SecretTrialReport, archiveCarriedKeys: boolean): string {
@@ -718,12 +656,13 @@ export function unreadableRefusalFa(trial: SecretTrialReport, archiveCarriedKeys
     `ریستور متوقف شد: ${String(trial.unreadableTotal)} رمز بازگردانده‌شده با هیچ کلیدی که این سرور ` +
     `${archiveCarriedKeys ? 'یا خود فایل بکاپ ' : ''}دارد باز نمی‌شود:\n${lines.join('\n')}\n` +
     'این پایگاه داده را همین‌طور به کار نگیرید؛ هیچ رمزی دوباره رمزگذاری نشد.\n' +
-    'راه ادامه: همین فایل بکاپ را در پنل مدیریت، «بکاپ و بازیابی»، بارگذاری کنید و یکی را برگزینید:\n' +
+    'راه ادامه: همین فایل بکاپ را در پنل مدیریت، «بکاپ و بازیابی»، بارگذاری کنید و ' +
+    '«ادامه؛ این‌ها را دوباره وارد می‌کنم» را برگزینید — این مقادیر پاک می‌شوند و باید بعد از ' +
+    'ریستور دوباره وارد شوند.\n' +
     (archiveCarriedKeys
       ? ''
-      : '  ۱. «بارگذاری کیت بازیابی سرور قبلی» — یا همین فرمان را با --kit و کیت سرور قبلی اجرا کنید.\n') +
-    `  ${archiveCarriedKeys ? '۱' : '۲'}. «ادامه؛ این‌ها را دوباره وارد می‌کنم» — ` +
-    'این مقادیر پاک می‌شوند و باید بعد از ریستور دوباره وارد شوند.\n'
+      : 'این بکاپ کلیدهایش را با خود ندارد (پیش از بکاپ‌های خودکفا ساخته شده) و کیت بازیابی حذف ' +
+        'شده است؛ بکاپی که با «رمز فایل بکاپ» ساخته شده فقط با فایل و رمز بازیابی می‌شود.\n')
   );
 }
 
@@ -814,7 +753,7 @@ async function main(): Promise<void> {
   // an archive in.
   if (args.command === 'verify') {
     // `parseArgs` has already refused a missing `--archive`.
-    process.exit(await cmdVerify(args.archives, args.kit, args.passwordStdin));
+    process.exit(await cmdVerify(args.archives, args.passwordStdin));
   }
 
   const config = loadConfig();
@@ -825,9 +764,7 @@ async function main(): Promise<void> {
     if (args.command === 'run') process.exit(await cmdRun(container));
     if (args.command === 'list') process.exit(await cmdList(container, args.limit));
     // Both refused by `parseArgs`, before this container was built.
-    process.exit(
-      await cmdRestore(container, args.archives, args.target ?? '', args.kit, args.passwordStdin),
-    );
+    process.exit(await cmdRestore(container, args.archives, args.target ?? '', args.passwordStdin));
   } finally {
     await container.shutdown();
   }

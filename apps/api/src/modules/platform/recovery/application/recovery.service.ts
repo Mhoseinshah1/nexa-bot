@@ -88,10 +88,9 @@ export interface RecoveryServiceDeps {
   }) => Promise<void>;
   readonly engine: RestoreEngine;
   /**
-   * The keyring, as a restore needs it (ADR-0032): re-read before an archive is
-   * opened, so a Recovery Kit imported through another process a moment ago is
-   * already usable; and asked, after the scratch restore, whether every key the
-   * restored database's secrets name is held.
+   * The keyring, as a restore needs it: re-read before an archive is opened, and asked,
+   * after the scratch restore, whether every stored secret of the restored database
+   * decrypts with this server's CONFIGURED keys or the archive's own bundled keys.
    */
   readonly keys: RecoveryKeyCoverage;
   readonly guard: PermissionGuard;
@@ -341,9 +340,7 @@ export class RecoveryService {
   ): Promise<RecoveryStepOutcome> {
     let verification: RecoveryVerification;
     try {
-      // The keyring as it is NOW. A Recovery Kit imported through the API a
-      // moment ago may have been imported by a different process; without this
-      // the archive it was imported for fails as foreign until the next tick.
+      // The keyring as it is NOW (another process may have reloaded the stored keys).
       await this.deps.keys.refresh();
       // `openArchive`, through the archiver -- the SAME function the pipeline's
       // own verification and the operator's `backup restore` use. A second
@@ -537,9 +534,6 @@ export class RecoveryService {
           restoreTest = {
             ...restoreTest,
             unreadableSecrets: unreadable,
-            // Only an archive with no bundle can be helped by the old server's kit:
-            // a bundle already carried every key its secrets were sealed under.
-            canUploadKit: bundledKeys === null,
             bundledKeys: bundledKeys?.length ?? 0,
           };
           if (trial.unreadableTotal > 0) {
@@ -598,8 +592,9 @@ export class RecoveryService {
   // --- After a refused restore test (NEXA-FIX-RESTORE-SECRETS §2.3) ---------
 
   /**
-   * Choice 1: the owner imported the old server's Recovery Kit (its own endpoint) and
-   * runs the verification and restore test AGAIN on this request, from its kept upload.
+   * Runs the verification and restore test AGAIN on this request, from its kept upload
+   * (a key added to this server's configuration since). The Recovery Kit import that used
+   * to come first is removed (SFR A1).
    *
    * Only from FAILED with `recovery.candidate_secrets_unreadable` and the upload still
    * there — a conditional UPDATE naming both — on the CRITICAL `recovery.restore`,
@@ -760,7 +755,7 @@ export class RecoveryService {
     if (unclearable.length > 0) {
       throw this.refuse(
         'recovery.candidate_secrets_unreadable',
-        "A refund card cannot be cleared by a restore. Import the old server's Recovery Kit.",
+        'A refund card cannot be cleared by a restore, and the Recovery Kit is removed: restore a backup made with a backup password instead.',
       );
     }
 
@@ -981,8 +976,7 @@ export class RecoveryService {
      */
     confirmedChecksum: string,
   ): Promise<void> {
-    // In the EXECUTOR's process, whose keyring only the timer would otherwise
-    // have refreshed since the operator imported a kit through the API.
+    // In the EXECUTOR's process, whose keyring only the timer would otherwise refresh.
     await this.deps.keys.refresh();
     const opened = await this.deps.archiver.open({
       archivePath: workspace.archivePath,
@@ -1096,8 +1090,8 @@ export class RecoveryService {
     from: 'VERIFYING' | 'RESTORE_TESTING',
     patch?: { verification?: RecoveryVerification; restoreTest?: RecoveryRestoreTest },
   ): Promise<RecoveryStepOutcome> {
-    // §2.3: the one refusal the owner can act on for THIS request — import the old
-    // server's kit and re-test, or acknowledge and re-enter — keeps its upload (the
+    // §2.3: the one refusal the owner can act on for THIS request — re-test, or acknowledge
+    // and re-enter — keeps its upload (the
     // ENCRYPTED archive and its sealed bundle; the plaintext dump is already gone).
     const keepUpload = failureCode === 'recovery.candidate_secrets_unreadable';
     if (!keepUpload) await this.clearWorkspace(id, workspace.directory);

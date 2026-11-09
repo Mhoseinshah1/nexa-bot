@@ -595,10 +595,6 @@ export const WEB_FA_ERRORS = {
   'web.err_incident_state_conflict': 'وضعیت این رخداد تغییر کرده است. صفحه را تازه کنید.',
   'web.err_incident_target_invalid': 'بخش‌های اثرگرفته درست انتخاب نشده‌اند.',
   'web.err_incident_version_conflict': 'این رخداد در همین فاصله تغییر کرده است. صفحه را تازه کنید.',
-  'web.err_installation_key_in_use': 'این کلید هنوز استفاده می‌شود و حذف نشد.',
-  'web.err_installation_key_not_found': 'کلید پیدا نشد.',
-  'web.err_installation_key_not_removable':
-    'این کلید بخشی از پیکربندی سرور است و از این‌جا حذف نمی‌شود.',
   'web.err_internal_unhandled':
     'خطایی در سرور رخ داد. کمی بعد دوباره تلاش کنید؛ اگر تکرار شد، شناسهٔ پیگیری را به پشتیبانی بدهید.',
   'web.err_legacy_cutover_already_approved': 'تأییدی با همین مشخصات از قبل وجود دارد.',
@@ -726,15 +722,6 @@ export const WEB_FA_ERRORS = {
     'انتقال از ربات قدیمی در جریان است. پس از پایان آن دوباره تلاش کنید.',
   'web.err_recovery_quiesced': 'به‌خاطر بازیابی در جریان، تغییرات تازه موقتاً پذیرفته نمی‌شود.',
   'web.err_recovery_refused': 'بازیابی پذیرفته نشد. جزئیات را در سابقهٔ بازیابی ببینید.',
-  'web.err_recovery_kit_auth_failed': 'عبارت عبور درست نیست یا فایل کیت آسیب دیده است.',
-  'web.err_recovery_kit_busy':
-    'اکنون ممکن نیست؛ کار دیگری روی کلیدها در جریان است. کمی بعد دوباره تلاش کنید.',
-  'web.err_recovery_kit_key_collision': 'کیت کلیدی دارد که با کلید موجود همین شناسه نمی‌خواند.',
-  'web.err_recovery_kit_malformed': 'این فایل کیت بازیابی معتبر نیست.',
-  'web.err_recovery_kit_passphrase_rejected': 'عبارت عبور کوتاه است یا دو بار یکسان وارد نشده است.',
-  'web.err_recovery_kit_reauthentication_failed': 'گذرواژهٔ شما درست نیست.',
-  'web.err_recovery_kit_too_many_keys': 'تعداد کلیدها از ظرفیت کیت بیشتر می‌شود.',
-  'web.err_recovery_kit_unsupported_version': 'نسخهٔ این کیت بازیابی پشتیبانی نمی‌شود.',
   'web.err_request_invalid':
     'بعضی از مقدارهای فرم درست نیست. فیلدهای مشخص‌شده را اصلاح کنید و دوباره بفرستید.',
   'web.err_role_confirmation_required': 'برای این تغییر حساس، کلید نقش را برای تأیید وارد کنید.',
