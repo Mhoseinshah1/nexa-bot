@@ -858,7 +858,10 @@ describe('tenant archive (Phase 6B PR-1) — export, verify, restore, as nexa_ap
     expect(
       compareArchiveHead({ ...head(expected.length), lastHash: 'f'.repeat(64) }, expected),
     ).toBe('DIVERGED');
-    expect(last.tag).toMatch(/tenant_archive/);
+    // The journal's head is whatever migration came last, so no later migration breaks this: the
+    // tenant archive's own migration must be IN the journal the archive heads are compared with.
+    expect(expected.some((m) => /tenant_archive/.test(m.tag))).toBe(true);
+    expect(last.tag).toMatch(/^[0-9]{4}_/);
   });
 
   describe('across releases', () => {
