@@ -64,6 +64,8 @@ export const NEVER_TABLES: Readonly<Record<string, string>> = {
   heavy_job_tickets: "this server's live queue (leases)",
   panel_probe_claims: 'connection-test cooldowns (also excluded from the installation dump)',
   tenant_capacity_limits: "the host's policy for this tenant; carried as host facts",
+  tenant_data_exports:
+    'data-export requests: a file on THIS server and a 24 h link mean nothing on another one',
 };
 
 /**
