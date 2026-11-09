@@ -30,6 +30,13 @@ export const TENANT_ARCHIVE_ERROR_CODES = {
   UNCLASSIFIED_TABLE: 'tenant_archive.unclassified_table',
   /** The export's connection bypasses row-level security. */
   RLS_BYPASSED: 'tenant_archive.rls_bypassed',
+  /** Phase 6B PR-2: the owner withdrew a verified dry run («لغو») before confirming it. */
+  RESTORE_CANCELLED: 'tenant_archive.restore_cancelled',
+  /**
+   * Phase 6B PR-2: a verified dry run nobody confirmed within a day; it held the installation's
+   * one restore slot, so it is released (the upload is removed with it).
+   */
+  DRY_RUN_EXPIRED: 'tenant_archive.dry_run_expired',
 } as const;
 export type TenantArchiveErrorCode =
   (typeof TENANT_ARCHIVE_ERROR_CODES)[keyof typeof TENANT_ARCHIVE_ERROR_CODES];

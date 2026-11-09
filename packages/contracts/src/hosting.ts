@@ -122,6 +122,13 @@ export const HOSTING_ERROR_CODES = {
   PURGE_CONFIRMATION_MISMATCH: 'hosting.purge_confirmation_mismatch',
   /** «ورود به پنل» is designed for 6B and not built yet. */
   ENTER_NOT_IMPLEMENTED: 'hosting.enter_not_implemented',
+  /**
+   * Phase 6B (ADR-0039 § 7): the bot has no backup password, so no archive is taken — an
+   * archive the owner cannot open is not a backup. Shown on the bot's card.
+   */
+  BACKUP_PASSWORD_REQUIRED: 'hosting.backup_password_required',
+  /** Phase 6B: no such archive of this bot, or it is no longer on this server. */
+  ARCHIVE_NOT_FOUND: 'hosting.archive_not_found',
 } as const;
 
 // ---------------------------------------------------------------------------
