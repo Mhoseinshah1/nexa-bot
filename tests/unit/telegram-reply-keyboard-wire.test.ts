@@ -98,6 +98,7 @@ function harness(
   options: {
     readonly appearance?: AppearanceReader;
     readonly text?: string;
+    readonly persistentMenu?: { enabled(scope: unknown): Promise<boolean> };
   } = {},
 ) {
   const calls: Call[] = [];
@@ -111,6 +112,10 @@ function harness(
     1000,
     { keyboardFor: async () => rows },
     options.appearance,
+    undefined,
+    undefined,
+    undefined,
+    options.persistentMenu as never,
   );
   const respondWith = (answers: ({ status: number; body: unknown } | 'TIMEOUT' | 'GARBLED')[]) =>
     vi.stubGlobal(
@@ -298,6 +303,55 @@ describe('the customer keyboard as the messenger draws it', () => {
         selective: false,
       }),
     );
+  });
+
+  it('B3 sends is_persistent from the tenant’s persistent_bottom_menu flag: ON true, OFF false, and the rest of the markup unchanged', async () => {
+    const { appearance } = reader([eligibleBot], { wallet: ICON });
+    const markupFor = async (enabled: boolean) => {
+      const { calls, respondWith, send } = harness(LEGACY, {
+        appearance,
+        persistentMenu: { enabled: async () => enabled },
+      });
+      respondWith([OK]);
+      await send(eligibleBot);
+      return calls[0]?.body['reply_markup'] as Record<string, unknown>;
+    };
+    const on = await markupFor(true);
+    const off = await markupFor(false);
+    expect(on['is_persistent']).toBe(true);
+    expect(off['is_persistent']).toBe(false);
+    expect({ ...off, is_persistent: true }).toEqual(on);
+    expect(off['resize_keyboard']).toBe(true);
+    expect(off['one_time_keyboard']).toBe(false);
+  });
+
+  it('B3 keeps the phone-number gate keyboard persistent whatever the flag says', async () => {
+    const { calls, respondWith, messenger } = harness(LEGACY, {
+      persistentMenu: { enabled: async () => false },
+    });
+    respondWith([OK]);
+    await messenger.send(scope, {
+      chatId: '42',
+      botInstanceId: eligibleBot,
+      templateKey: TEXT_KEY,
+      values: {},
+      keyboard: 'PHONE_REQUIRED',
+    });
+    expect((calls[0]?.body['reply_markup'] as Record<string, unknown>)['is_persistent']).toBe(true);
+  });
+
+  it('B3 wire: textMessageBody persistentKeyboard false/true/absent', () => {
+    const body = (persistentKeyboard?: boolean) =>
+      textMessageBody({
+        chatId: '1',
+        text: 'x',
+        html: false,
+        keyboard: [['a']],
+        ...(persistentKeyboard === undefined ? {} : { persistentKeyboard }),
+      })['reply_markup'] as Record<string, unknown>;
+    expect(body(false)['is_persistent']).toBe(false);
+    expect(body(true)['is_persistent']).toBe(true);
+    expect(body()['is_persistent']).toBe(true);
   });
 
   it('R-6 appends the admin row unstyled and without an icon', async () => {

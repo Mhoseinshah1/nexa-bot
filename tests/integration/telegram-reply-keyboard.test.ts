@@ -260,7 +260,8 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
           [{ text: label('bot.menu.tickets') }],
         ],
         resize_keyboard: true,
-        is_persistent: true,
+        // B3: the switch is off by default, so the menu is not persistent.
+        is_persistent: false,
         one_time_keyboard: false,
         selective: false,
       }),
@@ -284,7 +285,8 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
           [{ text: label('bot.menu.tickets') }],
         ],
         resize_keyboard: true,
-        is_persistent: true,
+        // B3: the switch is off by default, so the menu is not persistent.
+        is_persistent: false,
         one_time_keyboard: false,
         selective: false,
       }),

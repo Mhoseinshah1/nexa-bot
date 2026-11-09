@@ -579,6 +579,13 @@ export function textMessageBody(input: {
    */
   readonly keyboard?: readonly (readonly (string | TelegramReplyKeyboardButton)[])[];
   /**
+   * B3: whether the reply keyboard is sent with `is_persistent`. TRUE (the default, what every
+   * caller got before) makes Telegram pop the keyboard back up after a customer hides it to
+   * type; FALSE leaves it reachable from the keyboard button beside the input field. The
+   * customer messenger passes the tenant's `persistent_bottom_menu` flag for the main menu.
+   */
+  readonly persistentKeyboard?: boolean;
+  /**
    * Round N (F1): a reply to this message of the same chat. `allow_sending_without_reply`,
    * so a message deleted in the meantime costs the reply's link, never the message.
    */
@@ -606,7 +613,7 @@ export function textMessageBody(input: {
     body.reply_markup = {
       keyboard: input.keyboard.map((row) => row.map(replyKeyboardButtonMarkup)),
       resize_keyboard: true,
-      is_persistent: true,
+      is_persistent: input.persistentKeyboard ?? true,
       one_time_keyboard: false,
       selective: false,
     };
