@@ -1,4 +1,5 @@
 import { useId, useState, type ReactNode } from 'react';
+import { FilePicker } from '../ui/file-picker';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   hostedBotSlugSchema,
@@ -108,11 +109,14 @@ export function HostedRestoreSection() {
       <p className="muted small">{t('web.hosted_restore_hint')}</p>
       <div className="hosting-inline">
         <Field label={t('web.hosted_restore_file')} htmlFor={fileId}>
-          <input
+          <FilePicker
             id={fileId}
-            type="file"
             accept=".7z,application/x-7z-compressed"
-            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+            kind="any"
+            extensions={['.7z']}
+            selected={file}
+            onClear={() => setFile(null)}
+            onFiles={(files) => setFile(files[0] ?? null)}
           />
         </Field>
         <Button

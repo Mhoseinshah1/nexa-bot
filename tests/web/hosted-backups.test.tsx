@@ -7,7 +7,7 @@ import {
   type HostedBotView,
   type PermissionKey,
 } from '@nexa/contracts';
-import { BackupRoute } from '../../apps/web/src/pages/hosted-own-backup';
+import { BackupRoutePage } from '../../apps/web/src/pages/hosted-own-backup';
 import { HostedBackupSection } from '../../apps/web/src/pages/hosting-backup';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
@@ -109,7 +109,7 @@ describe('the backup page of a hosted bot’s own Web Admin', () => {
       },
     ]);
     const permissions: PermissionKey[] = ['backup.view'];
-    renderPage(<BackupRoute route={{ path: '/recovery' } as never} permissions={permissions} />);
+    renderPage(<BackupRoutePage route={{ path: '/recovery' } as never} permissions={permissions} />);
     expect(await screen.findByText(t('web.hosted_own_backup_body'))).toBeInTheDocument();
     expect(screen.getByText(t('web.hosted_own_backup_last'))).toBeInTheDocument();
     expect(api.calls.map((call) => call.url)).toEqual([url(HOSTED_BACKUP_ROUTES.own)]);
@@ -119,7 +119,7 @@ describe('the backup page of a hosted bot’s own Web Admin', () => {
     const api = stubApi([]);
     const permissions: PermissionKey[] = ['backup.view', 'backup.download'];
     renderPage(
-      <BackupRoute
+      <BackupRoutePage
         route={{ path: '/recovery', query: new URLSearchParams() } as never}
         permissions={permissions}
       />,

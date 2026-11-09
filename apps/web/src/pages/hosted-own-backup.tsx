@@ -14,7 +14,7 @@ import { RecoveryPage } from './recovery';
  * installation's and gets the full page; one that holds none asks the server, and a
  * not-found (this IS the installation) falls back to the full page too.
  */
-export function BackupRoute({
+export function BackupRoutePage({
   route,
   permissions,
 }: {
