@@ -1050,6 +1050,8 @@ export const INSTALLATION_ONLY_PERMISSIONS = [
  * whatever else it does. The owner has full access to every hosted install, except that he
  * cannot change its administrators or their permissions, rotate its panel credentials, or
  * touch backups and restores (installation-only anyway) or the creator panel from inside it.
+ * `data.export` is denied too: a hosted bot's bulk customer export is a HOST action behind a
+ * fresh code («میزبانی‌ها»), and the tenant owner's own door must not be a way around it.
  *
  * Dropped by `PermissionGuard` for any actor carrying `impersonation`. A permission alone
  * cannot cover every secret (the bot token is under `settings.edit`), so every writer that
@@ -1065,6 +1067,7 @@ export const IMPERSONATION_DENIED_PERMISSIONS = [
   'backup.download',
   'recovery.restore',
   'hosting.manage',
+  'data.export',
 ] as const satisfies readonly PermissionKey[];
 
 /**
