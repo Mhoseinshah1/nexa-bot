@@ -360,6 +360,22 @@ export const PERMISSIONS = [
    */
   p('hosting.manage', 'Manage the installation’s hosted bots (creator panel)', 'CRITICAL'),
 
+  /*
+   * Phase 6B PR-3 (ADR-0039, the open data export): «خروجی داده» — request and download a ZIP of
+   * CSV files holding the tenant's own customers, wallets and ledger, orders, services,
+   * payments, products, resellers, tickets and messages. CRITICAL because the file is the
+   * tenant's whole customer base in plain text, the artifact `backup.download` is the
+   * encrypted twin of; seeded to `owner` alone (a backfill migration reaches the owner roles
+   * that already exist). A hosted bot's owner holds it in their own tenant; the installation
+   * owner reaches a hosted bot's export from «میزبانی‌ها» with `hosting.manage` and a fresh
+   * code instead, so the key is not drawn in the installation's own Web Admin.
+   */
+  p(
+    'data.export',
+    'Request and download the tenant’s data export (CSV files in a ZIP)',
+    'CRITICAL',
+  ),
+
   // Customer-facing text
   //
   // Separate from `settings.*` because the blast radii are not comparable: a
