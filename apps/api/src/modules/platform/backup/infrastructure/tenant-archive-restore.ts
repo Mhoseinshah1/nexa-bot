@@ -432,8 +432,38 @@ export async function tenantCounts(
 }
 
 /**
+ * The canonical form's mask of `table`'s rows (ADR-0039 § 8): a shared aggregate's outbox
+ * sequence is the target's own after a restore (renumbered), and an unpublished message lands
+ * exhausted (never relayed here), so both are compared out. Every other table is unchanged.
+ */
+export function canonicalMask(
+  table: string,
+  columns: readonly string[],
+  ignoreRelayMarks = false,
+): (row: (string | null)[]) => (string | null)[] {
+  if (table !== 'outbox_messages') return (row) => row;
+  const type = columns.indexOf('aggregate_type');
+  const sequence = columns.indexOf('sequence');
+  const published = columns.indexOf('published_at');
+  const delivery = ['exhausted_at', 'last_error', 'next_attempt_at'].map((c) => columns.indexOf(c));
+  const relay = ['published_at', 'attempts', 'last_error', 'next_attempt_at', 'exhausted_at']
+    .map((c) => columns.indexOf(c))
+    .filter((at) => at >= 0);
+  return (row) => {
+    const out = [...row];
+    if (SHARED_AGGREGATE_TYPES.includes(row[type] ?? '')) out[sequence] = null;
+    if (row[published] === null) for (const at of delivery) if (at >= 0) out[at] = null;
+    if (ignoreRelayMarks) for (const at of relay) out[at] = null;
+    return out;
+  };
+}
+
+/**
  * The canonical digest of every table in `tables` (ADR-0039 § 8): secrets decrypted with
  * `cipher` and their key ids dropped, so rows sealed under different keys compare by plaintext.
+ * `columnsOf` (Phase 6B PR-4) reads a table over a given column list instead of all of its own
+ * — the archive's, when the live schema is a newer release's; a column it names that the table
+ * lacks makes that table's digest `missing-column`.
  */
 export async function canonicalDigests(
   executor: SqlExecutor,
@@ -453,35 +483,22 @@ export async function canonicalDigests(
      * nothing compared can change before it is deleted.
      */
     readonly lockRows?: boolean;
+    /** Phase 6B PR-4 (server move): read a table over this column list instead of its own. */
+    readonly columnsOf?: (table: string) => readonly string[] | undefined;
   } = {},
 ): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const table of tables) {
     const shape = catalogue.get(table);
     if (shape === undefined) continue;
-    const columns = shape.columns.map((column) => column.name);
+    const own = shape.columns.map((column) => column.name);
+    const columns = options.columnsOf?.(table) ?? own;
+    if (columns.some((column) => !own.includes(column))) {
+      out[table] = 'missing-column';
+      continue;
+    }
     const slots = secretSlots(table, columns);
-    const relay = ['published_at', 'attempts', 'last_error', 'next_attempt_at', 'exhausted_at']
-      .map((c) => columns.indexOf(c))
-      .filter((at) => at >= 0);
-    // A shared aggregate's outbox sequence is the target's own after a restore (renumbered):
-    // the canonical form compares the message, not the number the installation gave it.
-    const type = columns.indexOf('aggregate_type');
-    const sequence = columns.indexOf('sequence');
-    // And an unpublished message lands exhausted (never relayed here): its delivery marks are
-    // the target's, not the archive's, so they are compared out too.
-    const published = columns.indexOf('published_at');
-    const delivery = ['exhausted_at', 'last_error', 'next_attempt_at'].map((c) =>
-      columns.indexOf(c),
-    );
-    const masked = (row: (string | null)[]): (string | null)[] => {
-      if (table !== 'outbox_messages') return row;
-      const out = [...row];
-      if (SHARED_AGGREGATE_TYPES.includes(row[type] ?? '')) out[sequence] = null;
-      if (row[published] === null) for (const at of delivery) out[at] = null;
-      if (options.ignoreRelayMarks === true) for (const at of relay) out[at] = null;
-      return out;
-    };
+    const masked = canonicalMask(table, columns, options.ignoreRelayMarks === true);
     const digest = await digestTable(
       executor,
       shape,
@@ -491,6 +508,28 @@ export async function canonicalDigests(
       options.lockRows === true,
     );
     out[table] = `${String(digest.rows)}:${digest.hex()}`;
+  }
+  return out;
+}
+
+/**
+ * The same canonical digest, of an OPENED archive's parts (ADR-0039 § 8): each row as the
+ * export wrote it, its secrets decrypted under the archive key, masked like the live side. A
+ * move compares this with `canonicalDigests` of the restored installation's rows.
+ */
+export async function archiveCanonicalDigests(
+  opened: OpenedTenantArchive,
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const table of opened.manifest.tables) {
+    const columns = table.columns.map((column) => column.name);
+    const slots = secretSlots(table.name, columns);
+    const masked = canonicalMask(table.name, columns);
+    const digest = new LineDigest();
+    for await (const line of partLines(join(opened.directory, table.file))) {
+      digest.add(encodeCopyLine(masked(canonicalRow(decodeCopyLine(line), slots, opened.cipher))));
+    }
+    out[table.name] = `${String(digest.rows)}:${digest.hex()}`;
   }
   return out;
 }

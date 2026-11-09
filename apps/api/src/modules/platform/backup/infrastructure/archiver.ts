@@ -113,6 +113,7 @@ export class DualFormatBackupArchiver implements BackupArchiver {
     archivePath: string;
     sevenZipPath?: string;
     manifest: BackupManifest;
+    password?: string;
   }): Promise<{
     archiveBytes: number;
     keyId: string | null;
@@ -120,7 +121,12 @@ export class DualFormatBackupArchiver implements BackupArchiver {
     archivePath: string;
     passwordId: string | null;
   }> {
-    const password = await this.passwords.current();
+    // A server-move member (ADR-0039 § 8): the bundle password, never stored, never the
+    // stored one. It is recorded as no password id: nothing on this server opens it.
+    const password =
+      input.password === undefined
+        ? await this.passwords.current()
+        : { id: null, password: input.password };
     if (password === null) {
       const sealed = await this.keyringArchiver.seal(input);
       return { ...sealed, archivePath: input.archivePath, passwordId: null };
@@ -144,12 +150,13 @@ export class DualFormatBackupArchiver implements BackupArchiver {
     };
   }
 
-  async nextFormat(): Promise<BackupArchiveFormat> {
+  async nextFormat(password?: string): Promise<BackupArchiveFormat> {
+    if (password !== undefined) return 'SEVEN_ZIP';
     return (await this.passwords.current()) === null ? 'NXB' : 'SEVEN_ZIP';
   }
 
-  async preflight(): Promise<void> {
-    if ((await this.passwords.current()) === null) return;
+  async preflight(password?: string): Promise<void> {
+    if (password === undefined && (await this.passwords.current()) === null) return;
     await assertSevenZipMemory(this.sevenZip);
   }
 

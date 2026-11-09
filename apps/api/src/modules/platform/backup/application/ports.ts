@@ -601,6 +601,12 @@ export interface BackupArchiver {
     readonly archivePath: string;
     readonly sevenZipPath?: string;
     readonly manifest: BackupManifest;
+    /**
+     * Phase 6B PR-4 (ADR-0039 § 8): a server-move member is sealed with the BUNDLE password the
+     * operator typed, never the stored one — a 7z with its key bundle wrapped by it. Absent: the
+     * stored backup password decides, as before.
+     */
+    readonly password?: string;
   }): Promise<{
     readonly archiveBytes: number;
     readonly keyId: string | null;
@@ -639,13 +645,13 @@ export interface BackupArchiver {
   /** SHA-256 over a file, streamed. What the manifest's checksum is taken with. */
   checksum(path: string): Promise<{ readonly checksum: string; readonly bytes: number }>;
   /** The container the next `seal` will write (E4): `SEVEN_ZIP` when a password is set. */
-  nextFormat?(): Promise<BackupArchiveFormat>;
+  nextFormat?(password?: string): Promise<BackupArchiveFormat>;
   /**
    * Refuses, by throwing, a seal that could not run on this host right now — checked BEFORE
    * the dump so a host without the memory to compress does not spend an hour dumping first.
    * `seal` decides again with the memory it then sees; this is only the early answer.
    */
-  preflight?(): Promise<void>;
+  preflight?(password?: string): Promise<void>;
 }
 
 export interface BackupManifestInput {

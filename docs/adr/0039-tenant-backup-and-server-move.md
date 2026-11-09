@@ -841,6 +841,57 @@ export of a hosted bot` and `…host requests an export for a hosted bot` (each 
   fresh code (the request spends the code). No template key was needed (Persian text is Web
   Admin chrome, `web.*`). The export carries no attachments and no files of the media library.
 
+## As built in PR-4 (`feat/6b-server-move`) — the server move
+
+Decisions of PR-4, binding on later PRs (operator guide: `docs/server-move.md`):
+
+- **Bundle** as § 8, in `move-bundle.ts`: one 7z (AES-256, encrypted headers) with
+  `move-manifest.json`, `checklist.fa.txt`, `installation/nexa-backup-*.7z`, `hosted/<id>.7z`. The
+  open refuses any entry the format never writes and any member whose size or SHA-256 differs
+  from the manifest (`move.bundle_malformed`, `move.member_checksum_mismatch`). The manifest
+  carries non-secret configuration by VALUE from an allow-list and the re-enterable secrets
+  (`BACKUP_TELEGRAM_BOT_TOKEN`, the S3 keys) by NAME only; the keyring and the webhook secret are
+  never named.
+- **One bundle password seals every member.** `BackupService.run('MOVE', { deliver: false,
+sealPassword })` seals the installation member with it (no password id recorded) and its
+  VERIFY_RESTORE opens it with exactly that password; `TenantArchiveService` never delivers a
+  MOVE archive. Members are MOVED out of their run directories into the bundle (no second copy
+  stays under retention); their runs remain as history with no archive on disk.
+- **Freeze** is botctl's: `move export` records the application roles it stops in
+  `/etc/nexa/move-frozen` before stopping them; `restart`, `update` and `rollback` refuse while it
+  exists; `move abort` starts exactly those roles and removes it.
+- **Import, step 1** (`move.cli.js import-installation`): head (`move.head_newer` /
+  `.head_diverged`) and freshness (`move.target_not_fresh`, read across tenants on the system
+  path) are checked, then `RecoveryService.requestMove` runs the upload chain (verify, restore
+  test, trial decryption) and confirms the request as `source = 'MOVE'` with
+  `confirmed_by_admin_id` NULL (migration `0336`: the confirmation CHECK is
+  three-of-three for MOVE, four-of-four otherwise). The CLI waits for the executor (its reads are
+  retried across the cutover).
+- **Import, step 2** (`import-hosted`, a new process against the restored database): each hosted
+  member is compared with its live tenant — read bound to it as `nexa_app`, over the ARCHIVE's
+  columns — by row count and canonical SHA-256 per table (`archiveCanonicalDigests` against
+  `canonicalDigests`, both through `canonicalMask`), and no live TENANT table may hold rows the
+  archive lacks. The per-table normalisation list of § 8 is empty in this release (a newer
+  release adds an entry with the migration that rewrites a column).
+- **Not done: restoring an absent hosted tenant inside `move import`.** Under the freeze the
+  installation backup always holds every hosted tenant, so an absent one is not expected; it is
+  NOT restored automatically (the § 4 restore needs an actor admin and a `tenant_restores` row in
+  the recovery role). Its member is kept in `BACKUP_WORK_DIR/move-unrestored/` and the operator
+  restores it with «بازیابی ربات از فایل» and the bundle password; the import exits 2.
+- **Activation marks** are cleared in the INSTALLATION's own scope (its rows), audited
+  `hosting.move_marks_cleared` by a SYSTEM_JOB actor; the § Contract reason `move: clear
+activation marks after import` was therefore not needed.
+- **`botctl telegram register-hosted` is NOT built.** The checklist sends the operator to each
+  hosted bot's activation steps in «میزبانی‌ها» (DNS → SSL → webhook) after
+  `botctl telegram register`. `move verify` reads every bot's `getWebhookInfo` and every domain's
+  DNS (`judgeDns`) and TLS (`HttpsTlsProbe`); "here" is the host's own addresses plus
+  `HOSTED_BOTS_SERVER_IPS` (and the CNAME target's addresses for a hosted domain).
+- **System-path reasons** (pinned): `move: list hosted tenants for the bundle` (also read by
+  `move verify`), `move: refuse an import into a running business`, `move: bind a hosted tenant
+to verify it after import`.
+- **Contract items**: `RECOVERY_SOURCES` + `MOVE`; `MOVE_ERROR_CODES`. No template key: the
+  Persian text is the operator's CLI output, never a customer's.
+
 ## As built in PR-5 (`feat/6b-enter`, «ورود به پنل»)
 
 § 9 as designed, with these decisions (binding on later work):

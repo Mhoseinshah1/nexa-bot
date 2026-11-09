@@ -38,6 +38,9 @@ ENTRYPOINTS=(
   "apps/api/dist/admin-hosting-2fa-reset.cli.js"
   # `botctl admin reset-password`: the same lockout, for a forgotten password.
   "apps/api/dist/admin-password-reset.cli.js"
+  # `botctl move export|import|verify`: run on a frozen server and on a fresh one, where a
+  # broken import graph would strand the move half-way.
+  "apps/api/dist/move.cli.js"
   # `botctl customers prune-empty`: run before a Mirza import, when the target must be fresh.
   "apps/api/dist/customers-prune.cli.js"
   # Migration P7: the legacy importer runs from the runtime image during a rehearsal and

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   recoveryAcknowledgeUnreadableRequestSchema,
   BACKUP_TRIGGERS,
+  RECOVERY_SOURCES,
   canTransition,
   cutoverPermitted,
   isDestructiveRecoveryState,
@@ -215,6 +216,14 @@ describe('the pre-restore trigger', () => {
       'PRE_REPLACE',
       'MOVE',
     ]);
+  });
+});
+
+describe('the recovery sources', () => {
+  it('names the server-move member as its own source', () => {
+    // Phase 6B PR-4 (ADR-0039 § 8): `botctl move import` restores the installation through
+    // the executor as `MOVE`, the one source no administrator confirms.
+    expect([...RECOVERY_SOURCES]).toEqual(['UPLOAD', 'LOCAL_RUN', 'MOVE']);
   });
 });
 

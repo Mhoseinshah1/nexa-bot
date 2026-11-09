@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import {
   errors,
   isRecoveryConfirmationPhrase,
@@ -22,7 +25,9 @@ import {
   type RecoveryVerification,
   type ScopeContext,
   type TenantContext,
+  systemJobActor,
 } from '@nexa/contracts';
+import { newCorrelationId } from '../../../../infrastructure/logging/logger.js';
 import { requireInstallationScope } from '../../access/application/installation-scope.js';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import { recordMutationDenial } from '../../access/application/authorized-mutation.js';
@@ -943,6 +948,137 @@ export class RecoveryService {
     return this.require(scope, id);
   }
 
+  // --- Server move (Phase 6B PR-4, ADR-0039 § 8) --------------------------------
+
+  /**
+   * `botctl move import`: the INSTALLATION member of a server-move bundle, through this
+   * service's own verification and restore test, and then confirmed for the executor.
+   *
+   * The same chain as an upload — DECRYPT, CHECKSUM, MANIFEST, the scratch restore, the
+   * migration verdict, the trial decryption of every secret — so the move restores nothing
+   * the Web Admin would refuse. What differs is who confirms: there is no administrator on
+   * a fresh server's root shell, so the confirmation is the shell itself and the bundle
+   * password the operator typed (ADR-0025 records the same for `botctl restore`). The row is
+   * `source = 'MOVE'` with no `confirmed_by_admin_id`; its binding to the artifact's checksum
+   * and its expiry are exactly an administrator's. Never reached from HTTP: only the CLI
+   * calls it, in a one-off container on the server being restored.
+   *
+   * Refused unless this database is the installation's (a provisioned primary tenant).
+   */
+  async requestMove(input: {
+    /** The installation member, still ENCRYPTED (a 7z sealed with the bundle password). */
+    readonly archivePath: string;
+    readonly password: string;
+  }): Promise<RecoveryStepOutcome> {
+    const tenantId = this.deps.installationTenantId();
+    if (tenantId === null) {
+      throw this.refuse(
+        'recovery.internal',
+        'This server has no provisioned installation to restore a move into. Run install.sh first.',
+      );
+    }
+    const scope = { tenantId, botInstanceId: null } as unknown as TenantContext;
+    const id = this.deps.ids.uuid();
+    const actor = systemJobActor('server-move', newCorrelationId(this.deps.ids.uuid()));
+    const now = this.deps.clock.now();
+    await this.deps.requests.create({
+      id,
+      tenantId,
+      source: 'MOVE',
+      stage: 'RECEIVE_UPLOAD',
+      requestedByAdminId: null,
+      requestedByLabel: 'botctl move import',
+      correlationId: actor.correlationId,
+      now,
+    });
+    const workspace = await this.deps.workspaces.create(id);
+    try {
+      // Copied into the request's own workspace through a SHA-256: the bytes every later read
+      // sees are the bytes hashed here.
+      const copied = await copyThroughSha256(input.archivePath, workspace.archivePath);
+      await this.deps.requests.progressUnowned({
+        id,
+        stage: 'PARSE_CONTAINER',
+        now: this.deps.clock.now(),
+        patch: {
+          workspacePath: workspace.directory,
+          clientFilename: 'nexa-move installation member',
+          uploadBytes: BigInt(copied.bytes),
+          uploadSha256: copied.sha256,
+        },
+      });
+    } catch (error) {
+      await this.clearWorkspace(id, workspace.directory);
+      await this.deps.requests.transition({
+        id,
+        from: ['UPLOADED'],
+        to: 'FAILED',
+        now: this.deps.clock.now(),
+        patch: { stage: 'CLEANUP', failureCode: 'recovery.upload_rejected', workspacePath: null },
+      });
+      throw error;
+    }
+
+    const tested = await this.runVerifyAndTest(
+      scope,
+      id,
+      { archivePassword: input.password },
+      null,
+    );
+    if (tested.failureCode !== null || tested.request.state !== 'RESTORE_TEST_PASSED') {
+      return tested;
+    }
+    const request = tested.request;
+    if (request.artifactChecksum === null || request.restoreTest?.cutoverPermitted !== true) {
+      throw this.confirmationRefused('This artifact has not passed a restore test.');
+    }
+    const artifactChecksum = request.artifactChecksum;
+    const moved = await this.deps.exclusive(async (tx) => {
+      if (await this.deps.legacyMigrationActive(tx)) {
+        throw errors.conflict(
+          PLATFORM_ERROR_CODES.RECOVERY_LEGACY_MIGRATION_ACTIVE,
+          'A Mirza backup is being restored into this installation. Run the move after it finishes.',
+        );
+      }
+      const at = this.deps.clock.now();
+      return this.deps.requests.transition(
+        {
+          id,
+          from: ['RESTORE_TEST_PASSED'],
+          to: 'RESTORE_REQUESTED',
+          now: at,
+          patch: {
+            stage: 'AWAIT_CONFIRMATION',
+            confirmedAt: at,
+            confirmedByAdminId: null,
+            confirmedSessionId: null,
+            confirmedChecksum: artifactChecksum,
+            confirmationExpiresAt: new Date(at.getTime() + RECOVERY_CONFIRMATION_TTL_MS),
+          },
+        },
+        tx,
+      );
+    });
+    if (!moved) {
+      throw this.confirmationRefused('This move is no longer awaiting confirmation.');
+    }
+    await this.deps.audit.record(scope, actor, {
+      action: 'recovery.confirmed',
+      entityType: 'Recovery',
+      entityId: id,
+      before: { state: 'RESTORE_TEST_PASSED' },
+      after: {
+        state: 'RESTORE_REQUESTED',
+        source: 'MOVE',
+        backupId: request.backupId,
+        artifactChecksum,
+      },
+      reason: 'botctl move import confirmed a server-move restore on the root shell.',
+      result: 'SUCCESS',
+    });
+    return { request: await this.require(scope, id), failureCode: null };
+  }
+
   /**
    * Decrypts the archive again, for the EXECUTOR, immediately before the real
    * restore.
@@ -1274,4 +1410,25 @@ export function sameUnreadable(
 /** The digest of the bytes as received, computed by the server. */
 export function sha256Hex(data: Buffer): string {
   return createHash('sha256').update(data).digest('hex');
+}
+
+/** Copies `source` to `destination` (0600, never over a file) through a SHA-256. */
+async function copyThroughSha256(
+  source: string,
+  destination: string,
+): Promise<{ sha256: string; bytes: number }> {
+  const hash = createHash('sha256');
+  let bytes = 0;
+  await pipeline(
+    createReadStream(source),
+    new Transform({
+      transform(chunk: Buffer, _encoding, done) {
+        hash.update(chunk);
+        bytes += chunk.length;
+        done(null, chunk);
+      },
+    }),
+    createWriteStream(destination, { flags: 'wx', mode: 0o600 }),
+  );
+  return { sha256: hash.digest('hex'), bytes };
 }

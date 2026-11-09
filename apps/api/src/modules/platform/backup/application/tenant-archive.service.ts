@@ -299,9 +299,15 @@ export class TenantArchiveService {
         detail: 'Kept on this server: hosted archives are not sent to the owner’s topic.',
         attemptedAt: null,
       };
-      // A PRE_REPLACE archive stays on this server: it is the replace's safety copy, and its
-      // delivery would write into the very bot the replace compares row for row.
-      if (this.deps.delivery !== undefined && input.trigger !== 'PRE_REPLACE') {
+      // A server-move member (ADR-0039 § 8) is sealed with the bundle password and leaves the
+      // server only inside the bundle: never to the hosted bot's group. A PRE_REPLACE archive
+      // stays on this server too: it is the replace's safety copy, and its delivery would write
+      // into the very bot the replace compares row for row.
+      if (
+        this.deps.delivery !== undefined &&
+        input.trigger !== 'MOVE' &&
+        input.trigger !== 'PRE_REPLACE'
+      ) {
         try {
           delivered = await this.deps.delivery.deliver({
             tenantId: input.tenantId,

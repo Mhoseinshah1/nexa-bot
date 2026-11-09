@@ -38,6 +38,7 @@ import type {
   TICKET_ERROR_CODES,
   TONPAYS_ERROR_CODES,
   TONPAYS_TELEGRAM_ERROR_CODES,
+  MOVE_ERROR_CODES,
   TENANT_ARCHIVE_ERROR_CODES,
   DATA_EXPORT_ERROR_CODES,
 } from '@nexa/contracts';
@@ -99,6 +100,7 @@ export type ContractErrorCode =
   | CodesOf<typeof TICKET_ERROR_CODES>
   | CodesOf<typeof TONPAYS_ERROR_CODES>
   | CodesOf<typeof TONPAYS_TELEGRAM_ERROR_CODES>
+  | CodesOf<typeof MOVE_ERROR_CODES>
   | CodesOf<typeof TENANT_ARCHIVE_ERROR_CODES>
   | CodesOf<typeof DATA_EXPORT_ERROR_CODES>
   | 'request.invalid'
@@ -163,6 +165,16 @@ export const ERROR_TEXT = {
   'backup.archive_password_reauthentication_failed': 'web.backup_password_reauth_failed',
   'backup.archive_auth_failed': 'web.err_backup_archive_auth_failed',
   'backup.archive_malformed': 'web.err_backup_archive_malformed',
+  'move.bundle_malformed': 'web.err_move_bundle_malformed',
+  'move.member_checksum_mismatch': 'web.err_move_member_checksum_mismatch',
+  'move.head_newer': 'web.err_move_head_newer',
+  'move.head_diverged': 'web.err_move_head_diverged',
+  'move.target_not_fresh': 'web.err_move_target_not_fresh',
+  'move.member_failed': 'web.err_move_member_failed',
+  'move.installation_restore_failed': 'web.err_move_installation_restore_failed',
+  'move.hosted_mismatch': 'web.err_move_hosted_mismatch',
+  'move.hosted_missing': 'web.err_move_hosted_missing',
+  'move.password_refused': 'web.err_move_password_refused',
   'tenant_archive.head_newer': 'web.err_tenant_archive_head_newer',
   'tenant_archive.head_diverged': 'web.err_tenant_archive_head_diverged',
   'tenant_archive.tenant_exists': 'web.err_tenant_archive_tenant_exists',

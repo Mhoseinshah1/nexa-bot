@@ -785,6 +785,10 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
         # which would make the fake answer with the table format where JSON was
         # asked for — and readiness would silently never be detected.
         case "$*" in
+          *'--services --status running'*)
+            # `botctl move export`'s freeze: which services are running now.
+            printf '%s\n' $(read_state running_services "api worker monitor recovery postgres redis caddy backup-verify")
+            ;;
           *'--format json'*)
             # A leftover `compose run` container, if a test asked for one.
             #
@@ -1002,6 +1006,47 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
               *' apply '*) exit "$(read_state prune_apply_exit 0)" ;;
             esac
             exit 0
+            ;;
+          *'move.cli.js export'*)
+            # `botctl move export` (Phase 6B PR-4): the password arrives on STDIN (recorded, so a
+            # test proves it IS here and nowhere in argv); the one parsed line names the bundle
+            # inside the container, with the SHA-256 of what the fake `cat` below streams out.
+            cat >"${FAKE_DIR}/move_password_stdin"
+            printf '{"level":30,"msg":"a container log line on stdout"}\n'
+            if [ "$(read_state move_export_exit 0)" != 0 ]; then
+              printf 'move.member_failed: The archive of hosted bot x did not reach a verified success\n' >&2
+              exit "$(read_state move_export_exit 0)"
+            fi
+            printf 'NEXA-MOVE bundle=/var/lib/nexa/backups/.cli-move-fake1/work/nexa-move.7z bytes=10 sha256=%s\n' \
+              "$(printf '%s' "$(read_state move_bundle_reported FAKEBUNDLE)" | sha256sum | cut -d' ' -f1)"
+            exit 0
+            ;;
+          *'--entrypoint cat api /var/lib/nexa/backups/.cli-move-'*)
+            printf '%s' FAKEBUNDLE
+            exit "$(read_state move_cat_exit 0)"
+            ;;
+          *'--entrypoint rm api -rf -- /var/lib/nexa/backups/.cli-move-'*)
+            printf '%s\n' "${*##* }" >>"${FAKE_DIR}/move_removed"
+            exit 0
+            ;;
+          *' move-store'*)
+            cat >"${FAKE_DIR}/move_bundle_in"
+            printf '/var/lib/nexa/backups/.cli-move-fake2\n'
+            exit "$(read_state move_store_exit 0)"
+            ;;
+          *'move.cli.js import-installation'*)
+            cat >"${FAKE_DIR}/move_import_password"
+            printf 'restore (fake)\n'
+            exit "$(read_state move_import_exit 0)"
+            ;;
+          *'move.cli.js import-hosted'*)
+            cat >"${FAKE_DIR}/move_hosted_password"
+            printf 'CHECKLIST-FA (fake)\n'
+            exit "$(read_state move_hosted_exit 0)"
+            ;;
+          *'move.cli.js verify'*)
+            printf 'VERIFY-TABLE (fake)\n'
+            exit "$(read_state move_verify_exit 0)"
             ;;
           *'admin-password-reset.cli.js'*)
             # `botctl admin reset-password`: what the one-off container received on STDIN.
