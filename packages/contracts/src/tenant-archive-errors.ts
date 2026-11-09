@@ -35,6 +35,12 @@ export const TENANT_ARCHIVE_ERROR_CODES = {
    * archived (PRE_REPLACE) with it, and that archive must verify, or nothing is replaced.
    */
   PRE_REPLACE_FAILED: 'tenant_archive.pre_replace_failed',
+  /**
+   * The hosted bot changed between the hold and the replace's transaction: its register
+   * state or status moved, or a row of it was written after the PRE_REPLACE archive's snapshot.
+   * Nothing is deleted (a newer row would be lost); the owner runs the replace again.
+   */
+  CHANGED_DURING_REPLACE: 'tenant_archive.changed_during_replace',
   /** A live table this release does not classify. */
   UNCLASSIFIED_TABLE: 'tenant_archive.unclassified_table',
   /** The export's or the restore's connection bypasses row-level security. */
