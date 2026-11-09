@@ -1,3 +1,4 @@
+import { storedFailureMessage } from '../../backup/application/stored-failure.js';
 import {
   errors,
   HOSTING_ERROR_CODES,
@@ -425,12 +426,9 @@ export class TenantRestoreAdminService {
           includeConfirmed: true,
           failureCode:
             error instanceof NexaError ? error.code : 'tenant_archive.verification_failed',
-          // Only a NexaError's own, code-authored sentence is stored; any other error (a drizzle
-          // query error carries the SQL and its bound row values) gets a fixed text.
-          failureMessage:
-            error instanceof NexaError
-              ? error.message.slice(0, 500)
-              : 'The restore failed before it could finish; see the server log.',
+          // A NexaError's own sentence, else the sanitised cause chain: never a raw message
+          // (a drizzle query error carries the SQL and its bound row values).
+          failureMessage: storedFailureMessage(error),
           now: this.deps.clock.now(),
         })
         .catch(() => false);

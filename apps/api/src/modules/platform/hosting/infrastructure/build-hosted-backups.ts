@@ -143,6 +143,7 @@ export function buildHostedBackups(deps: {
     heavyJobs: deps.heavyJobs,
     clock: deps.clock,
     ids: deps.ids,
+    leaseOwner: deps.leaseOwner,
     queue,
   });
   const hostedBackups = new HostedBackupService({

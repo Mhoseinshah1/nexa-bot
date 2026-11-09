@@ -300,11 +300,10 @@ export class TenantArchiveService {
           // A delivery that threw is not a failed archive: the verified file stays here.
           delivered = {
             state: 'FAILED_DEFINITIVE',
-            detail:
-              `The hosted group delivery failed: ${error instanceof Error ? error.message : String(error)}`.slice(
-                0,
-                500,
-              ),
+            detail: `The hosted group delivery failed: ${storedFailureMessage(error)}`.slice(
+              0,
+              500,
+            ),
             attemptedAt: this.deps.clock.now(),
           };
         }
