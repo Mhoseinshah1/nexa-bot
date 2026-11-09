@@ -400,7 +400,7 @@ function OpsGroupSettingsTab({ denied, mayManage }: { denied: boolean; mayManage
 
                 {test.isPending && (
                   /* B8: the test sends one topic at a time, paced for Telegram's rate limit, so
-                     every topic is «در صف» until the answer arrives with each one's result. */
+                     every topic reads "queued" until the answer arrives with each one's result. */
                   <ul className="ops-group-test" role="status" data-testid="ops-group-test-queued">
                     {OPS_LOG_TOPIC_CATEGORIES.map((category) => (
                       <li key={category}>
