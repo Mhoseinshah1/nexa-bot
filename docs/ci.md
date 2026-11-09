@@ -273,13 +273,24 @@ Wall times in minutes, from `created_at` to `updated_at` of the CI run, and the
 two deployment jobs from their own job timestamps. Every run is a full
 (`heavy=true`) run.
 
-| run                  | event / what  | wall | update smoke | smoke |
-| -------------------- | ------------- | ---: | -----------: | ----: |
-| before `42571534164` | PR head, full | 30.6 |         13.3 |   5.7 |
-| before `42547476576` | PR head, full | 28.1 |         13.3 |   5.8 |
-| before `42551072700` | main push     | 33.4 |         14.0 |   6.4 |
-| after (first push)   | to be filled  |      |              |       |
-| after (later push)   | to be filled  |      |              |       |
+| run                  | event / what                           | wall | update smoke | smoke |
+| -------------------- | -------------------------------------- | ---: | -----------: | ----: |
+| before `42571534164` | PR head, full                          | 30.6 |         13.3 |   5.7 |
+| before `42547476576` | PR head, full                          | 28.1 |         13.3 |   5.8 |
+| before `42551072700` | main push                              | 33.4 |         14.0 |   6.4 |
+| after `42576456052`  | PR head, full, first push (cold cache) | 28.7 |         14.8 |   6.7 |
+| after `42579611929`  | dispatch, full, same head (warm cache) | 24.2 |         14.7 |   5.5 |
+
+Read honestly: the image cache did **not** shorten the critical path. The warm-up
+steps cost 0.4 + 0.3 min, the deployment smoke dropped by at most 0.3 min
+(5.5 against 5.7–6.4) and the update smoke did not move (14.7 against 13.3–14.0;
+its 13.6 min are the readiness timeouts it exists to exercise, and its builds
+were already a small part). The wall time fell from 28.1–33.4 to 24.2 min in the
+warm run, and that difference is the integration shards (slowest 22.3 min against
+25.1 in the cold run and 26.4–28.6 before, from the refreshed timing table and
+runner noise), not the cache. A comparison of one cold and one warm run cannot
+separate those two; the table is what was measured. Docs-only pull requests are
+unchanged (10.5 min for #440, `web` is their longest job).
 
 The slowest integration shard was 28.6 and 26.4 min in the two PR runs, the
 fastest 11.4 and 12.8: the suite, not the image build, is the critical path of
