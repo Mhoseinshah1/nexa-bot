@@ -38,6 +38,7 @@ import type {
   TICKET_ERROR_CODES,
   TONPAYS_ERROR_CODES,
   TONPAYS_TELEGRAM_ERROR_CODES,
+  MOVE_ERROR_CODES,
   TENANT_ARCHIVE_ERROR_CODES,
   DATA_EXPORT_ERROR_CODES,
 } from '@nexa/contracts';
@@ -99,6 +100,7 @@ export type ContractErrorCode =
   | CodesOf<typeof TICKET_ERROR_CODES>
   | CodesOf<typeof TONPAYS_ERROR_CODES>
   | CodesOf<typeof TONPAYS_TELEGRAM_ERROR_CODES>
+  | CodesOf<typeof MOVE_ERROR_CODES>
   | CodesOf<typeof TENANT_ARCHIVE_ERROR_CODES>
   | CodesOf<typeof DATA_EXPORT_ERROR_CODES>
   | 'request.invalid'
