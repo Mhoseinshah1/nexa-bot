@@ -230,18 +230,21 @@ describe('hosted-bot backups (phase 6B PR-2)', () => {
 
     // The hosted bot's own owner — every key in his own tenant — reaches none of it.
     const hosted = await hostedOwnerOf(bot.id);
+    // Thunks: each refusal is awaited as it is made (no rejection left unobserved).
     for (const attempt of [
-      backups.view(bot.scope, hosted, null, bot.id),
-      backups.setPassword(bot.scope, hosted, null, bot.id, {
-        idempotencyKey: key(),
-        proof: { code: '123456' },
-        password: 'the hosted owner chose this',
-      }),
-      backups.download(bot.scope, hosted, null, bot.id, api.container.ids.uuid(), {
-        proof: { code: '123456' },
-      }),
+      () => backups.view(bot.scope, hosted, null, bot.id),
+      () =>
+        backups.setPassword(bot.scope, hosted, null, bot.id, {
+          idempotencyKey: key(),
+          proof: { code: '123456' },
+          password: 'the hosted owner chose this',
+        }),
+      () =>
+        backups.download(bot.scope, hosted, null, bot.id, api.container.ids.uuid(), {
+          proof: { code: '123456' },
+        }),
     ]) {
-      expect(await codeOf(attempt)).toBe('hosting.owner_only');
+      expect(await codeOf(attempt())).toBe('hosting.owner_only');
     }
     expect(
       await codeOf(
