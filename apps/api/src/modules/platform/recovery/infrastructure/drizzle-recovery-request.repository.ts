@@ -313,6 +313,32 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
     return row === undefined ? null : toRow(row);
   }
 
+  /**
+   * SFR A3: lets go of the upload a refused request kept for the owner's choice — clears
+   * `workspace_path`, only while the row is still that FAILED, never-confirmed request naming
+   * that very directory. The caller removes the directory only after this returned true, so a
+   * concurrent acknowledgement (which needs the path) either wins first or finds it gone.
+   */
+  async releaseKeptUpload(input: {
+    id: string;
+    workspacePath: string;
+    now: Date;
+  }): Promise<boolean> {
+    const updated = await this.db
+      .update(recoveryRequests)
+      .set({ workspacePath: null, updatedAt: input.now })
+      .where(
+        and(
+          eq(recoveryRequests.id, input.id),
+          eq(recoveryRequests.state, 'FAILED'),
+          eq(recoveryRequests.workspacePath, input.workspacePath),
+          sql`${recoveryRequests.confirmedAt} IS NULL`,
+        ),
+      )
+      .returning({ id: recoveryRequests.id });
+    return updated.length > 0;
+  }
+
   async page(input: {
     tenantId: string;
     limit: number;

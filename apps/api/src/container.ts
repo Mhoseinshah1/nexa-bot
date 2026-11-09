@@ -162,6 +162,7 @@ import { getHeapStatistics } from 'node:v8';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import { InstallationKeyring } from './infrastructure/crypto/installation-keyring.js';
 import { FAST_KDF, PRODUCTION_KDF } from './infrastructure/crypto/kek.js';
+import { RecoveryUploadSweeper } from './modules/platform/recovery/application/upload-sweeper.js';
 import { DrizzleInstallationKeyRepository } from './modules/platform/recovery/infrastructure/drizzle-installation-key.repository.js';
 import {
   InstallationKeyLoader,
@@ -1849,6 +1850,8 @@ export interface Container {
   readonly recoveryExecutor: RecoveryExecutor;
   readonly recoveryRequests: DrizzleRecoveryRequestRepository;
   readonly recoveryWorkspaces: FilesystemRecoveryWorkspaces;
+  /** SFR A3: removes refused and orphaned restore uploads (the recovery role runs it). */
+  readonly recoveryUploadSweeper: RecoveryUploadSweeper;
   /**
    * Mirza `.nxpkg` importer (`docs/legacy-migration/nxpkg-importer.md`): the operator's
    * service (the Web Admin «مهاجرت از میرزا»), and the executor that ONLY the `migration`
@@ -8636,6 +8639,12 @@ export function createContainer(
    */
   const recoveryWorkspaces = new FilesystemRecoveryWorkspaces(config.RECOVERY_WORK_DIR);
   const recoveryJournal = new FileCutoverJournal(config.RECOVERY_WORK_DIR);
+  const recoveryUploadSweeper = new RecoveryUploadSweeper({
+    workspaces: recoveryWorkspaces,
+    requests: recoveryRequests,
+    clock,
+    logger,
+  });
   /*
    * The decrypt-only keys an installation still holds from a Recovery Kit it imported
    * before the kit was removed (SFR A1): the loader keeps this process's keyring in step
@@ -10023,6 +10032,7 @@ export function createContainer(
     recoveryExecutor,
     recoveryRequests,
     recoveryWorkspaces,
+    recoveryUploadSweeper,
     legacyMigration,
     migrationExecutor,
     legacyNxpkgImports,

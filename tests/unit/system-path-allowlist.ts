@@ -141,6 +141,7 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleRecoveryRequestRepository.purgeFinishedBefore',
   'DrizzleRecoveryRequestRepository.reassert',
   'DrizzleRecoveryRequestRepository.reclaimStale',
+  'DrizzleRecoveryRequestRepository.releaseKeptUpload',
   'DrizzleRecoveryRequestRepository.transition',
   'DrizzleSessionRepository.findByTokenHash',
   'DrizzleSessionRepository.purgeExpiredBefore',
