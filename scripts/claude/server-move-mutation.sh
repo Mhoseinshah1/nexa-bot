@@ -28,7 +28,7 @@ DEPLOY=tests/deploy/server-move.test.sh
 # name | file | perl substitution (a literal pipe is \x7c) | suite
 MUTATIONS=(
   "member-verified|$B/infrastructure/server-move.ts|s/run.verifiedAt !== null &&//|$UNIT"
-  "member-checksum|$B/infrastructure/move-bundle.ts|s/if \\(got.sha256 !== member.sha256 \\x7c\\x7c got.bytes !== member.bytes\\) \\{\\n    throw new NexaError\\(\\{\\n      kind: 'VALIDATION',\\n      code: MOVE_ERROR_CODES.MEMBER_CHECKSUM_MISMATCH,\\n      message: 'A member of the move bundle/if (false) {\\n    throw new NexaError({\\n      kind: 'VALIDATION',\\n      code: MOVE_ERROR_CODES.MEMBER_CHECKSUM_MISMATCH,\\n      message: 'A member of the move bundle/|$UNIT"
+  "member-checksum|$B/infrastructure/move-bundle.ts|s/if \\(got.sha256 !== member.sha256 \\x7c\\x7c got.bytes !== member.bytes\\) \\{/if (false) {/|$UNIT"
   "head-newer|$B/infrastructure/server-move.ts|s/if \\(verdict === 'NEWER'\\)/if (false)/|$UNIT"
   "hosted-digest|$B/infrastructure/server-move.ts|s/actual !== expected \\x7c\\x7c //|$UNIT"
   "hosted-extra|$B/infrastructure/server-move.ts|s/if \\(live.extraTables.length > 0\\)/if (false)/|$UNIT"
