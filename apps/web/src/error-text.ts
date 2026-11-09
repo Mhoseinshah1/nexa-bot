@@ -38,6 +38,7 @@ import type {
   TICKET_ERROR_CODES,
   TONPAYS_ERROR_CODES,
   TONPAYS_TELEGRAM_ERROR_CODES,
+  TENANT_ARCHIVE_ERROR_CODES,
 } from '@nexa/contracts';
 import { ApiError } from './api/client';
 import { t, type WebKey } from './i18n/web.fa';
@@ -97,6 +98,7 @@ export type ContractErrorCode =
   | CodesOf<typeof TICKET_ERROR_CODES>
   | CodesOf<typeof TONPAYS_ERROR_CODES>
   | CodesOf<typeof TONPAYS_TELEGRAM_ERROR_CODES>
+  | CodesOf<typeof TENANT_ARCHIVE_ERROR_CODES>
   | 'request.invalid'
   | 'http.error'
   | 'internal.unhandled'
