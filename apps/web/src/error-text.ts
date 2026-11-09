@@ -173,6 +173,7 @@ export const ERROR_TEXT = {
   'tenant_archive.replace_unavailable': 'web.err_tenant_archive_replace_unavailable',
   'tenant_archive.unclassified_table': 'web.err_tenant_archive_unclassified_table',
   'tenant_archive.rls_bypassed': 'web.err_tenant_archive_rls_bypassed',
+  'tenant_archive.lease_expired': 'web.err_tenant_archive_lease_expired',
   'backup.checksum_mismatch': 'web.err_backup_checksum_mismatch',
   'backup.run_missing': 'web.err_backup_run_missing',
   'backup.tool_failed': 'web.err_backup_tool_failed',

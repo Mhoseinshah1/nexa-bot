@@ -48,6 +48,13 @@ import {
  *     that row is reclaimed with stage DUMP while its directory holds the verified archive
  *     the installation was restored from.
  *
+ * HOSTED TENANT ARCHIVES (security review of PR #447, finding 2). A tenant archive run works in
+ * `hosted/<tenantId>/<runId>/` and its plaintext is the `plain/` and `verify/` directories
+ * (a tenant's rows, decrypted secrets re-sealed under the archive key). They are judged by
+ * the same rules from the same table: the directory's run id must have a row, and that row
+ * must be a TENANT run of exactly the tenant the path names — a path under another tenant,
+ * or an installation run's id under `hosted/`, is never this sweep's.
+ *
  * Run at worker start and inside `BackupService.run` right after the run claimed the
  * one-backup lock, when no other run of this installation can be in flight.
  */
@@ -56,16 +63,21 @@ import {
 export interface BackupRunDirectory {
   readonly id: string;
   readonly lastWrittenAt: Date;
+  /** The hosted tenant of `hosted/<tenant>/<id>/`; null for an installation run's `<id>/`. */
+  readonly subjectTenantId: string | null;
 }
 
 export interface BackupRunDirectoryStore {
-  /** Directories named by a run id (a UUID). Never a CLI scratch directory. */
+  /**
+   * Directories named by a run id (a UUID), at the root and under `hosted/<tenant uuid>/`.
+   * Never a CLI scratch directory.
+   */
   listRunDirectories(): Promise<readonly BackupRunDirectory[]>;
   /** Removes one run's directory, archive included. Returns what survived. */
-  removeRunDirectory(backupId: string): Promise<readonly string[]>;
-  /** Removes one run directory's plaintext files, never its archive. */
+  removeRunDirectory(directory: BackupRunDirectory): Promise<readonly string[]>;
+  /** Removes one run directory's plaintext, never its archive. */
   removeRunPlaintext(
-    backupId: string,
+    directory: BackupRunDirectory,
   ): Promise<{ readonly removed: readonly string[]; readonly survived: readonly string[] }>;
 }
 
@@ -78,6 +90,8 @@ export interface BackupOrphanRunFacts {
   readonly failureCode: string | null;
   readonly leaseHeartbeatAt: Date;
   readonly verifiedAt: Date | null;
+  /** A TENANT run's hosted tenant (`backup_runs.subject_tenant_id`); null for an installation run. */
+  readonly subjectTenantId: string | null;
 }
 
 export interface BackupOrphanRunReader {
@@ -122,6 +136,9 @@ export function decideOrphanDirectory(input: {
   if (directory.id === input.exceptId) return 'KEEP';
   if (input.protectedIds.has(directory.id)) return 'KEEP';
   if (row === null) return 'KEEP';
+  // The row must be the directory's own kind of run: an installation run at the root, the
+  // TENANT run of exactly the tenant its `hosted/<tenant>/` path names.
+  if (row.subjectTenantId !== directory.subjectTenantId) return 'KEEP';
   if (row.state === 'RUNNING') return 'KEEP';
   if (now.getTime() - row.leaseHeartbeatAt.getTime() <= input.leaseStaleAfterMs) return 'KEEP';
   if (now.getTime() - directory.lastWrittenAt.getTime() < input.minAgeMs) return 'KEEP';
@@ -189,7 +206,7 @@ export class BackupOrphanSweep {
         exceptId: input.exceptId ?? null,
       });
       if (decision === 'REMOVE_DIRECTORY') {
-        const left = await this.deps.directories.removeRunDirectory(directory.id);
+        const left = await this.deps.directories.removeRunDirectory(directory);
         if (left.length > 0) {
           survived.push(...left);
           continue;
@@ -198,7 +215,7 @@ export class BackupOrphanSweep {
         // The row says the directory is gone, so the run-row purge may take it later.
         await this.deps.runs.markArchivePruned({ id: directory.id, now });
       } else if (decision === 'REMOVE_PLAINTEXT') {
-        const outcome = await this.deps.directories.removeRunPlaintext(directory.id);
+        const outcome = await this.deps.directories.removeRunPlaintext(directory);
         files.push(...outcome.removed);
         survived.push(...outcome.survived);
       }

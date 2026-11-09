@@ -123,6 +123,9 @@ const MAX_CAPTURED_OUTPUT = 16 * 1024;
  */
 const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 
+/** A tenant archive's scratch database (`createScratchDatabase`): nothing else is named so. */
+export const TENANT_SCRATCH_DATABASE = /^nexa_tarc_[0-9a-f]{16}$/;
+
 async function run(
   command: string,
   args: readonly string[],
@@ -1124,6 +1127,7 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
    */
   async createScratchDatabase(): Promise<{ readonly name: string; readonly url: string }> {
     const name = `nexa_tarc_${randomBytes(8).toString('hex')}`;
+    // `TENANT_SCRATCH_DATABASE` is this shape: `dropAbandonedScratchDatabases` recognises it.
     assertNotLiveTarget({ database: name }, this.databaseName);
     await this.createDatabaseOn(this.verifyConnection, name);
     const url = new URL(this.options.databaseUrl);
@@ -1139,6 +1143,54 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
 
   /** Scratch databases whose DROP failed. Read by the cleanup stage. */
   readonly leaked: string[] = [];
+
+  /**
+   * Security review of PR #447, finding 2: a tenant archive or restore whose process was KILLED
+   * leaves its `nexa_tarc_<16 hex>` scratch database — a plaintext copy of a tenant — on the
+   * verify server, and nothing else ever drops it. The caller runs this only inside an
+   * admitted EXCLUSIVE heavy job, when no other archive or restore can own one; and each
+   * database is dropped WITHOUT `FORCE`, so one that still has a session (a live owner after
+   * all) is refused by PostgreSQL and reported in `survived`, never cut off. The name is matched
+   * exactly: no other database, the live one least of all, is ever a candidate.
+   */
+  async dropAbandonedScratchDatabases(): Promise<{
+    readonly dropped: readonly string[];
+    readonly survived: readonly string[];
+  }> {
+    const listed = await run(
+      this.bin('psql'),
+      [
+        '--no-psqlrc',
+        '--quiet',
+        '--tuples-only',
+        '--no-align',
+        '--command',
+        `SELECT datname FROM pg_database WHERE datname ~ '${TENANT_SCRATCH_DATABASE.source}' ORDER BY datname`,
+      ],
+      this.env('postgres', this.verifyConnection),
+      60_000,
+    ).catch(() => null);
+    if (listed === null || listed.code !== 0) {
+      return {
+        dropped: [],
+        survived: ['tenant scratch databases: the verify server was not listed'],
+      };
+    }
+    const dropped: string[] = [];
+    const survived: string[] = [];
+    for (const name of listed.stdout.split('\n').map((line) => line.trim())) {
+      if (!TENANT_SCRATCH_DATABASE.test(name) || name === this.databaseName) continue;
+      const outcome = await run(
+        this.bin('psql'),
+        ['--no-psqlrc', '--quiet', '--command', `DROP DATABASE IF EXISTS ${quoteIdent(name)}`],
+        this.env('postgres', this.verifyConnection),
+        60_000,
+      ).catch(() => null);
+      if (outcome !== null && outcome.code === 0) dropped.push(name);
+      else survived.push(name);
+    }
+    return { dropped, survived };
+  }
 
   /**
    * The operator's restore, from the CLI, into a database they name.

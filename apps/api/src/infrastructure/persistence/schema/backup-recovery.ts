@@ -711,6 +711,13 @@ export const tenantRestores = pgTable(
     preReplaceRunId: uuid('pre_replace_run_id').references(() => backupRuns.id),
     failureCode: text('failure_code'),
     failureMessage: text('failure_message'),
+    /**
+     * ADR-0025's lease (security review of PR #447, finding 3): the process working on the
+     * request and when it last said so. A stale one is FAILED by the next restore, never
+     * adopted. Null on rows written before the lease existed (their `updated_at` stands in).
+     */
+    leaseOwner: text('lease_owner'),
+    leaseHeartbeatAt: timestamptz('lease_heartbeat_at'),
     createdAt: timestamptz('created_at').notNull(),
     updatedAt: timestamptz('updated_at').notNull(),
     finishedAt: timestamptz('finished_at'),

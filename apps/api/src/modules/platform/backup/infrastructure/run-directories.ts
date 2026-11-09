@@ -4,14 +4,22 @@ import type {
   BackupRunDirectory,
   BackupRunDirectoryStore,
 } from '../application/backup-orphan-sweep.js';
-import { PLAINTEXT_FILES, RUN_DIRECTORY } from './workspace.js';
+import {
+  HOSTED_DIRECTORY,
+  HOSTED_PLAINTEXT,
+  newestWrite,
+  PLAINTEXT_FILES,
+  RUN_DIRECTORY,
+} from './workspace.js';
 
 /**
  * The filesystem half of the orphan sweep (Round 8, B1). Lists, measures and removes;
  * WHICH directory may go is `decideOrphanDirectory`'s, from the run table.
  *
- * Only directories named by a run id are listed — never a CLI scratch directory, never a
- * recovery workspace, never anything else an operator put under the root.
+ * Only directories named by a run id are listed — `<root>/<runId>/` for an installation run
+ * and `<root>/hosted/<tenantId>/<runId>/` for a tenant archive run (security review of PR
+ * #447, finding 2) — never a CLI scratch directory, never a recovery workspace, never
+ * anything else an operator put under the root.
  */
 export class FilesystemBackupRunDirectories implements BackupRunDirectoryStore {
   constructor(private readonly root: string) {}
@@ -27,36 +35,59 @@ export class FilesystemBackupRunDirectories implements BackupRunDirectoryStore {
     const found: BackupRunDirectory[] = [];
     for (const entry of entries) {
       if (!RUN_DIRECTORY.test(entry)) continue;
-      const path = join(this.root, entry);
-      const info = await stat(path).catch(() => null);
-      if (info === null || !info.isDirectory()) continue;
-      // The NEWEST of the directory and every file in it: a directory's own mtime moves only
-      // when an entry is added or removed, so a dump being streamed into it would look old.
-      let newest = info.mtimeMs;
-      for (const name of await readdir(path).catch(() => [] as string[])) {
-        const file = await stat(join(path, name)).catch(() => null);
-        if (file !== null && file.mtimeMs > newest) newest = file.mtimeMs;
+      const one = await this.measure(join(this.root, entry), entry, null);
+      if (one !== null) found.push(one);
+    }
+    const hosted = join(this.root, HOSTED_DIRECTORY);
+    for (const tenantId of await readdir(hosted).catch(() => [] as string[])) {
+      if (!RUN_DIRECTORY.test(tenantId)) continue;
+      for (const runId of await readdir(join(hosted, tenantId)).catch(() => [] as string[])) {
+        if (!RUN_DIRECTORY.test(runId)) continue;
+        const one = await this.measure(join(hosted, tenantId, runId), runId, tenantId);
+        if (one !== null) found.push(one);
       }
-      found.push({ id: entry, lastWrittenAt: new Date(newest) });
     }
     return found;
   }
 
-  async removeRunDirectory(backupId: string): Promise<readonly string[]> {
-    const path = join(this.root, backupId);
+  private async measure(
+    path: string,
+    id: string,
+    subjectTenantId: string | null,
+  ): Promise<BackupRunDirectory | null> {
+    const info = await stat(path).catch(() => null);
+    if (info === null || !info.isDirectory()) return null;
+    // The NEWEST of the directory and every file in it: a directory's own mtime moves only
+    // when an entry is added or removed, so a dump being streamed into it would look old. A
+    // tenant run writes two levels further down (`plain/data/<part>`).
+    const newest = await newestWrite(path, info.mtimeMs, subjectTenantId === null ? 1 : 3);
+    return { id, lastWrittenAt: new Date(newest), subjectTenantId };
+  }
+
+  /** The run's own directory, or null when a name in it is not a UUID (`..`, the root). */
+  private pathOf(directory: BackupRunDirectory): string | null {
+    if (!RUN_DIRECTORY.test(directory.id)) return null;
+    if (directory.subjectTenantId === null) return join(this.root, directory.id);
+    if (!RUN_DIRECTORY.test(directory.subjectTenantId)) return null;
+    return join(this.root, HOSTED_DIRECTORY, directory.subjectTenantId, directory.id);
+  }
+
+  async removeRunDirectory(directory: BackupRunDirectory): Promise<readonly string[]> {
+    const path = this.pathOf(directory);
     // Only ever a run's own directory, named by its id: never `..`, never the root.
-    if (!RUN_DIRECTORY.test(backupId)) return [path];
+    if (path === null) return [join(this.root, directory.id)];
     return (await removeEach([path])).survived;
   }
 
   async removeRunPlaintext(
-    backupId: string,
+    directory: BackupRunDirectory,
   ): Promise<{ readonly removed: readonly string[]; readonly survived: readonly string[] }> {
-    if (!RUN_DIRECTORY.test(backupId))
-      return { removed: [], survived: [join(this.root, backupId)] };
+    const path = this.pathOf(directory);
+    if (path === null) return { removed: [], survived: [join(this.root, directory.id)] };
+    const names = directory.subjectTenantId === null ? PLAINTEXT_FILES : HOSTED_PLAINTEXT;
     const present: string[] = [];
-    for (const name of PLAINTEXT_FILES) {
-      const file = join(this.root, backupId, name);
+    for (const name of names) {
+      const file = join(path, name);
       if ((await stat(file).catch(() => null)) !== null) present.push(file);
     }
     return removeEach(present);
