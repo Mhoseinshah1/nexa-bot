@@ -115,6 +115,12 @@ Admin session in the hosted tenant marked `impersonatedBy` that (D5) writes no r
 tenant's audit log, carries the owner's actor reference for the installation's log, cannot change
 that tenant's admins or credentials, and ends with the section session.
 
+**Refined by [ADR-0039](0039-tenant-backup-and-server-move.md) § 9** (Phase 6B): the session's
+principal is a password-less HOST admin of the hosted tenant (composite admin FKs forbid the
+owner's id there), the token crosses to the hosted domain as a URL fragment, secret writes are
+refused at each secret writer, and the owner's audit row is written on the same transaction
+through the system path.
+
 ## Backups (Phase 6B / D7)
 
 The creator sets the backup password for every hosted bot; hosted-bot owners cannot change it
@@ -123,10 +129,15 @@ password inside the archive, rewrapped under the target server's active key on r
 work per tenant later, so the wrap/unwrap code is tenant-agnostic: password and keys in,
 document out. Per-tenant backups are NOT built in this fix.
 
+The per-tenant archive, its restore, delivery, the server move and the open export are decided in
+[ADR-0039](0039-tenant-backup-and-server-move.md). One refinement of the paragraph above: a
+hosted archive bundles ONE per-archive key, never this server's keyring (ADR-0039 § 2).
+
 ## Open
 
 - Purge closes the tenant for good (sessions revoked, bots disabled, `PURGED`); the physical
   erasure of its rows is not built — append-only tables (audit, operational events, outbox) refuse
-  per-tenant deletes, so erasure needs its own design (6B).
+  per-tenant deletes, so erasure needs its own design — designed (not built) in
+  [ADR-0039](0039-tenant-backup-and-server-move.md) § 10.
 - A lost section factor with no recovery codes has no reset yet (the sign-in factor has
   `admin-2fa-reset.cli.ts`); a matching CLI is a follow-up.
