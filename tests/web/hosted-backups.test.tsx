@@ -98,6 +98,62 @@ describe('a hosted bot’s backups in «میزبانی‌ها»', () => {
     expect(sent.proof).toEqual({ code: '123456' });
     expect(sent.idempotencyKey.length).toBeGreaterThanOrEqual(8);
   });
+
+  it('«بازیابی روی همین سرور»: an archive row dry-runs a replace of the same bot behind a code', async () => {
+    const restoreHere = url(
+      HOSTED_BACKUP_ROUTES.restoreHere.replace(':tenantId', TENANT).replace(':runId', RUN),
+    );
+    const api = stubApi([
+      { url: ROUTE(HOSTED_BACKUP_ROUTES.bot), method: 'GET', body: response() },
+      {
+        url: restoreHere,
+        method: 'POST',
+        body: {
+          id: RUN,
+          state: 'VERIFIED',
+          stage: 'PREFLIGHT',
+          hostedTenantId: TENANT,
+          mode: 'REPLACE',
+          preReplaceRunId: null,
+          slug: 'acme',
+          head: 'EQUAL',
+          counts: {},
+          failureCode: null,
+          createdAt: '2026-11-09T00:00:00.000Z',
+          confirmRequestedAt: null,
+          finishedAt: null,
+        },
+      },
+    ]);
+    renderPage(<HostedBackupSection bot={bot} />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: t('web.hosted_backup_restore_here') }),
+    );
+    expect(screen.getByText(t('web.hosted_backup_restore_here_hint'))).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(t('web.hosted_backup_restore_here_password')), {
+      target: { value: 'the archive password' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.hosting_code_label')), {
+      target: { value: '654321' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: t('web.hosted_restore_dry_run') }));
+    await waitFor(() =>
+      expect(api.calls.filter((call) => call.url === restoreHere)).toHaveLength(1),
+    );
+    expect(api.calls.find((call) => call.url === restoreHere)?.body).toEqual({
+      proof: { code: '654321' },
+      password: 'the archive password',
+    });
+  });
+
+  it('a purged bot offers no «بازیابی روی همین سرور»', async () => {
+    stubApi([{ url: ROUTE(HOSTED_BACKUP_ROUTES.bot), method: 'GET', body: response() }]);
+    renderPage(<HostedBackupSection bot={{ ...bot, state: 'PURGED' } as HostedBotView} />);
+    expect(await screen.findByText(t('web.hosted_backup_status_ok'))).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: t('web.hosted_backup_restore_here') }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe('the backup page of a hosted bot’s own Web Admin', () => {
