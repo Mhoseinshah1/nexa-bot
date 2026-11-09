@@ -32,18 +32,25 @@ function facts(over: Partial<BackupOrphanRunFacts> = {}): BackupOrphanRunFacts {
     leaseHeartbeatAt: OLD,
     verifiedAt: null,
     failureCode: 'backup.tool_failed',
+    subjectTenantId: null,
     ...over,
   };
 }
 
 function decide(
   row: BackupOrphanRunFacts | null,
-  over: { lastWrittenAt?: Date; protectedIds?: string[]; exceptId?: string | null } = {},
+  over: {
+    lastWrittenAt?: Date;
+    protectedIds?: string[];
+    exceptId?: string | null;
+    subjectTenantId?: string | null;
+  } = {},
 ) {
   return decideOrphanDirectory({
     directory: {
       id: 'a0000000-0000-4000-8000-000000000001',
       lastWrittenAt: over.lastWrittenAt ?? OLD,
+      subjectTenantId: over.subjectTenantId ?? null,
     },
     row,
     now: NOW,
@@ -97,6 +104,19 @@ describe('decideOrphanDirectory', () => {
     expect(decide(facts({ stage: 'DUMP', failureCode: 'backup.lease_expired' }))).toBe(
       'REMOVE_PLAINTEXT',
     );
+  });
+
+  it('judges a hosted/<tenant>/<run>/ directory only by that tenant’s own TENANT run row', () => {
+    const tenant = 'c0000000-0000-4000-8000-000000000001';
+    const other = 'c0000000-0000-4000-8000-000000000002';
+    expect(decide(facts({ subjectTenantId: tenant }), { subjectTenantId: tenant })).toBe(
+      'REMOVE_DIRECTORY',
+    );
+    // Another tenant's run, or an installation run, under this tenant's path: not this sweep's.
+    expect(decide(facts({ subjectTenantId: other }), { subjectTenantId: tenant })).toBe('KEEP');
+    expect(decide(facts(), { subjectTenantId: tenant })).toBe('KEEP');
+    // And a tenant run's id at the root is not that run's directory either.
+    expect(decide(facts({ subjectTenantId: tenant }))).toBe('KEEP');
   });
 });
 
@@ -198,6 +218,60 @@ describe('the orphan sweep against a real directory', () => {
     );
     // A CLI scratch directory is not a run's: the housekeeping sweep owns it.
     expect(left.has('.cli-verify-abc')).toBe(true);
+  });
+
+  /**
+   * Security review of PR #447, finding 2: a KILLED tenant archive run left a tenant's rows in
+   * `hosted/<tenant>/<run>/plain/data/*.copy`, two levels below anything the sweep listed.
+   */
+  it('removes a killed tenant archive run’s plaintext under hosted/<tenant>/<run>/, keyed by its row', async () => {
+    const tenant = 'c0000000-0000-4000-8000-000000000001';
+    const killed = 'd0000000-0000-4000-8000-000000000001';
+    const live = 'd0000000-0000-4000-8000-000000000002';
+    const foreign = 'd0000000-0000-4000-8000-000000000003';
+    rows.push(
+      facts({
+        id: killed,
+        stage: 'VERIFY_RESTORE',
+        failureCode: 'backup.lease_expired',
+        subjectTenantId: tenant,
+      }),
+      facts({ id: live, state: 'RUNNING', subjectTenantId: tenant }),
+      // An installation run's id under a hosted path is not that run's directory.
+      facts({ id: foreign, stage: 'VERIFY_RESTORE', failureCode: 'backup.lease_expired' }),
+    );
+    try {
+      for (const id of [killed, live, foreign]) {
+        const run = join(root, 'hosted', tenant, id);
+        await mkdir(join(run, 'plain', 'data'), { recursive: true });
+        await mkdir(join(run, 'verify'), { recursive: true });
+        await writeFile(join(run, 'plain', 'data', 'x.copy'), 'a tenant row');
+        await writeFile(join(run, 'archive.7z'), 'sealed');
+        for (const path of [
+          join(run, 'plain', 'data', 'x.copy'),
+          join(run, 'plain', 'data'),
+          join(run, 'plain'),
+          join(run, 'verify'),
+          join(run, 'archive.7z'),
+          run,
+        ]) {
+          await utimes(path, OLD, OLD);
+        }
+      }
+      const result = await sweeper().sweep();
+      const run = join(root, 'hosted', tenant, killed);
+      expect((await readdir(run)).sort()).toEqual(['archive.7z']);
+      expect(result.files).toEqual(
+        expect.arrayContaining([join(run, 'plain'), join(run, 'verify')]),
+      );
+      for (const kept of [live, foreign]) {
+        expect(await readdir(join(root, 'hosted', tenant, kept, 'plain', 'data'))).toEqual([
+          'x.copy',
+        ]);
+      }
+    } finally {
+      rows.splice(rows.length - 3, 3);
+    }
   });
 
   it('a missing root is nothing to sweep, not a failure', async () => {

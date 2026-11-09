@@ -11,14 +11,26 @@ describe('TenantRestoreService — confirmation happens only after admission', (
     const confirm = vi.fn(async () => ({ hostedTenantId: 'tenant-x' }));
     const sha256 = vi.fn(async () => 'a'.repeat(64));
     const service = new TenantRestoreService({
-      engine: { sha256, restore: vi.fn(async () => ({})) } as never,
-      requests: { confirm, stage: vi.fn(), finish: vi.fn(), create: vi.fn() } as never,
+      engine: {
+        sha256,
+        restore: vi.fn(async () => ({})),
+        sweepAbandonedScratch: vi.fn(async () => ({ dropped: [], survived: [] })),
+      } as never,
+      requests: {
+        confirm,
+        stage: vi.fn(),
+        finish: vi.fn(),
+        create: vi.fn(),
+        heartbeat: vi.fn(),
+        reclaimStale: vi.fn(async () => 0),
+      } as never,
       heavyJobs: {
         runWhenAdmitted: async (_k: unknown, _t: unknown, job: () => Promise<unknown>) =>
           ran ? { ran: true, result: await job().catch(() => 'failed') } : { ran: false },
       } as never,
       clock: { now: () => new Date(0) } as never,
       ids: { uuid: () => 'id-1' } as never,
+      leaseOwner: 'test',
       queue: { pollMs: 1, maxWaitMs: 1, sleep: async () => undefined } as never,
     });
     return { service, confirm };

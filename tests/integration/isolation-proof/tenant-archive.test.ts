@@ -476,6 +476,7 @@ describe('tenant archive (Phase 6B PR-1) — export, verify, restore, as nexa_ap
       },
       clock,
       ids,
+      leaseOwner: 'test',
       queue: { pollMs: 10, maxWaitMs: 1_000, sleep: async () => undefined },
     });
   }
@@ -781,6 +782,211 @@ describe('tenant archive (Phase 6B PR-1) — export, verify, restore, as nexa_ap
     await expect(readdir(leftover)).rejects.toMatchObject({ code: 'ENOENT' });
   }, 600_000);
 
+  // ---- Security review of PR #447 -------------------------------------------------------
+
+  /** The target's restore request rows, newest first. */
+  async function requestRows(): Promise<
+    {
+      id: string;
+      state: string;
+      failure_code: string | null;
+      failure_message: string | null;
+      finished: boolean;
+    }[]
+  > {
+    return (
+      await target.owner.db.execute(sql`
+        SELECT id, state, failure_code, failure_message, finished_at IS NOT NULL AS finished
+          FROM tenant_restores WHERE tenant_id = ${SEED_IDS.tenantA}
+         ORDER BY created_at DESC, id DESC`)
+    ).rows as never;
+  }
+
+  async function hosted2Rows(): Promise<number> {
+    return (
+      (
+        await target.owner.db.execute(
+          sql`SELECT count(*)::int AS n FROM tenants WHERE id = ${HOSTED_2}`,
+        )
+      ).rows[0] as { n: number }
+    ).n;
+  }
+
+  it('finding 4: a restore on a connection that bypasses row-level security is refused before anything is opened', async () => {
+    const asOwner = engineFor({
+      app: target.owner,
+      ownerUrl: urlFor(targetName),
+      root,
+      cipher: target.cipher,
+      installationTenantId: SEED_IDS.tenantA,
+    });
+    const before = (await requestRows()).length;
+    const directory = join(root, 'restore-as-owner');
+    await expect(
+      restoreService(asOwner, target.app).restore({
+        installationTenantId: SEED_IDS.tenantA,
+        actorAdminId: target.actor,
+        archivePath,
+        password: PASSWORD,
+        directory,
+        mode: 'NEW',
+      }),
+    ).rejects.toMatchObject({ code: TENANT_ARCHIVE_ERROR_CODES.RLS_BYPASSED });
+    expect((await requestRows()).length).toBe(before);
+    await expect(readdir(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 300_000);
+
+  it('finding 1: a failed restore stores neither a row value nor the query parameters on its request', async () => {
+    const stray = uuidv7Like();
+    const broken = await crafted((dir, m) => rewrite(dir, m, 'tickets', 'bot_instance_id', stray));
+    let raw = '';
+    await dryThenApply(broken).catch((error: unknown) => {
+      raw = error instanceof Error ? error.message : String(error);
+    });
+    // The thrown error carries the value (it is the caller's to log through redaction)...
+    expect(raw).toContain(stray);
+    // ...the durable row does not.
+    const [row] = await requestRows();
+    expect(row?.state).toBe('FAILED');
+    expect(row?.failure_message ?? '').not.toContain(stray);
+    expect(row?.failure_message ?? '').not.toContain('params:');
+    expect(row?.failure_message ?? '').toContain('23503');
+    expect(await hosted2Rows()).toBe(0);
+  }, 600_000);
+
+  it('finding 5: the confirmation is bound to the bytes the restore reads — a file swapped after it is refused', async () => {
+    const verified = await crafted(async () => undefined);
+    const other = await crafted(async () => undefined);
+    const path = join(root, 'swapped.7z');
+    await copyFile(verified, path);
+    const repository = new DrizzleTenantRestoreRepository(target.app.db);
+    const swapping = Object.assign(Object.create(repository) as DrizzleTenantRestoreRepository, {
+      confirm: async (...args: Parameters<DrizzleTenantRestoreRepository['confirm']>) => {
+        const confirmed = await repository.confirm(...args);
+        // Another archive of the SAME tenant, under the confirmed file's name.
+        await copyFile(other, path);
+        return confirmed;
+      },
+    });
+    const service = new TenantRestoreService({
+      engine: targetEngine(),
+      requests: swapping,
+      heavyJobs: {
+        runWhenAdmitted: async (_kind, _tenant, job) => ({ ran: true, result: await job() }),
+      },
+      clock,
+      ids,
+      leaseOwner: 'test',
+      queue: { pollMs: 10, maxWaitMs: 1_000, sleep: async () => undefined },
+    });
+    const dry = await service.restore({
+      installationTenantId: SEED_IDS.tenantA,
+      actorAdminId: target.actor,
+      archivePath: path,
+      password: PASSWORD,
+      directory: join(root, 'swap-dry'),
+      mode: 'NEW',
+    });
+    if (dry === null) throw new Error('not admitted');
+    const applyDirectory = join(root, 'swap-apply');
+    await expect(
+      service.restore({
+        installationTenantId: SEED_IDS.tenantA,
+        actorAdminId: target.actor,
+        archivePath: path,
+        password: PASSWORD,
+        directory: applyDirectory,
+        mode: 'NEW',
+        confirmRequestId: dry.requestId,
+      }),
+    ).rejects.toMatchObject({ code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED });
+    expect(await hosted2Rows()).toBe(0);
+    expect((await requestRows()).find((row) => row.id === dry.requestId)?.state).toBe('FAILED');
+    // The private copy went with the refusal.
+    await expect(readdir(applyDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 600_000);
+
+  it('finding 3: a restore whose process died does not hold the slot — the next one fails it, a live one is never taken over', async () => {
+    const insertActive = async (id: string, heartbeat: Date) =>
+      target.owner.db.execute(sql`
+        INSERT INTO tenant_restores (id, tenant_id, hosted_tenant_id, mode, state, stage,
+                                     artifact_sha256, requested_by_admin_id, lease_owner,
+                                     lease_heartbeat_at, created_at, updated_at)
+        VALUES (${id}, ${SEED_IDS.tenantA}, ${HOSTED_2}, 'NEW', 'APPLYING', 'APPLY',
+                ${'0'.repeat(64)}, ${target.actor}, 'a-killed-process', ${heartbeat},
+                ${heartbeat}, ${heartbeat})`);
+    const archive = await crafted(async () => undefined);
+    const dryRun = (directory: string) =>
+      restoreService(targetEngine(), target.app).restore({
+        installationTenantId: SEED_IDS.tenantA,
+        actorAdminId: target.actor,
+        archivePath: archive,
+        password: PASSWORD,
+        directory: join(root, directory),
+        mode: 'NEW',
+      });
+    // A live lease (refreshed a minute ago) keeps the slot: the next restore is refused.
+    const live = uuidv7Like();
+    await insertActive(live, new Date(Date.now() - 60_000));
+    // (the single-active index refuses its request row: a unique violation)
+    await expect(dryRun('lease-live')).rejects.toMatchObject({ cause: { code: '23505' } });
+    expect((await requestRows()).find((row) => row.id === live)?.state).toBe('APPLYING');
+    // An hour without a heartbeat: the process is presumed gone, and the row is FAILED.
+    await target.owner.db.execute(
+      sql`UPDATE tenant_restores SET lease_heartbeat_at = ${new Date(Date.now() - 3_600_000)} WHERE id = ${live}`,
+    );
+    const dry = await dryRun('lease-stale');
+    expect(dry?.summary.hostedTenantId).toBe(HOSTED_2);
+    expect((await requestRows()).find((row) => row.id === live)).toMatchObject({
+      state: 'FAILED',
+      failure_code: TENANT_ARCHIVE_ERROR_CODES.LEASE_EXPIRED,
+      finished: true,
+    });
+    // The VERIFIED dry run holds the slot until the owner confirms it; its expiry is PR-2's
+    // (ADR-0039 § As built). Closed here so the next test can restore HOSTED_2.
+    await target.owner.db.execute(sql`
+      UPDATE tenant_restores SET state = 'FAILED', failure_code = 'test.closed', finished_at = now()
+       WHERE id = ${dry?.requestId ?? ''}`);
+  }, 600_000);
+
+  it('finding 2: idle tenant scratch databases a killed run left are dropped; a used one, or any other, is not', async () => {
+    const tools = new PostgresDatabaseTools({
+      databaseUrl: urlFor(targetName),
+      dumpTimeoutMs: 60_000,
+      restoreTimeoutMs: 60_000,
+      migratorEntrypoint: 'unused',
+    });
+    const abandoned = `nexa_tarc_${randomBytes(8).toString('hex')}`;
+    const inUse = `nexa_tarc_${randomBytes(8).toString('hex')}`;
+    const lookalike = `nexa_tarc_keep_${randomBytes(4).toString('hex')}`;
+    for (const name of [abandoned, inUse, lookalike]) await admin(`CREATE DATABASE "${name}"`);
+    const session = new Client({ connectionString: urlFor(inUse) });
+    await session.connect();
+    const exists = async (name: string) =>
+      (
+        (
+          await owner.db.execute(
+            sql`SELECT count(*)::int AS n FROM pg_database WHERE datname = ${name}`,
+          )
+        ).rows[0] as { n: number }
+      ).n === 1;
+    try {
+      const swept = await tools.dropAbandonedScratchDatabases();
+      expect(swept.dropped).toContain(abandoned);
+      expect(swept.survived).toContain(inUse);
+      expect(await exists(abandoned)).toBe(false);
+      expect(await exists(inUse)).toBe(true);
+      expect(await exists(lookalike)).toBe(true);
+      // The live database and the target are never candidates.
+      expect([...swept.dropped, ...swept.survived]).not.toContain(targetName);
+    } finally {
+      await session.end();
+      for (const name of [inUse, lookalike]) {
+        await admin(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`).catch(() => undefined);
+      }
+    }
+  }, 120_000);
+
   it('a crafted archive lands HOSTED, with no expiry and no capacity limits of its own choosing', async () => {
     const forged = await crafted(async (dir, m) => {
       m.host.expiresAt = '2000-01-01T00:00:00.000Z';
@@ -858,7 +1064,10 @@ describe('tenant archive (Phase 6B PR-1) — export, verify, restore, as nexa_ap
     expect(
       compareArchiveHead({ ...head(expected.length), lastHash: 'f'.repeat(64) }, expected),
     ).toBe('DIVERGED');
-    expect(last.tag).toMatch(/tenant_archive/);
+    // This head writes the format (0329); a later migration (0330 the restore lease) must not
+    // pin the test to being the last one.
+    expect(last.tag).toMatch(/^\d{4}_/);
+    expect(expected.some((m) => /_tenant_archive$/.test(m.tag))).toBe(true);
   });
 
   describe('across releases', () => {
