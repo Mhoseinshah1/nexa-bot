@@ -124,6 +124,18 @@ botctl — operate a Nexa installation
                              balance/service/reseller-credit reconciliation, go/no-go. Never
                              the live database, the token, the webhook or a customer message
 
+  botctl move export --out FILE
+                             the whole server, for another data centre: FREEZES this server
+                             (application roles stopped), asks a bundle password twice, takes
+                             a verified installation backup and an archive of every hosted bot
+                             into one bundle. This server stays frozen ('move abort' undoes it)
+  botctl move import FILE    on a NEW server after install.sh: provisioner and monitor off,
+                             restore the installation, verify every hosted bot, print the
+                             Persian checklist (DNS, webhooks, roles)
+  botctl move verify         after DNS changes: every domain resolves here with TLS, every
+                             bot's webhook points here; a Persian table
+  botctl move abort          on the OLD server: undo the freeze and start its roles again
+
   botctl telegram status     the local registration AND Telegram's own webhook state
   botctl telegram register   reconcile the webhook with Telegram (keeps queued updates)
 
@@ -162,7 +174,7 @@ botctl — operate a Nexa installation
                              only those still empty, in one transaction (audited)
 
 Long commands — backup, restore, update, rollback, cutover rehearse, secrets rewrap, customers
-prune-empty --apply — refuse
+prune-empty --apply, move export, move import — refuse
 to start on an SSH terminal that is not inside tmux or screen, because a dropped connection
 would end the run part-way. Start them in tmux; botctl prints the exact line:
 
@@ -1406,10 +1418,333 @@ restore_into_target() {
 }
 
 # ---------------------------------------------------------------------------
+# move — the whole server to another data centre (Phase 6B PR-4, ADR-0039 § 8)
+# ---------------------------------------------------------------------------
+#
+# `move export --out FILE` on the OLD server: FREEZE (every application role stopped, so
+# nothing writes and no order is taken; postgres, redis, backup-verify and the edge stay up),
+# ask the bundle password twice on the terminal with echo off, and run `move.cli.js export`
+# in a one-off container: a fresh installation backup and a fresh archive of every hosted bot,
+# one at a time through the heavy-job queue, each VERIFIED and sealed with that password, into
+# one bundle. The bundle is copied out through its SHA-256 to FILE.partial and renamed only
+# when the hash matches; the container's work directory goes on every exit. The server STAYS
+# frozen: restarting it with the same bot tokens would race the new one. `move abort` is the
+# only way back, and `restart`, `update` and `rollback` refuse while the freeze marker exists.
+#
+# `move import FILE` on the NEW server (after install.sh of the same or a newer release):
+# provisioner and monitor are switched off first (`roles disable`, which also takes the update
+# lock for the rest of the run), the bundle is streamed into a private `.cli-move-*` directory
+# in the backups volume (swept as debris if this is killed), the password is asked once, and
+# the CLI restores the installation through the recovery executor, then verifies every hosted
+# bot against it and prints the Persian checklist.
+#
+# `move verify`: DNS, TLS and every webhook against this server, as a Persian table. Exit 0
+# when everything is ready.
+#
+# The password is never an argument of any process and never in the environment: it reaches
+# each one-off container on standard input, from a shell function's own argument.
+
+MOVE_APP_ROLES="api worker monitor provisioner assistant recovery"
+
+move_frozen_file() { printf '%s/move-frozen' "$NEXA_CONFIG_DIR"; }
+
+# Called by restart, update and rollback: a frozen server is not started by accident.
+move_refuse_if_frozen() {
+  [ ! -e "$(move_frozen_file)" ] && return 0
+  nexa_die "this server is FROZEN for a move (sudo botctl move export). Starting it would race the new server with the same bot tokens. Finish the move, or run 'sudo botctl move abort' to return to this server."
+}
+
+cmd_move() {
+  local action="${1:-}"
+  shift || true
+  case "$action" in
+    export) cmd_move_export "$@" ;;
+    import) cmd_move_import "$@" ;;
+    verify) cmd_move_verify "$@" ;;
+    abort) cmd_move_abort "$@" ;;
+    *) nexa_die "usage: botctl move <export --out FILE|import FILE|verify|abort>" ;;
+  esac
+}
+
+# The bundle password, twice, hidden; printed to stdout for the caller's $( ). Refused when
+# empty, different, or shorter than a backup password may be (12 characters).
+move_read_password() {
+  local twice="$1" password="" confirm=""
+  printf 'رمز بستهٔ انتقال: ' >&2
+  IFS= read -rs password </dev/tty || nexa_die "could not read the password from the terminal."
+  printf '\n' >&2
+  if [ "$twice" = 1 ]; then
+    printf 'تکرار رمز: ' >&2
+    IFS= read -rs confirm </dev/tty || nexa_die "could not read the password from the terminal."
+    printf '\n' >&2
+    if [ "$password" != "$confirm" ]; then
+      password="" confirm=""
+      nexa_die "دو رمز یکسان نیستند؛ چیزی شروع نشد."
+    fi
+  fi
+  confirm=""
+  [ "${#password}" -ge 12 ] || nexa_die "رمز بسته دست‌کم ۱۲ نویسه است؛ چیزی شروع نشد."
+  printf '%s' "$password"
+}
+
+# The application roles this topology defines and that are running now.
+move_running_roles() {
+  local running role out=""
+  running="$(nexa_compose ps --services --status running 2>/dev/null)" ||
+    nexa_die "cannot ask docker which services are running."
+  for role in $MOVE_APP_ROLES; do
+    case "
+${running}
+" in *"
+${role}
+"*) out="${out:+${out} }${role}" ;; esac
+  done
+  printf '%s' "$out"
+}
+
+# shellcheck disable=SC2329 # run by botctl_run_child
+move_export_run() {
+  local password="$1" image="$2" domain="$3"
+  printf '%s' "$password" | nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/move.cli.js export --password-stdin --image "$image" --domain "$domain"
+}
+
+# shellcheck disable=SC2329 # run by botctl_run_child
+move_copy_out() {
+  nexa_compose run --rm --no-deps -T --entrypoint cat api "$1" </dev/null >"$2"
+}
+
+move_remove_in_container() {
+  [ -n "$1" ] || return 0
+  nexa_compose run --rm --no-deps -T --entrypoint rm api -rf -- "$1" </dev/null >/dev/null 2>&1 || true
+}
+
+MOVE_PARTIAL=""
+MOVE_CONTAINER_DIR=""
+# shellcheck disable=SC2329 # runs from an EXIT trap
+move_cleanup() {
+  botctl_reap_child
+  [ -z "$MOVE_PARTIAL" ] || rm -f -- "$MOVE_PARTIAL"
+  move_remove_in_container "$MOVE_CONTAINER_DIR"
+}
+
+cmd_move_export() {
+  require_installed
+  local out=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --out)
+        out="${2:-}"
+        shift 2 || nexa_die "--out needs a file name."
+        ;;
+      --out=*)
+        out="${1#--out=}"
+        shift
+        ;;
+      *) nexa_die "unknown option $1. usage: botctl move export --out FILE" ;;
+    esac
+  done
+  [ -n "$out" ] || nexa_die "move export needs --out FILE (for example /root/nexa-move.7z)."
+  [ ! -e "$out" ] || nexa_die "${out} already exists; choose another name. Nothing was started."
+  [ -d "$(dirname "$out")" ] || nexa_die "the directory of ${out} does not exist."
+  botctl_long_command move-export
+  nexa_acquire_lock 0
+
+  local password
+  password="$(move_read_password 1)" || exit 1
+
+  # THE FREEZE: nothing writes from here on. Recorded first, so an interrupted export leaves
+  # a server that refuses to start by accident rather than one that is half stopped.
+  local frozen roles
+  frozen="$(move_frozen_file)"
+  if [ -e "$frozen" ]; then
+    nexa_warn "this server is already frozen for a move; taking the export again."
+  else
+    roles="$(move_running_roles)"
+    (umask 077 && printf '%s\n' "$roles" >"$frozen") || nexa_die "cannot write ${frozen}."
+    if [ -n "$roles" ]; then
+      nexa_step "freezing: stopping ${roles} (postgres, redis, backup-verify and the edge stay up)"
+      # shellcheck disable=SC2086
+      nexa_compose stop $roles || nexa_die "stopping ${roles} failed; the server is marked frozen. Run 'botctl move abort' to undo."
+    fi
+  fi
+
+  local image domain
+  image="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE 2>/dev/null || true)"
+  domain="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_DOMAIN 2>/dev/null || true)"
+  trap move_cleanup EXIT
+  nexa_step "exporting: an installation backup and every hosted bot, one at a time (this takes a while)"
+  # The CLI's stdout (its one NEXA-MOVE line, and the container's log lines) goes to a private
+  # file, not a $( ): the child must stay in botctl's own process for the signal handling.
+  local report status=0
+  report="$(mktemp)" || nexa_die "cannot create a temporary file."
+  MOVE_PARTIAL="$report"
+  botctl_run_child move_export_run "$password" "$image" "$domain" >"$report" || status=$?
+  password=""
+  local line field bundle="" bytes="" sha=""
+  line="$(sed -n 's/^NEXA-MOVE //p' "$report" | tail -n 1)"
+  rm -f -- "$report"
+  MOVE_PARTIAL=""
+  for field in $line; do
+    case "$field" in
+      bundle=*) bundle="${field#bundle=}" ;;
+      bytes=*) bytes="${field#bytes=}" ;;
+      sha256=*) sha="${field#sha256=}" ;;
+    esac
+  done
+  case "$bundle" in
+    /var/lib/nexa/backups/.cli-move-*/work/nexa-move.7z) MOVE_CONTAINER_DIR="${bundle%/work/nexa-move.7z}" ;;
+    *) bundle="" ;;
+  esac
+  if [ "$status" -ne 0 ] || [ -z "$bundle" ] || [ -z "$sha" ]; then
+    nexa_die "بستهٔ انتقال ساخته نشد (کد ${status}). پیام بالا را ببینید؛ هیچ فایلی نوشته نشد. سرور منجمد ماند: دوباره 'sudo botctl move export --out ${out}' یا برای برگشت 'sudo botctl move abort'."
+  fi
+
+  MOVE_PARTIAL="${out}.partial"
+  local previous_umask
+  previous_umask="$(umask)"
+  umask 077
+  botctl_run_child move_copy_out "$bundle" "$MOVE_PARTIAL" ||
+    nexa_die "the bundle could not be copied out of the container; nothing was written to ${out}."
+  umask "$previous_umask"
+  local got
+  got="$(sha256sum -- "$MOVE_PARTIAL" | cut -d' ' -f1)"
+  [ "$got" = "$sha" ] ||
+    nexa_die "the copied bundle's SHA-256 is not the one the export sealed; nothing was written to ${out}."
+  mv -- "$MOVE_PARTIAL" "$out"
+  chmod 0600 "$out"
+  MOVE_PARTIAL=""
+  local version
+  version="$(nexa_current_version 2>/dev/null || printf 'unknown')"
+  cat <<DONE
+
+بستهٔ انتقال آماده است: ${out}
+  اندازه: ${bytes} بایت
+  SHA-256: ${sha}
+
+این سرور منجمد ماند: نقش‌های برنامه خاموش‌اند و سفارشی پذیرفته نمی‌شود. آن را روشن نکنید.
+گام‌های بعد:
+  ۱. فایل را به سرور جدید ببرید، مثلاً:  scp ${out} root@NEW-SERVER:/root/
+  ۲. روی سرور جدید install.sh همین نسخه (${version}) یا جدیدتر را اجرا کنید.
+  ۳. روی سرور جدید:  sudo botctl move import /root/$(basename "$out")
+  ۴. سپس DNS را عوض کنید و  sudo botctl move verify  را تا «آماده» شدن همه اجرا کنید.
+تلگرام پیام‌ها را تا ۲۴ ساعت نگه می‌دارد؛ انتقال را در همین بازه تمام کنید.
+راه برگشت (فقط اگر انتقال را رها می‌کنید):  sudo botctl move abort
+DONE
+}
+
+# shellcheck disable=SC2329 # run by botctl_run_child
+move_store_bundle() {
+  # shellcheck disable=SC2016 # expands in the container's shell, deliberately.
+  nexa_compose run --rm --no-deps -T --entrypoint sh api -c \
+    'umask 077; d=$(mktemp -d /var/lib/nexa/backups/.cli-move-XXXXXX) && cat >"$d/bundle.7z" && printf "%s\n" "$d"' \
+    move-store <"$1"
+}
+
+# shellcheck disable=SC2329 # run by botctl_run_child
+move_import_step() {
+  local password="$1" step="$2" workspace="$3"
+  shift 3
+  printf '%s' "$password" | nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/move.cli.js "$step" --workspace "$workspace" --password-stdin "$@"
+}
+
+# This host's own addresses, for "resolves here".
+move_here_args() {
+  local address
+  for address in $(hostname -I 2>/dev/null || true); do
+    printf -- '--here\n%s\n' "$address"
+  done
+}
+
+cmd_move_import() {
+  require_installed
+  [ "$#" -eq 1 ] || nexa_die "usage: botctl move import FILE"
+  local file="$1"
+  [ -r "$file" ] || nexa_die "cannot read ${file}."
+  [ ! -e "$(move_frozen_file)" ] ||
+    nexa_die "this server is frozen for a move OUT; a move is imported on a NEW server."
+  botctl_long_command move-import
+
+  local password
+  password="$(move_read_password 0)" || exit 1
+
+  # Off BEFORE anything is restored, and they stay off (ADR-0039 § 8): the restored panels and
+  # services are checked by a person first. Also takes the update lock for the rest of the run.
+  cmd_roles disable provisioner monitor
+
+  trap move_cleanup EXIT
+  nexa_step "copying the bundle into the backups volume"
+  local stored
+  stored="$(mktemp)" || nexa_die "cannot create a temporary file."
+  MOVE_PARTIAL="$stored"
+  botctl_run_child move_store_bundle "$file" >"$stored" ||
+    nexa_die "the bundle could not be copied into the container."
+  stored="$(tr -d '\r' <"$stored" | tail -n 1)"
+  rm -f -- "$MOVE_PARTIAL"
+  MOVE_PARTIAL=""
+  case "$stored" in
+    /var/lib/nexa/backups/.cli-move-*) MOVE_CONTAINER_DIR="$stored" ;;
+    *) nexa_die "the container did not name its work directory." ;;
+  esac
+
+  local domain
+  domain="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_DOMAIN 2>/dev/null || true)"
+  local move_args=()
+  [ -z "$domain" ] || move_args+=(--domain "$domain")
+  local here
+  while IFS= read -r here; do [ -z "$here" ] || move_args+=("$here"); done < <(move_here_args)
+
+  nexa_step "restoring the installation (verify, restore-test, pre-restore backup, cutover)"
+  botctl_run_child move_import_step "$password" import-installation "$MOVE_CONTAINER_DIR" ||
+    nexa_die "نصب بازیابی نشد. پیام بالا را ببینید. provisioner و monitor خاموش ماندند."
+  nexa_step "verifying every hosted bot against the restored installation"
+  local status=0
+  botctl_run_child move_import_step "$password" import-hosted "$MOVE_CONTAINER_DIR" "${move_args[@]}" ||
+    status=$?
+  password=""
+  case "$status" in
+    0) nexa_ok "the move is imported; follow the checklist above" ;;
+    2) nexa_warn "the move is imported, but some hosted bots must be restored from their files (listed above)" ;;
+    *) nexa_die "ربات‌های میزبانی‌شده تأیید نشدند (کد ${status}). پیام بالا را ببینید؛ provisioner و monitor خاموش ماندند." ;;
+  esac
+}
+
+cmd_move_verify() {
+  require_installed
+  [ "$#" -eq 0 ] || nexa_die "usage: botctl move verify"
+  local domain
+  domain="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_DOMAIN 2>/dev/null || true)"
+  local verify_args=()
+  [ -z "$domain" ] || verify_args+=(--domain "$domain")
+  local here
+  while IFS= read -r here; do [ -z "$here" ] || verify_args+=("$here"); done < <(move_here_args)
+  nexa_compose run --rm --no-deps -T --entrypoint node api dist/move.cli.js verify "${verify_args[@]}" </dev/null
+}
+
+cmd_move_abort() {
+  require_installed
+  [ "$#" -eq 0 ] || nexa_die "usage: botctl move abort"
+  local frozen roles
+  frozen="$(move_frozen_file)"
+  [ -e "$frozen" ] || nexa_die "this server is not frozen for a move; nothing to abort."
+  nexa_acquire_lock 0
+  roles="$(cat -- "$frozen")"
+  if [ -n "$roles" ]; then
+    nexa_step "starting ${roles} again"
+    # shellcheck disable=SC2086
+    nexa_compose start $roles || nexa_die "starting ${roles} failed; the server stays marked frozen."
+  fi
+  rm -f -- "$frozen"
+  nexa_ok "انتقال رها شد؛ این سرور دوباره کار می‌کند. اگر بسته‌ای روی سرور دیگری وارد شده، آن سرور را خاموش کنید."
+}
+
+# ---------------------------------------------------------------------------
 # update
 # ---------------------------------------------------------------------------
 cmd_update() {
   require_installed
+  move_refuse_if_frozen
   # An unreadable NEXA_DISABLED_ROLES is refused BEFORE anything moves: found after the
   # migration it would fail the start and the back-out alike.
   nexa_disabled_roles >/dev/null || nexa_die "NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env is not valid; edit that line by hand first ('botctl roles' refuses it too). Nothing was changed."
@@ -1839,6 +2174,7 @@ cmd_update() {
 # ADR-0022. Rolling back ACROSS more than one release is not promised.
 cmd_rollback() {
   require_installed
+  move_refuse_if_frozen
   # An unreadable NEXA_DISABLED_ROLES is refused BEFORE anything moves: found after the
   # migration it would fail the start and the back-out alike.
   nexa_disabled_roles >/dev/null || nexa_die "NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env is not valid; edit that line by hand first ('botctl roles' refuses it too). Nothing was changed."
@@ -2069,6 +2405,7 @@ cmd_restart() {
     *) nexa_die "usage: botctl restart [background]" ;;
   esac
   require_installed
+  move_refuse_if_frozen
   # An unreadable NEXA_DISABLED_ROLES is refused BEFORE anything moves: found after the
   # migration it would fail the start and the back-out alike.
   nexa_disabled_roles >/dev/null || nexa_die "NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env is not valid; edit that line by hand first ('botctl roles' refuses it too). Nothing was changed."
@@ -3586,7 +3923,7 @@ main() {
   # --allow-foreground, anywhere on a long command's line, is botctl's and not the command's
   # (botctl_long_command). Everything else is kept, in order, for the refusal's tmux line.
   case "${1:-} ${2:-}" in
-    'backup '* | 'restore '* | 'update '* | 'rollback '* | 'cutover rehearse' | 'secrets rewrap' | 'customers prune-empty')
+    'backup '* | 'restore '* | 'update '* | 'rollback '* | 'cutover rehearse' | 'secrets rewrap' | 'customers prune-empty' | 'move export' | 'move import')
       local arg kept=()
       for arg in "$@"; do
         if [ "$arg" = "--allow-foreground" ]; then BOTCTL_ALLOW_FOREGROUND=1; else kept+=("$arg"); fi
@@ -3616,6 +3953,7 @@ main() {
       cmd_rollback "$@"
       ;;
     roles) cmd_roles "$@" ;;
+    move) cmd_move "$@" ;;
     cutover) cmd_cutover "$@" ;;
     secrets) cmd_secrets "$@" ;;
     telegram) cmd_telegram "$@" ;;
