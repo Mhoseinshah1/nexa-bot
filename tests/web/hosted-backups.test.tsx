@@ -9,6 +9,7 @@ import {
 } from '@nexa/contracts';
 import { BackupRoutePage } from '../../apps/web/src/pages/hosted-own-backup';
 import { HostedBackupSection } from '../../apps/web/src/pages/hosting-backup';
+import { HostedRestoreSection } from '../../apps/web/src/pages/hosting-restore';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 
@@ -152,6 +153,53 @@ describe('a hosted bot’s backups in «میزبانی‌ها»', () => {
     expect(await screen.findByText(t('web.hosted_backup_status_ok'))).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: t('web.hosted_backup_restore_here') }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe('«بازیابی ربات از فایل» with a replace', () => {
+  it('names a verified REPLACE as one, with the PRE_REPLACE archive and its own confirmation', async () => {
+    const view = (over: Record<string, unknown>) => ({
+      id: RUN,
+      state: 'VERIFIED',
+      stage: 'PREFLIGHT',
+      hostedTenantId: TENANT,
+      mode: 'REPLACE',
+      preReplaceRunId: null,
+      slug: 'acme',
+      head: 'EQUAL',
+      counts: { customers: 3 },
+      failureCode: null,
+      createdAt: '2026-11-09T00:00:00.000Z',
+      confirmRequestedAt: null,
+      finishedAt: null,
+      ...over,
+    });
+    stubApi([
+      {
+        url: url(HOSTED_BACKUP_ROUTES.restores),
+        method: 'GET',
+        body: {
+          restores: [
+            view({}),
+            view({
+              id: '01a05e35-c9ad-7e93-bef3-1ed9b55292e2',
+              state: 'SUCCEEDED',
+              preReplaceRunId: '01a05e35-c9ad-7e93-bef3-1ed9b55292f3',
+              finishedAt: '2026-11-09T00:05:00.000Z',
+            }),
+          ],
+        },
+      },
+    ]);
+    renderPage(<HostedRestoreSection />);
+    expect(
+      await screen.findByRole('button', { name: t('web.hosted_restore_replace_confirm') }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(t('web.hosted_restore_mode_replace'))).toHaveLength(2);
+    expect(screen.getByText(t('web.hosted_restore_pre_replace'))).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: t('web.hosted_restore_confirm') }),
     ).not.toBeInTheDocument();
   });
 });
