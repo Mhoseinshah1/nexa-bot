@@ -1019,7 +1019,12 @@ export class RecoveryService {
       throw error;
     }
 
-    const tested = await this.runVerifyAndTest(scope, id, { archivePassword: input.password }, null);
+    const tested = await this.runVerifyAndTest(
+      scope,
+      id,
+      { archivePassword: input.password },
+      null,
+    );
     if (tested.failureCode !== null || tested.request.state !== 'RESTORE_TEST_PASSED') {
       return tested;
     }

@@ -217,6 +217,13 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'reason: hosting: spend an activation link',
   'reason: hosting: the hosted bot list, every hosted tenant',
   'reason: idempotency retention: interactive keys',
+  // Phase 6B PR-4 (ADR-0039 § 8): the server move. The bundle names every hosted bot's
+  // Telegram identity (the hosted tenants' own bot rows); `move import` refuses a target that
+  // already runs a business in ANY tenant; and each hosted member is checked once to be a
+  // HOSTED child of the restored installation before its rows are read bound to it.
+  'reason: move: bind a hosted tenant to verify it after import',
+  'reason: move: list hosted tenants for the bundle',
+  'reason: move: refuse an import into a running business',
   'reason: outbox retention: published messages',
   'reason: restore-exclusion',
   // Phase 6B PR-1 (ADR-0039): the tenant archive. Binding a hosted tenant from installation

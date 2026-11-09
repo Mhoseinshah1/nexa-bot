@@ -477,8 +477,7 @@ export class BackupService {
       // Both read the stored backup password: one that does not decrypt refuses the run HERE,
       // before the dump, with the owner's reason rather than the cipher's (§2.7).
       const plannedFormat =
-        (await this.passwordReadable(() => this.deps.archiver.nextFormat?.(sealPassword))) ??
-        'NXB';
+        (await this.passwordReadable(() => this.deps.archiver.nextFormat?.(sealPassword))) ?? 'NXB';
       // A host that cannot compress is refused now, before an hour of dumping (Round 5B).
       await this.passwordReadable(() => this.deps.archiver.preflight?.(sealPassword));
       await this.assertDiskRoom();

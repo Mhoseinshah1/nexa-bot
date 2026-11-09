@@ -134,7 +134,7 @@ async function hostFacts(input: TenantExportInput): Promise<HostFacts> {
  * migration, named by this release's journal. A ledger whose newest entry the journal does not
  * name (a newer or diverged database) is refused: the manifest would not say what it is.
  */
-async function migrationHead(
+export async function migrationHead(
   executor: SqlExecutor,
   folder: string,
 ): Promise<TenantArchiveManifest['migrations']> {
