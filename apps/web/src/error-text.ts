@@ -195,6 +195,7 @@ export const ERROR_TEXT = {
   'hosting.bot_not_found': 'web.err_hosting_bot_not_found',
   'hosting.state_conflict': 'web.err_hosting_state_conflict',
   'hosting.expiry_passed': 'web.err_hosting_expiry_passed',
+  'hosting.token_reentry_required': 'web.err_hosting_token_reentry_required',
   'hosting.slug_taken': 'web.err_hosting_slug_taken',
   'hosting.create_disabled': 'web.err_hosting_create_disabled',
   'hosting.purge_confirmation_mismatch': 'web.err_hosting_purge_confirmation_mismatch',

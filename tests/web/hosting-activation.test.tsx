@@ -32,13 +32,13 @@ const TENANT = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
 const ROUTE_OF = (template: string) => url(template.replace(':tenantId', TENANT));
 const ACT = '/hosting/bots/:tenantId/activation';
 
-function bot(): HostedBotView {
+function bot(state: HostedBotView['state'] = 'ACTIVE'): HostedBotView {
   return {
     tenantId: TENANT,
     slug: 'acme-vpn',
     displayName: 'آکمه',
-    state: 'ACTIVE',
-    tenantStatus: 'ACTIVE',
+    state,
+    tenantStatus: state === 'ACTIVE' ? 'ACTIVE' : state === 'DELETED' ? 'DISABLED' : 'STOPPED',
     expiresAt: null,
     createdAt: '2026-10-01T08:00:00.000Z',
     stateChangedAt: '2026-10-01T08:00:00.000Z',
@@ -82,7 +82,10 @@ function activation(overrides: Partial<HostedActivationView> = {}): HostedActiva
   };
 }
 
-function panelRoutes(view: HostedActivationView): Route[] {
+function panelRoutes(
+  view: HostedActivationView,
+  state: HostedBotView['state'] = 'ACTIVE',
+): Route[] {
   return [
     {
       url: url(HOSTING_ROUTES.status),
@@ -97,7 +100,7 @@ function panelRoutes(view: HostedActivationView): Route[] {
     {
       url: url(HOSTING_ROUTES.bots),
       method: 'GET',
-      body: { bots: [bot()], create: { enabled: true, refusal: null } },
+      body: { bots: [bot(state)], create: { enabled: true, refusal: null } },
     },
     {
       url: url(HOSTING_ROUTES.server),
@@ -137,6 +140,17 @@ async function openActivation() {
 }
 
 describe('the creator panel: activation steps', () => {
+  it('SFR A5: a suspended bot offers its token again, says it stays stopped until then, and runs no check', async () => {
+    stubApi(
+      panelRoutes(activation({ steps: steps({ TOKEN: 'DONE', DOMAIN: 'DONE' }) }), 'SUSPENDED'),
+    );
+    renderPage(<HostingPage denied={false} />);
+    const { list } = await openActivation();
+    expect(screen.getByText(t('web.hosting_act_stopped_token_first'))).toBeInTheDocument();
+    for (const button of within(list).getAllByRole('button')) expect(button).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.hosting_act_reconfigure') })).toBeEnabled();
+  });
+
   it('draws five pending steps and the DNS instructions, before anything is entered', async () => {
     stubApi(panelRoutes(activation({ domain: null, botUsername: null })));
     renderPage(<HostingPage denied={false} />);

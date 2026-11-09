@@ -306,6 +306,8 @@ export const WEB_FA_ERRORS = {
   'web.err_hosting_code_attempts_locked': 'کدهای نادرست زیادی وارد شد. کمی بعد دوباره امتحان کنید.',
   'web.err_hosting_bot_not_found': 'چنین ربات میزبانی‌شده‌ای پیدا نشد.',
   'web.err_hosting_state_conflict': 'این کار در وضعیت فعلی این ربات ممکن نیست. صفحه را تازه کنید.',
+  'web.err_hosting_token_reentry_required':
+    'این ربات متوقف شده است. پیش از فعال‌سازی دوباره، توکن تلگرام آن را در «فعال‌سازی» دوباره وارد کنید.',
   'web.err_hosting_expiry_passed':
     'تاریخ انقضای این ربات گذشته است. اول تاریخ تازه بگذارید یا آن را خالی کنید.',
   'web.err_hosting_slug_taken': 'این شناسه قبلاً استفاده شده است.',

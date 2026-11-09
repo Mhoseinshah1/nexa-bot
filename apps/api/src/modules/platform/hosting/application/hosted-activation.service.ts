@@ -38,6 +38,7 @@ import {
   hashActivationToken,
 } from '../domain/activation-link.js';
 import { judgeDns, parseHostedDomain } from '../domain/hosted-domain.js';
+import { OWNER_STOPPED_STATES } from '../domain/hosted-bot-lifecycle.js';
 import type { HostingOwnerGuard } from './hosting-owner-guard.js';
 import type { HostingSectionService } from './hosting-section.service.js';
 import type {
@@ -163,7 +164,9 @@ export class HostedActivationService {
     if (replay !== null) {
       return { activation: await this.view(installation, hostedTenantId), replayed: true };
     }
-    await this.requireHosted(installation, hostedTenantId, true);
+    // SFR A5: a bot the owner stopped takes its token while still stopped — the token is
+    // what lets it be activated again (`assertTokenReenteredSinceStop`), never the reverse.
+    assertConfigurable(await this.requireHosted(installation, hostedTenantId));
 
     const before = await this.deps.repository.find(installation, hostedTenantId);
     if (before?.ownerActivatedAt != null && before.domain !== domain) {
@@ -204,7 +207,7 @@ export class HostedActivationService {
       .withFreshProof(installation, actor, command.proof, action, async (tx, now, method) => {
         await this.inTransaction(installation, actor, token, tx);
         const hosted = await this.requireHostedIn(installation, hostedTenantId, tx);
-        assertActive(hosted);
+        assertConfigurable(hosted);
         await this.deps.repository.ensure(installation, hostedTenantId, now, tx);
         const locked = (await this.deps.repository.find(
           installation,
@@ -861,6 +864,21 @@ function assertActive(row: HostedBotRow): void {
     throw activationError(
       CODES.BOT_NOT_ACTIVE,
       'This hosted bot is not active: nothing is set up for a stopped or deleted bot.',
+    );
+  }
+}
+
+/**
+ * SFR A5: where the token and domain may be entered — an ACTIVE bot, or one the OWNER stopped
+ * (suspended or deleted), which needs a token entered since the stop before it is activated
+ * again. Entering one changes nothing about the stop: the hosted TENANT stays STOPPED or
+ * DISABLED, so the bot does not answer until the owner activates it.
+ */
+function assertConfigurable(row: HostedBotRow): void {
+  if (row.state !== 'ACTIVE' && !OWNER_STOPPED_STATES.includes(row.state)) {
+    throw activationError(
+      CODES.BOT_NOT_ACTIVE,
+      'This hosted bot is not active: nothing is set up for an expired or purged bot.',
     );
   }
 }
