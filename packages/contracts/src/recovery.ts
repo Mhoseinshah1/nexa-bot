@@ -407,7 +407,14 @@ export type RecoveryFailureCode = (typeof RECOVERY_FAILURE_CODES)[number];
  * matters after a host has been rebuilt — and the case where nothing about the
  * file may be trusted.
  */
-export const RECOVERY_SOURCES = ['UPLOAD', 'LOCAL_RUN'] as const;
+/*
+ * Phase 6B PR-4 (ADR-0039 § 8): `MOVE` is the installation member of a server-move bundle,
+ * restored on the NEW server by `botctl move import` through this same executor. Its
+ * confirmation is the root shell and the typed bundle password (as ADR-0025 records for
+ * `botctl restore`), so it is the one source confirmed by no administrator: the binding to the
+ * artifact's checksum and the expiry are kept.
+ */
+export const RECOVERY_SOURCES = ['UPLOAD', 'LOCAL_RUN', 'MOVE'] as const;
 export type RecoverySource = (typeof RECOVERY_SOURCES)[number];
 
 /**
