@@ -295,6 +295,10 @@ export const WEB_FA_ERRORS = {
   'web.err_tenant_archive_purged': 'این ربات برای همیشه بسته شده است.',
   'web.err_tenant_archive_replace_target_missing':
     'ربات این فایل روی این سرور میزبانی نمی‌شود؛ آن را به‌عنوان ربات تازه بازیابی کنید.',
+  'web.err_tenant_archive_changed_during_replace':
+    'ربات در میانهٔ جایگزینی تغییر کرد (داده‌ای تازه ثبت شد یا وضعیتش عوض شد)؛ برای اینکه چیزی از دست نرود هیچ داده‌ای جایگزین نشد. دوباره جایگزینی را انجام دهید.',
+  'web.err_hosting_replace_in_progress':
+    'این ربات در حال جایگزینی با یک بکاپ است؛ تا پایان آن وضعیتش تغییر نمی‌کند.',
   'web.err_tenant_archive_pre_replace_failed':
     'پیش از جایگزینی باید از داده‌های فعلی ربات بکاپ سالم گرفته شود و نشد (رمز بکاپ این ربات را تعیین کرده‌اید؟)؛ چیزی جایگزین نشد.',
   'web.err_tenant_archive_unclassified_table':

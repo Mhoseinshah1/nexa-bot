@@ -299,7 +299,9 @@ export class TenantArchiveService {
         detail: 'Kept on this server: hosted archives are not sent to the owner’s topic.',
         attemptedAt: null,
       };
-      if (this.deps.delivery !== undefined) {
+      // A PRE_REPLACE archive stays on this server: it is the replace's safety copy, and its
+      // delivery would write into the very bot the replace compares row for row.
+      if (this.deps.delivery !== undefined && input.trigger !== 'PRE_REPLACE') {
         try {
           delivered = await this.deps.delivery.deliver({
             tenantId: input.tenantId,
@@ -433,6 +435,8 @@ export interface TenantRestoreEngine {
     /** Absent: NEW. REPLACE runs `applyReplace` under `requestId`'s allowance. */
     readonly mode?: TenantRestoreMode;
     readonly requestId?: string;
+    /** REPLACE apply: the held bot, as it must still be under the replace's lock. */
+    readonly held?: ReplaceHeld;
     readonly apply: boolean;
     readonly onOpened: (manifest: TenantArchiveManifest) => Promise<void>;
     readonly onStage: (stage: TenantRestoreStage) => Promise<void>;
@@ -525,8 +529,18 @@ export interface TenantRestoreRepository {
  * or a crash (the next admitted restore reconciles).
  */
 export interface TenantReplaceHooks {
-  /** An ACTIVE hosted bot stops taking work (its tenant STOPPED; the register is untouched). */
-  hold(installationTenantId: string, hostedTenantId: string): Promise<void>;
+  /**
+   * An ACTIVE hosted bot stops taking work (its tenant STOPPED; the register is untouched).
+   * Answers the register state it was held in.
+   */
+  hold(installationTenantId: string, hostedTenantId: string): Promise<string>;
+  /**
+   * The held bot's rows (count and canonical digest per table), read BEFORE its PRE_REPLACE
+   * archive. The replace's transaction compares them again under its lock and refuses
+   * (`tenant_archive.changed_during_replace`) when anything moved: a row written after the
+   * archive's snapshot is never deleted.
+   */
+  snapshot(hostedTenantId: string, state: string): Promise<ReplaceHeld>;
   /**
    * The tenant back at the status its register state holds (`HOSTED_BOT_TENANT_STATUS`); null
    * reconciles every hosted bot of the installation (a crashed replace's hold).
@@ -538,6 +552,12 @@ export interface TenantReplaceHooks {
    * `tenant_archive.pre_replace_failed` otherwise — and then nothing is replaced.
    */
   preReplace(hostedTenantId: string): Promise<string>;
+}
+
+/** What a held bot was before its PRE_REPLACE archive (`TenantReplaceHooks.snapshot`). */
+export interface ReplaceHeld {
+  readonly state: string;
+  readonly digests: Readonly<Record<string, string>>;
 }
 
 export class TenantRestoreService {
@@ -643,12 +663,15 @@ export class TenantRestoreService {
         }, BACKUP_LEASE_HEARTBEAT_MS);
         beat.unref?.();
         let held: string | null = null;
+        let heldAs: ReplaceHeld | undefined;
         try {
           if (apply && replace !== undefined && confirmedTenant !== null) {
             // ADR-0039 § 4 step 2: the rows about to be replaced, archived and VERIFIED first,
-            // with the bot held still so the archive is what the replace deletes.
+            // with the bot held still so the archive is what the replace deletes — and its rows
+            // read before the archive, so the replace can prove nothing was written since.
             held = confirmedTenant;
-            await replace.hold(input.installationTenantId, confirmedTenant);
+            const state = await replace.hold(input.installationTenantId, confirmedTenant);
+            heldAs = await replace.snapshot(confirmedTenant, state);
             const runId = await replace.preReplace(confirmedTenant);
             await this.deps.requests.setPreReplaceRun(scope, {
               id,
@@ -668,6 +691,7 @@ export class TenantRestoreService {
             ...(input.slug === undefined ? {} : { slug: input.slug }),
             mode: input.mode,
             requestId: id,
+            ...(heldAs === undefined ? {} : { held: heldAs }),
             apply,
             onOpened: async (manifest) => {
               if (apply) {

@@ -12,6 +12,7 @@ import {
   lte,
   or,
   sql,
+  type SQL,
 } from 'drizzle-orm';
 import {
   CAPACITY_BOT_LIMIT_PRESSURE_CODE,
@@ -163,10 +164,23 @@ export class DrizzleHostingRepository implements HostingRepository {
           eq(hostedBots.tenantId, requireTenantId(scope)),
           eq(hostedBots.hostedTenantId, hostedTenantId),
           inArray(hostedBots.state, [...from]),
+          // Phase 6B replace: a bot being replaced is held still; nothing re-opens it.
+          sql`NOT ${replacing(sql`${hostedBots.tenantId}`, hostedTenantId)}`,
         ),
       )
       .returning();
     return row ? toBot(row) : null;
+  }
+
+  async replaceInProgress(
+    scope: ScopeContext,
+    hostedTenantId: string,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const result = (await executorOf(this.db, tx).execute(
+      sql`SELECT ${replacing(sql`${requireTenantId(scope)}::uuid`, hostedTenantId)} AS busy`,
+    )) as unknown as { rows: { busy: boolean }[] };
+    return result.rows[0]?.busy === true;
   }
 
   async setExpiry(
@@ -525,4 +539,15 @@ export class DrizzleHostingRepository implements HostingRepository {
     );
     return row?.finishedAt ?? null;
   }
+}
+
+/**
+ * A REPLACE of `hostedTenantId` in the installation `installation` that is VERIFYING or
+ * APPLYING (its row is the installation's own: read under the installation's scope).
+ */
+function replacing(installation: SQL, hostedTenantId: string): SQL {
+  return sql`EXISTS (SELECT 1 FROM tenant_restores r
+                      WHERE r.tenant_id = ${installation}
+                        AND r.hosted_tenant_id = ${hostedTenantId}::uuid
+                        AND r.mode = 'REPLACE' AND r.state IN ('VERIFYING', 'APPLYING'))`;
 }

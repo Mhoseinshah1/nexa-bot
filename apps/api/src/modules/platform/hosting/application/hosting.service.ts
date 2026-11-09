@@ -540,6 +540,21 @@ export class HostingService {
 
   // -------------------------------------------------------------------------------------
 
+  /**
+   * Phase 6B replace: while a REPLACE of the bot is VERIFYING or APPLYING, no transition — an
+   * activation would re-open a held bot whose rows the replace is about to delete. (The
+   * replace's own transaction refuses too if the bot moved; this is the clear answer.)
+   */
+  private async refuseWhileReplacing(
+    installation: ScopeContext,
+    hostedTenantId: string,
+    tx?: unknown,
+  ): Promise<void> {
+    if (await this.deps.repository.replaceInProgress(installation, hostedTenantId, tx)) {
+      throw replaceInProgress();
+    }
+  }
+
   private async transition(
     action: Exclude<HostedBotAction, 'EXPIRE'>,
     scope: ScopeContext,
@@ -570,6 +585,7 @@ export class HostingService {
     // Before the code: a transition that cannot happen spends nothing.
     const current = await this.requireRow(installation, hostedTenantId);
     planTransition(action, current, this.deps.clock.now());
+    await this.refuseWhileReplacing(installation, hostedTenantId);
     assertTokenReenteredSinceStop(
       action,
       current,
@@ -586,6 +602,7 @@ export class HostingService {
         await this.inTransaction(installation, actor, token, tx);
         const row = await this.requireRow(installation, hostedTenantId, tx, true);
         const plan = planTransition(action, row, now);
+        await this.refuseWhileReplacing(installation, hostedTenantId, tx);
         // Again under the row lock: a token change racing this activation is decided here.
         assertTokenReenteredSinceStop(
           action,
@@ -768,6 +785,13 @@ function parseTenantId(id: string): string {
 
 function slugTaken(): Error {
   return errors.conflict(HOSTING_ERROR_CODES.SLUG_TAKEN, 'That slug is already in use.');
+}
+
+function replaceInProgress(): Error {
+  return errors.conflict(
+    HOSTING_ERROR_CODES.REPLACE_IN_PROGRESS,
+    'This bot is being replaced from an archive; its state changes once that ends.',
+  );
 }
 
 function stateMoved(action: HostedBotAction, state: string): Error {

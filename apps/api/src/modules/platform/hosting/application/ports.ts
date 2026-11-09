@@ -79,6 +79,10 @@ export interface HostingRepository {
    * THE state change: one conditional UPDATE naming its `from` states. Null when the row was
    * not in one of them (a concurrent change won); the updated row otherwise.
    */
+  /**
+   * Moves the register row from one of `from` to `to` — never while a REPLACE of the bot is
+   * VERIFYING or APPLYING (Phase 6B replace): null then, as for a state that moved.
+   */
   transition(
     scope: ScopeContext,
     hostedTenantId: string,
@@ -87,6 +91,8 @@ export interface HostingRepository {
     now: Date,
     tx: unknown,
   ): Promise<HostedBotRow | null>;
+  /** Phase 6B replace: a REPLACE request of this bot is VERIFYING or APPLYING. */
+  replaceInProgress(scope: ScopeContext, hostedTenantId: string, tx?: unknown): Promise<boolean>;
   setExpiry(
     scope: ScopeContext,
     hostedTenantId: string,

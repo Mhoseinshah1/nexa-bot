@@ -26,6 +26,10 @@ import {
   replaceTarget,
   TENANT_REPLACE_REASON,
 } from '../../../apps/api/src/modules/platform/backup/infrastructure/tenant-archive-apply';
+import {
+  replaceSnapshot,
+  type ReplaceProbe,
+} from '../../../apps/api/src/modules/platform/backup/infrastructure/tenant-archive-replace';
 import { DrizzleTenantReplaceHold } from '../../../apps/api/src/modules/platform/backup/infrastructure/tenant-replace-hold';
 import {
   TenantArchiveService,
@@ -102,6 +106,8 @@ describe('tenant archive REPLACE (Phase 6B) — the same hosted bot, on the same
   let archivePath: string;
   let archived: Record<string, string>;
   const statusDuringPreReplace: string[] = [];
+  /** Runs right after the PRE_REPLACE archive: what a race in that window would do. */
+  let afterPreReplace: (() => Promise<void>) | null = null;
 
   async function digestsOf(tenantId: string): Promise<Record<string, string>> {
     return owner.db.transaction(async (tx) => {
@@ -120,7 +126,29 @@ describe('tenant archive REPLACE (Phase 6B) — the same hosted bot, on the same
                     WHERE b.hosted_tenant_id = ${HOSTED_1}`);
   }
 
-  function service(): TenantRestoreService {
+  function engineWith(probe?: ReplaceProbe): PostgresTenantArchiveEngine {
+    return new PostgresTenantArchiveEngine({
+      app,
+      scratch: new PostgresDatabaseTools({
+        databaseUrl: testOwnerDatabaseUrl(),
+        dumpTimeoutMs: 300_000,
+        restoreTimeoutMs: 300_000,
+        migratorEntrypoint: 'unused',
+      }),
+      sevenZip: SEVEN_ZIP,
+      root,
+      cipher,
+      kdf: FAST_KDF,
+      installationTenantId: () => SEED_IDS.tenantA,
+      installationId: () => SEED_IDS.tenantA,
+      release: 'test',
+      migrationsFolder: migrationsFolder(),
+      now: () => new Date(),
+      ...(probe === undefined ? {} : { replaceProbe: probe }),
+    });
+  }
+
+  function service(on: PostgresTenantArchiveEngine = engine): TenantRestoreService {
     const preReplace = hostedPreReplaceArchive({
       policies: new DrizzleHostedBackupPolicies(app.db),
       cipher,
@@ -129,14 +157,17 @@ describe('tenant archive REPLACE (Phase 6B) — the same hosted bot, on the same
     });
     const hold = new DrizzleTenantReplaceHold(app, () => new Date());
     return new TenantRestoreService({
-      engine,
+      engine: on,
       requests: new DrizzleTenantRestoreRepository(app.db),
       replace: {
         hold: (installation, hosted) => hold.hold(installation, hosted),
         release: (installation, hosted) => hold.release(installation, hosted),
+        snapshot: (hosted, state) => replaceSnapshot(app, hosted, state, cipher),
         preReplace: async (hosted) => {
           statusDuringPreReplace.push((await bot()).status);
-          return preReplace(hosted);
+          const runId = await preReplace(hosted);
+          if (afterPreReplace !== null) await afterPreReplace();
+          return runId;
         },
       },
       heavyJobs: passthrough,
@@ -147,8 +178,11 @@ describe('tenant archive REPLACE (Phase 6B) — the same hosted bot, on the same
     });
   }
 
-  async function dryThenApply(path: string): Promise<{ requestId: string }> {
-    const restores = service();
+  async function dryThenApply(
+    path: string,
+    on: PostgresTenantArchiveEngine = engine,
+  ): Promise<{ requestId: string }> {
+    const restores = service(on);
     const dry = await restores.restore({
       installationTenantId: SEED_IDS.tenantA,
       actorAdminId: actor,
@@ -182,24 +216,7 @@ describe('tenant archive REPLACE (Phase 6B) — the same hosted bot, on the same
     owner = createDatabase(testOwnerDatabaseUrl(), 2);
     expect(await app.scopeEnforcement()).toBe('enforcing');
     root = await mkdtemp(join(tmpdir(), 'nexa-treplace-'));
-    engine = new PostgresTenantArchiveEngine({
-      app,
-      scratch: new PostgresDatabaseTools({
-        databaseUrl: testOwnerDatabaseUrl(),
-        dumpTimeoutMs: 300_000,
-        restoreTimeoutMs: 300_000,
-        migratorEntrypoint: 'unused',
-      }),
-      sevenZip: SEVEN_ZIP,
-      root,
-      cipher,
-      kdf: FAST_KDF,
-      installationTenantId: () => SEED_IDS.tenantA,
-      installationId: () => SEED_IDS.tenantA,
-      release: 'test',
-      migrationsFolder: migrationsFolder(),
-      now: () => new Date(),
-    });
+    engine = engineWith();
     archives = new TenantArchiveService({
       runs: new DrizzleBackupRunRepository(world.api.container.database.db),
       engine,
@@ -297,6 +314,90 @@ describe('tenant archive REPLACE (Phase 6B) — the same hosted bot, on the same
     }
     expect(await digestsOf(HOSTED_1)).toEqual(before);
     // The hold was released: the bot is ACTIVE again.
+    expect(await bot()).toEqual({ state: 'ACTIVE', status: 'ACTIVE' });
+  }, 600_000);
+
+  it('a row written after the PRE_REPLACE snapshot makes the replace refuse, and the row stays', async () => {
+    // The race the hold closes from the panel, opened here by hand: a write reaches the bot
+    // between its PRE_REPLACE archive and the replace's transaction.
+    const marker = 'zq-written-in-the-window';
+    afterPreReplace = () => changeAfterArchive(marker);
+    let requestId = '';
+    try {
+      await expect(
+        dryThenApply(archivePath).catch((error: unknown) => {
+          requestId = (error as { requestId?: string }).requestId ?? '';
+          throw error;
+        }),
+      ).rejects.toMatchObject({ code: TENANT_ARCHIVE_ERROR_CODES.CHANGED_DURING_REPLACE });
+    } finally {
+      afterPreReplace = null;
+    }
+    // Nothing was deleted: the rows written in the window are still there.
+    expect(
+      (
+        await one<{ n: number }>(sql`SELECT
+          (SELECT count(*)::int FROM audit_logs WHERE tenant_id = ${HOSTED_1} AND action = ${marker})
+          + (SELECT count(*)::int FROM customers WHERE tenant_id = ${HOSTED_1} AND first_name = ${marker})
+          AS n`)
+      ).n,
+    ).toBe(2);
+    expect(
+      (await one<{ state: string }>(sql`SELECT state FROM tenant_restores WHERE id = ${requestId}`))
+        .state,
+    ).toBe('FAILED');
+    expect(await bot()).toEqual({ state: 'ACTIVE', status: 'ACTIVE' });
+  }, 600_000);
+
+  it('a row a concurrent writer commits between the comparison and the DELETE makes the replace refuse, and stays', async () => {
+    // Inside the replace's own transaction, after it compared the bot under lock: a second
+    // connection commits an append-only row of the bot (audit_logs has no foreign key to the
+    // tenant, so the tenant row's lock does not hold it back). The DELETE would take it too —
+    // so the replace must refuse and roll back.
+    const marker = 'zq-concurrent-writer';
+    const writer = new Client({ connectionString: testOwnerDatabaseUrl() });
+    await writer.connect();
+    const probed = engineWith({
+      afterCompare: async () => {
+        await writer.query(
+          `INSERT INTO audit_logs (id, tenant_id, occurred_at, actor_type, action, entity_type,
+                                   correlation_id, source_surface, result)
+           VALUES ($1, $2, now(), 'SYSTEM_JOB', $3, 'Tenant', 'c', 'WORKER', 'SUCCESS')`,
+          [uuidv7Like(), HOSTED_1, marker],
+        );
+      },
+    });
+    try {
+      await expect(dryThenApply(archivePath, probed)).rejects.toMatchObject({
+        code: TENANT_ARCHIVE_ERROR_CODES.CHANGED_DURING_REPLACE,
+      });
+    } finally {
+      await writer.end();
+    }
+    expect(
+      (
+        await one<{ n: number }>(
+          sql`SELECT count(*)::int AS n FROM audit_logs WHERE tenant_id = ${HOSTED_1} AND action = ${marker}`,
+        )
+      ).n,
+    ).toBe(1);
+    expect(await bot()).toEqual({ state: 'ACTIVE', status: 'ACTIVE' });
+  }, 600_000);
+
+  it('a bot re-opened while it is held makes the replace refuse', async () => {
+    // As an activation racing the hold would: the tenant is ACTIVE again before the lock.
+    afterPreReplace = async () => {
+      await owner.db.execute(sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${HOSTED_1}`);
+    };
+    const before = await digestsOf(HOSTED_1);
+    try {
+      await expect(dryThenApply(archivePath)).rejects.toMatchObject({
+        code: TENANT_ARCHIVE_ERROR_CODES.CHANGED_DURING_REPLACE,
+      });
+    } finally {
+      afterPreReplace = null;
+    }
+    expect(await digestsOf(HOSTED_1)).toEqual(before);
     expect(await bot()).toEqual({ state: 'ACTIVE', status: 'ACTIVE' });
   }, 600_000);
 

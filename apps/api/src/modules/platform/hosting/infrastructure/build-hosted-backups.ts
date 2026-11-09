@@ -30,6 +30,7 @@ import type { SevenZipOptions } from '../../backup/infrastructure/seven-zip.js';
 import { DrizzleTenantRestoreRepository } from '../../backup/infrastructure/drizzle-tenant-restore.repository.js';
 import { DrizzleHostedArchiveRuns } from '../../backup/infrastructure/drizzle-hosted-archive-runs.js';
 import { DrizzleTenantReplaceHold } from '../../backup/infrastructure/tenant-replace-hold.js';
+import { replaceSnapshot } from '../../backup/infrastructure/tenant-archive-replace.js';
 import { HostedBackupService } from '../application/hosted-backup.service.js';
 import { HOSTED_BACKUP_TICK_MS, HostedBackupLoop } from '../application/hosted-backup-loop.js';
 import type { HostingSectionService } from '../application/hosting-section.service.js';
@@ -149,6 +150,8 @@ export function buildHostedBackups(deps: {
         hold.hold(installationTenantId, hostedTenantId),
       release: (installationTenantId, hostedTenantId) =>
         hold.release(installationTenantId, hostedTenantId),
+      snapshot: (hostedTenantId, state) =>
+        replaceSnapshot(deps.database, hostedTenantId, state, deps.cipher),
       preReplace: hostedPreReplaceArchive({
         policies,
         cipher: deps.cipher,

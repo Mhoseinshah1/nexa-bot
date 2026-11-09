@@ -8,9 +8,11 @@ import {
 } from '@nexa/contracts';
 import type { DatabaseHandle } from '../../../../infrastructure/persistence/database.js';
 import {
+  withDatabaseScope,
   withSystemScope,
   withTenantScopeIn,
 } from '../../../../infrastructure/persistence/database-scope.js';
+import { canonicalDigests, tenantCounts } from './tenant-archive-restore.js';
 import {
   TENANT_KEYED_OTHERWISE,
   tenantArchiveClassOf,
@@ -22,6 +24,7 @@ import {
   rowsOf,
   tenantLoadOrder,
   type SqlExecutor,
+  type TableShape,
 } from './tenant-archive-copy.js';
 import {
   compareWithScratch,
@@ -113,6 +116,10 @@ export async function applyReplace(input: {
   readonly manifest: TenantArchiveManifest;
   readonly installationTenantId: string;
   readonly requestId: string;
+  /** What the bot was when it was held, before its PRE_REPLACE archive (`replaceSnapshot`). */
+  readonly held: ReplaceSnapshot;
+  /** Tests only: runs between the comparison under lock and the first DELETE. */
+  readonly probe?: ReplaceProbe;
   readonly now: Date;
   readonly archiveCipher: SecretCipher;
   readonly targetCipher: SecretCipher;
@@ -138,9 +145,9 @@ export async function applyReplace(input: {
       if (tenantShape === undefined) throw new Error('the live database has no tenants table');
 
       // 1. The bot holds still: its tenant row and its register row, locked to the end.
-      const [target] = await rowsOf<{ state: string; owner_admin_id: string }>(
+      const [target] = await rowsOf<{ state: string; status: string; owner_admin_id: string }>(
         tx,
-        sql`SELECT b.state, b.owner_admin_id::text AS owner_admin_id
+        sql`SELECT b.state, t.status, b.owner_admin_id::text AS owner_admin_id
               FROM tenants t
               JOIN hosted_bots b ON b.hosted_tenant_id = t.id
                                 AND b.tenant_id = ${input.installationTenantId}::uuid
@@ -156,6 +163,33 @@ export async function applyReplace(input: {
       }
       if (target.state === 'PURGED') {
         throw refuse(TENANT_ARCHIVE_ERROR_CODES.PURGED, 'A purged hosted bot is closed for good.');
+      }
+      // Nothing of the bot moved since it was held: the same register state, still held, and
+      // not one row changed after the snapshot taken before its PRE_REPLACE archive. Otherwise a
+      // row written in between (an order, a payment, a ledger entry) would be deleted with no
+      // trace: refuse, delete nothing; the owner runs the replace again.
+      if (target.state !== input.held.state || target.status !== heldStatus(input.held.state)) {
+        throw refuse(
+          TENANT_ARCHIVE_ERROR_CODES.CHANGED_DURING_REPLACE,
+          'The hosted bot changed state while it was being replaced; nothing was replaced.',
+          { state: target.state, status: target.status },
+        );
+      }
+      // Read LOCKING every row compared (`FOR UPDATE`): none of them can change or go before
+      // this transaction ends. A row INSERTED by a concurrent writer is caught below — by the
+      // count each DELETE reports, and by the bot's tables being empty after them.
+      const current = await withTenantScopeIn(tx, tenantScope, () =>
+        snapshotDigests(tx, liveCatalogue, liveOrder, tenantId, input.targetCipher, true),
+      );
+      const moved = [...new Set([...Object.keys(current), ...Object.keys(input.held.digests)])]
+        .filter((table) => current[table] !== input.held.digests[table])
+        .sort();
+      if (moved.length > 0) {
+        throw refuse(
+          TENANT_ARCHIVE_ERROR_CODES.CHANGED_DURING_REPLACE,
+          'The hosted bot’s rows changed after its PRE_REPLACE archive; nothing was replaced.',
+          { tables: moved },
+        );
       }
 
       // 2. The allowance, for this transaction only.
@@ -181,15 +215,26 @@ export async function applyReplace(input: {
       // at commit.
       await tx.execute(sql`SET CONSTRAINTS hosted_bots_owner_admin_fk DEFERRED`);
 
-      // 3. The old rows, children first.
+      await input.probe?.afterCompare?.();
+
+      // 3. The old rows, children first. Each DELETE must remove exactly the rows compared: one
+      // more is a row a concurrent writer committed after the comparison — refuse, so the whole
+      // transaction rolls back and that row stays.
       const guarded = await deleteGuardedTables(tx);
       const deleteIn = async (table: string): Promise<void> => {
         const statement = sql`DELETE FROM ${ident(table)} WHERE ${predicateFor(table, tenantId)}`;
-        if (guarded.has(table)) {
-          // The system path, under the replace's reason: the guard admits only this tenant.
-          await tx.execute(statement);
-        } else {
-          await withTenantScopeIn(tx, tenantScope, () => tx.execute(statement));
+        const result = (
+          guarded.has(table)
+            ? // The system path, under the replace's reason: the guard admits only this tenant.
+              await tx.execute(statement)
+            : await withTenantScopeIn(tx, tenantScope, () => tx.execute(statement))
+        ) as { rowCount?: number | null };
+        if ((result.rowCount ?? 0) !== snapshotCount(input.held.digests[table])) {
+          throw refuse(
+            TENANT_ARCHIVE_ERROR_CODES.CHANGED_DURING_REPLACE,
+            'A row of the hosted bot was written while it was being replaced; nothing was replaced.',
+            { table },
+          );
         }
       };
       for (const table of await neverTablesBoundToTenantRows(tx)) {
@@ -198,6 +243,24 @@ export async function applyReplace(input: {
         );
       }
       for (const table of replaceDeleteOrder(liveOrder)) await deleteIn(table);
+      // And nothing of the bot is left: a row a writer committed after its table's DELETE
+      // would otherwise sit beside the archive's.
+      const left = await withTenantScopeIn(tx, tenantScope, () =>
+        tenantCounts(
+          tx,
+          liveCatalogue,
+          liveOrder.filter((table) => table !== 'tenants'),
+          tenantId,
+        ),
+      );
+      const remaining = Object.keys(left).filter((table) => (left[table] ?? 0) > 0);
+      if (remaining.length > 0) {
+        throw refuse(
+          TENANT_ARCHIVE_ERROR_CODES.CHANGED_DURING_REPLACE,
+          'A row of the hosted bot was written while it was being replaced; nothing was replaced.',
+          { tables: remaining.sort() },
+        );
+      }
       // The host's unspent «ورود به پنل» tokens for this bot end with it: one minted before the
       // replace would open a session over rows that are no longer the ones it was minted for.
       // (Its entered sessions are `admin_sessions`, deleted above with every other session.)
@@ -291,6 +354,76 @@ export async function applyReplace(input: {
       return counts;
     }),
   );
+}
+
+/** A test's hook into the replace's transaction (a concurrent writer's moment). */
+export interface ReplaceProbe {
+  readonly afterCompare?: () => Promise<void>;
+}
+
+/** What a held bot was, read before its PRE_REPLACE archive. */
+export interface ReplaceSnapshot {
+  /** The register state when it was held. */
+  readonly state: string;
+  /** Count and canonical digest of every TENANT table but `tenants`. */
+  readonly digests: Readonly<Record<string, string>>;
+}
+
+/** The status a held bot's tenant has: STOPPED for one held from ACTIVE, else its mapping. */
+export function heldStatus(state: string): string {
+  if (state === 'ACTIVE') return 'STOPPED';
+  const status = (HOSTED_BOT_TENANT_STATUS as Readonly<Record<string, string>>)[state];
+  if (status === undefined) throw new Error(`unknown hosted bot state ${state}`);
+  return status;
+}
+
+async function snapshotDigests(
+  executor: SqlExecutor,
+  catalogue: ReadonlyMap<string, TableShape>,
+  order: readonly string[],
+  tenantId: string,
+  cipher: SecretCipher,
+  lockRows = false,
+): Promise<Record<string, string>> {
+  return canonicalDigests(
+    executor,
+    catalogue,
+    order.filter((table) => table !== 'tenants'),
+    tenantId,
+    cipher,
+    { ignoreRelayMarks: true, lockRows },
+  );
+}
+
+/** The row count a snapshot digest (`<rows>:<sha256>`) records. */
+function snapshotCount(digest: string | undefined): number {
+  return digest === undefined ? 0 : Number(digest.slice(0, digest.indexOf(':')));
+}
+
+/**
+ * The held bot's rows, as the replace's transaction will compare them: read bound to the
+ * tenant (row-level security), in one repeatable-read snapshot, secrets compared by plaintext.
+ */
+export async function replaceSnapshot(
+  app: DatabaseHandle,
+  tenantId: string,
+  state: string,
+  cipher: SecretCipher,
+): Promise<ReplaceSnapshot> {
+  const digests = await withDatabaseScope(
+    { tenantId: tenantId as never, botInstanceId: null },
+    () =>
+      app.db.transaction(
+        async (tx) => {
+          await pinSession(tx);
+          const catalogue = await readCatalogue(tx);
+          const order = await tenantLoadOrder(tx, catalogue);
+          return snapshotDigests(tx, catalogue, order, tenantId, cipher);
+        },
+        { isolationLevel: 'repeatable read', accessMode: 'read only' },
+      ),
+  );
+  return { state, digests };
 }
 
 /** The tenant status a register state holds its tenant at, as a literal (a closed enum). */

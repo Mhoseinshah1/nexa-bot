@@ -946,8 +946,30 @@ INITIALLY IMMEDIATE`); deletes the tenant's NEVER rows that reference its rows (
   failure the service releases the hold; after a crash the next admitted restore reconciles
   every hosted tenant of the installation to its register's status (only the hosting system
   path writes a hosted tenant's status, always to that mapping, so this undoes no decision).
-  The owner's own activate/suspend during the minutes of a replace is not refused; the
-  apply's final status follows the register as it is then.
+- **The window cannot lose a row** (lead review of #454, Codex P1). Two locks, either enough
+  alone:
+  - the hold answers the register state it held, and a **snapshot** of the bot is read right
+    after the hold and BEFORE the PRE_REPLACE archive: count and canonical digest of every
+    TENANT table (secrets by plaintext; the outbox's relay bookkeeping left out, a held bot's
+    messages may still be relayed). The replace's transaction, under its `FOR UPDATE` lock of
+    the tenant and register rows, requires the same register state, the held status, and the
+    same snapshot; anything else is `tenant_archive.changed_during_replace` and NOTHING is
+    deleted — a row written after the archive's snapshot is never lost. Inside that
+    transaction (READ COMMITTED) the comparison reads every row `FOR UPDATE`, so no compared
+    row can change or go before it ends; a row INSERTED meanwhile is caught by the count each
+    `DELETE` must report (exactly the compared rows, else the same refusal and a rollback) and
+    by the bot's tables being empty after the deletes. Most tables also cannot take such an
+    insert at all: their foreign key to `tenants` needs a KEY SHARE lock the replace's
+    `FOR UPDATE` of the tenant row refuses until it ends; the rest (`audit_logs`,
+    `operational_events`, `outbox_messages`, `request_idempotency`, and the two keyed through
+    the outbox) are covered by the counts. A higher isolation level was not used: SSI detects
+    nothing against a READ COMMITTED writer, and REPEATABLE READ would hide a concurrent
+    insert from the very DELETE that must see it. A PRE_REPLACE archive
+    is never delivered to the bot's group (delivery would write into the bot being compared);
+  - while a REPLACE of a bot is `VERIFYING` or `APPLYING`, no hosting transition moves it:
+    suspend, activate, delete and purge answer `hosting.replace_in_progress` (before the code
+    and again in the transaction), and the register `UPDATE` itself refuses, so the expiry
+    sweep leaves it too. Setting an expiry date is not a transition and stays allowed.
 - **The allowance (§ 10), as built** (migration `0337`). `nexa_tenant_rewrite_allowed(uuid)`:
   `SECURITY DEFINER`, owned by the migration owner, `search_path = pg_catalog`, `EXECUTE`
   revoked from PUBLIC (and from nexa_app, re-asserted with the role grants after a `--no-acl`
@@ -976,15 +998,15 @@ INITIALLY IMMEDIATE`); deletes the tenant's NEVER rows that reference its rows (
   session gone, PRE_REPLACE verified, the allowance dead after commit), fails a forged archive
   mid-transaction with every old row intact, replaces a `DELETED` bot, and refuses no password,
   `PURGED` and a foreign bot. Mutation checks: `scripts/claude/tenant-archive-mutation.sh`
-  (six source, seven SQL).
+  (twelve source, six SQL).
 - **UI.** Each verified archive row in the bot's backups offers «بازیابی روی همین سرور» (fresh
   code and the archive's password: a later password change does not reopen older archives),
   which leaves a VERIFIED replace in «بازیابی ربات از فایل»; that page's dry run has
   «جایگزینی ربات موجود», shows each request's mode and PRE_REPLACE archive, and confirms a
   replace with its own warning. The owner's log records the dry run and the confirmation
   (with the mode and the bot); the hosted tenant's audit log receives nothing of it (D5).
-- **Contract.** `tenant_archive.replace_unavailable` is removed; `.replace_target_missing` and
-  `.pre_replace_failed` added; the dry run's `mode`, the view's `mode`/`preReplaceRunId`, the
+- **Contract.** `tenant_archive.replace_unavailable` is removed; `.replace_target_missing`,
+  `.pre_replace_failed`, `.changed_during_replace` and `hosting.replace_in_progress` added; the dry run's `mode`, the view's `mode`/`preReplaceRunId`, the
   `restoreHere` route; system-path reasons `tenant archive: replace a hosted tenant's rows`,
   `…: the hosted bot a replace writes over`, `…: hold a hosted bot still for its replace`,
   `…: return a hosted bot to its register status` (pinned).

@@ -75,6 +75,12 @@ MUTATIONS=(
   # Every migration run re-asserts the grants (a --no-acl restore loses them): the lookup's
   # EXECUTE must stay the system path's alone there too.
   "allowed-grant-app|apps/api/src/infrastructure/persistence/row-level-security.ts|s/    REVOKE ALL ON FUNCTION nexa_tenant_rewrite_allowed\\(uuid\\) FROM \\$\\{APP_ROLE\\};\\n    GRANT EXECUTE ON FUNCTION nexa_tenant_rewrite_allowed\\(uuid\\) TO \\$\\{SYSTEM_ROLE\\};/    GRANT EXECUTE ON FUNCTION nexa_tenant_rewrite_allowed(uuid) TO \\\${APP_ROLE}, \\\${SYSTEM_ROLE};/|$ALLOWANCE_SUITE"
+  # The lead's review of #454 (and Codex P1): the replace window cannot lose a row.
+  "replace-changed-rows|$B/infrastructure/tenant-archive-replace.ts|s/if \\(moved.length > 0\\) \\{/if (false) {/|$REPLACE_SUITE"
+  "replace-changed-state|$B/infrastructure/tenant-archive-replace.ts|s/if \\(target.state !== input.held.state \\x7c\\x7c target.status !== heldStatus\\(input.held.state\\)\\)/if (false)/|$REPLACE_SUITE"
+  "replace-delete-count|$B/infrastructure/tenant-archive-replace.ts|s/if \\(\\(result.rowCount \\?\\? 0\\) !== snapshotCount\\(input.held.digests\\[table\\]\\)\\)/if (false)/|$REPLACE_SUITE"
+  "hosting-replace-refusal|apps/api/src/modules/platform/hosting/application/hosting.service.ts|s/if \\(await this.deps.repository.replaceInProgress\\(installation, hostedTenantId, tx\\)\\)/if (false)/|tests/integration/hosting-panel.test.ts"
+  "hosting-transition-guard|apps/api/src/modules/platform/hosting/infrastructure/drizzle-hosting.repository.ts|s/          sql\\x60NOT \\$\\{replacing\\(sql\\x60\\$\\{hostedBots.tenantId\\}\\x60, hostedTenantId\\)\\}\\x60,\\n//|tests/integration/hosting-panel.test.ts"
   "replace-apply-mode|apps/api/src/modules/platform/hosting/application/tenant-restore-admin.service.ts|s/mode: row.mode === 'REPLACE' \\? 'REPLACE' : 'NEW',/mode: 'NEW',/|tests/unit/hosted-backups.test.ts"
 )
 

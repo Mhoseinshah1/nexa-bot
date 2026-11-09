@@ -24,7 +24,7 @@ import type {
   TenantRestoreSummary,
 } from '../application/tenant-archive.service.js';
 import { applyRestore, preflightRestore } from './tenant-archive-apply.js';
-import { applyReplace } from './tenant-archive-replace.js';
+import { applyReplace, type ReplaceProbe } from './tenant-archive-replace.js';
 import { exportTenant, type TenantExportInput } from './tenant-archive-export.js';
 import {
   compareArchiveHead,
@@ -78,6 +78,8 @@ export interface TenantArchiveEngineDeps {
    */
   readonly maxExtractedBytes?: number;
   readonly headroomBytes?: number;
+  /** Tests only: a hook into the replace's transaction (`ReplaceProbe`). */
+  readonly replaceProbe?: ReplaceProbe;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -322,6 +324,7 @@ export class PostgresTenantArchiveEngine implements TenantArchiveEngine, TenantR
     readonly slug?: string;
     readonly mode?: TenantRestoreMode;
     readonly requestId?: string;
+    readonly held?: { readonly state: string; readonly digests: Readonly<Record<string, string>> };
     readonly apply: boolean;
     readonly onOpened: (manifest: TenantArchiveManifest) => Promise<void>;
     readonly onStage: (stage: TenantRestoreStage) => Promise<void>;
@@ -401,11 +404,11 @@ export class PostgresTenantArchiveEngine implements TenantArchiveEngine, TenantR
         if (!input.apply) return summary;
         await input.onStage('APPLY');
         if (input.mode === 'REPLACE') {
-          if (input.requestId === undefined) {
+          if (input.requestId === undefined || input.held === undefined) {
             throw new NexaError({
               kind: 'INTERNAL',
               code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
-              message: 'A replace is applied only under its own request row.',
+              message: 'A replace is applied only under its own request row, of a held bot.',
             });
           }
           const replaced = await applyReplace({
@@ -414,6 +417,8 @@ export class PostgresTenantArchiveEngine implements TenantArchiveEngine, TenantR
             manifest: opened.manifest,
             installationTenantId: input.installationTenantId,
             requestId: input.requestId,
+            held: input.held,
+            ...(this.deps.replaceProbe === undefined ? {} : { probe: this.deps.replaceProbe }),
             now: this.deps.now(),
             archiveCipher: opened.cipher,
             targetCipher: this.deps.cipher,
