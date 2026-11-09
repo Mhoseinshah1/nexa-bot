@@ -36,6 +36,7 @@ import {
   type GatewayConfigurationGap,
   type GatewayConversionSpec,
 } from '@nexa/contracts';
+import { refuseImpersonatedSecretWrite } from '../../../platform/identity/application/impersonation.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
   recordMutationDenial,
@@ -451,6 +452,8 @@ export class PaymentGatewayService {
       readonly secret: string;
     },
   ): Promise<PaymentGatewayRecord> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'payment_gateway.webhook_secret');
     const provider = this.provider(input.provider);
     const denial = {
       action: 'payment_gateway.set_webhook_secret',
@@ -526,6 +529,8 @@ export class PaymentGatewayService {
       readonly verifyKey: string;
     },
   ): Promise<PaymentGatewayRecord> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'payment_gateway.verify_key');
     const provider = this.provider(input.provider);
     const denial = {
       action: 'payment_gateway.set_verify_key',
@@ -827,6 +832,8 @@ export class PaymentGatewayService {
       readonly apiKey: string;
     },
   ): Promise<PaymentGatewayRecord> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'payment_gateway.api_key');
     const provider = this.provider(input.provider);
     const denial = {
       action: 'payment_gateway.set_credential',

@@ -160,6 +160,31 @@ export class AuthController {
     };
   }
 
+  /**
+   * Phase 6B «ورود به پنل» (ADR-0039 § 9 refinement 2): the hosted domain's `/enter` page posts
+   * the token from its address's fragment. The tenant is the one this request's Host resolves
+   * to — never the body — and the token must be for exactly that tenant and host. Answered like
+   * a sign-in: the session cookie on THIS domain, the body without the token.
+   */
+  @Post('enter')
+  async enter(
+    @Req() request: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+    @Body() body: unknown,
+  ): Promise<{ expiresAt: string }> {
+    await assertOriginOrHostedDomain(this.container, request);
+    void reply.header('cache-control', 'no-store');
+    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
+    const context = this.loginContext(request);
+    const opened = await this.container.hostingEnter.redeem(
+      request.hostname,
+      { correlationId, ip: context.ip, userAgent: context.userAgent },
+      body,
+    );
+    this.setSessionCookie(reply, opened.token, opened.expiresAt);
+    return { expiresAt: opened.expiresAt.toISOString() };
+  }
+
   @Get('session')
   async session(@Req() request: FastifyRequest): Promise<SessionResponse> {
     const described = await this.container.auth.describeSession(
@@ -171,6 +196,11 @@ export class AuthController {
       // an authorization decision: every endpoint re-checks server-side.
       permissions: this.shownPermissions(described),
       expiresAt: described.session.expiresAt.toISOString(),
+      // Phase 6B: the banner «در حال مشاهده به‌عنوان میزبان» and «خروج».
+      impersonation:
+        described.impersonation === null
+          ? null
+          : { ownerUsername: described.impersonation.ownerLabel },
     };
   }
 
@@ -182,13 +212,14 @@ export class AuthController {
     const token = requireSessionToken(request, this.isProduction);
     await assertOriginOrHostedDomain(this.container, request);
 
-    const { admin, session } = await this.container.auth.authenticate(token);
+    const { admin, session, impersonation } = await this.container.auth.authenticate(token);
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
     const scope: TenantContext = { tenantId: admin.tenantId, botInstanceId: null };
 
+    // An entered session's «خروج» is this same logout; its record goes to the owner's log.
     await this.container.auth.logout(
       scope,
-      adminActor(admin, correlationId, request, session.id),
+      adminActor(admin, correlationId, request, session.id, impersonation),
       session.id,
     );
     this.clearSessionCookie(reply);
@@ -204,13 +235,13 @@ export class AuthController {
     const token = requireSessionToken(request, this.isProduction);
     await assertOriginOrHostedDomain(this.container, request);
 
-    const { admin, session } = await this.container.auth.authenticate(token);
+    const { admin, session, impersonation } = await this.container.auth.authenticate(token);
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
     const scope: TenantContext = { tenantId: admin.tenantId, botInstanceId: null };
 
     await this.container.adminManagement.changeOwnPassword(
       scope,
-      adminActor(admin, correlationId, request, session.id),
+      adminActor(admin, correlationId, request, session.id, impersonation),
       body,
       {
         // The same subject login throttles by, resolved the same way: null when
@@ -342,6 +373,7 @@ export function toSummary(
     username: string;
     displayName: string;
     status: string;
+    kind?: string;
     telegramUserId: string | null;
     createdAt: Date;
     lastLoginAt: Date | null;
@@ -353,6 +385,7 @@ export function toSummary(
     username: admin.username,
     displayName: admin.displayName,
     status: admin.status as AdminSummary['status'],
+    kind: (admin.kind ?? 'OPERATOR') as NonNullable<AdminSummary['kind']>,
     telegramUserId: admin.telegramUserId,
     roleKeys: [...roleKeys],
     createdAt: admin.createdAt.toISOString(),

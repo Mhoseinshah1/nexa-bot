@@ -35,6 +35,7 @@ import {
   deriveCapabilityRegistry,
   validateUsernamePolicy as decideUsernamePolicy,
 } from '@nexa/contracts';
+import { refuseImpersonatedSecretWrite } from '../../identity/application/impersonation.js';
 import type { PanelActivation, PanelSellability } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import {
@@ -794,6 +795,10 @@ export class PanelService {
     actor: ActorContext,
     input: unknown,
   ): Promise<{ view: PanelWithCapacity; replayed: boolean }> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'panel.username');
+    refuseImpersonatedSecretWrite(actor, 'panel.password');
+    refuseImpersonatedSecretWrite(actor, 'panel.api_token');
     const tenant = this.tenant(scope);
     /*
      * AUTHORIZE, then parse. The order is the audit trail.
@@ -1461,6 +1466,10 @@ export class PanelService {
     panelId: string,
     input: unknown,
   ): Promise<PanelWithCapacity> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'panel.username');
+    refuseImpersonatedSecretWrite(actor, 'panel.password');
+    refuseImpersonatedSecretWrite(actor, 'panel.api_token');
     const tenant = this.tenant(scope);
     // Authorize, then parse — see `create`. This is the CRITICAL permission in
     // this module, and it was the one a malformed body could probe silently.

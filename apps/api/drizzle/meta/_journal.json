@@ -2343,8 +2343,15 @@
     {
       "idx": 334,
       "version": "7",
-      "when": 1794251945642,
-      "tag": "0334_recovery_move_source",
+      "when": 1794251534027,
+      "tag": "0334_hosting_enter",
+      "breakpoints": true
+    },
+    {
+      "idx": 335,
+      "version": "7",
+      "when": 1794251539116,
+      "tag": "0335_host_admin_guard",
       "breakpoints": true
     }
   ]

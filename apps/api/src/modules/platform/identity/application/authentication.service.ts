@@ -10,6 +10,7 @@ import {
   type SecondFactorMethod,
   type SecretCipher,
   type ActorContext,
+  type ActorImpersonation,
   type Admin,
   type AdminId,
   type AdminSession,
@@ -33,6 +34,7 @@ import type {
   LoginThrottleRepository,
   RoleRepository,
   SecondFactorRepository,
+  SessionImpersonationMark,
   SessionRepository,
 } from './ports.js';
 import {
@@ -83,9 +85,27 @@ export interface LoginContext {
   readonly userAgent: string | null;
 }
 
+/**
+ * Phase 6B «ورود به پنل»: who is behind an entered session, asked on EVERY request (ADR-0039
+ * § 9 refinement 4). Null when its «میزبانی‌ها» section session was closed, replaced or ran
+ * out, or the owner's own Web Admin session ended — the entered session then ends too.
+ */
+export interface EnteredSessionLiveness {
+  ownerOf(mark: SessionImpersonationMark, now: Date): Promise<ActorImpersonation | null>;
+}
+
+/** A resolved session: the admin, the session, and — for an entered one — its owner. */
+export interface ResolvedSession {
+  readonly admin: Admin;
+  readonly session: AdminSession;
+  readonly impersonation: ActorImpersonation | null;
+}
+
 export interface AuthenticatedAdmin {
   readonly admin: Admin;
   readonly session: AdminSession;
+  /** Phase 6B: set for an entered session (the banner and the owner's audit path). */
+  readonly impersonation: ActorImpersonation | null;
   readonly permissions: readonly PermissionKey[];
   readonly roleKeys: readonly string[];
 }
@@ -160,6 +180,11 @@ export class AuthenticationService {
      * session. Null in a graph that has no operations projection (some tests).
      */
     private readonly ownerAlerts: OwnerLoginAlerts | null = null,
+    /**
+     * Phase 6B: the liveness of entered sessions. Null (a graph without hosting): every entered
+     * session is refused — deny by default.
+     */
+    private readonly entered: EnteredSessionLiveness | null = null,
   ) {}
 
   /**
@@ -172,7 +197,11 @@ export class AuthenticationService {
    * a surface computing a concept differently from the layer that enforces it
    * is exactly the divergence this codebase is built to avoid.
    */
-  private async displayPermissions(admin: Admin, tx?: unknown): Promise<readonly PermissionKey[]> {
+  private async displayPermissions(
+    admin: Admin,
+    tx?: unknown,
+    impersonation: ActorImpersonation | null = null,
+  ): Promise<readonly PermissionKey[]> {
     const scope: TenantContext = { tenantId: admin.tenantId, botInstanceId: null };
     const actor: ActorContext = {
       type: 'WEB_ADMIN',
@@ -180,6 +209,8 @@ export class AuthenticationService {
       label: admin.username,
       surface: 'WEB',
       correlationId: 'display-permissions' as never,
+      // The entered session's chrome is decided by the same rule as its checks.
+      ...(impersonation === null ? {} : { impersonation }),
     };
     return [...(await this.permissions.permissionsOf(scope, actor, tx))].sort();
   }
@@ -912,7 +943,7 @@ export class AuthenticationService {
    * Called on every authenticated request. An expired, revoked or unknown token
    * and a disabled admin all produce the same UNAUTHENTICATED failure.
    */
-  async authenticate(token: string): Promise<{ session: AdminSession; admin: Admin }> {
+  async authenticate(token: string): Promise<ResolvedSession> {
     const session = await this.sessions.findByTokenHash(hashSessionToken(token));
     const now = this.clock.now();
 
@@ -940,6 +971,25 @@ export class AuthenticationService {
       );
     }
 
+    // Phase 6B «ورود به پنل»: an entered session lives exactly as long as the owner's
+    // «میزبانی‌ها» section session and his own Web Admin session, re-checked on EVERY request.
+    // A HOST principal holds no other kind of session, and an entered mark on an operator's
+    // session is not believed: both end the session on the spot.
+    let impersonation: ActorImpersonation | null = null;
+    if (session.impersonation !== null || admin.kind === 'HOST') {
+      impersonation =
+        session.impersonation === null || admin.kind !== 'HOST' || this.entered === null
+          ? null
+          : await this.entered.ownerOf(session.impersonation, now);
+      if (impersonation === null) {
+        await this.sessions.revoke(session.id, now, 'entered_session_ended');
+        throw errors.unauthenticated(
+          IDENTITY_ERROR_CODES.AUTH_SESSION_INVALID,
+          'The session is not valid. Sign in again.',
+        );
+      }
+    }
+
     // A tenant that is stopped or disabled ends existing access too, not only
     // new logins — otherwise stopping an installation leaves every session
     // already open still able to mutate it until expiry. NOT revoked, unlike a
@@ -958,7 +1008,7 @@ export class AuthenticationService {
     }
 
     await this.sessions.touch(session.id, now);
-    return { session, admin };
+    return { session, admin, impersonation };
   }
 
   /**
@@ -971,15 +1021,15 @@ export class AuthenticationService {
    * re-checks server-side; a UI that hides a button has authorized nothing.
    */
   async describeSession(token: string): Promise<AuthenticatedAdmin> {
-    const { admin, session } = await this.authenticate(token);
+    const { admin, session, impersonation } = await this.authenticate(token);
     const scope: TenantContext = { tenantId: admin.tenantId, botInstanceId: null };
 
     const [permissions, roleKeys] = await Promise.all([
-      this.displayPermissions(admin),
+      this.displayPermissions(admin, undefined, impersonation),
       this.admins.roleKeysFor(scope, admin.id),
     ]);
 
-    return { admin, session, permissions, roleKeys };
+    return { admin, session, impersonation, permissions, roleKeys };
   }
 
   async logout(scope: ScopeContext, actor: ActorContext, sessionId: AdminSessionId): Promise<void> {
@@ -1135,6 +1185,8 @@ function sessionResult(
   return {
     token,
     admin,
+    // A password sign-in is never an entered session.
+    impersonation: null,
     session: {
       id: sessionId,
       tenantId: scope.tenantId,

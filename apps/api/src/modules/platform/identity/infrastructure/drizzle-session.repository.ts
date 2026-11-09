@@ -12,13 +12,26 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { SessionRepository } from '../application/ports.js';
+import type { SessionRepository, StoredAdminSession } from '../application/ports.js';
 import {
   ScopeBound,
   withSystemScope,
 } from '../../../../infrastructure/persistence/database-scope.js';
 
 type SessionRow = typeof adminSessions.$inferSelect;
+
+function toStored(row: SessionRow): StoredAdminSession {
+  return {
+    ...toSession(row),
+    impersonation:
+      row.impersonatedByAdminId === null || row.impersonationHostingSessionId === null
+        ? null
+        : {
+            byAdminId: row.impersonatedByAdminId,
+            hostingSessionId: row.impersonationHostingSessionId,
+          },
+  };
+}
 
 function toSession(row: SessionRow): AdminSession {
   return {
@@ -50,21 +63,26 @@ export class DrizzleSessionRepository implements SessionRepository {
       readonly expiresAt: Date;
       readonly ip: string | null;
       readonly userAgent: string | null;
+      readonly impersonation?: { readonly byAdminId: string; readonly hostingSessionId: string };
     },
     tx?: unknown,
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
-    await executorOf(this.db, tx).insert(adminSessions).values({
-      id: session.id,
-      tenantId,
-      adminId: session.adminId,
-      tokenHash: session.tokenHash,
-      issuedAt: session.issuedAt,
-      expiresAt: session.expiresAt,
-      lastSeenAt: session.issuedAt,
-      ip: session.ip,
-      userAgent: session.userAgent,
-    });
+    await executorOf(this.db, tx)
+      .insert(adminSessions)
+      .values({
+        id: session.id,
+        tenantId,
+        adminId: session.adminId,
+        tokenHash: session.tokenHash,
+        issuedAt: session.issuedAt,
+        expiresAt: session.expiresAt,
+        lastSeenAt: session.issuedAt,
+        ip: session.ip,
+        userAgent: session.userAgent,
+        impersonatedByAdminId: session.impersonation?.byAdminId ?? null,
+        impersonationHostingSessionId: session.impersonation?.hostingSessionId ?? null,
+      });
   }
 
   /**
@@ -76,12 +94,12 @@ export class DrizzleSessionRepository implements SessionRepository {
    * from anything a caller knows. Every call made after this one is scoped to
    * the tenant it returns.
    */
-  async findByTokenHash(tokenHash: string): Promise<AdminSession | null> {
+  async findByTokenHash(tokenHash: string): Promise<StoredAdminSession | null> {
     // The system path, by name (ADR-0037): no tenant is bound yet, by definition.
     const [row] = await withSystemScope('admin session lookup by token hash', () =>
       this.db.select().from(adminSessions).where(eq(adminSessions.tokenHash, tokenHash)).limit(1),
     );
-    return row ? toSession(row) : null;
+    return row ? toStored(row) : null;
   }
 
   async isLive(scope: ScopeContext, id: AdminSessionId, now: Date, tx?: unknown): Promise<boolean> {

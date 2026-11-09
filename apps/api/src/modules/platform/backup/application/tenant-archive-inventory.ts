@@ -44,6 +44,7 @@ export const INSTALLATION_TABLES: Readonly<Record<string, string>> = {
   hosting_totp_factors: "the owner's section factor",
   hosting_recovery_codes: "the owner's section factor",
   hosting_sessions: "the owner's section sessions",
+  hosting_enter_tokens: "the owner's one-time «ورود به پنل» tokens; a live one must not travel",
   recovery_requests: 'whole-installation restores',
   secret_reentry_items: 'whole-installation restores',
   backup_archive_passwords: "the installation's own archive password",

@@ -554,7 +554,10 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
               key: 'roles',
               header: t('web.roles'),
               render: (row) =>
-                row.roleKeys.length === 0 ? (
+                // Phase 6B: the installation owner's principal in a hosted bot, read-only.
+                row.kind === 'HOST' ? (
+                  <Badge tone="violet">{t('web.admin_kind_host')}</Badge>
+                ) : row.roleKeys.length === 0 ? (
                   <span className="faint">—</span>
                 ) : (
                   <span className="system-roles">
@@ -580,13 +583,21 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
             {
               key: 'telegram',
               header: t('web.admin_telegram'),
-              render: (row) => <TelegramBinding row={row} mayEdit={mayEdit} />,
+              render: (row) => (
+                <TelegramBinding row={row} mayEdit={mayEdit && row.kind !== 'HOST'} />
+              ),
             },
             {
               key: 'manage',
               header: t('web.admin_manage'),
               align: 'end',
-              render: (row) => <AdminControls row={row} mayEdit={mayEdit} />,
+              // The HOST principal is not this bot's to change (the server refuses it too).
+              render: (row) =>
+                row.kind === 'HOST' ? (
+                  <span className="faint">—</span>
+                ) : (
+                  <AdminControls row={row} mayEdit={mayEdit} />
+                ),
             },
           ]}
         />

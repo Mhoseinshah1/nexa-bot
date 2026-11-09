@@ -225,6 +225,8 @@ export const WEB_FA_ERRORS = {
     'راه‌اندازی ورود دومرحله‌ای منقضی شده است. از اول شروع کنید.',
   'web.err_admin_self_modification_denied': 'این تغییر را روی حساب خودتان نمی‌توانید انجام دهید.',
   'web.err_admin_session_not_found': 'نشست پیدا نشد.',
+  'web.err_identity_impersonation_forbidden':
+    'در حالت «ورود به پنل» نمی‌توانید مدیران، رمزها، کد دومرحله‌ای یا کلیدها و توکن‌های این ربات را تغییر دهید.',
   'web.err_admin_telegram_id_taken': 'این شناسهٔ تلگرام به مدیر دیگری وصل است.',
   'web.err_admin_username_taken': 'این نام کاربری قبلاً گرفته شده است.',
   'web.err_appearance_admin_not_bound':
@@ -353,7 +355,10 @@ export const WEB_FA_ERRORS = {
   'web.err_hosting_slug_taken': 'این شناسه قبلاً استفاده شده است.',
   'web.err_hosting_create_disabled': 'ساختن ربات میزبانی‌شده روی این نصب فعلاً بسته است.',
   'web.err_hosting_purge_confirmation_mismatch': 'برای پاک‌سازی، شناسهٔ ربات را دقیقاً وارد کنید.',
-  'web.err_hosting_enter_not_implemented': '«ورود به پنل» در مرحلهٔ بعد اضافه می‌شود.',
+  'web.err_hosting_enter_domain_required':
+    'برای «ورود به پنل» ربات باید فعال باشد و دامنه‌اش در «فعال‌سازی» تأیید شده باشد.',
+  'web.err_hosting_enter_token_invalid':
+    'این پیوند ورود معتبر نیست یا دیگر کار نمی‌کند. از «میزبانی‌ها» دوباره «ورود به پنل» را بزنید.',
   // Phase 6A PR-4: the activation of a hosted bot.
   'web.err_hosting_act_not_configured':
     'اول توکن ربات و دامنه را وارد کنید. اگر این پیام برای مرحلهٔ دامنه است، سرور هنوز مقصد DNS ندارد: HOSTED_BOTS_CNAME_TARGET یا HOSTED_BOTS_SERVER_IPS را تنظیم کنید.',

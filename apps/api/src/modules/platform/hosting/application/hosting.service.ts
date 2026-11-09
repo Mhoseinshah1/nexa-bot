@@ -3,7 +3,6 @@ import {
   HOSTED_BOT_TENANT_STATUS,
   hostedBotActionRequestSchema,
   hostedBotCreateRequestSchema,
-  hostedBotEnterRequestSchema,
   hostedBotExpiryRequestSchema,
   hostedBotPurgeRequestSchema,
   hostedBotSetLimitRequestSchema,
@@ -490,33 +489,6 @@ export class HostingService {
       async (tx) => this.inTransaction(installation, actor, token, tx),
     );
     return this.deps.capacityLimits.set(installation, actor, limitCommand);
-  }
-
-  /**
-   * «ورود به پنل» — DESIGNED for 6B, not built (`docs/adr/0038-hosted-bots.md` § Enter).
-   * The request shape already carries the fresh proof the action will ask for.
-   */
-  async enter(
-    scope: ScopeContext,
-    actor: ActorContext,
-    token: string | null,
-    id: string,
-    input: unknown,
-  ): Promise<never> {
-    const hostedTenantId = parseTenantId(id);
-    const installation = await this.deps.section.requireSection(
-      scope,
-      actor,
-      token,
-      'hosting.enter',
-      hostedTenantId,
-    );
-    hostedBotEnterRequestSchema.parse(input);
-    await this.requireRow(installation, hostedTenantId);
-    throw errors.preconditionFailed(
-      HOSTING_ERROR_CODES.ENTER_NOT_IMPLEMENTED,
-      'Entering a hosted bot’s panel arrives in phase 6B.',
-    );
   }
 
   /** The server card: CPU, RAM, disk and the estimate of how many more bots fit. */

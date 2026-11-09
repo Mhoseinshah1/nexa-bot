@@ -75,7 +75,7 @@ async function storedHash(username: string): Promise<string> {
     .select({ hash: admins.passwordHash })
     .from(admins)
     .where(and(eq(admins.tenantId, tenantA.tenantId as string), eq(admins.username, username)));
-  return row!.hash;
+  return row!.hash as string;
 }
 
 async function lockOut(username: string): Promise<void> {
@@ -191,7 +191,7 @@ describe('one tenant of many, under row-level security (ADR-0037)', () => {
       .select({ hash: admins.passwordHash })
       .from(admins)
       .where(and(eq(admins.tenantId, tenantId), eq(admins.username, username)));
-    return row!.hash;
+    return row!.hash as string;
   };
   const throttleIn = async (tenantId: string, username: string): Promise<number> =>
     (

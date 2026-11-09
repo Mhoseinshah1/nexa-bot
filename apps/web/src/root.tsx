@@ -1,5 +1,6 @@
 import { App } from './app';
 import { HostedActivatePage, isActivationPath, readActivationToken } from './pages/hosted-activate';
+import { HostedEnterPage, isEnterPath } from './pages/hosted-enter';
 
 /**
  * What `main.tsx` mounts (phase 6A PR-4): the activation page on `/activate`, and the Web Admin
@@ -10,6 +11,8 @@ import { HostedActivatePage, isActivationPath, readActivationToken } from './pag
  */
 export function Root() {
   if (isActivationPath(window.location.pathname)) return <ActivationRoot />;
+  // Phase 6B «ورود به پنل»: the owner's one-time entry, `/enter#token=…`, same fragment rule.
+  if (isEnterPath(window.location.pathname)) return <EnterRoot />;
   return <App />;
 }
 
@@ -20,6 +23,18 @@ function ActivationRoot() {
     <HostedActivatePage
       initialToken={token}
       onSignIn={() => {
+        window.location.assign('/');
+      }}
+    />
+  );
+}
+
+function EnterRoot() {
+  const token = takeToken();
+  return (
+    <HostedEnterPage
+      initialToken={token}
+      onEntered={() => {
         window.location.assign('/');
       }}
     />

@@ -69,7 +69,7 @@ whole database, § 6):
 | `hosted_bots`, `hosted_bot_activations`          | the owner's register (`tenant_id` = installation). Carried as **host facts** in the manifest, § 2    |
 | `hosted_bot_activation_links`                    | one-time links the owner issued; an unused one must not travel                                       |
 | `hosting_totp_factors`, `hosting_recovery_codes` | the owner's section factor                                                                           |
-| `hosting_sessions`                               | the owner's section sessions                                                                         |
+| `hosting_sessions`, `hosting_enter_tokens`       | the owner's section sessions and his one-time «ورود به پنل» tokens                                   |
 | `recovery_requests`, `secret_reentry_items`      | whole-installation restores                                                                          |
 | `backup_archive_passwords`                       | the installation's own archive password; a hosted bot's password lives in an installation table, § 7 |
 
@@ -864,7 +864,7 @@ sealPassword })` seals the installation member with it (no password id recorded)
   `.head_diverged`) and freshness (`move.target_not_fresh`, read across tenants on the system
   path) are checked, then `RecoveryService.requestMove` runs the upload chain (verify, restore
   test, trial decryption) and confirms the request as `source = 'MOVE'` with
-  `confirmed_by_admin_id` NULL (migration `0334`→renumbered: the confirmation CHECK is
+  `confirmed_by_admin_id` NULL (migration `0336`: the confirmation CHECK is
   three-of-three for MOVE, four-of-four otherwise). The CLI waits for the executor (its reads are
   retried across the cutover).
 - **Import, step 2** (`import-hosted`, a new process against the restored database): each hosted
@@ -891,6 +891,54 @@ activation marks after import` was therefore not needed.
 to verify it after import`.
 - **Contract items**: `RECOVERY_SOURCES` + `MOVE`; `MOVE_ERROR_CODES`. No template key: the
   Persian text is the operator's CLI output, never a customer's.
+## As built in PR-5 (`feat/6b-enter`, «ورود به پنل»)
+
+§ 9 as designed, with these decisions (binding on later work):
+
+- **Where the session lives.** The hosted Web Admin is reached on the hosted bot's own verified
+  domain, which 6A PR-4 already routes (a request's Host resolves to the hosted tenant; the
+  sign-in and the Origin check follow it). `POST /hosting/bots/:id/enter` therefore needs the bot
+  `ACTIVE` with a domain whose DNS **and TLS** marks are set (the link is `https://`), else
+  `hosting.enter_domain_required`. A bot with no verified domain cannot be entered in 6B.
+- **Mint.** A fresh code, an idempotency key (a replay answers `url: null`: only the hash is
+  kept, so a retry never mints a second token), the HOST principal ensured in the same
+  transaction, `hosting.enter` in the owner's log with the token id, domain, expiry and proof.
+  The token is bound to the minting section session.
+- **Redeem.** `POST /auth/enter` on the hosted domain; the conditional UPDATE names the hash,
+  the hosted tenant the Host resolves to, the host itself, unused and unexpired. Inside the
+  same transaction the section session, the owner's Web Admin session, his `ACTIVE` status and
+  his installation `owner` role must all hold; any failure rolls the spend back and answers
+  `hosting.enter_token_invalid` (an unknown Host is refused earlier by the Origin check, 403).
+  The entered session expires at `min(section expiry, now + SESSION_TTL)`; its opening is
+  recorded as `hosting.enter_opened` in the owner's log.
+- **Every request** of an entered session re-reads the same four facts (`ownerOf`, system path
+  `hosting: entered session liveness`); when one fails the session is revoked on the spot
+  (`entered_session_ended`). Closing or replacing the section also revokes the entered sessions
+  at once (`entered_section_ended`). «خروج» is the ordinary sign-out of that session.
+- **Permissions.** The resolver gives the HOST principal the whole catalogue only when the
+  actor carries `impersonation` (and nothing otherwise, nor to an operator carrying it); the
+  guard then drops `IMPERSONATION_DENIED_PERMISSIONS` and the installation-only keys.
+- **Secret writers.** Each writer's public entry refuses an impersonated actor before it seals
+  anything: bot token replacement, panel create and credentials, the three gateway secrets,
+  the support-AI key, the legacy package key, the backup password, the hosting and sign-in
+  TOTP enrolment, the refund card and — the safest reading of "every write that seals a new
+  secret" — the gift-card batch export, so an entered session cannot create gift-card batches
+  either. `tests/unit/impersonation-secret-writers.test.ts` walks `SECRET_COLUMNS` and every
+  `.encrypt(` call site. Refusals of a secret writer are not audited (they throw before any
+  transaction); permission denials are, in the owner's log.
+- **Account security.** Password change, second-factor activation, disabling, backup codes and
+  revoking other sessions refuse an entered session; reads stay open.
+- **The HOST row** is listed in the admins table as «میزبان» with no controls; the admin
+  service answers `admin.not_found` for any change aimed at it; the `nexa_host_admin_guard`
+  trigger refuses any UPDATE or DELETE of it and any change of an admin's kind. INSERT stays
+  open so a tenant restore can carry it.
+- **Audit (D5).** `DrizzleAuditWriter` sends every entry of an impersonated actor to the
+  installation's log (`tenant_id` = installation, actor = the owner, `acted_in_tenant_id` = the
+  hosted tenant) on the same transaction via `withSystemScopeIn` (`audit: host owner acting in a
+hosted tenant`). Outbox events and operational events of an entered session still carry the
+  HOST principal's reference inside the hosted tenant (they are not the audit log).
+- **Inventory.** `hosting_enter_tokens` is INSTALLATION (a live token must not travel).
+- **Mutation checks:** `scripts/claude/hosting-enter-mutation.sh`.
 
 ## Open
 

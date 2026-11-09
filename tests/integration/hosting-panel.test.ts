@@ -839,16 +839,17 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
       ).toBe(HOSTING_ERROR_CODES.BOT_NOT_FOUND);
     });
 
-    it('«ورود به پنل» is a typed stub for 6B; the server card reads the host', async () => {
+    it('«ورود به پنل» needs a verified domain (tests/integration/hosting-enter.test.ts has the rest); the server card reads the host', async () => {
       const panel = await openPanel();
       const id = (await createBot(panel)).bot.tenantId;
       expect(
         await codeOf(
-          api.container.hosting.enter(tenantA, ownerActor, panel.token, id, {
+          api.container.hostingEnter.mint(tenantA, ownerActor, panel.token, id, {
+            idempotencyKey: key(),
             proof: { code: code(panel.secret) },
           }),
         ),
-      ).toBe(HOSTING_ERROR_CODES.ENTER_NOT_IMPLEMENTED);
+      ).toBe(HOSTING_ERROR_CODES.ENTER_DOMAIN_REQUIRED);
       const server = await api.container.hosting.server(tenantA, ownerActor, panel.token);
       expect(server.cpu.cores).toBeGreaterThan(0);
       expect(server.memory.totalBytes).toBeGreaterThan(0);

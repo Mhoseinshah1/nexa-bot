@@ -157,6 +157,12 @@ export const auditLogs = pgTable(
     userAgent: text('user_agent'),
     /** Denials are audited too. */
     result: text('result').notNull(),
+    /**
+     * Phase 6B (D5): the hosted tenant the installation owner acted IN through «ورود به پنل».
+     * Such a row belongs to the installation's log (`tenant_id`), names the owner as the actor,
+     * and is the only record of the act: the hosted tenant's own log receives nothing.
+     */
+    actedInTenantId: uuid('acted_in_tenant_id'),
   },
   (table) => [
     index('audit_logs_tenant_occurred_idx').on(table.tenantId, table.occurredAt),

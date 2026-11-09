@@ -7,6 +7,7 @@ import {
   type CapacityLimitsResponse,
   type CapacitySetLimitResponse,
   type HostedBotPurgePreviewResponse,
+  type HostedBotEnterResponse,
   type HostedBotPurgeResponse,
   type HostedBotResponse,
   type HostedBotsResponse,
@@ -218,10 +219,13 @@ export class HostingController {
   async enter(
     @Req() request: FastifyRequest,
     @Param('tenantId') tenantId: string,
+    @Res({ passthrough: true }) reply: FastifyReply,
     @Body() body: unknown,
-  ): Promise<never> {
+  ): Promise<HostedBotEnterResponse> {
     const { scope, actor } = await authenticateAdmin(this.container, request);
-    return this.container.hosting.enter(scope, actor, this.token(request), tenantId, body);
+    // The answer carries a one-time entry: never cached anywhere.
+    void reply.header('cache-control', 'no-store');
+    return this.container.hostingEnter.mint(scope, actor, this.token(request), tenantId, body);
   }
 
   @Get('server')

@@ -202,6 +202,21 @@ export interface RoleRepository {
   ): Promise<PermissionOverride[]>;
 }
 
+/**
+ * Phase 6B «ورود به پنل»: who entered a session, as its row records it — the installation
+ * owner's admin id and the «میزبانی‌ها» section session it ends with. Null on every ordinary
+ * session.
+ */
+export interface SessionImpersonationMark {
+  readonly byAdminId: string;
+  readonly hostingSessionId: string;
+}
+
+/** A session as the token lookup reads it: the contract's view plus its entered mark. */
+export interface StoredAdminSession extends AdminSession {
+  readonly impersonation: SessionImpersonationMark | null;
+}
+
 export interface SessionRepository {
   create(
     scope: ScopeContext,
@@ -213,6 +228,8 @@ export interface SessionRepository {
       readonly expiresAt: Date;
       readonly ip: string | null;
       readonly userAgent: string | null;
+      /** Phase 6B: only the enter redemption sets it. */
+      readonly impersonation?: SessionImpersonationMark;
     },
     tx?: unknown,
   ): Promise<void>;
@@ -222,7 +239,7 @@ export interface SessionRepository {
    * the one place that is allowed to be, and it returns the tenant so every
    * subsequent call is scoped.
    */
-  findByTokenHash(tokenHash: string): Promise<AdminSession | null>;
+  findByTokenHash(tokenHash: string): Promise<StoredAdminSession | null>;
   /**
    * Whether this session is still live at this instant.
    *
