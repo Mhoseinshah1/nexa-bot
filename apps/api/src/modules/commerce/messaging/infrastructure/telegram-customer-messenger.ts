@@ -417,6 +417,12 @@ export interface CustomerTemplateRenderer {
    */
   render(scope: ScopeContext, key: TemplateKey, values: TemplateValues): Promise<string>;
   /**
+   * B2: a WHOLE customer message, with the RIGHT-TO-LEFT MARK at the start of each Persian line
+   * that would otherwise be drawn left-aligned (`TemplateResolver.renderMessage`). Absent in a
+   * stand-in, which sends the plain rendering.
+   */
+  renderMessage?(scope: ScopeContext, key: TemplateKey, values: TemplateValues): Promise<string>;
+  /**
    * R4 PR-F (F6): the same rendering with every date value wrapped in the instant marks, for
    * a rich message's `date_time` texts (`TemplateResolver.renderWithInstants`). Absent in a
    * stand-in, whose rich messages then carry the dates as plain text.
@@ -498,6 +504,16 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * Absent in a stand-in, which sends every screen exactly as before.
      */
     private readonly rich?: RichMessageSupport,
+    /**
+     * B3: the tenant's `persistent_bottom_menu` flag. ON keeps the main menu's reply keyboard
+     * `is_persistent` (it pops back after a customer hides it); OFF (the default) sends it
+     * non-persistent, reachable from the keyboard button beside the input field. Absent in a
+     * stand-in, which keeps the keyboard persistent as it always was. The phone-number
+     * keyboards are a gate, not the menu, and stay persistent whatever this says.
+     */
+    private readonly persistentMenu?: {
+      enabled(scope: ScopeContext): Promise<boolean>;
+    },
   ) {}
 
   /**
@@ -530,6 +546,17 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     }
   }
 
+  /** B2: a whole customer message (marks and all) when the renderer offers it, else plain. */
+  private messageText(
+    scope: ScopeContext,
+    key: TemplateKey,
+    values: TemplateValues,
+  ): Promise<string> {
+    return this.templates.renderMessage === undefined
+      ? this.templates.render(scope, key, values)
+      : this.templates.renderMessage(scope, key, values);
+  }
+
   async send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) {
@@ -541,9 +568,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     }
 
     // R5C-2 B2: a hand-written table reads as plain lines wherever it is not sent as a rich table.
-    const text = plainTableText(
-      await this.templates.render(scope, message.templateKey, message.values),
-    );
+    const text = plainTableText(await this.messageText(scope, message.templateKey, message.values));
     /*
      * The FORMAT is a property of the key, read from the frozen catalogue.
      *
@@ -628,6 +653,12 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
             message.keyboard === 'PHONE_REQUEST_GATEWAY'
             ? [[share], [{ text: CATALOGUE_FA['bot.phone.other_gateway_button'] }]]
             : undefined;
+    const persistentKeyboard =
+      phoneRows !== undefined || this.persistentMenu === undefined
+        ? true
+        : await this.bestEffort('read the persistent-menu flag', false, () =>
+            this.persistentMenu!.enabled(scope),
+          );
     const keyboard =
       phoneRows ?? (iconKeyboard === undefined ? undefined : withAdminRow(iconKeyboard));
     const plainKeyboard =
@@ -742,7 +773,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
             ...(last
               ? {
                   buttons: plain || decorationRefused ? plainButtons : buttons,
-                  ...(rows === undefined ? {} : { keyboard: rows }),
+                  ...(rows === undefined ? {} : { keyboard: rows, persistentKeyboard }),
                 }
               : {}),
           }),
@@ -1028,9 +1059,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       return { ...wire, html: false, decorated: false, fallback: wire };
     }
     // A caption cannot carry a rich table: a hand-written one reads as plain lines here too.
-    const text = plainTableText(
-      await this.templates.render(scope, caption.templateKey, caption.values),
-    );
+    const text = plainTableText(await this.messageText(scope, caption.templateKey, caption.values));
     // UX Batch 01 item 4: a template whose every line was dropped renders nothing, and a
     // bare file is told apart from another service's by its fallback.
     if (text.trim() === '' && caption.fallback !== undefined) {
@@ -1092,7 +1121,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     if (token === null) return { outcome: 'REFUSED' };
     // A caption cannot carry a rich table: a hand-written one reads as plain lines here too.
     const rendered = plainTableText(
-      await this.templates.render(scope, message.templateKey, message.values),
+      await this.messageText(scope, message.templateKey, message.values),
     );
     const format = templateDefinition(message.templateKey).format;
     const html = format === 'TELEGRAM_HTML';
@@ -1263,7 +1292,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
     const rendered = plainTableText(
-      await this.templates.render(scope, message.templateKey, message.values),
+      await this.messageText(scope, message.templateKey, message.values),
     );
     const format = templateDefinition(message.templateKey).format;
     const html = format === 'TELEGRAM_HTML';

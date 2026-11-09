@@ -770,7 +770,8 @@ export class NotificationDispatcher {
       // alert gets their wording. It happens before the send and outside any
       // transaction — a template read is cheap, and holding a transaction across
       // the send is the thing this class exists to avoid.
-      text = await this.templates.render(
+      // B2: the whole message, with the RTL marks a Persian line needs.
+      text = await this.templates.renderMessage(
         scope,
         intent.templateKey,
         deserialiseValues(intent),
