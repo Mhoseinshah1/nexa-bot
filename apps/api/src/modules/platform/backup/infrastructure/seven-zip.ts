@@ -266,6 +266,15 @@ export function sealArgs(
   dumpName: string,
   extraEntries: readonly string[] = [],
 ): readonly string[] {
+  return sealEntryArgs(level, archivePath, [MANIFEST_ENTRY, dumpName, ...extraEntries]);
+}
+
+/** `sealArgs` for any list of entries (the tenant archive's manifest, `data/` and key bundle). */
+export function sealEntryArgs(
+  level: SevenZipLevel,
+  archivePath: string,
+  entries: readonly string[],
+): readonly string[] {
   return [
     'a',
     '-t7z',
@@ -281,9 +290,7 @@ export function sealArgs(
     '-y',
     '--',
     archivePath,
-    MANIFEST_ENTRY,
-    dumpName,
-    ...extraEntries,
+    ...entries,
   ];
 }
 
@@ -594,4 +601,137 @@ export async function openSevenZip(input: {
     passwordIndex,
     keyBundle,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6B (ADR-0039 § 2): a 7z of named ENTRIES — the tenant archive.
+//
+// The same container, password handling (stdin, never argv), memory-bounded level table,
+// encrypted headers and non-solid layout as the installation archive above; only what is
+// inside differs (a manifest, one part per table under `data/`, the key bundle). Reading is
+// entry by entry with `x -so` — never an extraction to disk by 7-Zip — so an uploaded archive
+// cannot write outside the file each entry is streamed into, whatever names it carries.
+// ---------------------------------------------------------------------------
+
+/**
+ * Seals `entries` (paths relative to `directory`: files, or a directory 7-Zip recurses) into a
+ * new 7z at `archivePath`, with `password`. Refuses, before spawning, a level the host's free
+ * memory cannot hold (`backup.memory_insufficient`).
+ */
+export async function sealSevenZipEntries(input: {
+  readonly directory: string;
+  readonly entries: readonly string[];
+  readonly archivePath: string;
+  readonly password: string;
+  readonly options: SevenZipOptions;
+}): Promise<{ readonly archiveBytes: number }> {
+  if (input.entries.length === 0) throw malformed('an archive needs at least one entry');
+  for (const entry of input.entries) {
+    if (entry.startsWith('/') || entry.startsWith('-') || entry.split('/').includes('..')) {
+      throw malformed('an entry name is not a plain relative path');
+    }
+  }
+  const level = await pickLevel(input.options);
+  await rm(input.archivePath, { force: true });
+  const result = await run7z({
+    binary: input.options.binary,
+    cwd: input.directory,
+    password: input.password,
+    timeoutMs: input.options.sealTimeoutMs,
+    lowPriorityPrefix: input.options.lowPriorityPrefix,
+    cpuLimit: input.options.cpuLimit,
+    args: sealEntryArgs(level, input.archivePath, input.entries),
+  });
+  if (killedBySignal(result.code, result.signal)) {
+    throw toolOomKilled('7-Zip', result.code, result.signal);
+  }
+  if (result.code !== 0) {
+    throw new NexaError({
+      kind: 'INTERNAL',
+      code: PLATFORM_ERROR_CODES.BACKUP_TOOL_FAILED,
+      message: '7-Zip could not write the archive.',
+      details: { exitCode: result.code, stderr: result.stderr.slice(0, 2000) },
+    });
+  }
+  const { size } = await stat(input.archivePath);
+  return { archiveBytes: size };
+}
+
+/** The archive's entry names, with `password`; one auth failure for any wrong guess. */
+export async function listSevenZipEntries(input: {
+  readonly archivePath: string;
+  readonly password: string;
+  readonly options: SevenZipOptions;
+}): Promise<readonly string[]> {
+  const listing = await list(input.archivePath, input.password, input.options);
+  if (listing === null) throw authFailed();
+  return listing.entries;
+}
+
+/**
+ * Streams ONE entry into `destination` (created 0600) through a SHA-256, refusing more than
+ * `maxBytes`. 7-Zip's CRC fails a damaged entry; the caller compares the digest with the
+ * manifest's.
+ */
+export async function extractSevenZipEntry(input: {
+  readonly archivePath: string;
+  readonly password: string;
+  readonly entry: string;
+  readonly destination: string;
+  readonly options: SevenZipOptions;
+  readonly maxBytes?: number;
+}): Promise<{ readonly sha256: string; readonly bytes: number }> {
+  const digest = createHash('sha256');
+  let bytes = 0;
+  let overflow = false;
+  const limit = input.maxBytes ?? Number.POSITIVE_INFINITY;
+  const counter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      bytes += chunk.length;
+      if (bytes > limit) {
+        overflow = true;
+        callback(malformed('an entry is larger than its format allows'));
+        return;
+      }
+      digest.update(chunk);
+      callback(null, chunk);
+    },
+  });
+  const out = createWriteStream(input.destination, { mode: 0o600 });
+  const sinkDone = pipeline(counter, out).catch((error: unknown) => error);
+  const run = await run7z({
+    binary: input.options.binary,
+    password: input.password,
+    timeoutMs: input.options.openTimeoutMs,
+    stdoutSink: counter,
+    lowPriorityPrefix: input.options.lowPriorityPrefix,
+    cpuLimit: input.options.cpuLimit,
+    args: [
+      'x',
+      '-so',
+      '-bd',
+      '-mmt=1',
+      typeSwitch(input.archivePath),
+      '--',
+      input.archivePath,
+      input.entry,
+    ],
+  }).catch(async (error: unknown) => {
+    await rm(input.destination, { force: true });
+    throw overflow ? malformed('an entry is larger than its format allows') : error;
+  });
+  await sinkDone;
+  if (killedBySignal(run.code, run.signal)) {
+    await rm(input.destination, { force: true });
+    throw toolOomKilled('7-Zip', run.code, run.signal);
+  }
+  if (run.code !== 0 || overflow) {
+    await rm(input.destination, { force: true });
+    if (overflow) throw malformed('an entry is larger than its format allows');
+    if (/missing volume|unexpected end/i.test(run.stderr)) {
+      throw malformed('a part of the archive is missing');
+    }
+    throw authFailed();
+  }
+  return { sha256: digest.digest('hex'), bytes };
 }

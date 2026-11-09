@@ -514,5 +514,46 @@ describe('capacity guards (phase 6A PR-2)', () => {
         .where(eq(heavyJobTickets.id, ids.owner));
       expect(owner[0]?.state).toBe('ABANDONED');
     });
+
+    it('Phase 6B: a BACKUP or RESTORE runs alone, whatever the concurrency allows', async () => {
+      const queue = new DrizzleHeavyJobQueueRepository(api.container.database.db);
+      const t0 = new Date('2026-11-09T10:00:00Z');
+      const lease = (ms: number) => new Date(t0.getTime() + ms);
+      const ids = {
+        report: '01930000-0000-7000-8000-00000000f101',
+        restore: '01930000-0000-7000-8000-00000000f102',
+        export: '01930000-0000-7000-8000-00000000f103',
+        backup: '01930000-0000-7000-8000-00000000f104',
+      };
+      const enqueue = (id: string, kind: 'REPORT' | 'RESTORE' | 'EXPORT' | 'BACKUP', at: number) =>
+        queue.enqueue({
+          id,
+          tenantId: SEED_IDS.tenantB,
+          kind,
+          priority: 0,
+          now: lease(at),
+          leaseUntil: lease(600_000),
+        });
+      const start = (id: string, at: number) =>
+        queue.tryStart(id, { now: lease(at), leaseUntil: lease(600_000), concurrency: 2 });
+      await enqueue(ids.report, 'REPORT', 0);
+      expect(await start(ids.report, 1)).toBe('RUNNING');
+      // Room for two, but a RESTORE does not start beside a running job.
+      await enqueue(ids.restore, 'RESTORE', 2);
+      expect(await start(ids.restore, 3)).toBe('QUEUED');
+      await queue.finish(ids.report, lease(4));
+      expect(await start(ids.restore, 5)).toBe('RUNNING');
+      // And nothing starts beside a running RESTORE.
+      await enqueue(ids.export, 'EXPORT', 6);
+      expect(await start(ids.export, 7)).toBe('QUEUED');
+      await queue.finish(ids.restore, lease(8));
+      expect(await start(ids.export, 9)).toBe('RUNNING');
+      // Nor a BACKUP beside a running EXPORT.
+      await enqueue(ids.backup, 'BACKUP', 10);
+      expect(await start(ids.backup, 11)).toBe('QUEUED');
+      await queue.finish(ids.export, lease(12));
+      expect(await start(ids.backup, 13)).toBe('RUNNING');
+      await queue.finish(ids.backup, lease(14));
+    });
   });
 });

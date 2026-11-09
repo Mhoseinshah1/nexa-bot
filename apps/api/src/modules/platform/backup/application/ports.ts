@@ -371,6 +371,11 @@ export interface BackupRunRow {
   readonly summaryDeliveryState: BackupDeliveryState | null;
   /** How long each stage took (Round 5B). Null before it was recorded, or on a reclaimed run. */
   readonly phaseDurationsMs: BackupPhaseDurationsMs | null;
+  /**
+   * Phase 6B (ADR-0039 § 5): the hosted tenant a TENANT archive run archived; null (or absent,
+   * in a hand-built row) for the installation's own runs.
+   */
+  readonly subjectTenantId?: string | null;
 }
 
 /**
@@ -447,6 +452,11 @@ export interface BackupRunRepository {
     readonly trigger: BackupTrigger;
     readonly leaseOwner: string;
     readonly now: Date;
+    /**
+     * Phase 6B: a TENANT archive's tenant. Absent: an INSTALLATION run. Either way the same
+     * single-active index decides, so the two scopes never run at once.
+     */
+    readonly subjectTenantId?: string;
   }): Promise<StartOutcome>;
 
   /** Advances the stage and refreshes the lease in one write. */

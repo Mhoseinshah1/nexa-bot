@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { EXCLUSIVE_HEAVY_JOB_KINDS } from '@nexa/contracts';
 import type { CapacityLimit, CapacityResource, HeavyJobKind, TenantStatus } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -201,7 +202,11 @@ export class DrizzleHeavyJobQueueRepository implements HeavyJobQueueRepository {
         return mine.state as HeavyJobTicket['state'];
       }
       const live = await tx
-        .select({ id: heavyJobTickets.id, state: heavyJobTickets.state })
+        .select({
+          id: heavyJobTickets.id,
+          state: heavyJobTickets.state,
+          kind: heavyJobTickets.kind,
+        })
         .from(heavyJobTickets)
         .where(inArray(heavyJobTickets.state, ['QUEUED', 'RUNNING']))
         .orderBy(
@@ -209,9 +214,16 @@ export class DrizzleHeavyJobQueueRepository implements HeavyJobQueueRepository {
           asc(heavyJobTickets.enqueuedAt),
           asc(heavyJobTickets.id),
         );
-      const running = live.filter((row) => row.state === 'RUNNING').length;
+      const running = live.filter((row) => row.state === 'RUNNING');
       const first = live.find((row) => row.state === 'QUEUED');
-      if (running < input.concurrency && first?.id === id) {
+      // Phase 6B (ADR-0039 § Cross-cutting): an EXCLUSIVE kind (a dump, an archive, a restore)
+      // starts only when nothing runs, and nothing starts beside one, whatever the concurrency.
+      const exclusive = (kind: string) => EXCLUSIVE_HEAVY_JOB_KINDS.some((k) => k === kind);
+      const admitted =
+        running.length < input.concurrency &&
+        !running.some((row) => exclusive(row.kind)) &&
+        (!exclusive(mine.kind) || running.length === 0);
+      if (admitted && first?.id === id) {
         await tx
           .update(heavyJobTickets)
           .set({ state: 'RUNNING', startedAt: input.now, leaseUntil: input.leaseUntil })

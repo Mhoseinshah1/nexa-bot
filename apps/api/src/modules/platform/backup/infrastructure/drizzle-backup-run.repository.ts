@@ -45,6 +45,15 @@ import { ScopeBound } from '../../../../infrastructure/persistence/database-scop
 
 type Row = typeof backupRuns.$inferSelect;
 
+/**
+ * Phase 6B (ADR-0039 § 5): the installation's own runs. Every read that answers a question
+ * about THE installation backup — its history, its last good archive, its retention, its
+ * unknown deliveries — asks it of these only: a hosted tenant's archive is not the owner's
+ * backup, and must not make his look fresher or be pruned by his retention. The lock, the
+ * lease and the reclaim stay shared (one heavy archive at a time, of either scope).
+ */
+const INSTALLATION_RUN = eq(backupRuns.archiveScope, 'INSTALLATION');
+
 function toRow(row: Row): BackupRunRow {
   return {
     id: row.id,
@@ -72,6 +81,7 @@ function toRow(row: Row): BackupRunRow {
     archiveSealId: row.archiveSealId,
     summaryDeliveryState: row.summaryDeliveryState as BackupDeliveryState | null,
     phaseDurationsMs: row.phaseDurationsMs as BackupPhaseDurationsMs | null,
+    subjectTenantId: row.subjectTenantId,
   };
 }
 
@@ -188,6 +198,7 @@ export class DrizzleBackupRunRepository
         SELECT run.id, run.started_at
           FROM ${backupRuns} AS run
          WHERE run.state = 'SUCCEEDED'
+           AND run.archive_scope = 'INSTALLATION'
            AND run.finished_at IS NOT NULL
            AND run.archive_pruned_at IS NULL
            AND run.delivery_state = 'SUCCEEDED'
@@ -219,6 +230,7 @@ export class DrizzleBackupRunRepository
     trigger: BackupTrigger;
     leaseOwner: string;
     now: Date;
+    subjectTenantId?: string;
   }): Promise<StartOutcome> {
     try {
       const [row] = await this.db
@@ -226,6 +238,9 @@ export class DrizzleBackupRunRepository
         .values({
           id: input.id,
           trigger: input.trigger,
+          // Phase 6B: a tenant archive names its tenant; every other run is the installation's.
+          archiveScope: input.subjectTenantId === undefined ? 'INSTALLATION' : 'TENANT',
+          subjectTenantId: input.subjectTenantId ?? null,
           state: 'RUNNING',
           stage: 'DUMP',
           startedAt: input.now,
@@ -414,6 +429,7 @@ export class DrizzleBackupRunRepository
     const rows = await this.db
       .select()
       .from(backupRuns)
+      .where(INSTALLATION_RUN)
       .orderBy(desc(backupRuns.startedAt), desc(backupRuns.id))
       .limit(limit);
     return rows.map(toRow);
@@ -438,9 +454,12 @@ export class DrizzleBackupRunRepository
       .select()
       .from(backupRuns)
       .where(
-        input.cursor === null
-          ? undefined
-          : sql`(${backupRuns.startedAt}, ${backupRuns.id}) < (${input.cursor.startedAt}, ${input.cursor.id})`,
+        and(
+          INSTALLATION_RUN,
+          input.cursor === null
+            ? undefined
+            : sql`(${backupRuns.startedAt}, ${backupRuns.id}) < (${input.cursor.startedAt}, ${input.cursor.id})`,
+        ),
       )
       .orderBy(desc(backupRuns.startedAt), desc(backupRuns.id))
       .limit(input.limit + 1);
@@ -465,7 +484,7 @@ export class DrizzleBackupRunRepository
     const [row] = await this.db
       .select({ total: sql<number>`count(*)::int` })
       .from(backupRuns)
-      .where(eq(backupRuns.deliveryState, 'OUTCOME_UNKNOWN'));
+      .where(and(INSTALLATION_RUN, eq(backupRuns.deliveryState, 'OUTCOME_UNKNOWN')));
     return row?.total ?? 0;
   }
 
@@ -487,7 +506,7 @@ export class DrizzleBackupRunRepository
     const rows = await this.db
       .select()
       .from(backupRuns)
-      .where(eq(backupRuns.deliveryState, 'OUTCOME_UNKNOWN'))
+      .where(and(INSTALLATION_RUN, eq(backupRuns.deliveryState, 'OUTCOME_UNKNOWN')))
       .orderBy(desc(backupRuns.startedAt), desc(backupRuns.id))
       .limit(limit);
     return rows.map(toRow);
@@ -546,6 +565,7 @@ export class DrizzleBackupRunRepository
             AND candidate.id <> COALESCE(
               (SELECT newest.id FROM ${backupRuns} AS newest
                 WHERE newest.state = 'SUCCEEDED' AND newest.verified_at IS NOT NULL
+                  AND newest.archive_scope = 'INSTALLATION'
                 ORDER BY newest.started_at DESC, newest.id DESC
                 LIMIT 1),
               '00000000-0000-0000-0000-000000000000'::uuid
@@ -600,6 +620,7 @@ export class DrizzleBackupRunRepository
     const rows = await this.db.execute<{ id: string; state: string }>(sql`
       SELECT candidate.id, candidate.state FROM ${backupRuns} AS candidate
        WHERE candidate.finished_at IS NOT NULL
+         AND candidate.archive_scope = 'INSTALLATION'
          AND candidate.state <> 'RUNNING'
          AND candidate.archive_pruned_at IS NULL
          AND candidate.finished_at < ${input.finishedBefore}
@@ -610,6 +631,7 @@ export class DrizzleBackupRunRepository
          AND candidate.id NOT IN (
            SELECT newest.id FROM ${backupRuns} AS newest
             WHERE newest.state = 'SUCCEEDED' AND newest.verified_at IS NOT NULL
+              AND newest.archive_scope = 'INSTALLATION'
             ORDER BY newest.started_at DESC, newest.id DESC
             LIMIT ${input.keepCount}
          )
@@ -619,6 +641,7 @@ export class DrizzleBackupRunRepository
          AND candidate.id <> COALESCE(
            (SELECT newest.id FROM ${backupRuns} AS newest
              WHERE newest.state = 'SUCCEEDED' AND newest.verified_at IS NOT NULL
+               AND newest.archive_scope = 'INSTALLATION'
              ORDER BY newest.started_at DESC, newest.id DESC
              LIMIT 1),
            '00000000-0000-0000-0000-000000000000'::uuid
@@ -678,7 +701,13 @@ export class DrizzleBackupRunRepository
     const [row] = await this.db
       .select()
       .from(backupRuns)
-      .where(and(eq(backupRuns.state, 'SUCCEEDED'), sql`${backupRuns.verifiedAt} IS NOT NULL`))
+      .where(
+        and(
+          INSTALLATION_RUN,
+          eq(backupRuns.state, 'SUCCEEDED'),
+          sql`${backupRuns.verifiedAt} IS NOT NULL`,
+        ),
+      )
       .orderBy(desc(backupRuns.startedAt), desc(backupRuns.id))
       .limit(1);
     return row === undefined ? null : toRow(row);
@@ -689,7 +718,13 @@ export class DrizzleBackupRunRepository
     const [row] = await this.db
       .select({ startedAt: backupRuns.startedAt })
       .from(backupRuns)
-      .where(and(eq(backupRuns.state, 'SUCCEEDED'), sql`${backupRuns.verifiedAt} IS NOT NULL`))
+      .where(
+        and(
+          INSTALLATION_RUN,
+          eq(backupRuns.state, 'SUCCEEDED'),
+          sql`${backupRuns.verifiedAt} IS NOT NULL`,
+        ),
+      )
       .orderBy(desc(backupRuns.startedAt))
       .limit(1);
     return row === undefined ? null : row.startedAt;

@@ -1115,6 +1115,28 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
     return { ok: true, scratchDatabase: scratch, tableCount, detail: null };
   }
 
+  /**
+   * Phase 6B (ADR-0039 § 5): an EMPTY scratch database for a tenant archive's verification or
+   * restore, on the same server `verifyRestore` uses (the `backup-verify` service when one is
+   * configured, never a fallback to the live one), and the URL to reach it with this
+   * installation's owner credentials. The name is random and prefixed; the caller drops it
+   * with `dropScratchDatabase`, which records a failed drop on `leaked`.
+   */
+  async createScratchDatabase(): Promise<{ readonly name: string; readonly url: string }> {
+    const name = `nexa_tarc_${randomBytes(8).toString('hex')}`;
+    assertNotLiveTarget({ database: name }, this.databaseName);
+    await this.createDatabaseOn(this.verifyConnection, name);
+    const url = new URL(this.options.databaseUrl);
+    url.hostname = this.verifyConnection.host;
+    url.port = this.verifyConnection.port;
+    url.pathname = `/${encodeURIComponent(name)}`;
+    return { name, url: url.toString() };
+  }
+
+  async dropScratchDatabase(name: string): Promise<{ dropped: boolean }> {
+    return this.dropDatabaseOn(this.verifyConnection, name);
+  }
+
   /** Scratch databases whose DROP failed. Read by the cleanup stage. */
   readonly leaked: string[] = [];
 
