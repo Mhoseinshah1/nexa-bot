@@ -59,13 +59,17 @@ const HOSTED_PASSWORD = 'the-hosted-owners-password';
  * the panel makes is bound by row-level security; the fixtures and the cross-tenant reads
  * back are the owner's handle (`container.database`).
  *
- * The clock is the container's own, moved forward by the cases: every code is a fresh
+ * The clock is the container's own, FROZEN in the middle of a TOTP step and moved only by
+ * the cases (it once followed the wall clock, so "the step in force now" could land a step
+ * after the code was issued when a boundary fell in between: the flake on #443). Every code is a fresh
  * 30-second step (the replay rule refuses a step twice), and the 12-hour expiry and the
  * 15-minute lock are crossed by moving it.
  */
 describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
   let api: ApiApp;
   let offsetMs = 0;
+  /** The frozen instant (the middle of a TOTP step); only `offsetMs` moves the clock. */
+  let baseMs = 0;
   let keys = 0;
   let owner: SeededAdmin;
   let ownerActor: ActorContext;
@@ -79,10 +83,13 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
       .inject(options as never);
   const key = () => `hosting-key-${String((keys += 1))}`;
   const now = () => api.container.clock.now();
+  /** The code `code()` issued last: the one a step spent. */
+  let lastCode = '';
   /** A code for a step no earlier code used. */
   const code = (secret: string) => {
     offsetMs += 30_000;
-    return totpForStep(secret, totpStepAt(now()));
+    lastCode = totpForStep(secret, totpStepAt(now()));
+    return lastCode;
   };
   const codeOf = async (promise: Promise<unknown>): Promise<string> => {
     try {
@@ -166,8 +173,9 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
     await migrateOnce(config.DATABASE_URL);
     api = await createApiApp(config);
     const clock = api.container.clock as { now: () => Date };
-    const real = clock.now.bind(clock);
-    clock.now = () => new Date(real().getTime() + offsetMs);
+    // Frozen in the middle of a step: nothing moves with the wall clock.
+    baseMs = Math.floor(Date.now() / 30_000) * 30_000 + 10_000;
+    clock.now = () => new Date(baseMs + offsetMs);
   }, 120_000);
 
   afterAll(async () => {
@@ -432,13 +440,46 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
           proof,
         });
       await expect(suspend(undefined)).rejects.toThrow();
-      expect(await codeOf(suspend({ code: '000000' }))).toBe(HOSTING_ERROR_CODES.CODE_REJECTED);
-      // The step the creation itself spent.
-      const spent = totpForStep(panel.secret, totpStepAt(now()));
+      // A code that is NOT valid for any step the skew window accepts (000000 could be, 1 in
+      // 333,000 runs).
+      const window = [-2, -1, 0, 1, 2].map((d) => totpForStep(panel.secret, totpStepAt(now()) + d));
+      const wrong = ['000000', '111111', '222222'].find((c) => !window.includes(c))!;
+      expect(await codeOf(suspend({ code: wrong }))).toBe(HOSTING_ERROR_CODES.CODE_REJECTED);
+      // The step the creation itself spent: the code it was given, not "the code of the step
+      // in force now" (which is a different, still-acceptable step if a boundary was crossed).
+      const spent = lastCode;
       expect(await codeOf(suspend({ code: spent }))).toBe(HOSTING_ERROR_CODES.CODE_REJECTED);
       expect((await tenantRow(id))?.status).toBe('ACTIVE');
       // An open section is not a code: a fresh one is still required, and then it works.
       await suspend({ code: code(panel.secret) });
+      expect((await tenantRow(id))?.status).toBe('STOPPED');
+    });
+  });
+
+  describe('the TOTP step boundary', () => {
+    it('a spent code stays refused when the clock crosses into the next step, and the next step’s code is fresh', async () => {
+      const panel = await openPanel();
+      const created = await createBot(panel);
+      const id = created.bot.tenantId;
+      const suspend = (proof: unknown) =>
+        api.container.hosting.suspend(tenantA, ownerActor, panel.token, id, {
+          idempotencyKey: key(),
+          proof,
+        });
+      const spentStep = totpStepAt(now());
+      const spent = lastCode;
+      // The last millisecond of the spent step ...
+      offsetMs += 30_000 - ((baseMs + offsetMs) % 30_000) - 1;
+      expect(totpStepAt(now())).toBe(spentStep);
+      expect(await codeOf(suspend({ code: spent }))).toBe(HOSTING_ERROR_CODES.CODE_REJECTED);
+      // ... and the first millisecond of the next one: the "code of the step in force now"
+      // is a DIFFERENT code, which is fresh (this is what made the old assertion flaky); the
+      // spent one is still refused.
+      offsetMs += 1;
+      expect(totpStepAt(now())).toBe(spentStep + 1);
+      expect(await codeOf(suspend({ code: spent }))).toBe(HOSTING_ERROR_CODES.CODE_REJECTED);
+      expect((await tenantRow(id))?.status).toBe('ACTIVE');
+      await suspend({ code: totpForStep(panel.secret, spentStep + 1) });
       expect((await tenantRow(id))?.status).toBe('STOPPED');
     });
   });
