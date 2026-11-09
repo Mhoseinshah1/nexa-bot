@@ -2318,6 +2318,20 @@
       "when": 1794240243010,
       "tag": "0330_tenant_restore_lease",
       "breakpoints": true
+    },
+    {
+      "idx": 331,
+      "version": "7",
+      "when": 1794245424356,
+      "tag": "0331_hosting_enter",
+      "breakpoints": true
+    },
+    {
+      "idx": 332,
+      "version": "7",
+      "when": 1794245440514,
+      "tag": "0332_host_admin_guard",
+      "breakpoints": true
     }
   ]
 }

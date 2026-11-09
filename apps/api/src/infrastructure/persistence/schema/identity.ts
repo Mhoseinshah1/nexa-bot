@@ -18,7 +18,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import { ADMIN_STATUSES, PERMISSION_OVERRIDE_EFFECTS } from '@nexa/contracts';
+import { ADMIN_KINDS, ADMIN_STATUSES, PERMISSION_OVERRIDE_EFFECTS } from '@nexa/contracts';
 import { enumCheck, timestamptz } from './_shared.js';
 import { tenants } from './tenancy.js';
 
@@ -55,10 +55,19 @@ export const admins = pgTable(
      * The self-describing output of the PasswordHasher: algorithm, parameters,
      * salt and digest in one string. Never a plaintext, never a bare digest,
      * and never returned by any query a surface can reach.
+     *
+     * NULL exactly for the `HOST` kind (phase 6B, `admins_kind_password_check`): the
+     * installation owner's principal in a hosted tenant has no password and cannot sign in.
      */
-    passwordHash: text('password_hash').notNull(),
+    passwordHash: text('password_hash'),
     passwordUpdatedAt: timestamptz('password_updated_at').notNull(),
     status: text('status').notNull().default('ACTIVE'),
+    /**
+     * `OPERATOR` (everyone who signs in) or `HOST` (phase 6B «ورود به پنل»: the installation
+     * owner's principal in a hosted tenant, one per tenant, never edited by its admins — the
+     * `nexa_host_admin_guard` trigger, migration 0332).
+     */
+    kind: text('kind').notNull().default('OPERATOR'),
     /**
      * The Telegram admin seam. A later Telegram admin surface attaches to THIS
      * identity rather than creating a second admin table — which is how the
@@ -94,6 +103,13 @@ export const admins = pgTable(
       'admins_disabled_at_check',
       sql`(status = 'DISABLED' AND disabled_at IS NOT NULL) OR (status <> 'DISABLED' AND disabled_at IS NULL)`,
     ),
+    check('admins_kind_check', enumCheck('kind', ADMIN_KINDS)),
+    // A HOST has no password and every OPERATOR has one: the sign-in can never reach a HOST.
+    check('admins_kind_password_check', sql`(kind = 'HOST') = (password_hash IS NULL)`),
+    // One HOST per tenant: «میزبان» is one principal, whoever the owner is.
+    uniqueIndex('admins_tenant_host_key')
+      .on(table.tenantId)
+      .where(sql`kind = 'HOST'`),
   ],
 );
 
@@ -279,8 +295,24 @@ export const adminSessions = pgTable(
     revokedReason: text('revoked_reason'),
     ip: text('ip'),
     userAgent: text('user_agent'),
+    /**
+     * Phase 6B «ورود به پنل» (ADR-0039 § 9): set on a session the installation owner entered
+     * into this hosted tenant — the owner's admin id in the INSTALLATION tenant, and the
+     * «میزبانی‌ها» section session it was opened from and ends with. Plain uuids, no foreign
+     * key: they name another tenant's rows, and `admin_sessions` is never exported.
+     */
+    impersonatedByAdminId: uuid('impersonated_by_admin_id'),
+    impersonationHostingSessionId: uuid('impersonation_hosting_session_id'),
   },
   (table) => [
+    check(
+      'admin_sessions_impersonation_check',
+      sql`(impersonated_by_admin_id IS NULL) = (impersonation_hosting_session_id IS NULL)`,
+    ),
+    // The section-close revocation's read: the entered sessions of one section session.
+    index('admin_sessions_impersonation_idx')
+      .on(table.impersonationHostingSessionId)
+      .where(sql`impersonation_hosting_session_id IS NOT NULL`),
     // Global rather than per-tenant: the token is the lookup key and is
     // presented before any tenant is known, so it must be unique everywhere.
     uniqueIndex('admin_sessions_token_key').on(table.tokenHash),
