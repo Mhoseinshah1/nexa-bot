@@ -4,7 +4,6 @@ import {
   API_PREFIX,
   BACKUP_ROUTES,
   RECOVERY_CONFIRMATION_PHRASE,
-  RECOVERY_KIT_ROUTES,
   RECOVERY_ROUTES,
   type PermissionKey,
 } from '@nexa/contracts';
@@ -107,14 +106,9 @@ function routes(
     runs?: Record<string, unknown>[];
     caps?: Record<string, unknown>;
     recoveries?: Record<string, unknown>[];
-    keys?: Record<string, unknown>[];
   } = {},
 ) {
   return [
-    {
-      url: `${API_PREFIX}${RECOVERY_KIT_ROUTES.keys}`,
-      body: { keys: over.keys ?? [] },
-    },
     { url: `${API_PREFIX}${BACKUP_ROUTES.status}`, body: over.status ?? status() },
     {
       url: `${API_PREFIX}${RECOVERY_ROUTES.capabilities}`,
@@ -146,7 +140,6 @@ const REFUSED_TEST = {
     { purpose: 'bot_instance.token', count: 2 },
     { purpose: 'panel.password', count: 1 },
   ],
-  canUploadKit: true,
 };
 
 const refused = (test: Record<string, unknown> = {}) =>
@@ -159,7 +152,6 @@ const refused = (test: Record<string, unknown> = {}) =>
   });
 
 const VERIFY_URL = `${API_PREFIX}${RECOVERY_ROUTES.detail(RECOVERY_ID)}/verify`;
-const RETEST_URL = `${API_PREFIX}${RECOVERY_ROUTES.retest(RECOVERY_ID)}`;
 const ACK_URL = `${API_PREFIX}${RECOVERY_ROUTES.acknowledgeUnreadable(RECOVERY_ID)}`;
 
 /** Uploads a file and verifies it; the verification answers `answer`. */
@@ -197,66 +189,19 @@ describe('a restore refused for unreadable secrets', () => {
     expect(panel.getByText(/تعداد: ۱|تعداد: 1/)).toBeInTheDocument();
   });
 
-  it('offers the old server kit only when the archive carried no keys', async () => {
-    await reachRefusal([], refused({ canUploadKit: false }));
+  it('SFR A1: offers no Recovery Kit and no kit re-test — only re-entering, and says the kit is removed', async () => {
+    // MUTATION: drawing the kit choice (its region, its import form or its re-test) again fails this.
+    await reachRefusal([], refused(), [...ALL]);
     const panel = within(screen.getByTestId('unreadable-secrets'));
-    expect(panel.queryByRole('button', { name: 'آزمون دوباره با کیت وارد‌شده' })).toBeNull();
+    expect(screen.queryByTestId('unreadable-kit-import')).toBeNull();
+    expect(panel.queryByRole('region')).toBeNull();
+    expect(panel.queryByText(/کیت بازیابی سرور قبلی/)).toBeNull();
+    expect(panel.queryByRole('button', { name: /آزمون دوباره/ })).toBeNull();
+    expect(panel.getByText(t('web.secret_unreadable_intro'))).toBeInTheDocument();
+    expect(t('web.secret_unreadable_intro')).toContain('کیت بازیابی حذف شده است');
     expect(
       panel.getByRole('button', { name: 'ادامه؛ این‌ها را دوباره وارد می‌کنم' }),
     ).toBeEnabled();
-  });
-
-  it('draws the kit import inside the kit choice card, with the same form as the kit card', async () => {
-    await reachRefusal([], refused(), [...ALL, 'recovery.kit.import']);
-    const choice = within(
-      screen.getByRole('region', { name: t('web.secret_unreadable_kit_choice') }),
-    );
-    const card = within(screen.getByTestId('unreadable-kit-import'));
-    expect(
-      within(screen.getByTestId('unreadable-secrets')).getByTestId('unreadable-kit-import'),
-    ).toBeTruthy();
-    expect(choice.getByTestId('unreadable-kit-import')).toBeTruthy();
-    expect(card.getByText(t('web.kit_import_passphrase'))).toBeTruthy();
-    expect(card.getByText(t('web.kit_account_password'))).toBeTruthy();
-    expect(card.getByRole('button', { name: t('web.kit_import_button') })).toBeDisabled();
-    // The retest button stays next to it.
-    expect(choice.getByRole('button', { name: t('web.secret_unreadable_retest') })).toBeEnabled();
-  });
-
-  it('draws no kit form in the choice without recovery.kit.import, and says why', async () => {
-    await reachRefusal([]);
-    expect(screen.queryByTestId('unreadable-kit-import')).toBeNull();
-    const choice = within(
-      screen.getByRole('region', { name: t('web.secret_unreadable_kit_choice') }),
-    );
-    expect(choice.getByText(t('web.kit_no_permission_import'))).toBeTruthy();
-  });
-
-  it('labels the archive password so it is not confused with the kit password', async () => {
-    const sevenZip = new File(
-      [new Uint8Array([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0, 4, 1, 2, 3, 4])],
-      'old.7z',
-    );
-    await reachRefusal([], refused(), [...ALL, 'recovery.kit.import'], sevenZip);
-    const choice = within(
-      screen.getByRole('region', { name: t('web.secret_unreadable_kit_choice') }),
-    );
-    expect(t('web.secret_unreadable_archive_password_label')).toBe(
-      'رمز فایل بکاپ (همان رمزی که بکاپ با آن گرفته شده)',
-    );
-    expect(choice.getByText(t('web.secret_unreadable_archive_password_label'))).toBeTruthy();
-    expect(choice.getByText(t('web.kit_import_passphrase'))).toBeTruthy();
-  });
-
-  it('tests again on the same request with a fresh key', async () => {
-    const api = await reachRefusal([{ url: RETEST_URL, body: { recovery: recovery() } }]);
-    fireEvent.click(screen.getByRole('button', { name: 'آزمون دوباره با کیت وارد‌شده' }));
-    await waitFor(() => expect(api.calls.some((call) => call.url === RETEST_URL)).toBe(true));
-    const call = api.calls.find((candidate) => candidate.url === RETEST_URL);
-    expect(call?.method).toBe('POST');
-    expect((call?.body as { idempotencyKey: string }).idempotencyKey.length).toBeGreaterThanOrEqual(
-      8,
-    );
   });
 
   it('sends the exact list when the operator continues, then asks for the typed phrase', async () => {

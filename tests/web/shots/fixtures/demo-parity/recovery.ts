@@ -1,7 +1,6 @@
 import {
   backupHistoryResponseSchema,
   backupStatusResponseSchema,
-  installationKeysResponseSchema,
   legacyMigrationImportListResponseSchema,
   recoveryListResponseSchema,
 } from '@nexa/contracts';
@@ -84,52 +83,6 @@ const RUNS = [
     deliveryDetailPresent: false,
   }),
   run(10, 101 * HOUR),
-];
-
-const deps = (secrets: number, wrappedKeys: number, retainedArchives: number): Json => ({
-  secrets,
-  wrappedKeys,
-  retainedArchives,
-  openRecoveries: 0,
-});
-
-const KEYS = [
-  {
-    keyId: 'nexa-kek-2026a',
-    fingerprint: 'b41c9e07d2aa3f58c1e09b7a24f6d3e5',
-    origin: 'CONFIGURED_ACTIVE',
-    encrypts: true,
-    importedAt: null,
-    importedBy: null,
-    available: true,
-    dependencies: deps(14, 2, 4),
-    arrivedByRestore: false,
-    removable: false,
-  },
-  {
-    keyId: 'nexa-kek-2025b',
-    fingerprint: '0e77a1c3b2d94f6a8b5c07e1d3f2a946',
-    origin: 'CONFIGURED',
-    encrypts: false,
-    importedAt: null,
-    importedBy: null,
-    available: true,
-    dependencies: deps(0, 0, 9),
-    arrivedByRestore: false,
-    removable: false,
-  },
-  {
-    keyId: 'oldsrv-kek-2025',
-    fingerprint: '9a8b7c6d5e4f30214b6c8d0e2f4a6b8c',
-    origin: 'IMPORTED',
-    encrypts: false,
-    importedAt: ago(17 * DAY + 9 * HOUR),
-    importedBy: 'owner',
-    available: true,
-    dependencies: deps(0, 0, 0),
-    arrivedByRestore: false,
-    removable: true,
-  },
 ];
 
 const recovery = (n: number, over: Json): Json => ({
@@ -260,7 +213,6 @@ export const DEMO_RECOVERY: readonly ShotFixture[] = [
     runs: RUNS,
     nextCursor: '01a05e35-c9ad-7e93-bef3-1ed9b5529c10',
   }),
-  fixture('/recovery-kit/keys', installationKeysResponseSchema, { keys: KEYS }),
   fixture('/recoveries', recoveryListResponseSchema, { recoveries: RECOVERIES, nextCursor: null }),
   fixture('/legacy-migration/imports', legacyMigrationImportListResponseSchema, {
     imports: IMPORTS,

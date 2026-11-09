@@ -5,7 +5,6 @@ import {
   PAYMENT_OPS_QUEUES,
   customerTagListResponseSchema,
   inboxListResponseSchema,
-  installationKeysResponseSchema,
   healthInfoResponseSchema,
   inboxSummaryResponseSchema,
   secretReentryListResponseSchema,
@@ -106,7 +105,6 @@ export const SHELL: readonly ShotFixture[] = [
       },
     ],
   }),
-  fixture('/recovery-kit/keys', installationKeysResponseSchema, { keys: [] }),
   fixture('/audit-log', auditLogListResponseSchema, { entries: [], nextCursor: null }),
   // `/incidents` (the list) is in `coverage-b.ts`, beside the incident its detail shows.
   fixture('/notification-center', inboxListResponseSchema, {

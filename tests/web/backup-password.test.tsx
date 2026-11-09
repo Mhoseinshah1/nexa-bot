@@ -51,7 +51,7 @@ describe('the backup password card (E4)', () => {
       target: { value: 'a long backup password' },
     });
     expect(save).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(t('web.kit_account_password')), {
+    fireEvent.change(screen.getByLabelText(t('web.step_up_account_password')), {
       target: { value: 'my-account-password' },
     });
     expect(save).toBeEnabled();
@@ -66,6 +66,6 @@ describe('the backup password card (E4)', () => {
     await waitFor(() =>
       expect(screen.getByLabelText(t('web.backup_password_new'))).toHaveValue(''),
     );
-    expect(screen.getByLabelText(t('web.kit_account_password'))).toHaveValue('');
+    expect(screen.getByLabelText(t('web.step_up_account_password'))).toHaveValue('');
   });
 });

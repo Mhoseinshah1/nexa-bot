@@ -209,6 +209,18 @@ export interface LegacyNxpkgImportRepository {
     readonly now: Date;
     readonly leaseUntil: Date;
   }): Promise<boolean>;
+  /**
+   * SFR A2: records the importing role's heap use on this owner's row as
+   * `progress.memoryPeak`, only when it is higher than the one already there. One atomic
+   * UPDATE on the progress column, never a read-modify-write of the whole progress. Optional:
+   * an executor given no heap probe never calls it.
+   */
+  recordMemoryPeak?(input: {
+    readonly id: string;
+    readonly leaseOwner: string;
+    readonly heapUsedMb: number;
+    readonly heapLimitMb: number;
+  }): Promise<void>;
   /** Gives this owner's lease back without moving the status. */
   release(input: {
     readonly id: string;
@@ -258,7 +270,10 @@ export interface LegacyNxpkgImportRepository {
  * a connection under slow I/O, and failed with it — so a healthy import could lose its lease
  * and a failed one could not give it back.
  */
-export type LegacyMigrationLeasePort = Pick<LegacyNxpkgImportRepository, 'heartbeat' | 'release'>;
+export type LegacyMigrationLeasePort = Pick<
+  LegacyNxpkgImportRepository,
+  'heartbeat' | 'release' | 'recordMemoryPeak'
+>;
 
 /**
  * Whether a step's error is a TRANSIENT infrastructure failure — a database connection that

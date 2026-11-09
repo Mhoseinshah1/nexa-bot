@@ -88,9 +88,6 @@ export const AUDIT_CRITICAL_ACTIONS: Readonly<Record<string, readonly Permission
   // lose (and re-enter) the secrets it could not read — both on the CRITICAL key.
   'recovery.retest': ['recovery.restore'],
   'recovery.unreadable_acknowledged': ['recovery.restore'],
-  'recovery_kit.exported': ['recovery.kit.export'],
-  'recovery_kit.imported': ['recovery.kit.import'],
-  'installation_key.removed': ['recovery.key.remove'],
   // Mirza PR6: both the owner's cutover approval and its revocation are charged on the
   // CRITICAL `legacy.cutover.approve` (`legacy-cutover.service.ts`, `requireApprove`).
   'legacy.cutover.approve': ['legacy.cutover.approve'],
@@ -106,7 +103,26 @@ export const AUDIT_CRITICAL_ACTIONS: Readonly<Record<string, readonly Permission
   'legacy.compaction.request': ['legacy.migration.apply'],
 };
 
-export const AUDIT_CRITICAL_ACTION_CODES: readonly string[] = Object.keys(AUDIT_CRITICAL_ACTIONS);
+/**
+ * Actions nothing writes any more whose rows were charged on a CRITICAL permission that has
+ * since been REMOVED, so they cannot sit in `AUDIT_CRITICAL_ACTIONS` (whose permissions must
+ * exist and be CRITICAL). The audit log is append-only and its old rows stay: they keep their
+ * CRITICAL badge and stay in the CRITICAL filter.
+ *
+ * - `recovery_kit.exported`, `recovery_kit.imported`, `installation_key.removed`: the Recovery
+ *   Kit (`recovery.kit.export` / `recovery.kit.import` / `recovery.key.remove`), removed in SFR
+ *   A1 (owner decision 2026-11-08: backups are self-contained).
+ */
+export const AUDIT_LEGACY_CRITICAL_ACTIONS: readonly string[] = [
+  'recovery_kit.exported',
+  'recovery_kit.imported',
+  'installation_key.removed',
+];
+
+export const AUDIT_CRITICAL_ACTION_CODES: readonly string[] = [
+  ...Object.keys(AUDIT_CRITICAL_ACTIONS),
+  ...AUDIT_LEGACY_CRITICAL_ACTIONS,
+];
 
 /**
  * Which security slices one row belongs to. The SAME rule the server's filter applies in
@@ -122,7 +138,12 @@ export function auditSecurityClasses(row: {
   if (row.action.startsWith(AUDIT_AUTH_ACTION_PREFIX) || AUDIT_AUTH_ACTIONS.includes(row.action)) {
     classes.push('AUTH');
   }
-  if (Object.hasOwn(AUDIT_CRITICAL_ACTIONS, row.action)) classes.push('CRITICAL');
+  if (
+    Object.hasOwn(AUDIT_CRITICAL_ACTIONS, row.action) ||
+    AUDIT_LEGACY_CRITICAL_ACTIONS.includes(row.action)
+  ) {
+    classes.push('CRITICAL');
+  }
   return classes;
 }
 

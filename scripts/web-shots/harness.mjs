@@ -264,6 +264,8 @@ export async function openPage(cdp, page) {
     await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
   }
   await send('Emulation.setEmulatedMedia', {
+    // SFR A4: `media: 'print'` lays the page out as the browser prints it.
+    ...(page.media === 'print' ? { media: 'print' } : {}),
     features: [
       { name: 'prefers-color-scheme', value: page.theme },
       { name: 'prefers-reduced-motion', value: 'reduce' },

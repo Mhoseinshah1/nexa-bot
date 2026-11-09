@@ -424,14 +424,6 @@ import {
   type MonitorProfileResponse,
   BACKUP_ROUTES,
   RECOVERY_ROUTES,
-  // ADR-0032: the Recovery Kit.
-  RECOVERY_KIT_ROUTES,
-  importRecoveryKitResponseSchema,
-  installationKeysResponseSchema,
-  removeInstallationKeyResponseSchema,
-  type ImportRecoveryKitResponse,
-  type InstallationKeysResponse,
-  type RemoveInstallationKeyResponse,
   backupHistoryResponseSchema,
   backupStatusResponseSchema,
   recoveryCapabilitiesResponseSchema,
@@ -3101,83 +3093,6 @@ export function verifyRecovery(
   );
 }
 
-// --- The Recovery Kit (ADR-0032) ---------------------------------------------
-
-export function fetchInstallationKeys(): Promise<InstallationKeysResponse> {
-  return authedGet(RECOVERY_KIT_ROUTES.keys, installationKeysResponseSchema);
-}
-
-/**
- * Exports the kit and hands it to the browser as a file.
- *
- * A POST with the password and the passphrase in the BODY — never a link the
- * browser could replay, cache or put in its history. The bytes come back sealed;
- * nothing on this page can read them, and nothing here keeps them after the
- * download is handed over.
- */
-export async function exportRecoveryKit(input: {
-  accountPassword: string;
-  /** Required by the server when the administrator's two-step sign-in is on. */
-  code?: string;
-  passphrase: string;
-  passphraseConfirmation: string;
-}): Promise<{ blob: Blob; filename: string }> {
-  const response = await fetch(`${API_PREFIX}${RECOVERY_KIT_ROUTES.export}`, {
-    method: 'POST',
-    credentials: 'same-origin',
-    cache: 'no-store',
-    headers: { 'content-type': 'application/json', accept: 'application/octet-stream' },
-    body: JSON.stringify(input),
-  });
-  if (!response.ok) {
-    const payload: unknown = await response.json().catch(() => null);
-    throw toApiError(response.status, payload);
-  }
-  const disposition = response.headers.get('content-disposition') ?? '';
-  const match = /filename="([A-Za-z0-9._-]+)"/.exec(disposition);
-  return { blob: await response.blob(), filename: match?.[1] ?? 'nexa-recovery-kit.nxkit' };
-}
-
-/** Reads a chosen kit file as base64 and imports it. The passphrase goes in the body only. */
-export async function importRecoveryKit(input: {
-  file: File;
-  passphrase: string;
-  accountPassword: string;
-  code?: string;
-  idempotencyKey: string;
-}): Promise<ImportRecoveryKitResponse> {
-  // FileReader's data URL, the way the other file pickers here read a file: one
-  // API every browser and the test DOM implement alike.
-  const kit = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('The kit file could not be read.'));
-    reader.onload = () => {
-      const url = typeof reader.result === 'string' ? reader.result : '';
-      resolve(url.slice(url.indexOf(',') + 1));
-    };
-    reader.readAsDataURL(input.file);
-  });
-  return post(
-    RECOVERY_KIT_ROUTES.import,
-    {
-      kit,
-      passphrase: input.passphrase,
-      accountPassword: input.accountPassword,
-      ...(input.code === undefined || input.code === '' ? {} : { code: input.code }),
-      idempotencyKey: input.idempotencyKey,
-    },
-    importRecoveryKitResponseSchema,
-  );
-}
-
-export function removeInstallationKey(input: {
-  keyId: string;
-  confirmation: string;
-  idempotencyKey: string;
-}): Promise<RemoveInstallationKeyResponse> {
-  return post(RECOVERY_KIT_ROUTES.remove, input, removeInstallationKeyResponseSchema);
-}
-
 export function confirmRecovery(input: {
   id: string;
   phrase: string;
@@ -3190,24 +3105,6 @@ export function confirmRecovery(input: {
       phrase: input.phrase,
       artifactChecksum: input.artifactChecksum,
       idempotencyKey: input.idempotencyKey,
-    },
-    recoveryDetailResponseSchema,
-  );
-}
-
-/** §2.3 choice 1: the restore test again on the same request (after the old kit was imported). */
-export function retestRecovery(input: {
-  id: string;
-  idempotencyKey: string;
-  archivePassword?: string;
-}): Promise<RecoveryDetailResponse> {
-  return post(
-    RECOVERY_ROUTES.retest(input.id),
-    {
-      idempotencyKey: input.idempotencyKey,
-      ...(input.archivePassword === undefined || input.archivePassword === ''
-        ? {}
-        : { archivePassword: input.archivePassword }),
     },
     recoveryDetailResponseSchema,
   );

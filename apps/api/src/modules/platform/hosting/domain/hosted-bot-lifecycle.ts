@@ -59,3 +59,32 @@ export function planTransition(
     tenantStatusTo: HOSTED_BOT_TENANT_STATUS[rule.to],
   };
 }
+
+/**
+ * SFR A5: the states the OWNER stops a bot into. A bot is brought back from one of them only
+ * once its Telegram token was entered and verified SINCE the stop — the token is the gate, and
+ * the re-enable comes after it, never before. EXPIRED is the sweep's stop, not the owner's:
+ * renewing a date asks for no token.
+ */
+export const OWNER_STOPPED_STATES: readonly HostedBotState[] = ['SUSPENDED', 'DELETED'];
+
+/**
+ * Refuses ACTIVATE of an owner-stopped bot whose token was not verified after it stopped.
+ * `tokenVerifiedAt` is the activation row's mark, set only when the creator ENTERS a token
+ * («فعال‌سازی» → token) and Telegram accepts it.
+ */
+export function assertTokenReenteredSinceStop(
+  action: HostedBotAction,
+  current: { readonly state: HostedBotState; readonly stateChangedAt: Date },
+  tokenVerifiedAt: Date | null,
+): void {
+  if (action !== 'ACTIVATE' || !OWNER_STOPPED_STATES.includes(current.state)) return;
+  if (tokenVerifiedAt !== null && tokenVerifiedAt.getTime() > current.stateChangedAt.getTime()) {
+    return;
+  }
+  throw errors.preconditionFailed(
+    HOSTING_ERROR_CODES.TOKEN_REENTRY_REQUIRED,
+    'This bot was stopped. Enter its Telegram token again before activating it.',
+    { state: current.state, stoppedAt: current.stateChangedAt.toISOString() },
+  );
+}

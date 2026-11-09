@@ -1,10 +1,12 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import type { KeyringFormat, SecretKeyring } from './keyring.js';
-import { kekFingerprint } from './recovery-kit.js';
+import { kekFingerprint } from './kek.js';
 
 /**
  * The keyring this installation actually decrypts with: its CONFIGURED keys,
- * plus the decrypt-only keys imported from Recovery Kits.
+ * plus the decrypt-only keys imported from Recovery Kits before the kit was removed
+ * (SFR A1). Nothing imports one any more; the held ones still read live secrets an
+ * older kit-assisted restore left under them, until `botctl secrets rewrap`.
  *
  * It implements `SecretKeyring`, so `AesGcmSecretCipher` and the backup archive
  * read it exactly as they read the configured keyring — `keys.get(id)` at the
@@ -48,6 +50,15 @@ export class InstallationKeyring implements SecretKeyring {
   /** Every key this installation can decrypt with. Read at the moment of use. */
   get keys(): ReadonlyMap<string, Buffer> {
     return this.merged;
+  }
+
+  /**
+   * SFR A1: the CONFIGURED keyring alone, without any imported key. What a restore decrypts
+   * with (plus the archive's own bundled keys): a backup that needs a key only a Recovery Kit
+   * supplied is refused, never opened through a kit imported here before the kit was removed.
+   */
+  get configuredKeyring(): SecretKeyring {
+    return this.configured;
   }
 
   /** The configured keys alone — what the server's configuration says. */

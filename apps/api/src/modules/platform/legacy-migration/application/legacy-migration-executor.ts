@@ -1,6 +1,7 @@
 import {
   asId,
   LEGACY_MIGRATION_APPROVAL_TTL_MS,
+  LEGACY_MIGRATION_MEMORY_PRESSURE_RATIO,
   systemJobActor,
   validInventoryHold,
   type Clock,
@@ -8,6 +9,7 @@ import {
   type LegacyMigrationBlocker,
   type LegacyMigrationApplyReport,
   type LegacyMigrationCodeCount,
+  type LegacyMigrationExhaustedCause,
   type LegacyMigrationPhase,
   type LegacyMigrationProgress,
   type LegacyNxpkgErrorCode,
@@ -105,6 +107,16 @@ export interface LegacyMigrationExecutorDeps {
    * pool has; the container gives the import roles a dedicated pool.
    */
   readonly leases?: LegacyMigrationLeasePort;
+  /**
+   * SFR A2: this process's V8 heap, read while a step runs (the container passes
+   * `v8.getHeapStatistics`). Above `LEGACY_MIGRATION_MEMORY_PRESSURE_RATIO` of the limit the
+   * reading is recorded on the row (`progress.memoryPeak`), so a step whose process then dies
+   * on "JavaScript heap out of memory" is closed with a reason the owner can read. Absent:
+   * nothing is measured.
+   */
+  readonly heapProbe?: () => { readonly usedBytes: number; readonly limitBytes: number };
+  /** Test seam: how often the heap is read while a step runs (default 1 s). */
+  readonly memoryProbeMs?: number;
   /**
    * Whether a step's error is a transient database failure, run again in place
    * (`LEGACY_MIGRATION_TRANSIENT_RETRY_DELAYS_MS`). Defaults to "never": an executor that was
@@ -394,6 +406,7 @@ export class LegacyMigrationExecutor {
       this.deps.heartbeatMs ?? LEGACY_MIGRATION_LEASE_HEARTBEAT_MS,
     );
     heartbeat.unref();
+    const memoryWatch = this.watchMemory(row.id);
 
     try {
       const stale = await this.deps.workspaces.discardStaleSteps(row.id);
@@ -443,7 +456,48 @@ export class LegacyMigrationExecutor {
       await this.release(row.id);
     } finally {
       clearInterval(heartbeat);
+      if (memoryWatch !== null) clearInterval(memoryWatch);
     }
+  }
+
+  /**
+   * SFR A2: reads the heap every `memoryProbeMs` while a step runs and records a reading above
+   * the pressure ratio on the row, on the lease connection (the step's own may be busy). Only a
+   * reading higher than the last one recorded by this process is written, so a step near its
+   * limit writes a handful of rows, not one a second. A failed write is logged and ignored:
+   * this is evidence for a message, never a reason to stop an import.
+   */
+  private watchMemory(id: string): ReturnType<typeof setInterval> | null {
+    const probe = this.deps.heapProbe;
+    const record = this.leases.recordMemoryPeak?.bind(this.leases);
+    if (probe === undefined || record === undefined) return null;
+    let recordedMb = 0;
+    const read = async (): Promise<void> => {
+      const { usedBytes, limitBytes } = probe();
+      if (limitBytes <= 0 || usedBytes < limitBytes * LEGACY_MIGRATION_MEMORY_PRESSURE_RATIO) {
+        return;
+      }
+      const heapUsedMb = Math.floor(usedBytes / 1_048_576);
+      if (heapUsedMb <= recordedMb) return;
+      recordedMb = heapUsedMb;
+      await record({
+        id,
+        leaseOwner: this.deps.leaseOwner,
+        heapUsedMb,
+        heapLimitMb: Math.floor(limitBytes / 1_048_576),
+      }).catch((error: unknown) => {
+        this.deps.logger.warn(
+          { importId: id, err: errorKind(error) },
+          'a legacy migration memory reading could not be recorded',
+        );
+      });
+    };
+    const timer = setInterval(
+      guardedTick('legacy-migration-memory', read, this.deps.logger),
+      this.deps.memoryProbeMs ?? 1_000,
+    );
+    timer.unref();
+    return timer;
   }
 
   /**
@@ -633,8 +687,17 @@ export class LegacyMigrationExecutor {
   private async dryRun(claimed: LegacyNxpkgImportRow, signal: AbortSignal): Promise<void> {
     let row = claimed;
     if (row.progress.dryRunAttempts >= LEGACY_MIGRATION_MAX_STEP_ATTEMPTS) {
+      // SFR A2: every attempt started and none recorded an outcome. A heap reading near the
+      // limit says the process most likely died of memory; the owner is told so, in Persian,
+      // instead of a bare IMPORT_FAILED.
+      const cause = exhaustedCause(row.progress);
       this.deps.logger.error(
-        { importId: row.id, attempts: row.progress.dryRunAttempts },
+        {
+          importId: row.id,
+          attempts: row.progress.dryRunAttempts,
+          cause,
+          memoryPeak: row.progress.memoryPeak ?? null,
+        },
         'a legacy migration dry run was started too many times and is failed',
       );
       await this.fail(
@@ -642,6 +705,8 @@ export class LegacyMigrationExecutor {
         ['DRY_RUN_REQUESTED', 'DRY_RUN_RUNNING'],
         'DRY_RUN_FAILED',
         'IMPORT_FAILED',
+        null,
+        { attemptsExhaustedCause: cause },
       );
       return;
     }
@@ -1263,14 +1328,21 @@ export class LegacyMigrationExecutor {
     to: 'VERIFY_FAILED' | 'DRY_RUN_FAILED' | 'FAILED',
     code: LegacyNxpkgErrorCode,
     counts: readonly LegacyMigrationCodeCount[] | null = null,
+    progress: Partial<LegacyMigrationProgress> = {},
   ): Promise<void> {
     this.deps.logger.warn({ importId: row.id, to, code }, 'a legacy migration step refused');
     const current = await this.reread(row.id);
-    await this.advance(current, from, to, {
-      errorCode: code,
+    const recorded: Partial<LegacyMigrationProgress> = {
       // What the refusal measured (M8: the converter's totals beside the importer's), kept
       // on the row so the operator reads both numbers.
-      ...(counts === null ? {} : { progress: { ...current.progress, refusalCounts: [...counts] } }),
+      ...(counts === null ? {} : { refusalCounts: [...counts] }),
+      ...progress,
+    };
+    await this.advance(current, from, to, {
+      errorCode: code,
+      ...(Object.keys(recorded).length === 0
+        ? {}
+        : { progress: { ...current.progress, ...recorded } }),
     });
   }
 
@@ -1392,3 +1464,8 @@ const ATTEMPT_COUNTERS = [
   'applyAttempts',
   'adoptAttempts',
 ] as const;
+
+/** SFR A2: why a step reached its attempt bound — memory when a heap peak was recorded. */
+export function exhaustedCause(progress: LegacyMigrationProgress): LegacyMigrationExhaustedCause {
+  return progress.memoryPeak !== undefined && progress.memoryPeak !== null ? 'MEMORY' : 'UNKNOWN';
+}

@@ -9,7 +9,10 @@ import {
   estimateCapacity,
   ESTIMATE_OWNER_RESERVED,
 } from '../../apps/api/src/modules/platform/hosting/domain/capacity-estimate';
-import { planTransition } from '../../apps/api/src/modules/platform/hosting/domain/hosted-bot-lifecycle';
+import {
+  assertTokenReenteredSinceStop,
+  planTransition,
+} from '../../apps/api/src/modules/platform/hosting/domain/hosted-bot-lifecycle';
 import { HOSTED_BOT_TRANSITIONS, HOSTED_BOT_TENANT_STATUS, isNexaError } from '@nexa/contracts';
 
 /**
@@ -185,5 +188,52 @@ describe('the server card’s estimate', () => {
       moreSmallBots: 0,
       blockedBy: 'DISK',
     });
+  });
+});
+
+describe('SFR A5: the token is the gate for bringing back a bot the owner stopped', () => {
+  const stoppedAt = new Date('2026-11-09T10:00:00Z');
+  const before = new Date(stoppedAt.getTime() - 1);
+  const after = new Date(stoppedAt.getTime() + 1);
+  const codeOf = (fn: () => void): string | null => {
+    try {
+      fn();
+      return null;
+    } catch (error) {
+      return isNexaError(error) ? error.code : 'not a NexaError';
+    }
+  };
+  for (const state of ['SUSPENDED', 'DELETED'] as const) {
+    it(`ACTIVATE of a ${state} bot needs a token verified after the stop`, () => {
+      const current = { state, stateChangedAt: stoppedAt };
+      for (const verified of [null, before, stoppedAt]) {
+        expect(codeOf(() => assertTokenReenteredSinceStop('ACTIVATE', current, verified))).toBe(
+          'hosting.token_reentry_required',
+        );
+      }
+      expect(codeOf(() => assertTokenReenteredSinceStop('ACTIVATE', current, after))).toBeNull();
+    });
+  }
+  it('asks nothing of an expired bot, or of any other action', () => {
+    expect(
+      codeOf(() =>
+        assertTokenReenteredSinceStop(
+          'ACTIVATE',
+          { state: 'EXPIRED', stateChangedAt: stoppedAt },
+          null,
+        ),
+      ),
+    ).toBeNull();
+    for (const action of ['SUSPEND', 'DELETE', 'PURGE'] as const) {
+      expect(
+        codeOf(() =>
+          assertTokenReenteredSinceStop(
+            action,
+            { state: 'SUSPENDED', stateChangedAt: stoppedAt },
+            null,
+          ),
+        ),
+      ).toBeNull();
+    }
   });
 });

@@ -210,6 +210,10 @@ export const WEB_FA_LEGACY = {
   'web.lmg_error_decisions': 'فایل تصمیم‌های مالکیت بررسی نشد.',
   'web.lmg_error_import_failed': 'واردکردن ناموفق بود؛ گزارش اجرای واردکننده جزئیات را دارد.',
   'web.lmg_error_cancelled': 'این مهاجرت لغو شد.',
+  'web.lmg_exhausted_memory':
+    'حافظهٔ نقش بازیابی کافی نبود: اجرای آزمایشی {attempts} بار شروع شد و هر بار نزدیک سقف حافظه ({used} از {limit} مگابایت) متوقف شد. با «botctl update» یا «botctl restart» سقف حافظهٔ این نقش دوباره از حافظهٔ سرور محاسبه می‌شود؛ سپس اجرای آزمایشی تازه‌ای بخواهید.',
+  'web.lmg_exhausted_unknown':
+    'اجرای آزمایشی {attempts} بار شروع شد و هیچ‌بار به نتیجه نرسید، پس بسته شد. علت در گزارش نقش بازیابی است: botctl logs recovery',
   'web.lmg_phase': 'مرحله',
   'web.lmg_phase_verify': 'بررسی بسته',
   'web.lmg_phase_dry_run': 'اجرای آزمایشی',

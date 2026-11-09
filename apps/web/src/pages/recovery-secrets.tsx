@@ -1,16 +1,11 @@
 import { useState, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   PLATFORM_ERROR_CODES,
   type RecoveryRequestSummary,
   type RecoveryRestoreTest,
 } from '@nexa/contracts';
-import {
-  ApiError,
-  acknowledgeUnreadableSecrets,
-  fetchSecretReentry,
-  retestRecovery,
-} from '../api/client';
+import { ApiError, acknowledgeUnreadableSecrets, fetchSecretReentry } from '../api/client';
 import { formatNumber } from '../format';
 import { t } from '../i18n/web.fa';
 import { recoveryErrorText } from '../recovery-failure-labels';
@@ -22,11 +17,8 @@ import {
 import { useLinkHandler } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import { ConfirmDialog } from '../ui/confirm-dialog';
-import { Banner, SecretInput } from '../ui/kit';
+import { Banner } from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
-import { ImportForm } from './recovery-kit';
-
-function noop(): void {}
 
 const UNREADABLE_CODE = 'recovery.candidate_secrets_unreadable';
 
@@ -55,48 +47,24 @@ function SecretList({ list }: { list: NonNullable<RecoveryRestoreTest['unreadabl
 
 /**
  * After `recovery.candidate_secrets_unreadable`: which secrets could not be read, and the
- * two ways on — import the old server's Recovery Kit and test again, or accept re-entering
- * them. Neither is the security: the server re-checks the list and the permission.
+ * way on — accept re-entering them. The Recovery Kit import that was the other choice is
+ * removed (SFR A1). This is not the security: the server re-checks the list and the
+ * permission.
  */
 export function UnreadableSecretsPanel({
   recovery,
   mayRestore,
-  sevenZip,
-  mayImportKit = false,
   onUpdated,
 }: {
   recovery: RecoveryRequestSummary;
   mayRestore: boolean;
-  /**
-   * `recovery.kit.import`: decides only whether the kit form is DRAWN here (the same
-   * `ImportForm` and mutation as the Recovery Kit card; the server checks the key again).
-   */
-  mayImportKit?: boolean;
-  /** Whether the upload was a 7-Zip archive, whose test needs its password again. */
-  sevenZip: boolean;
   onUpdated: (next: RecoveryRequestSummary) => void;
 }) {
   const list = unreadableSecretsOf(recovery);
-  const client = useQueryClient();
-  const [password, setPassword] = useState('');
   const [asking, setAsking] = useState(false);
-  const retestKey = useSubmissionKey();
   const acknowledgeKey = useSubmissionKey();
   const hasRefundCard = list.some((entry) => UNCLEARABLE_SECRET_PURPOSES.includes(entry.purpose));
 
-  const retest = useMutation({
-    mutationFn: () => {
-      const body = { id: recovery.id, archivePassword: password };
-      return retestRecovery({ ...body, idempotencyKey: retestKey.current(body) });
-    },
-    onSuccess: (result) => {
-      retestKey.settle();
-      onUpdated(result.recovery);
-    },
-    onError: (error) => retestKey.settleOn(error),
-    // The password is for this one test: cleared whatever the answer.
-    onSettled: () => setPassword(''),
-  });
   const acknowledge = useMutation({
     mutationFn: () => {
       const body = { id: recovery.id, unreadable: list };
@@ -117,7 +85,6 @@ export function UnreadableSecretsPanel({
   });
 
   if (list.length === 0) return null;
-  const canUploadKit = recovery.restoreTest?.canUploadKit === true;
   const refused =
     acknowledge.error instanceof ApiError &&
     acknowledge.error.code === PLATFORM_ERROR_CODES.RECOVERY_REFUSED &&
@@ -134,56 +101,6 @@ export function UnreadableSecretsPanel({
         <Banner tone="neutral">{t('web.secret_unreadable_no_permission')}</Banner>
       ) : (
         <>
-          {canUploadKit && (
-            <section className="stack" aria-label={t('web.secret_unreadable_kit_choice')}>
-              <h4>{t('web.secret_unreadable_kit_choice')}</h4>
-              <p className="muted small">{t('web.secret_unreadable_kit_hint')}</p>
-              {/* The kit import sits in the choice it belongs to (it used to be a separate card above). */}
-              {mayImportKit ? (
-                <div className="stack inset" data-testid="unreadable-kit-import">
-                  <h5>{t('web.kit_import_title')}</h5>
-                  <p className="muted small">{t('web.kit_import_hint')}</p>
-                  <ImportForm
-                    onImported={() =>
-                      void client.invalidateQueries({ queryKey: ['installation-keys'] })
-                    }
-                    onDirty={noop}
-                  />
-                </div>
-              ) : (
-                <Banner tone="neutral">{t('web.kit_no_permission_import')}</Banner>
-              )}
-              {sevenZip && (
-                <label className="field">
-                  <span className="field-label">
-                    {t('web.secret_unreadable_archive_password_label')}
-                  </span>
-                  <SecretInput
-                    value={password}
-                    onChange={(event) => setPassword(event.currentTarget.value)}
-                  />
-                </label>
-              )}
-              <div className="btn-group">
-                <button
-                  type="button"
-                  className="btn primary"
-                  onClick={() => retest.mutate()}
-                  disabled={retest.isPending}
-                >
-                  {retest.isPending
-                    ? t('web.secret_unreadable_retesting')
-                    : t('web.secret_unreadable_retest')}
-                </button>
-              </div>
-              {retest.error !== null && (
-                <Banner tone="danger">
-                  {recoveryErrorText(retest.error)}
-                  <ErrorRef error={retest.error} />
-                </Banner>
-              )}
-            </section>
-          )}
           <section className="stack">
             <p className="muted small">{t('web.secret_unreadable_continue_hint')}</p>
             <div className="btn-group">

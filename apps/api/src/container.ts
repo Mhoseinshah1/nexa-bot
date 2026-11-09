@@ -158,13 +158,13 @@ import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
 import { SecretReentryService } from './modules/platform/recovery/application/secret-reentry.service.js';
 import { DrizzleSecretReentryReader } from './modules/platform/recovery/infrastructure/drizzle-secret-reentry.reader.js';
 import { hostname } from 'node:os';
+import { getHeapStatistics } from 'node:v8';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import { InstallationKeyring } from './infrastructure/crypto/installation-keyring.js';
-import { FAST_KIT_KDF, PRODUCTION_KIT_KDF } from './infrastructure/crypto/recovery-kit.js';
-import { InstallationKeyService } from './modules/platform/recovery/application/installation-key.service.js';
+import { FAST_KDF, PRODUCTION_KDF } from './infrastructure/crypto/kek.js';
+import { RecoveryUploadSweeper } from './modules/platform/recovery/application/upload-sweeper.js';
 import { DrizzleInstallationKeyRepository } from './modules/platform/recovery/infrastructure/drizzle-installation-key.repository.js';
 import {
-  FilesystemRetainedArchiveScanner,
   InstallationKeyLoader,
   KeyringRecoveryKeyCoverage,
   PgCandidateKeyStore,
@@ -1850,6 +1850,8 @@ export interface Container {
   readonly recoveryExecutor: RecoveryExecutor;
   readonly recoveryRequests: DrizzleRecoveryRequestRepository;
   readonly recoveryWorkspaces: FilesystemRecoveryWorkspaces;
+  /** SFR A3: removes refused and orphaned restore uploads (the recovery role runs it). */
+  readonly recoveryUploadSweeper: RecoveryUploadSweeper;
   /**
    * Mirza `.nxpkg` importer (`docs/legacy-migration/nxpkg-importer.md`): the operator's
    * service (the Web Admin «مهاجرت از میرزا»), and the executor that ONLY the `migration`
@@ -1903,7 +1905,6 @@ export interface Container {
   /** R12 F2: the owner's outbound allow-list the URL policy consults (refreshed per role). */
   readonly outboundAllowList: OutboundAllowList;
   readonly installationKeyRepository: DrizzleInstallationKeyRepository;
-  readonly installationKeys: InstallationKeyService;
   /**
    * Migration P7: the legacy importer (`docs/legacy-migration/importer.md`). A factory,
    * because two of its inputs are the CLI's: the P6 adoption port (null until agent
@@ -8440,7 +8441,7 @@ export function createContainer(
      * the archiver zeroes what it is given, and these buffers are the keyring's.
      */
     {
-      profile: config.PASSWORD_HASH_PROFILE === 'fast' ? FAST_KIT_KDF : PRODUCTION_KIT_KDF,
+      profile: config.PASSWORD_HASH_PROFILE === 'fast' ? FAST_KDF : PRODUCTION_KDF,
       keys: async () => {
         const ids = new Set([
           keyring.activeKeyId,
@@ -8638,10 +8639,17 @@ export function createContainer(
    */
   const recoveryWorkspaces = new FilesystemRecoveryWorkspaces(config.RECOVERY_WORK_DIR);
   const recoveryJournal = new FileCutoverJournal(config.RECOVERY_WORK_DIR);
+  const recoveryUploadSweeper = new RecoveryUploadSweeper({
+    workspaces: recoveryWorkspaces,
+    requests: recoveryRequests,
+    clock,
+    logger,
+  });
   /*
-   * The Recovery Kit's key lifecycle (ADR-0032). The loader keeps this
-   * process's keyring in step with `installation_keys`; the coverage adapter is
-   * what both halves of a recovery ask about keys.
+   * The decrypt-only keys an installation still holds from a Recovery Kit it imported
+   * before the kit was removed (SFR A1): the loader keeps this process's keyring in step
+   * with `installation_keys` (read-only now); the coverage adapter is what both halves of
+   * a recovery ask about keys.
    */
   const installationKeyRepository = new DrizzleInstallationKeyRepository(database.db);
   const installationKeyLoader = new InstallationKeyLoader(
@@ -8656,27 +8664,6 @@ export function createContainer(
     new PgCandidateKeyStore(config.DATABASE_URL, backupTools.liveDatabase),
     acceptsV1(config, configuredKeyring),
   );
-  const installationKeys = new InstallationKeyService({
-    ownerAlerts,
-    keyring,
-    loader: installationKeyLoader,
-    keys: installationKeyRepository,
-    archives: new FilesystemRetainedArchiveScanner(config.BACKUP_WORK_DIR),
-    recoveries: recoveryRequests,
-    workspaces: recoveryWorkspaces,
-    uow,
-    idempotency,
-    guard,
-    audit,
-    opsLog,
-    clock,
-    ids,
-    // The same switch that selects the password hasher's cost, refused in
-    // production by the config schema for the same reason.
-    kdf: config.PASSWORD_HASH_PROFILE === 'fast' ? FAST_KIT_KDF : PRODUCTION_KIT_KDF,
-    verifyStepUp: (scope, actor, stepUp, context, action) =>
-      adminManagement.verifyStepUp(scope, actor, stepUp, context, action),
-  });
   const secretReentry = new SecretReentryService({
     reader: new DrizzleSecretReentryReader(database.db, cipher),
     guard,
@@ -9110,6 +9097,11 @@ export function createContainer(
       ? {}
       : { leases: new DrizzleLegacyNxpkgImportRepository(leaseDatabase.db) }),
     isTransientFailure: isTransientDatabaseFailure,
+    // SFR A2: the heap the import role runs in, so a dry run that dies of memory says so.
+    heapProbe: () => {
+      const heap = getHeapStatistics();
+      return { usedBytes: heap.used_heap_size, limitBytes: heap.heap_size_limit };
+    },
     logger,
   });
   const backupScheduler = new BackupScheduler({
@@ -10040,6 +10032,7 @@ export function createContainer(
     recoveryExecutor,
     recoveryRequests,
     recoveryWorkspaces,
+    recoveryUploadSweeper,
     legacyMigration,
     migrationExecutor,
     legacyNxpkgImports,
@@ -10049,7 +10042,6 @@ export function createContainer(
     recoveryKeyCoverage,
     outboundAllowList,
     installationKeyRepository,
-    installationKeys,
     legacyPanelInventory: (options = {}) => legacyInventory(options),
     rickpanelInventorySource: () => legacyInventory(),
     legacyImporter: (options = {}) => {

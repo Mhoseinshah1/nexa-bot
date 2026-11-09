@@ -1,12 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, scrypt } from 'node:crypto';
 import { z } from 'zod';
 import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
-import {
-  FAST_KIT_KDF,
-  kekFingerprint,
-  PRODUCTION_KIT_KDF,
-  type KitKdfProfile,
-} from './recovery-kit.js';
+import { FAST_KDF, kekFingerprint, PRODUCTION_KDF, type KdfProfile } from './kek.js';
 
 /**
  * The key bundle: the keyring keys a backup's secrets are sealed under, carried
@@ -59,9 +54,9 @@ const b64url = z.string().regex(/^[A-Za-z0-9_-]+$/);
  * verified — and the tag can only be checked AFTER deriving. Any other profile is
  * refused as malformed before a byte of scrypt memory is committed.
  */
-const ACCEPTED_PROFILES: readonly KitKdfProfile[] = [PRODUCTION_KIT_KDF, FAST_KIT_KDF];
+const ACCEPTED_PROFILES: readonly KdfProfile[] = [PRODUCTION_KDF, FAST_KDF];
 
-function acceptedProfile(profile: KitKdfProfile): boolean {
+function acceptedProfile(profile: KdfProfile): boolean {
   return ACCEPTED_PROFILES.some(
     (accepted) =>
       accepted.log2N === profile.log2N && accepted.r === profile.r && accepted.p === profile.p,
@@ -157,7 +152,7 @@ function aad(backupId: string, keyId: string, fingerprint: string): Buffer {
  * derivation: that one refuses to run beside another (a kit is opened by hand), and
  * a scheduled backup must not fail because somebody is importing a kit.
  */
-async function derive(password: string, salt: Buffer, profile: KitKdfProfile): Promise<Buffer> {
+async function derive(password: string, salt: Buffer, profile: KdfProfile): Promise<Buffer> {
   const N = 2 ** profile.log2N;
   const secret = Buffer.from(password.normalize('NFC'), 'utf8');
   try {
@@ -186,7 +181,7 @@ export async function sealKeyBundle(input: {
   readonly keys: readonly BundleKey[];
   readonly password: string;
   readonly backupId: string;
-  readonly profile: KitKdfProfile;
+  readonly profile: KdfProfile;
 }): Promise<Buffer> {
   if (input.password.length === 0) throw malformed('a key bundle needs a password');
   if (!acceptedProfile(input.profile))

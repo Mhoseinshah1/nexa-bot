@@ -39,7 +39,8 @@ import type { ScopeActivityReader } from '../../system/application/record-ping.s
 import type { CapacityLimitsService } from '../../capacity/application/capacity-limits.service.js';
 import type { CapacityLimitResolver } from '../../capacity/application/capacity-limit-resolver.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { planTransition } from '../domain/hosted-bot-lifecycle.js';
+import { assertTokenReenteredSinceStop, planTransition } from '../domain/hosted-bot-lifecycle.js';
+import type { HostedActivationRepository } from './activation-ports.js';
 import { estimateCapacity } from '../domain/capacity-estimate.js';
 import { diskUsedPercent } from '../../capacity/domain/memory.js';
 import type { HostingOwnerGuard } from './hosting-owner-guard.js';
@@ -56,6 +57,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface HostingServiceDeps {
   readonly repository: HostingRepository;
+  /** SFR A5: the activation row, whose token mark gates re-activating a stopped bot. */
+  readonly activations: Pick<HostedActivationRepository, 'find'>;
   readonly system: HostedTenantSystemPath;
   readonly section: HostingSectionService;
   readonly owner: HostingOwnerGuard;
@@ -593,10 +596,12 @@ export class HostingService {
     if (replay !== null)
       return { bot: await this.view(installation, actor, hostedTenantId), replayed: true };
     // Before the code: a transition that cannot happen spends nothing.
-    planTransition(
+    const current = await this.requireRow(installation, hostedTenantId);
+    planTransition(action, current, this.deps.clock.now());
+    assertTokenReenteredSinceStop(
       action,
-      await this.requireRow(installation, hostedTenantId),
-      this.deps.clock.now(),
+      current,
+      (await this.deps.activations.find(installation, hostedTenantId))?.tokenVerifiedAt ?? null,
     );
 
     const context = systemContext(auditAction);
@@ -609,6 +614,13 @@ export class HostingService {
         await this.inTransaction(installation, actor, token, tx);
         const row = await this.requireRow(installation, hostedTenantId, tx, true);
         const plan = planTransition(action, row, now);
+        // Again under the row lock: a token change racing this activation is decided here.
+        assertTokenReenteredSinceStop(
+          action,
+          row,
+          (await this.deps.activations.find(installation, hostedTenantId, tx, true))
+            ?.tokenVerifiedAt ?? null,
+        );
         const moved = await this.deps.repository.transition(
           installation,
           hostedTenantId,

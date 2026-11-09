@@ -158,11 +158,10 @@ export async function startProcessRestartWatch(
 }
 
 export async function resolveInstallationTenant(container: Container): Promise<void> {
-  // The decrypt-only keys imported from Recovery Kits (ADR-0032), loaded before
-  // anything in this process reads a secret, then kept in step on a timer: a kit
-  // imported through the API reaches the worker, the monitor, the provisioner and
-  // the recovery executor within one interval, and a restored database's keys
-  // reach every process that reconnects to it. Every role calls this function,
+  // The decrypt-only keys imported from Recovery Kits before the kit was removed
+  // (SFR A1), loaded before anything in this process reads a secret, then kept in
+  // step on a timer: a restored database's rows (and a `secrets rewrap`) reach
+  // every process that reconnects to it. Every role calls this function,
   // which is why it lives here. A failed load is logged and keeps what it had.
   await container.installationKeyLoader.refreshQuietly();
   container.installationKeyLoader.start(INSTALLATION_KEY_REFRESH_MS);

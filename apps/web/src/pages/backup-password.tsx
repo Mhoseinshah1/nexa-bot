@@ -13,7 +13,7 @@ import { formatTimestamp } from '../format';
 import { Icon } from '../ui/icons';
 import { errorText } from '../error-text';
 import { ErrorRef } from '../ui/technical-details';
-import { StepUpCodeField } from './recovery-kit';
+import { StepUpCodeField } from './step-up-code-field';
 
 /**
  * «رمز فایل بکاپ» — Round 4 PR-E, E4.
@@ -132,7 +132,7 @@ export function BackupPasswordCard({
             />
           </label>
           <label className="field">
-            <span className="field-label">{t('web.kit_account_password')}</span>
+            <span className="field-label">{t('web.step_up_account_password')}</span>
             <SecretInput
               value={accountPassword}
               onChange={(event) => setAccountPassword(event.currentTarget.value)}

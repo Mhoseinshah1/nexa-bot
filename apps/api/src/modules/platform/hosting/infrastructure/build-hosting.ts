@@ -25,6 +25,7 @@ import {
   type HostingSectionDeps,
 } from '../application/hosting-section.service.js';
 import { HostingService } from '../application/hosting.service.js';
+import { DrizzleHostedActivationRepository } from './drizzle-hosted-activation.repository.js';
 import { HostedBotExpiryService } from '../application/hosted-bot-expiry.service.js';
 import {
   hostedBotCreateRefusal,
@@ -104,6 +105,7 @@ export function buildHosting(deps: {
   });
   const hosting = new HostingService({
     repository,
+    activations: new DrizzleHostedActivationRepository(deps.db),
     system,
     section: hostingSection,
     owner,

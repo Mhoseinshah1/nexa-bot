@@ -30,7 +30,7 @@ import { rememberOnce } from '../../idempotency/application/remember-once.js';
  * WHAT IT IS. The one key of every 7-Zip backup archive from the next run on: an operator
  * opens a backup in 7-Zip with it and nothing else. So setting it is CRITICAL — charged on
  * `backup.download` (owner only), which is already the permission that hands out the
- * archive — and behind the same account-password step-up the Recovery Kit export uses.
+ * archive — and behind the account-password step-up (`verifyStepUp`).
  *
  * WHAT IT NEVER DOES. Return the password, log it, put it in an audit row, an operational
  * event, the idempotency store (not even a hash of it — an unsalted digest of a password is

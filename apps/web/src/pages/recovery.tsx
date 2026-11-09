@@ -55,7 +55,6 @@ import { DataCompactionCard } from './data-compaction';
 import { assembleParts } from '../backup-parts';
 import { phaseRows } from '../backup-phases';
 import { CodeName } from './code-name';
-import { RecoveryKitSection } from './recovery-kit';
 import {
   RestoreSecretsSummary,
   UnreadableSecretsPanel,
@@ -94,9 +93,9 @@ import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
  * NOTHING HERE IS FAKE. Every control calls a real endpoint, and a capability
  * this installation does not have says so in the place an operator would look
  * for it rather than being hidden: uploading is reported off when it is off.
- * An archive from ANOTHER installation is restorable once that installation's
- * Recovery Kit is imported (ADR-0032), and the section that does it sits above
- * the upload, in the order an operator on a fresh server needs it.
+ * An archive from ANOTHER installation is restorable when it was made with a
+ * backup password: it carries its own keys, so the file and the password are all
+ * a fresh server needs. The Recovery Kit is removed (SFR A1).
  *
  * `permission` decides what is DRAWN and never what is allowed. The server
  * re-checks every call, and this page would be exactly as safe if it drew all of
@@ -260,13 +259,6 @@ export function RecoveryPage({
         </StateSwitch>
       </Card>
 
-      {/*
-        The Recovery Kit (ADR-0032), ABOVE the upload: on a fresh server the kit
-        is imported first and the old server's backup uploaded second, and the
-        page reads in the order the operator acts.
-      */}
-      <RecoveryKitSection permissions={permissions} />
-
       <Card
         title={t('web.recovery_operations_title')}
         hint={t('web.recovery_upload_hint')}
@@ -283,7 +275,6 @@ export function RecoveryPage({
             uploadEnabled={false}
             maxUploadBytes={0}
             mayRestore={false}
-            mayImportKit={false}
             mirza={mirza}
             onChanged={refreshAll}
           />
@@ -294,7 +285,6 @@ export function RecoveryPage({
               uploadEnabled={capabilities.data?.uploadEnabled ?? false}
               maxUploadBytes={capabilities.data?.maxUploadBytes ?? 0}
               mayRestore={mayRestore}
-              mayImportKit={permissions.includes('recovery.kit.import')}
               mirza={mirza}
               onChanged={refreshAll}
             />
@@ -588,7 +578,6 @@ function RecoveryOperations({
   uploadEnabled,
   maxUploadBytes,
   mayRestore,
-  mayImportKit,
   mirza,
   onChanged,
 }: {
@@ -597,8 +586,6 @@ function RecoveryOperations({
   uploadEnabled: boolean;
   maxUploadBytes: number;
   mayRestore: boolean;
-  /** `recovery.kit.import`: whether the unreadable-secrets choice draws the kit form. */
-  mayImportKit: boolean;
   mirza: MirzaAccess;
   onChanged: () => void;
 }) {
@@ -904,8 +891,6 @@ function RecoveryOperations({
           <UnreadableSecretsPanel
             recovery={current}
             mayRestore={mayRestore}
-            sevenZip={uploadedSevenZip}
-            mayImportKit={mayImportKit}
             onUpdated={(next) => {
               setCurrent(next);
               onChanged();

@@ -8,7 +8,6 @@ import {
   LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
   RECOVERY_CONFIRMATION_PHRASE,
-  RECOVERY_KIT_ROUTES,
   RECOVERY_ROUTES,
   type PermissionKey,
 } from '@nexa/contracts';
@@ -224,7 +223,6 @@ function page(
   } = {},
 ) {
   const api = stubApi([
-    { url: `${API_PREFIX}${RECOVERY_KIT_ROUTES.keys}`, body: { keys: [] } },
     {
       url: `${API_PREFIX}${BACKUP_ROUTES.status}`,
       body: {
@@ -537,6 +535,51 @@ describe('the Mirza review', () => {
     expect(screen.queryByRole('button', { name: t('web.mrz_confirm_button') })).toBeNull();
     const steps = Array.from(document.querySelectorAll('.lmg-steps li'));
     expect(steps.map((li) => li.className)).toEqual(['done', 'failed', 'todo', 'todo']);
+  });
+
+  it('SFR A2: a dry run closed at its attempt bound on memory says so in Persian, with the numbers', async () => {
+    page([
+      view({
+        status: 'DRY_RUN_FAILED',
+        keyPresent: true,
+        verifyReport,
+        errorCode: 'IMPORT_FAILED',
+        progress: {
+          ...progress,
+          dryRunAttempts: 5,
+          memoryPeak: { heapUsedMb: 520, heapLimitMb: 560 },
+          attemptsExhaustedCause: 'MEMORY',
+        },
+      }),
+    ]);
+    await choose(MIRZA_PACKAGE_BYTES, 'restore.nxpkg');
+    await send();
+    const memory = t('web.lmg_exhausted_memory')
+      .replace('{attempts}', formatNumber(5))
+      .replace('{used}', formatNumber(520))
+      .replace('{limit}', formatNumber(560));
+    expect(await screen.findByText(memory)).toBeInTheDocument();
+    expect(memory).toContain('حافظهٔ نقش بازیابی کافی نبود');
+  });
+
+  it('SFR A2: a dry run closed at its bound for no recorded reason points at the recovery log', async () => {
+    page([
+      view({
+        status: 'DRY_RUN_FAILED',
+        keyPresent: true,
+        verifyReport,
+        errorCode: 'IMPORT_FAILED',
+        progress: { ...progress, dryRunAttempts: 5, attemptsExhaustedCause: 'UNKNOWN' },
+      }),
+    ]);
+    await choose(MIRZA_PACKAGE_BYTES, 'restore.nxpkg');
+    await send();
+    expect(
+      await screen.findByText(
+        t('web.lmg_exhausted_unknown').replace('{attempts}', formatNumber(5)),
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(t('web.lmg_exhausted_memory'), { exact: false })).toBeNull();
   });
 });
 

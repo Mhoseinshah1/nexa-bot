@@ -138,7 +138,7 @@ export * from './data-retention.js';
 export * from './data-compaction.js';
 export * from './legacy-compaction.js';
 export * from './recovery.js';
-export * from './recovery-kit.js';
+export * from './installation-keys.js';
 export * from './secrets.js';
 export * from './ports.js';
 export * from './http.js';

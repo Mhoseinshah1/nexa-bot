@@ -377,7 +377,7 @@ describe('ApiErrorReport', () => {
  *
  * "Says an error" is found, not listed: every `function name(x: unknown, …): string` in
  * `apps/web/src` whose body reads `ApiError` or calls another such function (to a fixpoint,
- * from `errorText` and `messageFor`) is an error-sentence function — `kitMessage`,
+ * from `errorText` and `messageFor`) is an error-sentence function —
  * `ticketFault`, `bulkMessage`, … — so a page's new helper is covered the day it is written.
  * Every `<Banner …>…</Banner>` in a page or kit component that calls one must also hold an
  * `ErrorRef` (or be an `ApiErrorReport`, which draws one).
@@ -442,7 +442,7 @@ describe('every error banner carries the reference', () => {
   }
 
   it('finds the pages’ own error-sentence helpers', () => {
-    for (const name of ['kitMessage', 'ticketFault', 'bulkMessage', 'recoveryErrorText']) {
+    for (const name of ['ticketFault', 'bulkMessage', 'recoveryErrorText']) {
       expect(names.has(name), name).toBe(true);
     }
     expect(names.size).toBeGreaterThan(30);
@@ -466,7 +466,7 @@ describe('every error banner carries the reference', () => {
     const planted = [
       '{save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}',
       '<Banner tone="danger">',
-      '  {kitMessage(exporter.error)}',
+      '  {ticketFault(exporter.error)}',
       '</Banner>',
       '<Banner tone="danger">{messageFor(x)}<ErrorRef error={x} /></Banner>',
       '<Banner tone="ok">{t(\'web.saved\')}</Banner>',

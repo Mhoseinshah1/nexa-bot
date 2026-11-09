@@ -691,6 +691,13 @@ Owner decisions (round NEXA-FIX-V097, PR-1; detail in `docs/legacy-migration/com
 
 ## Recovery
 
+**Owner decision 2026-11-08 (binding): backups are self-contained; the Recovery Kit is removed
+(SFR A1).** A restore needs only the backup file and its backup password (the keys are bundled
+and wrapped by that password). A backup that genuinely needs a kit is refused with a Persian
+reason and never half-restored; the restore test decrypts with this server's configured keys and
+the archive's own keys only. `installation_keys` stays read-only until a release after every
+installation has run `botctl secrets rewrap`.
+
 Five recovery rules (ADR-0028). Each one is a way to produce something that
 looks like a restore and is not:
 

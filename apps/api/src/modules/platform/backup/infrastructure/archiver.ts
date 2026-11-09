@@ -7,7 +7,7 @@ import {
   wipeBundleKeys,
   type BundleKey,
 } from '../../../../infrastructure/crypto/key-bundle.js';
-import type { KitKdfProfile } from '../../../../infrastructure/crypto/recovery-kit.js';
+import type { KdfProfile } from '../../../../infrastructure/crypto/kek.js';
 import type {
   BackupArchivePasswordSource,
   BackupArchiver,
@@ -78,7 +78,7 @@ export class KeyringBackupArchiver implements BackupArchiver {
  */
 export interface KeyBundleSource {
   keys(): Promise<readonly BundleKey[]>;
-  readonly profile: KitKdfProfile;
+  readonly profile: KdfProfile;
 }
 
 export class DualFormatBackupArchiver implements BackupArchiver {
