@@ -16,8 +16,10 @@ export const TENANT_ARCHIVE_FORMAT_VERSION = 1;
 
 /**
  * How a restore lands (ADR-0039 § 4): a NEW hosted child of the target installation keeping
- * every id, or a REPLACE of the same tenant id's rows. Replace depends on the tenant rewrite
- * allowance (§ 10) and is refused (`tenant_archive.replace_unavailable`) until it is built.
+ * every id, or a REPLACE of the same tenant id's rows — a hosted bot of this installation in
+ * any state but PURGED — under the tenant rewrite allowance (§ 10): its rows are archived
+ * first (PRE_REPLACE), then deleted and the archive's inserted in ONE transaction that is
+ * compared with the verified scratch before it commits.
  */
 export const TENANT_RESTORE_MODES = ['NEW', 'REPLACE'] as const;
 export type TenantRestoreMode = (typeof TENANT_RESTORE_MODES)[number];
