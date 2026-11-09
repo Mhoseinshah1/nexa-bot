@@ -44,6 +44,7 @@ import {
   type HostedActivationLinkResponse,
   type HostedActivationRedeemRequest,
   type HostedActivationRedeemResponse,
+  type HostedBotEnterResponse,
   type HostedActivationResponse,
   type HostedActivationRunnableStep,
   type HostedActivationView,
@@ -5867,6 +5868,23 @@ export function actOnHostedBot(
     body,
     hostingShape<HostedBotResponse>(),
   );
+}
+
+/** Enter a hosted bot's panel (phase 6B): a fresh code mints a one-time entry on the bot's own domain. */
+export function enterHostedBot(
+  tenantId: string,
+  body: { idempotencyKey: string; proof: HostingProof },
+): Promise<HostedBotEnterResponse> {
+  return post(
+    hostingPath(HOSTING_ROUTES.enter, tenantId),
+    body,
+    hostingShape<HostedBotEnterResponse>(),
+  );
+}
+
+/** The hosted domain's `/enter` page: spends the token, the session cookie comes back. */
+export function redeemHostedEnter(token: string): Promise<{ expiresAt: string }> {
+  return post(AUTH_ROUTES.enter, { token }, hostingShape<{ expiresAt: string }>());
 }
 
 export function fetchHostedBotPurgePreview(

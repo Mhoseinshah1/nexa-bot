@@ -17,7 +17,7 @@ import {
 } from './router';
 import { useTheme } from './theme';
 import { Icon } from './ui/icons';
-import { Empty, LeaveGuardHost, PageTrailContext, ToastProvider } from './ui/kit';
+import { Banner, Empty, LeaveGuardHost, Ltr, PageTrailContext, ToastProvider } from './ui/kit';
 import { pageTrail } from './page-trail';
 import { NAV, navPermitted } from './nav';
 import { useNavCounters } from './nav-counters';
@@ -1648,7 +1648,11 @@ export function App() {
         <SavedViewsScope.Provider
           value={savedViewsScopeOf(session.data.admin.id, window.location.host)}
         >
-          <SignedIn permissions={session.data.permissions} admin={session.data.admin} />
+          <SignedIn
+            permissions={session.data.permissions}
+            admin={session.data.admin}
+            impersonation={session.data.impersonation ?? null}
+          />
         </SavedViewsScope.Provider>
       ) : (
         <SignIn />
@@ -1918,9 +1922,12 @@ function messageFor(error: unknown): string {
 function SignedIn({
   admin,
   permissions: sessionPermissions,
+  impersonation = null,
 }: {
   admin: { username: string; displayName: string; roleKeys: string[] };
   permissions: string[];
+  /** Phase 6B enter: the installation owner, entered into this hosted bot. */
+  impersonation?: { ownerUsername: string } | null;
 }) {
   /*
    * The session carries strings; everything below decides on `PermissionKey`, so a key a
@@ -2089,6 +2096,30 @@ function SignedIn({
 
         <main className="content" id="main">
           <div className="content-inner">
+            {/* Phase 6B enter (an entered session): always said, on every page, with the way out beside it.
+                The exit button is the ordinary sign-out: it ends this entered session only. */}
+            {impersonation !== null && (
+              <Banner
+                tone="warn"
+                role="status"
+                title={t('web.impersonation_banner')}
+                action={
+                  <button
+                    type="button"
+                    className="btn sm"
+                    disabled={leave.isPending}
+                    onClick={() => leave.mutate()}
+                  >
+                    {t('web.impersonation_exit')}
+                  </button>
+                }
+              >
+                <p className="small">
+                  {t('web.impersonation_owner')} <Ltr>{impersonation.ownerUsername}</Ltr>
+                </p>
+                <p className="small">{t('web.impersonation_note')}</p>
+              </Banner>
+            )}
             {/* Phase E3: every administrator sees an ACTIVE incident that asked to be seen. */}
             <IncidentBanner mayView={permissions.includes('incidents.view')} />
             {/* NEXA-FIX-RESTORE-SECRETS: secrets a restore cleared and nobody re-entered yet. */}

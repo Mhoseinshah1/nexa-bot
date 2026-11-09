@@ -14,6 +14,7 @@ import {
 import {
   actOnHostedBot,
   createHostedBot,
+  enterHostedBot,
   fetchHostedBotPurgePreview,
   fetchHostedBots,
   purgeHostedBot,
@@ -46,6 +47,7 @@ import {
   SecretInput,
 } from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
+import { Modal } from '../ui/overlays';
 import { fromLocalInput, toLocalInput } from './incidents';
 import { CodePromptDialog, HOSTING_BOTS_KEY, HOSTING_SERVER_KEY } from './hosting-parts';
 import { ActivationSection } from './hosting-activation';
@@ -59,7 +61,7 @@ import { ActivationSection } from './hosting-activation';
 type Dialog =
   | { readonly kind: 'create' }
   | {
-      readonly kind: 'suspend' | 'activate' | 'delete' | 'purge' | 'expiry';
+      readonly kind: 'suspend' | 'activate' | 'delete' | 'purge' | 'expiry' | 'enter';
       readonly bot: HostedBotView;
     };
 
@@ -146,6 +148,7 @@ export function HostedBots({
           onDone={() => done(t('web.hosting_purge_done'))}
         />
       )}
+      {dialog?.kind === 'enter' && <EnterDialog bot={dialog.bot} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'expiry' && (
         <ExpiryDialog bot={dialog.bot} onClose={() => setDialog(null)} onDone={() => done()} />
       )}
@@ -165,7 +168,7 @@ function BotCard({
   onLimitSaved,
 }: {
   bot: HostedBotView;
-  onAction: (kind: 'suspend' | 'activate' | 'delete' | 'purge' | 'expiry') => void;
+  onAction: (kind: 'suspend' | 'activate' | 'delete' | 'purge' | 'expiry' | 'enter') => void;
   onLimitSaved: () => void;
 }) {
   const state = HOSTED_STATE_LABEL[bot.state];
@@ -254,12 +257,13 @@ function BotCard({
               {t('web.hosting_action_purge')}
             </Button>
           )}
-          <span className="hosting-inline">
-            <Button size="sm" icon="external" disabled>
+          {/* Phase 6B: the server decides (an ACTIVE bot with a verified domain); a bot that
+              is not shows the Persian refusal in the prompt. */}
+          {bot.state === 'ACTIVE' && (
+            <Button size="sm" icon="external" onClick={() => onAction('enter')}>
               {t('web.hosting_action_enter')}
             </Button>
-            <span className="muted small">{t('web.hosting_enter_later')}</span>
-          </span>
+          )}
         </div>
       )}
       {/* SFR A5: also for a bot the owner stopped — its token is entered again HERE, while it
@@ -633,6 +637,58 @@ function ActionDialog({
         />
       </Field>
     </CodePromptDialog>
+  );
+}
+
+/**
+ * «ورود به پنل» (phase 6B): a fresh code mints a one-time entry, opened in a new tab on the
+ * bot's own domain (the token in the fragment). If the browser blocks the tab, the link is
+ * shown once to open by hand; it is never stored.
+ */
+function EnterDialog({ bot, onClose }: { bot: HostedBotView; onClose: () => void }) {
+  const toast = useToast();
+  const [blocked, setBlocked] = useState<string | null>(null);
+  const [replayed, setReplayed] = useState(false);
+  if (blocked !== null || replayed) {
+    return (
+      <Modal open onClose={onClose} title={`${t('web.hosting_enter_title')} — ${bot.displayName}`}>
+        {replayed ? (
+          <Banner tone="info">{t('web.hosting_enter_replayed')}</Banner>
+        ) : (
+          <div className="stack">
+            <Banner tone="warn">{t('web.hosting_enter_blocked')}</Banner>
+            <a href={blocked as string} target="_blank" rel="noopener noreferrer">
+              {t('web.hosting_enter_submit')}
+            </a>
+          </div>
+        )}
+      </Modal>
+    );
+  }
+  return (
+    <CodePromptDialog
+      title={`${t('web.hosting_enter_title')} — ${bot.displayName}`}
+      hint={t('web.hosting_enter_hint')}
+      confirmLabel={t('web.hosting_enter_submit')}
+      run={({ proof, idempotencyKey }) => enterHostedBot(bot.tenantId, { idempotencyKey, proof })}
+      onClose={onClose}
+      onDone={(result) => {
+        if (result.url === null) {
+          setReplayed(true);
+          return;
+        }
+        // No `noopener` feature: with it `window.open` answers null even when it opened, and a
+        // blocked tab could not be told apart. The new tab is cut loose from this one at once.
+        const opened = window.open(result.url, '_blank');
+        if (opened === null) {
+          setBlocked(result.url);
+          return;
+        }
+        opened.opener = null;
+        toast({ tone: 'ok', message: t('web.hosting_enter_opened') });
+        onClose();
+      }}
+    />
   );
 }
 
