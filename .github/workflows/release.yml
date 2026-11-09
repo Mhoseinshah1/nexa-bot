@@ -451,7 +451,7 @@ jobs:
                 ;;
             esac
             printf 'creating release %s.\n' "$TAG"
-            notes="$(printf 'Install on a fresh Ubuntu 22.04 or 24.04 server (bash):\n\n```\ncurl -fsSL --remote-name-all https://github.com/%s/releases/download/%s/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh\n```\n\nSee docs/deployment.md.\n' "$GH_REPO" "$TAG")"
+            notes="$(printf 'Install on a fresh Ubuntu 22.04 or 24.04 server (bash):\n\n```\ncurl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --remote-name-all https://github.com/%s/releases/download/%s/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh\n```\n\nSee docs/deployment.md.\n' "$GH_REPO" "$TAG")"
             gh release create "$TAG" --verify-tag --title "$TAG" --notes "$notes" "${assets[@]}"
           fi
 

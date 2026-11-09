@@ -22,7 +22,7 @@ const read = (p) => readFileSync(join(root, p), 'utf8');
 
 // The installer one-liner, exactly. docs/deployment.md is reconciled to this.
 export const ONE_LINER =
-  'curl -fsSL --remote-name-all https://github.com/Mhoseinshah1/nexa-bot/releases/latest/download/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh';
+  'curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --remote-name-all https://github.com/Mhoseinshah1/nexa-bot/releases/latest/download/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh';
 export const PINNED_LINER = ONE_LINER.replace(
   'releases/latest/download',
   'releases/download/vX.Y.Z',
@@ -96,7 +96,11 @@ for (const file of READMES) {
   const required = [['one-liner', ONE_LINER]];
   if (file === 'README.md') required.push(['pinned one-liner', PINNED_LINER]);
   for (const [name, expected] of required) {
-    const lines = text.split('\n').filter((l) => l.startsWith('curl -fsSL --remote-name-all '));
+    const lines = text
+      .split('\n')
+      .filter((l) =>
+        l.startsWith('curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --remote-name-all '),
+      );
     if (!lines.includes(expected))
       fail(`${file}: ${name} is missing or differs from scripts/check-readme.mjs`);
   }
@@ -106,7 +110,9 @@ for (const file of READMES) {
 const deployment = read('docs/deployment.md');
 const deployLines = deployment
   .split('\n')
-  .filter((l) => l.startsWith('curl -fsSL --remote-name-all '));
+  .filter((l) =>
+    l.startsWith('curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --remote-name-all '),
+  );
 for (const l of deployLines) {
   if (l !== ONE_LINER && l !== PINNED_LINER) {
     fail(`docs/deployment.md: install one-liner differs from the READMEs: ${l}`);

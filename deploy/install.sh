@@ -132,7 +132,7 @@ nexa_standalone() {
   printf '==> downloading %s\n' "$name"
   # A redirect is followed to https only, even when the override allows file.
   curl -fsSLS --proto "$protocols" --proto-redir '=https' --tlsv1.2 \
-    --retry 3 -o "${work}/${name}" "${base}/${name}" ||
+    --retry 5 --retry-delay 2 --retry-all-errors -o "${work}/${name}" "${base}/${name}" ||
     nexa_standalone_die "could not download ${base}/${name}."
 
   local actual
@@ -638,7 +638,7 @@ ensure_docker() {
   install -m 0755 -d /etc/apt/keyrings
   local keyring=/etc/apt/keyrings/docker.asc
   if [ ! -s "$keyring" ]; then
-    curl -fsSL --proto '=https' --tlsv1.2 https://download.docker.com/linux/ubuntu/gpg -o "$keyring" ||
+    curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --proto '=https' --tlsv1.2 https://download.docker.com/linux/ubuntu/gpg -o "$keyring" ||
       nexa_die "could not download Docker's signing key. Check outbound HTTPS to download.docker.com."
     chmod a+r "$keyring"
   fi

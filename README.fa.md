@@ -41,7 +41,7 @@
 2. این دستور را کپی کنید، در ترمینال بچسبانید و Enter بزنید:
 
 ```bash
-curl -fsSL --remote-name-all https://github.com/Mhoseinshah1/nexa-bot/releases/latest/download/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
+curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --remote-name-all https://github.com/Mhoseinshah1/nexa-bot/releases/latest/download/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
 ```
 
 3. نصب‌کننده چند سؤال می‌پرسد. به ترتیب جواب بدهید:
