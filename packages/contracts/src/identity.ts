@@ -32,6 +32,21 @@ export type AdminStatus = (typeof ADMIN_STATUSES)[number];
 export const adminStatusSchema = z.enum(ADMIN_STATUSES);
 
 /**
+ * What KIND of principal an administrator row is (ADR-0039 § 9, phase 6B «ورود به پنل»).
+ *
+ * `OPERATOR` is every administrator a person signs in as. `HOST` is the installation owner's
+ * principal INSIDE a hosted tenant: one per hosted tenant, created on the owner's first enter,
+ * with no password (it cannot sign in — the sign-in treats it as an unknown user), no role,
+ * and not editable, disableable or deletable by the tenant's own administrators (a database
+ * guard). It exists because 61 foreign keys reference admins by `(tenant_id, admin_id)`: the
+ * owner's own installation id cannot be written into a hosted tenant's row, and writing the
+ * hosted owner's id instead would be a fabricated actor. Rows the host writes therefore say
+ * «میزبان» did it, which is true.
+ */
+export const ADMIN_KINDS = ['OPERATOR', 'HOST'] as const;
+export type AdminKind = (typeof ADMIN_KINDS)[number];
+
+/**
  * Usernames are stored already lower-cased and matched exactly.
  *
  * Case-folding at the boundary rather than in the index keeps the uniqueness
@@ -110,6 +125,8 @@ export interface Admin {
   readonly username: string;
   readonly displayName: string;
   readonly status: AdminStatus;
+  /** `HOST` only for the installation owner's principal in a hosted tenant (`ADMIN_KINDS`). */
+  readonly kind: AdminKind;
   /** The seam for a later Telegram admin surface. Null until linked. */
   readonly telegramUserId: string | null;
   readonly createdAt: Date;
