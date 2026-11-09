@@ -213,6 +213,42 @@ describe('hosting section factor recovery (server CLI service)', () => {
     ).toHaveLength(0);
   });
 
+  it('a reset between a proof being spent and the session being written opens nothing', async () => {
+    const panel = await openPanel();
+    const uow = api.container.uow as { run: (...args: unknown[]) => Promise<unknown> };
+    const original = uow.run.bind(uow);
+    const stepBefore = (await db().select().from(hostingTotpFactors))[0]!.lastUsedStep;
+    let done = false;
+    uow.run = async (...args: unknown[]) => {
+      const out = await original(...args);
+      // The transaction that spent the proof has just committed: reset now.
+      const factor = (await db().select().from(hostingTotpFactors))[0];
+      if (!done && factor !== undefined && factor.lastUsedStep !== stepBefore) {
+        done = true;
+        await reset('panel-owner');
+      }
+      return out;
+    };
+    try {
+      const sessionsBefore = (await db().select().from(hostingSessions)).length;
+      const ownerSession = await signIn(owner);
+      expect(
+        await codeOf(
+          api.container.hostingSection.openSession(tenantA, ownerSession, {
+            proof: { code: code(panel.secret) },
+          }),
+        ),
+      ).toBe(HOSTING_ERROR_CODES.SECOND_FACTOR_REQUIRED);
+      expect(
+        (await db().select().from(hostingSessions)).filter((row) => row.revokedAt === null),
+      ).toHaveLength(0);
+      expect(done).toBe(true);
+      expect((await db().select().from(hostingSessions)).length).toBe(sessionsBefore);
+    } finally {
+      uow.run = original;
+    }
+  });
+
   it('parses its arguments strictly', () => {
     expect(parseHostingResetArgs(['--username', 'o', '--reason', 'lost'])).toEqual({
       username: 'o',
