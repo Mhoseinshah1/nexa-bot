@@ -283,6 +283,7 @@ export function RecoveryPage({
             uploadEnabled={false}
             maxUploadBytes={0}
             mayRestore={false}
+            mayImportKit={false}
             mirza={mirza}
             onChanged={refreshAll}
           />
@@ -293,6 +294,7 @@ export function RecoveryPage({
               uploadEnabled={capabilities.data?.uploadEnabled ?? false}
               maxUploadBytes={capabilities.data?.maxUploadBytes ?? 0}
               mayRestore={mayRestore}
+              mayImportKit={permissions.includes('recovery.kit.import')}
               mirza={mirza}
               onChanged={refreshAll}
             />
@@ -586,6 +588,7 @@ function RecoveryOperations({
   uploadEnabled,
   maxUploadBytes,
   mayRestore,
+  mayImportKit,
   mirza,
   onChanged,
 }: {
@@ -594,6 +597,8 @@ function RecoveryOperations({
   uploadEnabled: boolean;
   maxUploadBytes: number;
   mayRestore: boolean;
+  /** `recovery.kit.import`: whether the unreadable-secrets choice draws the kit form. */
+  mayImportKit: boolean;
   mirza: MirzaAccess;
   onChanged: () => void;
 }) {
@@ -900,6 +905,7 @@ function RecoveryOperations({
             recovery={current}
             mayRestore={mayRestore}
             sevenZip={uploadedSevenZip}
+            mayImportKit={mayImportKit}
             onUpdated={(next) => {
               setCurrent(next);
               onChanged();

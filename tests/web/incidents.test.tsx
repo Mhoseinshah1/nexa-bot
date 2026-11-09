@@ -97,6 +97,99 @@ describe('the incidents list', () => {
     renderPage(<IncidentsPage denied mayManage />);
     expect(api.calls).toHaveLength(0);
   });
+
+  it('PR-8: no count chip (the list has no server total), the intro folded, a freshness line', async () => {
+    stubApi([{ url: '/incidents', body: { incidents: [incident()], nextCursor: null } }]);
+    const view = renderPage(<IncidentsPage denied={false} mayManage />);
+    await screen.findByText('Frankfurt maintenance');
+    expect(view.container.querySelector('.count-chip')).toBeNull();
+    expect(screen.getByTestId('list-read-at')).toBeInTheDocument();
+    const fold = screen.getByText(t('web.inc_about_fold')).closest('details');
+    expect(fold).not.toBeNull();
+    expect(fold?.textContent).toContain(t('web.inc_subtitle'));
+  });
+});
+
+describe('the incident side drawer (PR-8)', () => {
+  beforeEach(() => vi.unstubAllGlobals());
+
+  const OLDER = '01a05e35-c9ad-7e93-bef3-1ed9b55292d1';
+  const CURSOR = `2026-10-03T09:00:00.000Z_${ID}`;
+
+  it('opens the row whose name was pressed, read by its own id, even on an older page', async () => {
+    const api = stubApi([
+      { url: '/incidents', body: { incidents: [incident()], nextCursor: CURSOR } },
+      {
+        url: `/incidents?cursor=`,
+        body: {
+          incidents: [incident({ id: OLDER, title: 'Old window', status: 'RESOLVED' })],
+          nextCursor: null,
+        },
+      },
+      {
+        url: `/incidents/${OLDER}`,
+        body: {
+          incident: incident({ id: OLDER, title: 'Old window', status: 'RESOLVED' }),
+          timeline: [],
+        },
+      },
+    ]);
+    renderPage(<IncidentsPage denied={false} mayManage mayNotify />);
+    await screen.findByText('Frankfurt maintenance');
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_older') }));
+    const link = await screen.findByRole('link', { name: 'Old window' });
+    // The name is still a real link to the full page.
+    expect(link.getAttribute('href')).toBe(`/incidents/${OLDER}`);
+    fireEvent.click(link);
+    const drawer = await screen.findByRole('dialog');
+    await within(drawer).findByText(t('web.inc_summary'));
+    expect(within(drawer).getByRole('heading', { name: 'Old window' })).toBeInTheDocument();
+    expect(
+      api.calls.filter((call) => call.method === 'GET' && call.url.endsWith(`/incidents/${OLDER}`)),
+    ).not.toHaveLength(0);
+    // Nothing reads the newer page's incident for it.
+    expect(api.calls.some((call) => call.url.endsWith(`/incidents/${ID}`))).toBe(false);
+    expect(within(drawer).getByRole('link', { name: t('web.inc_open_full') })).toHaveAttribute(
+      'href',
+      `/incidents/${OLDER}`,
+    );
+    expect(within(drawer).queryByText(t('web.err_incident_not_found'))).toBeNull();
+  });
+
+  it('keeps every detail action, by the same permission keys, inside the drawer', async () => {
+    stubApi([{ url: '/incidents', body: { incidents: [incident()], nextCursor: null } }, detail()]);
+    renderPage(<IncidentsPage denied={false} mayManage mayNotify />);
+    fireEvent.click(await screen.findByRole('link', { name: 'Frankfurt maintenance' }));
+    const drawer = await screen.findByRole('dialog');
+    const group = await within(drawer).findByRole('group', {
+      name: t('web.inc_actions_incident'),
+    });
+    expect(within(group).getByRole('button', { name: t('web.inc_resolve') })).toBeTruthy();
+    expect(within(group).getByRole('button', { name: t('web.inc_edit') })).toBeTruthy();
+    expect(within(drawer).getByRole('button', { name: t('web.inc_notice') })).toBeTruthy();
+    expect(within(drawer).getByText(t('web.inc_timeline'))).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('draws no action in the drawer without manage or notify', async () => {
+    stubApi([{ url: '/incidents', body: { incidents: [incident()], nextCursor: null } }, detail()]);
+    renderPage(<IncidentsPage denied={false} mayManage={false} />);
+    fireEvent.click(await screen.findByRole('link', { name: 'Frankfurt maintenance' }));
+    const drawer = await screen.findByRole('dialog');
+    await within(drawer).findByText(t('web.inc_effect_panel_drain'));
+    expect(within(drawer).queryByRole('button', { name: t('web.inc_resolve') })).toBeNull();
+    expect(within(drawer).queryByRole('button', { name: t('web.inc_notice') })).toBeNull();
+  });
+
+  it('leaves a modified click to the browser: no drawer for a new-tab click', async () => {
+    stubApi([{ url: '/incidents', body: { incidents: [incident()], nextCursor: null } }]);
+    renderPage(<IncidentsPage denied={false} mayManage={false} />);
+    fireEvent.click(await screen.findByRole('link', { name: 'Frankfurt maintenance' }), {
+      ctrlKey: true,
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
 });
 
 describe('the incident detail', () => {
@@ -313,7 +406,8 @@ describe('the incident detail', () => {
   it('offers no action on a resolved incident', async () => {
     stubApi([detail({ status: 'RESOLVED', resolvedAt: '2026-10-03T11:00:00.000Z' })]);
     renderPage(<IncidentDetailPage id={ID} denied={false} mayManage mayNotify />);
-    expect(await screen.findByText(t('web.inc_status_resolved'))).toBeInTheDocument();
+    // The status chip under the title and the summary's status line.
+    expect(await screen.findAllByText(t('web.inc_status_resolved'))).toHaveLength(2);
     expect(screen.queryByRole('button', { name: t('web.inc_edit') })).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.inc_notice') })).toBeNull();
   });

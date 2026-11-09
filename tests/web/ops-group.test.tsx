@@ -154,7 +154,7 @@ describe('the operations log group page', () => {
     const resolved = resolve({ path: '/ops-group', query: new URLSearchParams() }, [
       'settings.view',
     ]);
-    expect(resolved.title).toBe('گروه گزارش‌های مدیریتی');
+    expect(resolved.title).toBe('گروه لاگ');
   });
 });
 

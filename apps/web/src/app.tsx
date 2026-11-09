@@ -32,12 +32,10 @@ import { BotButtonsPage } from './pages/bot-buttons';
 import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { RemindersPage } from './pages/reminders';
-import { AlertsPage, NotificationsPage } from './pages/alerts';
 // Phase B3: the notification center and its top-bar bell.
 import { NotificationBell, NotificationCenterPage } from './pages/notification-center';
 import { IncidentBanner, IncidentDetailPage, IncidentsPage } from './pages/incidents';
 import { SecretReentryStrip } from './pages/recovery-secrets';
-import { AuditLogPage, auditLogFirstScreen } from './pages/audit-log';
 import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
 import { SystemPage } from './pages/system';
@@ -1330,20 +1328,26 @@ export function resolve(
   }
 
   if (route.path === '/audit-log') {
+    // «گزارش ممیزی» is the «تاریخچهٔ تغییرات» tab of «سامانه»: old links land there with their filters.
+    const query = new URLSearchParams(route.query);
+    query.set('section', 'audit');
     return {
-      element: (
-        <AuditLogPage route={route} denied={!may('audit.view')} mayExport={may('audit.export')} />
-      ),
-      crumbs: [{ label: t('web.nav_audit_log') }],
-      title: t('web.audit_title'),
+      element: <RedirectPage to={`/system?${query.toString()}`} />,
+      crumbs: [{ label: t('web.nav_system') }],
+      title: t('web.nav_system'),
     };
   }
 
+  /*
+   * «هشدارهای مدیریتی» is the alerts chips of «اعلان‌ها و هشدارها»: the old path REPLACES
+   * itself with the unified page on its «هشدارهای باز» chip, so a bookmark lands there and
+   * Back does not bounce into the redirect. The permission (`opslog.view`) is the chips'.
+   */
   if (route.path === '/alerts') {
     return {
-      element: <AlertsPage denied={!may('opslog.view')} />,
-      crumbs: [{ label: t('web.nav_alerts') }],
-      title: t('web.nav_alerts'),
+      element: <RedirectPage to="/notification-center?filter=open" />,
+      crumbs: [{ label: t('web.nav_inbox') }],
+      title: t('web.nc_title'),
     };
   }
 
@@ -1351,7 +1355,12 @@ export function resolve(
   if (route.path === '/incidents') {
     return {
       element: (
-        <IncidentsPage denied={!may('incidents.view')} mayManage={may('incidents.manage')} />
+        <IncidentsPage
+          denied={!may('incidents.view')}
+          mayManage={may('incidents.manage')}
+          mayNotify={may('incidents.notify')}
+          mayViewPanels={may('panels.view')}
+        />
       ),
       crumbs: [{ label: t('web.nav_incidents') }],
       title: t('web.nav_incidents'),
@@ -1385,11 +1394,12 @@ export function resolve(
     };
   }
 
+  // The delivery log is the tab «گزارش ارسال‌ها» of «گروه لاگ»; the old path replaces itself.
   if (route.path === '/notifications') {
     return {
-      element: <NotificationsPage mayTest={may('settings.edit')} denied={!may('opslog.view')} />,
-      crumbs: [{ label: t('web.nav_notifications') }],
-      title: t('web.nav_notifications'),
+      element: <RedirectPage to="/ops-group?tab=log" />,
+      crumbs: [{ label: t('web.nav_ops_group') }],
+      title: t('web.opsgroup_title'),
     };
   }
 
@@ -1409,7 +1419,18 @@ export function resolve(
 
   if (route.path === '/ops-group') {
     return {
-      element: <OpsGroupPage denied={!may('settings.view')} mayManage={may('settings.edit')} />,
+      element: (
+        <OpsGroupPage
+          route={route}
+          denied={!may('settings.view')}
+          mayManage={may('settings.edit')}
+          // The delivery log tab keeps what `/notifications` had: read with `opslog.view`, test
+          // sends with `settings.edit` (which the server authorizes on its own).
+          {...(may('opslog.view') || may('settings.edit')
+            ? { log: { denied: !may('opslog.view'), mayTest: may('settings.edit') } }
+            : {})}
+        />
+      ),
       crumbs: [{ label: t('web.nav_ops_group') }],
       title: t('web.opsgroup_title'),
     };
@@ -1511,7 +1532,6 @@ function NotFound() {
  */
 export const NAV_PREFETCH: Readonly<Record<string, NavPrefetch>> = {
   '/users': { permission: 'users.view', queries: customersFirstScreen },
-  '/audit-log': { permission: 'audit.view', queries: auditLogFirstScreen },
   '/settings': { permission: 'settings.view', queries: () => [settingsQuery()] },
 };
 

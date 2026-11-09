@@ -601,7 +601,7 @@ describe('the NOWPayments key, IPN secret and credential check', () => {
     ]);
     renderPage(<PaymentGatewaysPage provider="NOWPAYMENTS" denied={false} mayEdit />);
     fireEvent.click(await screen.findByRole('button', { name: 'تنظیم کلید API' }));
-    const input = (await screen.findByLabelText('کلید IPN جدید (IPN Secret)')) as HTMLInputElement;
+    const input = (await screen.findByLabelText('کلید IPN جدید (رمز IPN)')) as HTMLInputElement;
     expect(input.value).toBe('');
     expect(input.type).toBe('text');
     expect(input.autocomplete).toBe('off');
@@ -717,7 +717,7 @@ describe('the CentralPay API key and verify key', () => {
   it('shows the missing verify key as a state, offers no check and no IPN secret', async () => {
     stubApi([{ url: '/payment-gateways', body: { gateways: [CENTRALPAY] } }]);
     const view = renderPage(<PaymentGatewaysPage provider="CENTRALPAY" denied={false} mayEdit />);
-    expect(await screen.findByText('کلید تأیید (verify) تنظیم نشده')).toBeInTheDocument();
+    expect(await screen.findByText('کلید تأیید تنظیم نشده')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'بررسی اتصال' })).toBeNull();
     expect(view.container.querySelectorAll('input[type="password"]')).toHaveLength(0);
   });
@@ -729,8 +729,8 @@ describe('the CentralPay API key and verify key', () => {
     ]);
     renderPage(<PaymentGatewaysPage provider="CENTRALPAY" denied={false} mayEdit />);
     fireEvent.click(await screen.findByRole('button', { name: 'تنظیم کلید API' }));
-    expect(screen.queryByLabelText('کلید IPN جدید (IPN Secret)')).toBeNull();
-    const input = (await screen.findByLabelText('کلید تأیید جدید (verify)')) as HTMLInputElement;
+    expect(screen.queryByLabelText('کلید IPN جدید (رمز IPN)')).toBeNull();
+    const input = (await screen.findByLabelText('کلید تأیید جدید')) as HTMLInputElement;
     expect(input.value).toBe('');
     expect(input.type).toBe('text');
     expect(input.autocomplete).toBe('off');
@@ -813,7 +813,7 @@ describe('the TetraPay page', () => {
     ]);
     renderPage(<PaymentGatewaysPage provider="TETRAPAY" denied={false} mayEdit />);
     fireEvent.click(await screen.findByRole('button', { name: 'تنظیم کلید API' }));
-    expect(screen.queryByLabelText('کلید IPN جدید (IPN Secret)')).toBeNull();
+    expect(screen.queryByLabelText('کلید IPN جدید (رمز IPN)')).toBeNull();
     const input = (await screen.findByLabelText(
       'رمز وب‌هوک جدید (whsec_ — اختیاری)',
     )) as HTMLInputElement;

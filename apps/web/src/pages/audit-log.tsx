@@ -17,7 +17,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
 import { mayRequest } from '../view-state';
-import { listRouteKey, useDebouncedApply } from '../ui/list-search';
+import { ListFreshness, listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { dayEnd, dayStart } from './tickets';
 import {
   Badge,
@@ -32,7 +32,6 @@ import {
   FilterChip,
   FilterChips,
   Ltr,
-  PageHead,
   StateSwitch,
   type Column,
   type Tone,
@@ -171,11 +170,6 @@ export function auditLogQuery(
       }),
     staleTime: NAV_PREFETCH_FRESH_MS,
   };
-}
-
-/** What `/audit-log` asks on arrival from the sidebar: no filter, the newest page. */
-export function auditLogFirstScreen(): readonly PageQuery[] {
-  return [auditLogQuery(auditFiltersOf(new URLSearchParams()), undefined)];
 }
 
 interface Draft {
@@ -375,25 +369,21 @@ export function AuditLogPage({
 
   return (
     <>
-      <PageHead
-        title={t('web.audit_title')}
-        subtitle={t('web.audit_intro')}
-        {...(mayExport && !denied
-          ? {
-              actions: (
-                <a
-                  className="btn sm"
-                  href={auditLogExportUrl(filters)}
-                  download
-                  title={t('web.audit_export_hint')}
-                >
-                  <Icon name="download" size={14} />
-                  {t('web.audit_export_csv')}
-                </a>
-              ),
-            }
-          : {})}
-      />
+      {/* The audit tab of the System page: no page title of its own, the tab is the title. */}
+      <div className="toolbar">
+        <ListFreshness query={log} />
+        {mayExport && !denied && (
+          <a
+            className="btn sm"
+            href={auditLogExportUrl(filters)}
+            download
+            title={t('web.audit_export_hint')}
+          >
+            <Icon name="download" size={14} />
+            {t('web.audit_export_csv')}
+          </a>
+        )}
+      </div>
 
       <Card>
         {requestable && (
@@ -661,6 +651,9 @@ export function AuditLogPage({
             }
           />
         </StateSwitch>
+        <Disclosure size="sm" summary={t('web.audit_about_fold')}>
+          <p className="muted small">{t('web.audit_intro')}</p>
+        </Disclosure>
       </Card>
     </>
   );

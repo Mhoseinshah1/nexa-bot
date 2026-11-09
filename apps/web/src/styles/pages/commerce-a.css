@@ -99,16 +99,6 @@
   font-weight: 600;
 }
 
-/* A form inside a card that is disabled as a whole until what it needs has loaded. */
-.ca-fieldset {
-  border: 0;
-  padding: 0;
-  margin: 0;
-  min-width: 0;
-  display: grid;
-  gap: 10px;
-}
-
 /* A technical identity as a page title (a username, a reference), with its copy button. */
 .ca-title-id {
   display: inline-flex;
@@ -139,22 +129,6 @@
   gap: 6px;
   align-items: center;
   flex-wrap: wrap;
-}
-
-/* The standing rules a list obeys, as a quiet list under it. */
-.ca-notes {
-  margin: 0;
-  padding-inline-start: 18px;
-  display: grid;
-  gap: 6px;
-  color: var(--fg-2);
-  font-size: var(--fs-sm);
-}
-
-/* Why each unavailable action is unavailable: action name, then the sentence. */
-.ca-blockers dd {
-  color: var(--fg-2);
-  font-size: var(--fs-sm);
 }
 
 /* The secondary lines of a summary card: «سقف ۵۰ گیگابایت», «آخرین خواندن …». */
@@ -203,58 +177,6 @@
   margin-top: 2px;
 }
 
-/* A refund request's decision: approve (destructive) beside reject. */
-.ca-decision {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px;
-}
-.ca-decision > .banner {
-  grid-column: 1 / -1;
-}
-.ca-decision-part {
-  display: grid;
-  gap: 10px;
-  align-content: start;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: calc(var(--radius-card) - 6px);
-  background: var(--panel-row);
-}
-.ca-decision-approve {
-  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
-}
-
-/* A detail page's summary strip: four figures across, two on a narrow screen. */
-.ca-stats {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-/*
- * Demo parity (services-detail): the tile's figure at the stat-strip size (X6); a date is
- * the smaller line the demo draws (`.svc-v`); each secondary line holds its label at the
- * start and its value at the end; the traffic bar carries its percentage beside it.
- */
-.ca-stats > .stat .val {
-  font-size: 24px;
-  font-weight: 750;
-  letter-spacing: -0.02em;
-}
-.ca-stats > .stat .val .ca-stat-when {
-  font-size: 16px;
-  letter-spacing: 0;
-}
-.ca-stats > .stat .foot > .ca-stat-line,
-.ca-stats > .stat > .ca-stat-line {
-  display: flex;
-  flex: 1 1 100%;
-  justify-content: space-between;
-  gap: 8px;
-}
-.ca-stats > .stat > .ca-stat-line {
-  color: var(--fg-3);
-}
 .svc-usage-meter {
   display: flex;
   align-items: center;
@@ -265,30 +187,6 @@
 .svc-usage-meter .progress {
   flex: 1;
   min-width: 0;
-}
-@media (max-width: 1100px) {
-  .ca-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-/* Demo parity (services-detail 390): two tiles a row on a phone, as the demo. */
-@media (max-width: 520px) {
-  .ca-stats {
-    gap: 10px;
-  }
-}
-
-/* A detail page's subtitle: a few facts, separated by a dot drawn here, not typed. */
-.ca-subline {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px 0;
-  align-items: baseline;
-}
-.ca-subline > * + *::before {
-  content: '·';
-  margin-inline: 8px;
-  color: var(--fg-3);
 }
 
 /* An order's three figures, as the foot of the order's items. */
@@ -366,14 +264,6 @@
 
 /* ------------------------------------------------------------ Customer 360 (§11) --- */
 
-/* The primary actions in the head: they wrap rather than overflow on a phone. */
-.c360-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
-}
-
 /*
  * The section list. Sticky under the topbar on a wide screen so an operator can jump
  * between parts of a long page; a horizontally scrolling strip on a narrow one.
@@ -444,15 +334,6 @@
   padding-inline-start: 18px;
 }
 
-@media (max-width: 520px) {
-  .c360-actions {
-    justify-content: flex-start;
-  }
-  .c360-actions > * {
-    flex: 1 1 auto;
-  }
-}
-
 /* Roadmap B5 (Agent 2b): Customer 360 workspace — latest rows, shortcuts. */
 .c360ws-half-head {
   display: flex;
@@ -497,13 +378,7 @@
   background: var(--danger);
   color: var(--on-danger);
 }
-.nc-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-block-end: 12px;
-}
+
 .nc-list {
   list-style: none;
   margin: 0;
@@ -529,31 +404,6 @@
 .nc-title {
   margin: 0;
   overflow-wrap: anywhere;
-}
-
-/* --- Program §13: the Service Operations Center --------------------------------- */
-
-/* The workspace's further filters: wrap at 390px, never scroll sideways. */
-.soc-filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 8px 12px;
-  margin-block: 8px;
-}
-.soc-filters .field {
-  min-width: 0;
-  flex: 1 1 160px;
-}
-/* Grant traffic, grant time and move: side by side on a wide screen, stacked on a phone. */
-.soc-grant-move {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-.soc-grant-move h4 {
-  margin: 0;
-  font-size: var(--fs-body);
 }
 
 /* Phase A2: «ارسال پیام» — the preview and the history's message text. */
@@ -601,7 +451,7 @@
 }
 
 /* The picker and its button on one line that wraps on a phone. */
-.crm-assign,
+
 .crm-tag-form {
   display: flex;
   flex-wrap: wrap;
@@ -609,7 +459,7 @@
   align-items: flex-end;
   margin-block-start: 10px;
 }
-.crm-assign > .field,
+
 .crm-tag-form > .field {
   flex: 1 1 160px;
   min-inline-size: 0;
@@ -633,15 +483,6 @@
   gap: 4px;
 }
 
-.crm-note-form {
-  display: grid;
-  gap: 8px;
-  justify-items: start;
-  margin-block-end: 12px;
-}
-.crm-note-form > .field {
-  justify-self: stretch;
-}
 .crm-notes li {
   padding-block: 8px;
   border-block-end: 1px solid var(--line);
@@ -651,19 +492,6 @@
   /* A note is prose: its line breaks are kept, and a long unbroken run wraps. */
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-/* The customer list's tag filter: a labelled select beside the status chips. */
-.filter-row .filter-select {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--fs-sm);
-  color: var(--fg-2);
-  min-inline-size: 0;
-}
-.filter-row .filter-select select {
-  max-inline-size: 220px;
 }
 
 /* Touch: a link in a detail page's row list is a 44px target (tokens.css). */
@@ -726,4 +554,35 @@
 }
 .service-why {
   margin-block-start: calc(-1 * var(--gap) / 2);
+}
+
+/* PR-8 (system menu): the unified notifications + alerts page and the bell's drawer. */
+.nc-bell-list {
+  margin: 0;
+}
+.nc-bell-list .nc-item:last-child {
+  border-block-end: 0;
+}
+.alerts-head,
+.notifications-head,
+.ops-group-tabhead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-end: 12px;
+}
+.alerts-head {
+  justify-content: flex-end;
+}
+.notifications-head p,
+.ops-group-tabhead p {
+  margin: 0;
+  flex: 1 1 280px;
+}
+.notifications-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }

@@ -248,7 +248,7 @@ function ExportForm({ onDirty }: { onDirty: (dirty: boolean) => void }) {
   );
 }
 
-function ImportForm({
+export function ImportForm({
   onImported,
   onDirty,
 }: {

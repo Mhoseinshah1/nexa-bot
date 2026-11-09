@@ -21,8 +21,8 @@ const READINESS = {
   body: { status: 'ok', dependencies: [{ name: 'postgres', status: 'up', latencyMs: 3 }] },
 };
 
-const routeFor = (path: string, permissions: readonly PermissionKey[]): ReactElement =>
-  resolve({ path, query: new URLSearchParams() }, permissions).element as ReactElement;
+const routeFor = (path: string, permissions: readonly PermissionKey[], query = ''): ReactElement =>
+  resolve({ path, query: new URLSearchParams(query) }, permissions).element as ReactElement;
 
 /**
  * `/notifications` carries TWO server capabilities and they are held
@@ -87,14 +87,15 @@ describe('the catalogue permission combinations', () => {
 });
 
 describe('the notification permission combinations', () => {
-  const entry = NAV.find((candidate) => candidate.id === 'notifications');
+  // «گزارش ارسال‌ها», the delivery log, is a tab of «گروه لاگ» (`/ops-group`).
+  const entry = NAV.find((candidate) => candidate.id === 'ops-group');
   const HISTORY = { url: '/notifications', body: { notifications: [], nextCursor: null } };
   const TEST_SEND = 'ارسال پیام آزمایشی';
   const DENIED = 'شما به این بخش دسترسی ندارید.';
 
   const open = (permissions: readonly PermissionKey[]) => {
     stubApi([HISTORY]);
-    return renderPage(routeFor('/notifications', permissions));
+    return renderPage(routeFor('/ops-group', permissions, 'tab=log'));
   };
 
   it('offers the page to an actor who may only send a test', async () => {

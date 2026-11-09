@@ -7,6 +7,7 @@ import { OPS_A } from './fixtures/ops-a.ts';
 import { OPS_B } from './fixtures/ops-b.ts';
 import { COVERAGE } from './fixtures/coverage.ts';
 import { COVERAGE_B } from './fixtures/coverage-b.ts';
+import { COVERAGE_C } from './fixtures/coverage-c.ts';
 import { DEMO_PARITY, DEMO_PARITY_EMPTY } from './fixtures/demo-parity/index.ts';
 
 /** Every fixture the screenshot server answers from, one file per page family. */
@@ -19,6 +20,7 @@ export const FIXTURES: readonly ShotFixture[] = [
   ...OPS_B,
   ...COVERAGE,
   ...COVERAGE_B,
+  ...COVERAGE_C,
 ];
 
 export { SHOT_NOW } from './fixture.ts';

@@ -100,16 +100,16 @@ export const WEB_FA_PANELS = {
   // The username policy. Read back in full on the panel page, for the reason
   // `docs/conventions.md` names: a setting a surface can write and cannot read is the
   // legacy screen where "the only way to read a price is to overwrite it".
-  'web.panel_username_policy': 'یوزرنیم سرویس‌ها',
-  'web.panel_username_custom': 'یوزرنیم دلخواه مشتری',
+  'web.panel_username_policy': 'نام کاربری سرویس‌ها',
+  'web.panel_username_custom': 'نام کاربری دلخواه مشتری',
   'web.panel_username_custom_hint':
-    'مشتری خودش یوزرنیم را می‌نویسد: 4 تا 20 نویسه از a-z، A-Z، 0-9، - و _ ، با حداقل یک حرف و یک رقم. حروف بزرگ و کوچک فرقی ندارند و با حروف کوچک ذخیره می‌شود.',
+    'مشتری خودش نام کاربری را می‌نویسد: 4 تا 20 نویسه از a-z، A-Z، 0-9، - و _ ، با حداقل یک حرف و یک رقم. حروف بزرگ و کوچک فرقی ندارند و با حروف کوچک ذخیره می‌شود.',
   'web.panel_username_automatic': 'انتخاب خودکار',
   'web.panel_username_automatic_hint':
-    'سامانه خودش یوزرنیم می‌سازد، بر اساس روشی که پایین انتخاب می‌کنید.',
+    'سامانه خودش نام کاربری می‌سازد، بر اساس روشی که پایین انتخاب می‌کنید.',
   'web.panel_username_strategy': 'روش ساخت خودکار',
   'web.panel_username_strategy_hint':
-    'هر یوزرنیم جدید بین 4 تا 20 نویسه و فقط از حروف کوچک انگلیسی، رقم، خط تیره و زیرخط ساخته می‌شود.',
+    'هر نام کاربری جدید بین 4 تا 20 نویسه و فقط از حروف کوچک انگلیسی، رقم، خط تیره و زیرخط ساخته می‌شود.',
   'web.panel_username_strategy_RANDOM': 'تصادفی 12 نویسه‌ای',
   'web.panel_username_strategy_PREFIX_RANDOM': 'پیشوند + تصادفی',
   'web.panel_username_strategy_TELEGRAM_ID_RANDOM': 'شناسهٔ تلگرام + تصادفی',
@@ -117,7 +117,7 @@ export const WEB_FA_PANELS = {
   'web.panel_username_prefix': 'پیشوند',
   'web.panel_username_prefix_hint':
     'با یک حرف کوچک انگلیسی شروع شود و حداکثر 14 نویسه باشد، تا دست‌کم 6 نویسهٔ تصادفی جا بماند. پیش‌فرض nx است.',
-  'web.panel_username_template': 'الگوی یوزرنیم',
+  'web.panel_username_template': 'الگوی نام کاربری',
   'web.panel_username_template_hint':
     'باید دست‌کم یکی از {order4}، {random4}، {random6} یا {random10} را داشته باشد، وگرنه دو خرید یک نام می‌گیرند.',
   'web.panel_username_tokens': 'جانشین‌های مجاز',
@@ -132,7 +132,7 @@ export const WEB_FA_PANELS = {
   'web.panel_username_issue_ILLEGAL_CHARACTER':
     'متن ثابت الگو فقط می‌تواند حرف کوچک انگلیسی، رقم، خط تیره و زیرخط داشته باشد.',
   'web.panel_username_issue_NO_UNIQUENESS_TOKEN':
-    'الگو باید دست‌کم یکی از {order4}، {random4}، {random6} یا {random10} را داشته باشد، وگرنه همه‌ی مشتری‌ها یک یوزرنیم می‌گیرند.',
+    'الگو باید دست‌کم یکی از {order4}، {random4}، {random6} یا {random10} را داشته باشد، وگرنه همه‌ی مشتری‌ها یک نام کاربری می‌گیرند.',
   'web.panel_username_issue_TOO_LONG': 'بلندترین خروجی این الگو از 20 نویسه بیشتر می‌شود.',
   'web.panel_username_issue_TOO_SHORT': 'کوتاه‌ترین خروجی این الگو از 4 نویسه کمتر می‌شود.',
   'web.panel_username_policy_empty': 'دست‌کم یکی از دو حالت باید روشن باشد.',
@@ -424,7 +424,7 @@ export const WEB_FA_PANELS = {
   'web.balancing_strategy_least_used': 'کمترین تعداد ظرفیت اشغال‌شده',
   'web.balancing_strategy_lowest_utilisation': 'کمترین درصد پرشدگی (پنل بدون سقف در آخر)',
   // --- Panel health dashboard and drain (Phase C2) ------------------------------
-  'web.panel_reason_draining': 'فروش جدید متوقف است (Drain)',
+  'web.panel_reason_draining': 'فروش جدید متوقف است (تخلیه)',
   'web.panel_reason_draining_help':
     'اپراتور فروش جدید روی این پنل را متوقف کرده است. سرویس‌های موجود بدون تغییر کار می‌کنند. برای ازسرگیری، به صفحهٔ «سلامت پنل‌ها» بروید.',
   // --- Advanced provider settings (WP-A8) ----------------------------------
@@ -683,8 +683,7 @@ export const WEB_FA_PANELS = {
     'مبلغ خارج از محدودهٔ پل درگاه کاستوم بود؛ پرداختی ساخته نشد',
   'web.provcode_custom_amount_not_payable': 'پل درگاه کاستوم این مبلغ دقیق را نمی‌تواند دریافت کند',
   'web.provcode_custom_expires_at_invalid': 'پل درگاه کاستوم مهلت پرداخت را نپذیرفت',
-  'web.provcode_custom_callback_url_rejected':
-    'پل درگاه کاستوم نشانی بازگشت (callback) نکسا را نپذیرفت',
+  'web.provcode_custom_callback_url_rejected': 'پل درگاه کاستوم نشانی بازگشت نکسا را نپذیرفت',
   'web.provcode_custom_rate_limited':
     'پل درگاه کاستوم درخواست‌های زیادی دریافت کرده است؛ بعداً دوباره پرسیده می‌شود',
   'web.provcode_custom_internal': 'خطای داخلی در پل درگاه کاستوم',

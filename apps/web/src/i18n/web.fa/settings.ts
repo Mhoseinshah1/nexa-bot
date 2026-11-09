@@ -6,6 +6,7 @@
 export const WEB_FA_SETTINGS = {
   // Settings
   'web.settings_title': 'تنظیمات',
+  'web.settings_about_fold': 'دربارهٔ این صفحه',
   'web.settings_intro': 'تنظیمات موردنظر را تغییر دهید و ذخیره کنید.',
   'web.restart_required': 'نیازمند راه‌اندازی مجدد',
   /*
@@ -312,7 +313,7 @@ export const WEB_FA_SETTINGS = {
   'web.feature_where_label': 'کجا دیده می‌شود',
   'web.feature_where_bot': 'ربات مشتری',
   'web.feature_where_miniapp': 'مینی‌اپ',
-  'web.feature_where_ops_group': 'گروه گزارش‌ها',
+  'web.feature_where_ops_group': 'گروه لاگ',
   'web.feature_where_web_admin': 'پنل مدیریت',
   'web.feature_where_background': 'پس‌زمینه',
   'web.feature_off_label': 'اگر خاموش شود',

@@ -43,12 +43,6 @@
   margin: 0 0 8px;
   font-size: var(--fs-body);
 }
-.bx-note {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
 
 /* --- Bots: one compact card per bot ------------------------------------------------------ */
 

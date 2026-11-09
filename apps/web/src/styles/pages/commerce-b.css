@@ -51,24 +51,7 @@
   background: var(--panel-row);
 }
 
-/* --- Shared by the COMMERCE-B editors (editor-layout.tsx) ------------------------ */
-
-/*
- * An editor page: a start column, the form, and a side column of facts and
- * isolated actions — the reference product editor's three columns. The side
- * column drops under the form below 1200px, and everything is one column below 980px.
- */
-.cb-editor {
-  display: grid;
-  grid-template-columns: 190px minmax(0, 1fr) 340px;
-  gap: 16px;
-  align-items: start;
-}
-.cb-editor.no-nav {
-  grid-template-columns: minmax(0, 1fr) 340px;
-}
-.cb-editor-main,
-.cb-editor-side {
+.cb-editor-main {
   min-width: 0;
 }
 .cb-form-section {
@@ -104,24 +87,7 @@
   border-radius: 50%;
   background: currentColor;
 }
-/*
- * A list beside its editor (categories, extra devices, service locations, custom
- * service): the table takes the room, the form a fixed side column that stays in
- * view while the list scrolls. One column below 1200px.
- */
-.cb-split {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 16px;
-  align-items: start;
-}
-.cb-split > * {
-  min-width: 0;
-}
-.cb-side-form.cb-sticky {
-  position: sticky;
-  top: 12px;
-}
+
 /* The rules a page states about itself, as a quiet list. */
 .cb-notes {
   margin: 0;
@@ -176,29 +142,6 @@
   white-space: nowrap;
 }
 
-@media (max-width: 1200px) {
-  .cb-split {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .cb-side-form.cb-sticky {
-    position: static;
-  }
-  .cb-editor {
-    grid-template-columns: 170px minmax(0, 1fr);
-  }
-  .cb-editor.no-nav {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .cb-editor > .cb-editor-side {
-    grid-column: 1 / -1;
-  }
-}
-@media (max-width: 980px) {
-  .cb-editor {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
 /* --- /products ------------------------------------------------------------------- */
 
 /* Why a product is not in the bot's list: a dot and a sentence that may wrap. */
@@ -247,14 +190,7 @@
 .custom-levels li + li {
   margin-top: 6px;
 }
-/* Demo parity (custom-service): the specificity card's paragraphs spaced as the demo's. */
-.cs-specificity > .card-body {
-  display: grid;
-  gap: 14px;
-}
-.cs-specificity > .card-body > p {
-  margin: 0;
-}
+
 /*
  * Demo parity (custom-service): a panel's or tier's copy button is the demo's `.cpb` — drawn
  * on the row's hover or the button's keyboard focus, always where there is no hover.
@@ -363,16 +299,7 @@
 .audience-builder > * + * {
   margin-top: 14px;
 }
-.aud-section > * + * {
-  margin-top: 8px;
-}
-.aud-section > .field-group-head:first-child {
-  margin-top: 0;
-}
-/* Who: each segment as a selectable tile, the way the reference lists recipients. */
-.aud-segments {
-  gap: 8px;
-}
+
 .aud-segment {
   display: inline-flex;
   align-items: center;
@@ -386,25 +313,6 @@
 .aud-segment:has(input:checked) {
   border-color: var(--accent);
   background: var(--accent-soft);
-}
-.aud-service-toggle {
-  font-weight: 500;
-}
-.audience-service > * + * {
-  margin-top: 8px;
-}
-.audience-service h4 {
-  font-size: var(--fs-sm);
-  color: var(--fg-2);
-}
-/* The count, and what it found, on one line. */
-.aud-count {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 20px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--line);
 }
 
 /* --- Figures shared by broadcasts, bulk operations and campaigns ------------------- */
@@ -480,10 +388,7 @@
   text-align: center;
   font-size: var(--fs-sm);
 }
-.bc-file {
-  max-width: 100%;
-  font-size: var(--fs-sm);
-}
+
 /* R4 A6: the variable chips under the body, and the preview's sample recipient. */
 .bc-chips {
   display: flex;
@@ -544,9 +449,6 @@
 
 /* --- /campaigns ------------------------------------------------------------------- */
 
-.cb-editor.no-side {
-  grid-template-columns: 190px minmax(0, 1fr);
-}
 .campaign-kinds {
   display: inline-flex;
   flex-wrap: wrap;
@@ -569,11 +471,7 @@
   z-index: 2;
   box-shadow: var(--shadow);
 }
-@media (max-width: 980px) {
-  .cb-editor.no-side {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
+
 /* A figure that is a sentence (“not determinable”), at text size inside a stat card. */
 .cb-stat-note {
   display: block;
@@ -645,16 +543,6 @@
   outline: none;
 }
 
-/* --- /reseller-tiers -------------------------------------------------------------- */
-
-/* A scroll target for an opened panel; takes no room. */
-.tiers-anchor {
-  height: 0;
-  margin: 0 !important;
-}
-.tiers-anchor:focus {
-  outline: none;
-}
 /* Demo parity: one kind a line — product, category, panel, bot, purchase type — each with its pill. */
 .tiers-grants {
   display: flex;

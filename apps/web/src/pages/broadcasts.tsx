@@ -399,7 +399,7 @@ export function BroadcastNewPage({ maySend }: { maySend: boolean }) {
   }
   return (
     <>
-      <PageHead title={t('web.bc_new')} subtitle={t('web.bc_page_intro')} />
+      <PageHead title={t('web.bc_new')} />
       <Composer record={null} />
     </>
   );

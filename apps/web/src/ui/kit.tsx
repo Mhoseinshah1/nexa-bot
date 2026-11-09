@@ -279,30 +279,6 @@ export function Copyable({ value, display }: { value: string; display?: string }
 }
 
 /**
- * A technical value on its own line — a URL, a hash, a command — with an
- * optional copy button. Always LTR and isolated; never a secret (a credential
- * is `Secret`, which renders presence only).
- */
-export function CodeValue({
-  value,
-  copy = true,
-  wrap = false,
-}: {
-  value: string;
-  copy?: boolean;
-  wrap?: boolean;
-}) {
-  return (
-    <span className="code-field">
-      <code className={cx('code', wrap && 'wrap', isPersianText(value) && 'fa-in-ltr')}>
-        {value}
-      </code>
-      {copy && <CopyButton value={value} />}
-    </span>
-  );
-}
-
-/**
  * A technical identifier shown as itself: left to right, monospace, its full value in the
  * tooltip — and no copy button. The demo draws list identifiers this way (X7); `Copyable`
  * stays for a detail view, where copying the whole value is the point. `display` shortens
@@ -868,11 +844,6 @@ export function StatCard({
   );
 }
 
-/** A `StatCard` that needs attention. The same card, outlined red by default. */
-export function AlertStatCard(props: Parameters<typeof StatCard>[0]) {
-  return <StatCard {...props} tone={props.tone ?? 'alert'} />;
-}
-
 /**
  * A definition list of label → value rows. `DefinitionList` is the same
  * component under the name the kit inventory uses.
@@ -1074,9 +1045,6 @@ export function Banner({
     </div>
   );
 }
-
-/** A `Banner` by the name the kit inventory uses. */
-export const Callout = Banner;
 
 /** A vertical history: when, what, and an optional detail, each with a tone. */
 export function Timeline({
@@ -1338,63 +1306,6 @@ export function Pills<T extends string>({
 
 export const PERIOD_PRESETS = ['today', '7d', '30d', 'month', 'custom'] as const;
 export type PeriodPreset = (typeof PERIOD_PRESETS)[number];
-
-const PERIOD_LABEL: Readonly<Record<PeriodPreset, WebKey>> = {
-  today: 'web.period_today',
-  '7d': 'web.period_7d',
-  '30d': 'web.period_30d',
-  month: 'web.period_month',
-  custom: 'web.period_custom',
-};
-
-/**
- * The period control: امروز · ۷ روز · ۳۰ روز · این ماه · دلخواه, and the
- * comparison switch. The component only; what a preset MEANS (the tenant's
- * calendar and timezone, the reporting definitions) is the caller's, and the
- * custom range's inputs are passed in through `custom`, shown while the
- * `custom` preset is selected.
- */
-export function PeriodControl({
-  value,
-  onChange,
-  presets = PERIOD_PRESETS,
-  compare,
-  onCompareChange,
-  custom,
-}: {
-  value: PeriodPreset;
-  onChange: (next: PeriodPreset) => void;
-  presets?: readonly PeriodPreset[];
-  compare?: boolean;
-  onCompareChange?: (next: boolean) => void;
-  custom?: ReactNode;
-}) {
-  return (
-    <div className="period">
-      <ButtonGroup segmented label={t('web.period_label')}>
-        {presets.map((preset) => (
-          <button
-            key={preset}
-            type="button"
-            className={cx('btn', 'sm', value === preset && 'on')}
-            aria-pressed={value === preset}
-            onClick={() => onChange(preset)}
-          >
-            {t(PERIOD_LABEL[preset])}
-          </button>
-        ))}
-      </ButtonGroup>
-      {value === 'custom' && custom !== undefined && <span className="custom">{custom}</span>}
-      {onCompareChange !== undefined && (
-        <Checkbox
-          label={t('web.period_compare')}
-          checked={compare === true}
-          onChange={onCompareChange}
-        />
-      )}
-    </div>
-  );
-}
 
 /* ----------------------------------------------------------------- forms --- */
 
@@ -1862,9 +1773,6 @@ export function Empty({
     </div>
   );
 }
-/** `Empty` by the name the kit inventory uses. */
-export const EmptyState = Empty;
-
 export function Skeleton({ rows = 6, cols = 4 }: { rows?: number; cols?: number }) {
   return (
     <div className="skel" aria-hidden="true">
@@ -1875,19 +1783,6 @@ export function Skeleton({ rows = 6, cols = 4 }: { rows?: number; cols?: number 
           ))}
         </div>
       ))}
-    </div>
-  );
-}
-
-/**
- * A loading placeholder that is announced. `Skeleton` is decorative
- * (`aria-hidden`); this adds the words for a screen reader.
- */
-export function LoadingState({ rows = 5, cols = 4 }: { rows?: number; cols?: number }) {
-  return (
-    <div role="status" aria-busy="true">
-      <span className="visually-hidden">{t('web.loading')}</span>
-      <Skeleton rows={rows} cols={cols} />
     </div>
   );
 }
@@ -2183,9 +2078,6 @@ export function DataTable<T>({
     </>
   );
 }
-/** `DataTable` by the name the kit inventory uses. */
-export const Table = DataTable;
-
 /** A two-line cell: the primary value, and a quieter line beneath it. */
 export function CellMain({ primary, secondary }: { primary: ReactNode; secondary?: ReactNode }) {
   return (
@@ -2299,9 +2191,6 @@ export function CursorPager({
     </div>
   );
 }
-/** `CursorPager` by the name the kit inventory uses. The semantics are keyset. */
-export const Pagination = CursorPager;
-
 /**
  * A total the SERVER sent with the list (`totalRows` on the report endpoints): the only
  * number a counted pager may print. A distinct type so a client-side count — the length of
