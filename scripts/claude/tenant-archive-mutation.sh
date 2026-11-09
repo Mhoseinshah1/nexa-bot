@@ -72,6 +72,9 @@ MUTATIONS=(
   "replace-release|$B/application/tenant-archive.service.ts|s/await replace\\?.release\\(input.installationTenantId, held\\).catch\\(\\(\\) => undefined\\);//|$REPLACE_SUITE"
   "replace-delete-scope|$B/infrastructure/tenant-archive-replace.ts|s/WHERE \\$\\{predicateFor\\(table, tenantId\\)\\}\\x60;/WHERE true\\x60;/|$REPLACE_SUITE"
   "replace-claim|$B/infrastructure/tenant-archive-replace.ts|s/set_config\\('nexa.tenant_rewrite', \\$\\{input.requestId\\}, true\\)/set_config('nexa.tenant_rewrite', '', true)/|$REPLACE_SUITE"
+  # Every migration run re-asserts the grants (a --no-acl restore loses them): the lookup's
+  # EXECUTE must stay the system path's alone there too.
+  "allowed-grant-app|apps/api/src/infrastructure/persistence/row-level-security.ts|s/    REVOKE ALL ON FUNCTION nexa_tenant_rewrite_allowed\\(uuid\\) FROM \\$\\{APP_ROLE\\};\\n    GRANT EXECUTE ON FUNCTION nexa_tenant_rewrite_allowed\\(uuid\\) TO \\$\\{SYSTEM_ROLE\\};/    GRANT EXECUTE ON FUNCTION nexa_tenant_rewrite_allowed(uuid) TO \\\${APP_ROLE}, \\\${SYSTEM_ROLE};/|$ALLOWANCE_SUITE"
   "replace-apply-mode|apps/api/src/modules/platform/hosting/application/tenant-restore-admin.service.ts|s/mode: row.mode === 'REPLACE' \\? 'REPLACE' : 'NEW',/mode: 'NEW',/|tests/unit/hosted-backups.test.ts"
 )
 
@@ -83,7 +86,6 @@ SQL_MUTATIONS=(
   "allowed-xact|s/       AND r.rewrite_xact_id = \\(pg_current_xact_id\\(\\)::text\\)::bigint\\n//"
   "allowed-tenant|s/       AND r.hosted_tenant_id = p_tenant\\n//"
   "allowed-applying|s/       AND r.state = 'APPLYING'\\n//"
-  "allowed-grant-app|s/(GRANT EXECUTE ON FUNCTION nexa_tenant_rewrite_allowed\\(uuid\\) TO nexa_system)/\\1, nexa_app/"
 )
 
 run_suite() {

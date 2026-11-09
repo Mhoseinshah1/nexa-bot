@@ -37,7 +37,7 @@ import {
  *   outside      the system path and the replace's reason, no allowance      → refused
  *   inside       + `nexa.tenant_rewrite` naming an APPLYING REPLACE request of the tenant,
  *                  claimed by THIS transaction                                → the row goes
- *   not system   the allowance, but the statement as nexa_app                  → refused
+ *   not system   the allowance and the reason, but the statement as nexa_app   → refused
  *   wrong reason the allowance, another system-path reason                     → refused
  *   other tenant the allowance, the other tenant's row                         → refused
  *   not applying the allowance, the request VERIFIED                           → refused
@@ -303,7 +303,8 @@ describe('the tenant rewrite allowance — every DELETE guard, from the catalogu
             ['inside', await attempt(client, pair, H1, inside), 'deleted'],
             [
               'not system',
-              await attempt(client, pair, H1, { ...inside, role: 'none', reason: '' }),
+              // nexa_app can set the reason itself: the role is what it cannot be.
+              await attempt(client, pair, H1, { ...inside, role: 'none' }),
               'refused',
             ],
             [
