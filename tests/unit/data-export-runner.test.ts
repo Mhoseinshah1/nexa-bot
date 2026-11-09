@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { DATA_EXPORT_ERROR_CODES, DATA_EXPORT_TTL_MS, NexaError } from '@nexa/contracts';
+import {
+  DATA_EXPORT_ERROR_CODES,
+  DATA_EXPORT_TTL_MS,
+  NexaError,
+  type DataExportState,
+} from '@nexa/contracts';
 import { DataExportRunner } from '../../apps/api/src/modules/platform/data-export/application/data-export.runner';
 import type {
   DataExportRepository,
@@ -52,6 +57,8 @@ function rig(options: {
   write?: () => Promise<{ bytes: number; sha256: string }>;
   markReady?: boolean;
   pending?: DataExportRow[];
+  disk?: { tenantId: string; fileName: string; exportId: string }[];
+  states?: { id: string; state: DataExportState; fileName: string | null }[];
 }): Rig {
   const calls: string[] = [];
   const removed: string[] = [];
@@ -67,6 +74,7 @@ function rig(options: {
       return 0;
     },
     pendingRemoval: async () => options.pending ?? [],
+    statesOf: async () => options.states ?? [],
     markRemoved: async (_scope: unknown, id: string) => {
       calls.push(`markRemoved:${id}`);
     },
@@ -91,10 +99,11 @@ function rig(options: {
   const runner = new DataExportRunner({
     repository,
     files: {
-      pathFor: (tenantId, exportId) => ({
-        path: `/x/${tenantId}/${exportId}.zip`,
-        fileName: `${exportId}.zip`,
+      pathFor: (tenantId, exportId, attempt) => ({
+        path: `/x/${tenantId}/${exportId}.${attempt}.zip`,
+        fileName: `${exportId}.${attempt}.zip`,
       }),
+      list: async () => options.disk ?? [],
       open: async () => null,
       remove: async (_tenantId, fileName) => {
         removed.push(fileName);
@@ -162,7 +171,7 @@ describe('the data export runner', () => {
     });
     await r.runner.tick();
     expect(r.failed).toEqual([DATA_EXPORT_ERROR_CODES.FAILED]);
-    expect(r.removed).toEqual([`${EXPORT_ID}.zip`]);
+    expect(r.removed).toEqual([`${EXPORT_ID}.1.zip`]);
     expect(r.ready).toHaveLength(0);
   });
 
@@ -183,15 +192,46 @@ describe('the data export runner', () => {
   it('removes the file when the lease was lost, so it is nobody’s file', async () => {
     const r = rig({ markReady: false });
     await r.runner.tick();
-    expect(r.removed).toEqual([`${EXPORT_ID}.zip`]);
+    expect(r.removed).toEqual([`${EXPORT_ID}.1.zip`]);
   });
 
   it('removes the file of each expired export, then marks it removed; a failure is retried next tick', async () => {
-    const expired = row({ state: 'EXPIRED', fileName: `${EXPORT_ID}.zip`, expiresAt: T0 });
+    const expired = row({ state: 'EXPIRED', fileName: `${EXPORT_ID}.1.zip`, expiresAt: T0 });
     const r = rig({ claim: null, pending: [expired] });
     await r.runner.tick();
-    expect(r.removed).toEqual([`${EXPORT_ID}.zip`]);
+    expect(r.removed).toEqual([`${EXPORT_ID}.1.zip`]);
     expect(r.calls).toContain(`markRemoved:${EXPORT_ID}`);
     expect(r.calls.indexOf('expireDue')).toBeGreaterThanOrEqual(0);
+  });
+
+  it('names each attempt’s file by its attempt, so a replacement never shares a path with a stale worker', async () => {
+    const first = rig({ claim: row({ attempts: 1 }), markReady: false });
+    const second = rig({ claim: row({ attempts: 2 }), markReady: false });
+    await first.runner.tick();
+    await second.runner.tick();
+    expect(first.removed).toEqual([`${EXPORT_ID}.1.zip`]);
+    expect(second.removed).toEqual([`${EXPORT_ID}.2.zip`]);
+  });
+
+  it('sweeps files left by an exhausted (FAILED) export, a superseded attempt and a deleted row; keeps live ones', async () => {
+    const T = '01900000-0000-7000-8000-00000000aa01';
+    const id = (n: number) => `01900000-0000-7000-8000-0000000000e${n}`;
+    const file = (n: number, a: number) => ({
+      tenantId: T,
+      exportId: id(n),
+      fileName: `${id(n)}.${a}.zip`,
+    });
+    const r = rig({
+      claim: null,
+      disk: [file(1, 3), file(2, 1), file(2, 2), file(3, 1), file(4, 1), file(5, 1)],
+      states: [
+        { id: id(1), state: 'FAILED', fileName: null },
+        { id: id(2), state: 'READY', fileName: `${id(2)}.2.zip` },
+        { id: id(3), state: 'RUNNING', fileName: null },
+        { id: id(4), state: 'REQUESTED', fileName: null },
+      ],
+    });
+    await r.runner.tick();
+    expect(r.removed.sort()).toEqual([`${id(1)}.3.zip`, `${id(2)}.1.zip`, `${id(5)}.1.zip`].sort());
   });
 });

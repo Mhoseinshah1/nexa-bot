@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import {
   guardFormula,
   UTF8_BOM,
 } from '../../apps/api/src/modules/platform/data-export/infrastructure/csv';
+import { FilesystemDataExportFiles } from '../../apps/api/src/modules/platform/data-export/infrastructure/data-export-files';
 import { ZipFileWriter } from '../../apps/api/src/modules/platform/data-export/infrastructure/zip-file-writer';
 import { buildDataExportReadme } from '../../apps/api/src/modules/platform/data-export/application/data-export-readme';
 import {
@@ -118,5 +119,26 @@ describe('README.fa.md', () => {
         }
       }
     }
+  });
+});
+
+describe('the export files on disk', () => {
+  const T = '01900000-0000-7000-8000-00000000aa01';
+  const E = '01900000-0000-7000-8000-00000000ee01';
+
+  it('gives each attempt its own path, lists files and parts, and removes only the named attempt', async () => {
+    const files = new FilesystemDataExportFiles(await directory);
+    const one = files.pathFor(T, E, 1);
+    const two = files.pathFor(T, E, 2);
+    expect(one.path).not.toBe(two.path);
+    await mkdir(join(await directory, 'data-exports', T), { recursive: true });
+    await writeFile(one.path, 'a');
+    await writeFile(`${two.path}.part`, 'b');
+    const listed = await files.list();
+    expect(listed.map((f) => f.fileName).sort()).toEqual([one.fileName, two.fileName].sort());
+    await files.remove(T, one.fileName);
+    expect((await files.list()).map((f) => f.fileName)).toEqual([two.fileName]);
+    await files.remove(T, two.fileName);
+    expect(await files.list()).toEqual([]);
   });
 });

@@ -126,6 +126,57 @@ export class DataExportRunner {
         );
       }
     }
+    await this.sweepDebris();
+  }
+
+  /**
+   * Files no live export owns: left by a worker killed mid-write (an export that then used every
+   * attempt and ended FAILED, or a superseded attempt) or by a removal that failed. A file is
+   * kept only while its export is REQUESTED/RUNNING (a worker may be writing it) or it is the
+   * published file of a READY/EXPIRED export not yet removed. Anything else is removed, so a
+   * failure is retried on the next tick.
+   */
+  private async sweepDebris(): Promise<void> {
+    try {
+      const files = await this.deps.files.list();
+      if (files.length === 0) return;
+      const states = new Map(
+        (await this.deps.repository.statesOf([...new Set(files.map((f) => f.exportId))])).map(
+          (s) => [s.id, s] as const,
+        ),
+      );
+      let removed = 0;
+      for (const file of files) {
+        if (removed >= REMOVAL_BATCH) break;
+        const owner = states.get(file.exportId);
+        if (owner !== undefined) {
+          if (owner.state === 'REQUESTED' || owner.state === 'RUNNING') continue;
+          if (
+            (owner.state === 'READY' || owner.state === 'EXPIRED') &&
+            owner.fileName === file.fileName
+          ) {
+            continue;
+          }
+        }
+        try {
+          await this.deps.files.remove(file.tenantId, file.fileName);
+          removed += 1;
+        } catch (error) {
+          this.deps.logger.warn(
+            {
+              exportId: file.exportId,
+              err: error instanceof Error ? error.message : String(error),
+            },
+            'a leftover data export file could not be removed; retrying next tick',
+          );
+        }
+      }
+    } catch (error) {
+      this.deps.logger.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        'the data export debris sweep failed; retrying next tick',
+      );
+    }
   }
 
   private async run(row: DataExportRow): Promise<DataExportRow | null> {
@@ -137,7 +188,9 @@ export class DataExportRunner {
         .catch(() => undefined);
     }, this.deps.heartbeatMs);
     beat.unref?.();
-    const target = this.deps.files.pathFor(row.tenantId, row.id);
+    // This attempt's own file: a worker that lost its lease can neither overwrite nor delete
+    // the one the replacement attempt writes.
+    const target = this.deps.files.pathFor(row.tenantId, row.id, row.attempts);
     try {
       const admitted = await this.deps.queue.runWhenAdmitted(
         'EXPORT',

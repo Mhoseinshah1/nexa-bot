@@ -61,6 +61,7 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleDataExportRepository.expireDue',
   'DrizzleDataExportRepository.failAbandoned',
   'DrizzleDataExportRepository.pendingRemoval',
+  'DrizzleDataExportRepository.statesOf',
   'DrizzleDirectMessageRepository.purgeFileContentBefore',
   'DrizzleGatewayInvoiceRepository.providerOrderIdTaken',
   'DrizzleHeavyJobQueueRepository.enqueue',

@@ -47,7 +47,7 @@ const ACTIVE = DATA_EXPORT_ACTIVE_STATES as readonly string[];
 
 /**
  * Phase 6B PR-3: the `tenant_data_exports` rows. A method with a scope runs bound to the
- * EXPORTED tenant (row-level security confines it to that tenant's rows); the four with none
+ * EXPORTED tenant (row-level security confines it to that tenant's rows); the five with none
  * are the worker's sweeps across tenants, which `@ScopeBound` runs on the system path under
  * the reason `DrizzleDataExportRepository.<method>`, pinned in the allow-list. Every state
  * change is a conditional UPDATE naming its `from` state and, for the worker's, its lease.
@@ -301,6 +301,19 @@ export class DrizzleDataExportRepository implements DataExportRepository {
           eq(tenantDataExports.state, 'EXPIRED'),
         ),
       );
+  }
+
+  async statesOf(ids: readonly string[]) {
+    if (ids.length === 0) return [];
+    const rows = await this.db
+      .select({
+        id: tenantDataExports.id,
+        state: tenantDataExports.state,
+        fileName: tenantDataExports.fileName,
+      })
+      .from(tenantDataExports)
+      .where(inArray(tenantDataExports.id, [...ids]));
+    return rows.map((r) => ({ id: r.id, state: r.state as DataExportState, fileName: r.fileName }));
   }
 
   /** The row, still RUNNING and still this worker's. */

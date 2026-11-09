@@ -101,12 +101,30 @@ export interface DataExportRepository {
   /** EXPIRED exports whose file has not been removed yet. */
   pendingRemoval(limit: number): Promise<DataExportRow[]>;
   markRemoved(scope: TenantContext, id: string, now: Date): Promise<void>;
+  /** The state and published file of each of these exports (a missing id is not returned). */
+  statesOf(
+    ids: readonly string[],
+  ): Promise<
+    { readonly id: string; readonly state: DataExportState; readonly fileName: string | null }[]
+  >;
 }
 
 /** The export files on disk: `<root>/<tenantId>/<fileName>`, never a caller's path. */
 export interface DataExportFiles {
-  /** The path the worker writes for one export of one tenant. */
-  pathFor(tenantId: string, exportId: string): { readonly path: string; readonly fileName: string };
+  /**
+   * The path the worker writes for one ATTEMPT of one export of one tenant. The attempt is in
+   * the name, so a worker that lost its lease and the one that took the export over never
+   * write, publish or delete the same file.
+   */
+  pathFor(
+    tenantId: string,
+    exportId: string,
+    attempt: number,
+  ): { readonly path: string; readonly fileName: string };
+  /** Every export file (and `.part`) on disk, for the debris sweep. */
+  list(): Promise<
+    { readonly tenantId: string; readonly fileName: string; readonly exportId: string }[]
+  >;
   open(
     tenantId: string,
     fileName: string,
