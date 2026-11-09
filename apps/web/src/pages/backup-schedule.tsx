@@ -41,6 +41,7 @@ import {
 } from '../ui/kit';
 import { errorText } from '../error-text';
 import { ErrorRef } from '../ui/technical-details';
+import { TimeField24 } from '../ui/time-field24';
 
 /**
  * «زمان‌بندی بکاپ خودکار» — spec §13.2.
@@ -246,18 +247,18 @@ export function BackupScheduleCard({
           <Field
             label={t('web.backup_schedule_daily_edit')}
             hint={t('web.backup_schedule_daily_hint')}
-            htmlFor="backup-daily-time"
+            htmlFor="backup-daily-time-h"
             {...(dailyTrimmed === '' || dailyValid
               ? {}
               : { error: t('web.backup_schedule_daily_invalid') })}
           >
-            <Input
+            {/* The Persian 24-hour picker, like campaigns, reminders and the ops group: the value
+                is still the wire's own HH:MM, so the pattern, the request and the save are as before. */}
+            <TimeField24
               id="backup-daily-time"
-              dir="ltr"
-              inputMode="numeric"
-              placeholder="04:00"
+              label={t('web.backup_schedule_daily_edit')}
               value={dailyText}
-              onChange={(event) => setDailyText(event.target.value)}
+              onChange={setDailyText}
             />
           </Field>
           <div className="btn-group">
