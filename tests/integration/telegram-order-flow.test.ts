@@ -237,6 +237,21 @@ describe('the customer purchase flow over Telegram', () => {
   const messages = () =>
     sent.filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'));
   const lastMessage = () => messages()[messages().length - 1];
+  /**
+   * B1: a typed message nobody recognised is answered with `bot.unknown_command` and then the
+   * main menu with no extra tap, so the unknown sentence is the SECOND-to-last message and the
+   * last one is the menu's greeting with its keyboard.
+   */
+  const unknownAnswer = () => {
+    const menu = messages()[messages().length - 1];
+    expect(String(menu?.body['text']), 'the main menu follows the unknown sentence').toContain(
+      'خوش برگشتی',
+    );
+    expect(
+      (menu?.body['reply_markup'] as { keyboard?: unknown } | undefined)?.keyboard,
+    ).toBeDefined();
+    return messages()[messages().length - 2];
+  };
   const buttonsOf = (message: Sent | undefined) =>
     (
       (
@@ -752,7 +767,7 @@ describe('the customer purchase flow over Telegram', () => {
 
     // Before the window, a code is just a message nobody asked for.
     await command('SPRING');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
 
     await tap(`dc:${orderId}`);
     expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.ask']);
@@ -777,7 +792,7 @@ describe('the customer purchase flow over Telegram', () => {
 
     // The window closed on the accepted code: the next message is ordinary again.
     await command('SPRING');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
 
     await tap(`dx:${orderId}`);
     expect(String(lastMessage()?.body['text'])).not.toContain('تخفیف');
@@ -814,7 +829,7 @@ describe('the customer purchase flow over Telegram', () => {
       'mm:',
     ]);
     await command('SPRING');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
     expect((await orders())[0]?.['total_amount']).toBe(250_000n);
 
     // Cancel: the main menu, window closed, order left alone.
@@ -822,7 +837,7 @@ describe('the customer purchase flow over Telegram', () => {
     await tap('iz:');
     expect(String(lastMessage()?.body['text'])).toContain('خوش برگشتی');
     await command('SPRING');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
     expect((await orders())[0]?.['state']).toBe('DRAFT');
     expect((await orders())[0]?.['total_amount']).toBe(250_000n);
   });
@@ -843,13 +858,13 @@ describe('the customer purchase flow over Telegram', () => {
     // The first message after it is ordinary, and it closed the window for good: a
     // refusal would have rolled the close back and caught this message and every next one.
     await command('SPRING');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
     const windows = await api.container.database.db.execute(
       sql`SELECT close_reason FROM discount_code_captures WHERE order_id = ${orderId}`,
     );
     expect(windows.rows).toEqual([{ close_reason: 'SUPERSEDED' }]);
     await command('hello');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
   });
 
   it('explains an automatic discount on the summary, and refuses to confirm it once withdrawn', async () => {

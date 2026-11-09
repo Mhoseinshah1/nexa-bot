@@ -267,7 +267,9 @@ describe('the customer Telegram turn', () => {
     // it grants no authority and why a tap arrives as ordinary text.
     expect(markup?.inline_keyboard, 'the menu was drawn as an inline keyboard').toBeUndefined();
     expect(markup?.resize_keyboard).toBe(true);
-    expect(markup?.is_persistent).toBe(true);
+    // B3: «منوی پایین همیشه نمایش داده شود» is OFF by default, so the menu is NOT persistent
+    // and a customer who hides it is not shown it again.
+    expect(markup?.is_persistent).toBe(false);
     // Never one-shot. Hiding the menu after a single tap is what made the bot feel
     // command-driven, which is the thing staging acceptance objected to.
     expect(markup?.one_time_keyboard).toBe(false);
@@ -278,6 +280,30 @@ describe('the customer Telegram turn', () => {
     // keyboard above is exactly the six. The ninth is the reseller request, its flag off by
     // default, so it is not drawn either.
     expect(MAIN_MENU_BUTTONS).toHaveLength(9);
+  });
+
+  it('B3: with persistent_bottom_menu ON the menu keyboard is sent is_persistent, resize and not one-shot', async () => {
+    const owner = adminActorFor(
+      await createAdmin(api.container, tenantA, { username: 'pm-owner', roleKeys: ['owner'] }),
+    );
+    const flag = (await api.container.featureFlags.list(tenantA, owner)).find(
+      (row) => row.key === 'persistent_bottom_menu',
+    );
+    expect(flag?.enabled, 'the switch is off by default').toBe(false);
+    await api.container.featureFlags.set(tenantA, owner, {
+      key: 'persistent_bottom_menu',
+      enabled: true,
+      expectedVersion: flag?.version ?? null,
+      reason: 'B3 test',
+      idempotencyKey: 'pm-flag-on',
+    });
+    await start();
+    const markup = sent[0]?.body['reply_markup'] as
+      | { is_persistent?: boolean; resize_keyboard?: boolean; one_time_keyboard?: boolean }
+      | undefined;
+    expect(markup?.is_persistent).toBe(true);
+    expect(markup?.resize_keyboard).toBe(true);
+    expect(markup?.one_time_keyboard).toBe(false);
   });
 
   it('draws the tenant’s own main menu — order, switches, flags, labels — and routes a renamed button (R1)', async () => {
@@ -1157,9 +1183,14 @@ describe('the customer Telegram turn', () => {
     const response = await start({ text: 'سلام، قیمت چنده؟' });
     expect(response.statusCode).toBe(201);
     expect(await customers()).toHaveLength(1);
-    // One reply, and it is the FALLBACK rather than the welcome — named, for the
+    // The FIRST reply is the FALLBACK rather than the welcome — named, for the
     // same reason the blocked case is.
-    expect(sent).toHaveLength(1);
+    // B1: the unknown sentence, then the main menu with its keyboard and no extra tap.
+    expect(sent).toHaveLength(2);
     expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(String(sent[1]?.body['text'])).toContain('خوش برگشتی');
+    expect(
+      (sent[1]?.body['reply_markup'] as { keyboard?: unknown } | undefined)?.keyboard,
+    ).toBeDefined();
   });
 });

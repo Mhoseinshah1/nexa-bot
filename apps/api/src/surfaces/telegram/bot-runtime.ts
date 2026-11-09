@@ -1032,6 +1032,30 @@ export class BotRuntime {
     }
 
     /*
+     * B1: a typed message nobody recognised is answered with `bot.unknown_command` and the
+     * customer is put back on the main menu with no extra tap — the greeting and the
+     * keyboard `/start` shows. Only after the sentence was delivered, and never for a tapped
+     * button (that is `bot.callback.stale`, which carries its own way back). Best effort: the
+     * outcome of the menu is not the turn's.
+     */
+    if (
+      reply.key === 'bot.unknown_command' &&
+      sent.outcome === 'DELIVERED' &&
+      !isCallbackQueryUpdate(input.update)
+    ) {
+      const menu = await this.mainMenuReply(scope, actor, customer, input);
+      if (menu.key !== null) {
+        await this.deps.messenger.send(scope, {
+          chatId,
+          templateKey: menu.key,
+          values: menu.values,
+          botInstanceId: input.botInstanceId,
+          ...(menu.keyboard === undefined ? {} : { keyboard: menu.keyboard }),
+        });
+      }
+    }
+
+    /*
      * A rate-limited FACT goes on the lane rather than being lost.
      *
      * `OQ-4H-01`. The durable write has already committed by the time this runs —

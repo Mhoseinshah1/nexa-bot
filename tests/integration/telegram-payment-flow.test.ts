@@ -298,6 +298,21 @@ describe('the customer payment flow over Telegram', () => {
   const messages = () =>
     sent.filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'));
   const lastMessage = () => messages()[messages().length - 1];
+  /**
+   * B1: a typed message nobody recognised is answered with `bot.unknown_command` and then the
+   * main menu with no extra tap, so the unknown sentence is the SECOND-to-last message and the
+   * last one is the menu's greeting with its keyboard.
+   */
+  const unknownAnswer = () => {
+    const menu = messages()[messages().length - 1];
+    expect(String(menu?.body['text']), 'the main menu follows the unknown sentence').toContain(
+      'خوش برگشتی',
+    );
+    expect(
+      (menu?.body['reply_markup'] as { keyboard?: unknown } | undefined)?.keyboard,
+    ).toBeDefined();
+    return messages()[messages().length - 2];
+  };
   const buttonsOf = (message: Sent | undefined) =>
     (
       (
@@ -1450,7 +1465,7 @@ describe('the customer payment flow over Telegram', () => {
   it('answers an unknown message as an unknown command, menu or no menu', async () => {
     sent = [];
     await command('چطور می‌توانم اشتراک بخرم؟');
-    expect(String(lastMessage()?.body['text'])).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(String(unknownAnswer()?.body['text'])).toBe(CATALOGUE_FA['bot.unknown_command']);
   });
 
   // -------------------------------------------------------------------------
