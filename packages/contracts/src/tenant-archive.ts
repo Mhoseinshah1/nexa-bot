@@ -104,7 +104,14 @@ export const tenantArchiveManifestSchema = z
       botInstanceId: z.uuid().nullable(),
       botUsername: z.string().nullable(),
       telegramBotId: z.string().nullable(),
-      capacityLimits: z.array(z.object({ key: z.string().min(1), value: z.string() })),
+      /** The host's `tenant_capacity_limits` rows for this tenant (its policy, not its data). */
+      capacityLimits: z.array(
+        z.object({
+          resource: z.string().min(1),
+          mode: z.string().min(1),
+          value: z.number().int().nullable(),
+        }),
+      ),
     }),
     /** In load order (parents first). */
     tables: z.array(
