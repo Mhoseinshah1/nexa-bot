@@ -2,6 +2,7 @@
 
 Presentation only: every query, mutation, permission prop, confirm dialog, reason field and validation is the page's own, unchanged.
 No endpoint was added; the thread works on what `GET /business-chats/:id` already returns.
+PR-10 (owner-approved, item 2) later added `GET /business-chats/:id/history` (read-only, `business_chats.view`, newest first, 50 a page, a message-id cursor, text + speaker search): «نمایش 50 پیام قدیمی‌تر» reads from it past the detail's 100 messages, and the thread's search is the server's, over the whole conversation.
 Kit pieces used: `QuickFilters`, `QuickActionBar`/`QuickAction`, `AttentionStrip`, `KpiRow`, `CardRows`, `DetailHead`, `Disclosure`.
 
 ## `/business-chats` (inbox) — `pages/business-chats.tsx`

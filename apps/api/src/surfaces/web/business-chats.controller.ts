@@ -2,8 +2,10 @@ import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
+  BUSINESS_CHAT_HISTORY_PAGE,
   BUSINESS_CHAT_LIST_LIMIT,
   BUSINESS_CHAT_ROUTES,
+  businessChatHistoryQuerySchema,
   businessChatControlRequestSchema,
   businessChatListQuerySchema,
   businessChatResumeAllRequestSchema,
@@ -16,6 +18,7 @@ import {
   routePattern,
   type BusinessChatControlResponse,
   type BusinessChatDetailResponse,
+  type BusinessChatHistoryResponse,
   type BusinessChatListResponse,
   type BusinessChatResumeAllResponse,
   type BusinessChatSendResponse,
@@ -25,7 +28,10 @@ import {
 import { z } from 'zod';
 import { CONTAINER, type Container } from '../../container.js';
 import { authenticateAdmin } from './authenticated-request.js';
-import type { BusinessConversationListItem } from '../../modules/commerce/business-chats/application/ports.js';
+import type {
+  BusinessConversationListItem,
+  BusinessMessageRecord,
+} from '../../modules/commerce/business-chats/application/ports.js';
 
 /**
  * TB2 — Telegram Business conversations over HTTP: the inbox, one conversation, the
@@ -115,19 +121,38 @@ export class BusinessChatsController {
         createdAt: escalation.createdAt.toISOString(),
         aiFailure: escalation.jobId === null ? null : (aiFailures.get(escalation.jobId) ?? null),
       })),
-      messages: found.messages.map((message) => ({
-        id: message.id,
-        origin: message.origin,
-        kind: message.kind,
-        text: message.text,
-        sentAt: message.sentAt.toISOString(),
-        edited: message.editedAt !== null,
-        deleted: message.deletedAt !== null,
-      })),
+      messages: found.messages.map(toMessageView),
       // CX1 (review of PR #248): the one projection, which keeps `origin` readable by the
       // pre-A4 bundle a rolling deploy can still be serving.
       outbound: found.outbound.map(businessOutboundView),
       aiMode: await this.container.supportInsights.aiMode(scope),
+    };
+  }
+
+  /**
+   * Web redesign PR-10: the conversation's history, newest first, a page at a time — older
+   * than the detail's window, or searched across the whole conversation. Read-only.
+   */
+  @Get(routePattern(BUSINESS_CHAT_ROUTES.history, 'conversationId'))
+  async history(
+    @Req() request: FastifyRequest,
+    @Param('conversationId') conversationId: string,
+    @Query() query: unknown,
+  ): Promise<BusinessChatHistoryResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const input = businessChatHistoryQuerySchema.parse(query ?? {});
+    const rows = await this.container.businessConversations.history(scope, actor, {
+      conversationId,
+      ...(input.before === undefined ? {} : { before: input.before }),
+      ...(input.q === undefined ? {} : { text: input.q }),
+      ...(input.sender === undefined ? {} : { sender: input.sender }),
+      limit: BUSINESS_CHAT_HISTORY_PAGE + 1,
+    });
+    const page = rows.slice(0, BUSINESS_CHAT_HISTORY_PAGE);
+    const last = page[page.length - 1];
+    return {
+      messages: page.map(toMessageView),
+      nextCursor: rows.length > BUSINESS_CHAT_HISTORY_PAGE && last !== undefined ? last.id : null,
     };
   }
 
@@ -188,6 +213,21 @@ export class BusinessChatsController {
       idempotencyKey: command.idempotencyKey,
     });
   }
+}
+
+/** One message as the detail and the history draw it (never the photo's file id). */
+function toMessageView(
+  message: BusinessMessageRecord,
+): BusinessChatDetailResponse['messages'][number] {
+  return {
+    id: message.id,
+    origin: message.origin,
+    kind: message.kind,
+    text: message.text,
+    sentAt: message.sentAt.toISOString(),
+    edited: message.editedAt !== null,
+    deleted: message.deletedAt !== null,
+  };
 }
 
 function toSummary(item: BusinessConversationListItem): BusinessConversationSummary {

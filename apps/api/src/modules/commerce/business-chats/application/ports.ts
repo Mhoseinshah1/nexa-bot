@@ -410,6 +410,24 @@ export interface BusinessMessageRepository {
   ): Promise<readonly BusinessMessageRecord[]>;
 
   /**
+   * Web redesign PR-10: one page of the conversation's history, NEWEST FIRST — the order
+   * `(sent_at, telegram_message_id)` descending, which `(conversation, message id)` being
+   * unique makes total. `beforeId` keeps the messages strictly older than that message of the
+   * same tenant and conversation (none when it is not one). `text` is a case-insensitive
+   * substring of the message text; `origins` the speakers kept. Null means no filter.
+   */
+  history(
+    scope: ScopeContext,
+    input: {
+      readonly conversationId: string;
+      readonly beforeId: string | null;
+      readonly text: string | null;
+      readonly origins: readonly BusinessMessageOrigin[] | null;
+      readonly limit: number;
+    },
+  ): Promise<readonly BusinessMessageRecord[]>;
+
+  /**
    * TB6: one message's photo reference, read by the tenant, the conversation AND the row id
    * together — a message of another conversation or another tenant is null, never a file id.
    */
