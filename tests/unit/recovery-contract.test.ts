@@ -206,7 +206,15 @@ describe('recovery permissions', () => {
 
 describe('the pre-restore trigger', () => {
   it('is a third trigger value, not a third code path', () => {
-    expect([...BACKUP_TRIGGERS]).toEqual(['MANUAL', 'SCHEDULED', 'PRE_RESTORE']);
+    expect([...BACKUP_TRIGGERS]).toEqual([
+      'MANUAL',
+      'SCHEDULED',
+      'PRE_RESTORE',
+      // Phase 6B (ADR-0039): a tenant's pre-replace archive and a server-move member — values
+      // too, through the same six stages.
+      'PRE_REPLACE',
+      'MOVE',
+    ]);
   });
 });
 

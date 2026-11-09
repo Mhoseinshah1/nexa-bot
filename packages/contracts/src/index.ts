@@ -210,6 +210,8 @@ export * from './record-source.js';
 export * from './gift-cards.js';
 /** Phase 6A PR-2: per-bot capacity limits, the heavy-job queue and the owner's capacity alerts. */
 export * from './capacity.js';
+/** Phase 6B (ADR-0039): the tenant archive — format, manifest, restore modes and states. */
+export * from './tenant-archive.js';
 /** Phase 6A PR-3: the creator panel — hosted bots, their lifecycle and the section's 2FA. */
 export * from './hosting.js';
 export * from './hosting-activation.js';

@@ -251,8 +251,16 @@ export const CAPACITY_DISK_WARNING_PERCENT = 80;
 export const CAPACITY_DISK_CRITICAL_PERCENT = 90;
 
 /** Heavy jobs: what waits in the one installation-wide queue. */
-export const HEAVY_JOB_KINDS = ['BACKUP', 'IMPORT', 'EXPORT', 'REPORT'] as const;
+export const HEAVY_JOB_KINDS = ['BACKUP', 'IMPORT', 'EXPORT', 'REPORT', 'RESTORE'] as const;
 export type HeavyJobKind = (typeof HEAVY_JOB_KINDS)[number];
+/**
+ * Phase 6B (ADR-0039 § Cross-cutting): the kinds that run ALONE. The gate starts one only
+ * when no other ticket runs, and starts nothing beside it, whatever
+ * `INSTALLATION_HEAVY_JOB_CONCURRENCY` allows — a dump, an archive or a restore beside
+ * another heavy job is the memory peak the queue exists to prevent. Decided under the gate's
+ * existing installation lock.
+ */
+export const EXCLUSIVE_HEAVY_JOB_KINDS: readonly HeavyJobKind[] = ['BACKUP', 'RESTORE'];
 export const HEAVY_JOB_STATES = ['QUEUED', 'RUNNING', 'DONE', 'ABANDONED'] as const;
 export type HeavyJobState = (typeof HEAVY_JOB_STATES)[number];
 
