@@ -203,6 +203,16 @@ export class PermissionGuard {
     return this.effective(scope, actor, tx);
   }
 
+  /**
+   * Permissions being DELEGATED (a role's keys), filtered by the same scope rule as `effective`:
+   * the installation-only keys mean nothing outside the installation tenant, so a delegator who
+   * cannot hold them there is not refused for failing to "hold" them (Codex P2, PR #448).
+   */
+  delegableIn<T extends PermissionKey>(scope: ScopeContext, permissions: Iterable<T>): T[] {
+    const kept = this.withoutForeignInstallationKeys(scope, new Set<PermissionKey>(permissions));
+    return [...permissions].filter((key) => kept.has(key));
+  }
+
   /** The authority a re-enable would restore. See `PermissionResolver`. */
   async permissionsIfActive(
     scope: ScopeContext,
