@@ -2919,6 +2919,13 @@ assert_equals "botctl admin reset-2fa failed" 0 "$BOTCTL_STATUS"
 assert_contains "reset-2fa did not reach the CLI" \
   "$(docker_log)" "dist/admin-2fa-reset.cli.js --username owner --reason lost-phone"
 assert_not_contains "reset-2fa ran in read-only mode" "$(docker_log)" "--check"
+reset_docker_log
+run_botctl admin reset-hosting-2fa --username owner --reason lost-phone
+assert_equals "botctl admin reset-hosting-2fa failed" 0 "$BOTCTL_STATUS"
+assert_contains "reset-hosting-2fa did not reach its CLI" \
+  "$(docker_log)" "dist/admin-hosting-2fa-reset.cli.js --username owner --reason lost-phone"
+assert_not_contains "reset-hosting-2fa reached the sign-in factor's CLI" \
+  "$(docker_log)" "dist/admin-2fa-reset.cli.js"
 
 # A real terminal for the password prompts: botctl reads them from /dev/tty, which a pipe
 # cannot stand in for. The child is run under a pty; every time it prints a prompt (a line
@@ -3117,7 +3124,7 @@ assert_not_contains "a delete ran under a held lock" "$(docker_log)" "customers-
 test_case "an unknown admin subcommand is refused with the usage"
 run_botctl admin nonsense
 assert_fails "an unknown admin subcommand was accepted" test "$BOTCTL_STATUS" -eq 0
-for action in check-2fa reset-2fa reset-password; do
+for action in check-2fa reset-2fa reset-hosting-2fa reset-password; do
   assert_contains "the usage does not name ${action}" "$BOTCTL_OUTPUT" "$action"
 done
 
