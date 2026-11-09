@@ -266,15 +266,20 @@ describe('hosted archive delivery: the hosted bot’s own group, never the owner
 });
 
 describe('«بازیابی ربات از فایل»: the recovery role’s pass', () => {
-  function admin(rows: TenantRestoreRecord[], files: Record<string, string | null>) {
+  function admin(
+    rows: TenantRestoreRecord[],
+    files: Record<string, string | null>,
+    restoreFails?: Error,
+  ) {
     const restored: { confirmRequestId?: string; password: string }[] = [];
-    const withdrawn: { id: string; failureCode: string }[] = [];
+    const withdrawn: { id: string; failureCode: string; failureMessage?: string }[] = [];
     const removed: string[] = [];
     const service = new TenantRestoreAdminService({
       section: {} as never,
       owner: {} as never,
       restores: {
         restore: async (input) => {
+          if (restoreFails) throw restoreFails;
           restored.push(input);
           return { requestId: input.confirmRequestId ?? 'x', summary: {} as never };
         },
@@ -356,6 +361,21 @@ describe('«بازیابی ربات از فایل»: the recovery role’s pass'
       expect.objectContaining({ confirmRequestId: id, password: 'the archive password' }),
     ]);
     expect(t.removed).toContain(id);
+  });
+
+  it('a plain error from the restore never reaches the persisted failure message', async () => {
+    const id = '01900000-0000-7000-8000-0000000000c3';
+    const marker = '01900000-0000-7000-8000-0000000000ff';
+    const t = admin(
+      [record({ id, confirmRequestedAt: new Date('2026-11-08T23:30:00Z') })],
+      { [id]: JSON.stringify({ ciphertext: 'sealed:pw', keyId: 'k1' }) },
+      new Error(`Failed query: insert into customers values ($1) params: ${marker}`),
+    );
+    await t.service.tick();
+    expect(t.withdrawn).toHaveLength(1);
+    const message = t.withdrawn[0]?.failureMessage ?? '';
+    expect(message).not.toContain('params:');
+    expect(message).not.toContain(marker);
   });
 
   it('expires a dry run nobody confirmed within a day; a fresh one stays', async () => {

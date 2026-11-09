@@ -10,6 +10,7 @@ import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
 import { installProcessBackstop } from './infrastructure/lifecycle/process-backstop.js';
+import { errorDiagnostics } from './modules/platform/legacy-migration/domain/error-diagnostics.js';
 import { stalledAfterGrace } from './modules/platform/opslog/application/loop-stall-reporter.js';
 
 /** The executor's name in the operations log: `job.loop_stalled:recovery-executor`. */
@@ -194,7 +195,7 @@ async function main(): Promise<void> {
       .tick()
       .catch((error: unknown) => {
         container.logger.warn(
-          { err: error instanceof Error ? error.message : String(error) },
+          { diagnostics: errorDiagnostics(error) },
           'the hosted restore pass failed; it runs again shortly',
         );
       })

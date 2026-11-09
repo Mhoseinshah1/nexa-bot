@@ -418,7 +418,12 @@ export class TenantRestoreAdminService {
           id: row.id,
           failureCode:
             error instanceof NexaError ? error.code : 'tenant_archive.verification_failed',
-          failureMessage: error instanceof Error ? error.message.slice(0, 500) : String(error),
+          // Only a NexaError's own, code-authored sentence is stored; any other error (a drizzle
+          // query error carries the SQL and its bound row values) gets a fixed text.
+          failureMessage:
+            error instanceof NexaError
+              ? error.message.slice(0, 500)
+              : 'The restore failed before it could finish; see the server log.',
           now: this.deps.clock.now(),
         })
         .catch(() => false);
