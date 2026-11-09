@@ -238,7 +238,34 @@ export const hostedBotSetLimitRequestSchema = z.object({
   limit: capacityLimitSchema.nullable(),
 });
 
-export const hostedBotEnterRequestSchema = z.object({ proof: hostingProofSchema });
+/**
+ * «ورود به پنل» (phase 6B, ADR-0039 § 9): a fresh code mints one entry. The idempotency key
+ * answers a retry WITHOUT a second token (only a hash of the first is kept, so a replay
+ * answers `url: null`), never by minting again.
+ */
+export const hostedBotEnterRequestSchema = z.object({
+  idempotencyKey,
+  proof: hostingProofSchema,
+});
+
+/** How long a minted enter token may be redeemed (15 minutes, by the `Clock`). */
+export const HOSTED_ENTER_TOKEN_TTL_SECONDS = 15 * 60;
+
+/** The hosted domain's page that redeems a token: `https://<domain>/enter#token=<token>`. */
+export const HOSTED_ENTER_PAGE_PATH = '/enter';
+
+/**
+ * The redemption, posted by that page on the hosted domain to `POST /auth/enter`. The token is
+ * 256 random bits in base64url; only its SHA-256 is stored.
+ */
+export const hostedEnterRedeemRequestSchema = z.object({
+  token: z
+    .string()
+    .min(43)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/),
+});
+export type HostedEnterRedeemRequest = z.infer<typeof hostedEnterRedeemRequestSchema>;
 
 /** Why creating is closed, or null when it is open. */
 export const HOSTING_CREATE_REFUSALS = ['FLAG_OFF', 'PRODUCTION_NOT_RELEASED'] as const;
@@ -343,6 +370,16 @@ export interface HostedBotPurgeResponse extends HostedBotResponse {
    * stay until the erasure job (6B) removes them; nothing can reopen it.
    */
   readonly erasure: 'PENDING';
+}
+
+/**
+ * A minted entry: the address to open in a new tab — on the HOSTED domain, the token in the
+ * FRAGMENT so no server, proxy or `Referer` sees it. `url` is null on an idempotent replay.
+ */
+export interface HostedBotEnterResponse {
+  readonly url: string | null;
+  readonly expiresAt: string | null;
+  readonly replayed: boolean;
 }
 
 export interface HostingServerResponse {

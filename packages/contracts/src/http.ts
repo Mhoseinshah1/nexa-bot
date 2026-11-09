@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { adminChangeReasonSchema, adminDisplayNameSchema, stepUpSchema } from './identity.js';
+import {
+  ADMIN_KINDS,
+  adminChangeReasonSchema,
+  adminDisplayNameSchema,
+  stepUpSchema,
+} from './identity.js';
 import {
   DELIVERY_OUTCOMES,
   NOTIFICATION_KINDS,
@@ -609,6 +614,11 @@ export const adminSummarySchema = z.object({
   username: z.string(),
   displayName: z.string(),
   status: z.enum(['ACTIVE', 'DISABLED']),
+  /**
+   * Phase 6B: `HOST` is the installation owner's principal in a hosted tenant, listed
+   * read-only as «میزبان». Absent from older answers, which read as `OPERATOR`.
+   */
+  kind: z.enum(ADMIN_KINDS).optional(),
   telegramUserId: z.string().nullable(),
   roleKeys: z.array(z.string()),
   createdAt: z.string(),
@@ -643,6 +653,11 @@ export const sessionResponseSchema = z.object({
   admin: adminSummarySchema,
   permissions: z.array(z.string()),
   expiresAt: z.string(),
+  /**
+   * Phase 6B «ورود به پنل»: set when this session is the installation owner's, entered into a
+   * hosted tenant (the banner «در حال مشاهده به‌عنوان میزبان» and «خروج»). Null otherwise.
+   */
+  impersonation: z.object({ ownerUsername: z.string() }).nullable().optional(),
 });
 export type SessionResponse = z.infer<typeof sessionResponseSchema>;
 
@@ -815,6 +830,8 @@ export const AUTH_ROUTES = {
   logout: '/auth/logout',
   session: '/auth/session',
   password: '/auth/password',
+  /** Phase 6B: redeem a «ورود به پنل» token on the hosted domain (`hostedEnterRedeemRequestSchema`). */
+  enter: '/auth/enter',
 } as const;
 
 export const ADMIN_ROUTES = {
