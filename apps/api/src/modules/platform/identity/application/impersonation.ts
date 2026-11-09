@@ -39,3 +39,16 @@ export function refuseImpersonatedAccountChange(actor: ActorContext, action: str
     { action },
   );
 }
+
+/**
+ * The same refusal for a HOST action that has its own fresh-code door in «میزبانی‌ها» (the bulk
+ * data export): the hosted owner's own door for it is not open to an entered session.
+ */
+export function refuseImpersonatedHostAction(actor: ActorContext, action: string): void {
+  if (actor.impersonation === undefined) return;
+  throw errors.permissionDenied(
+    IDENTITY_ERROR_CODES.IMPERSONATION_FORBIDDEN,
+    'An entered session cannot use this action; it is the host’s, behind a fresh code.',
+    { action },
+  );
+}

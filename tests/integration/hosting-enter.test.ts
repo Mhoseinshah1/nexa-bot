@@ -366,6 +366,7 @@ describe('«ورود به پنل» (phase 6B PR-5)', () => {
       expect(body.permissions).toContain('settings.edit');
       expect(body.permissions).not.toContain('admins.edit');
       expect(body.permissions).not.toContain('backup.download');
+      expect(body.permissions).not.toContain('data.export');
 
       // Several write paths the entered session can make, and one it is denied: a ping (the
       // reference write path), an admin create (denied: admins.edit), and its own sign-out.
@@ -415,6 +416,21 @@ describe('«ورود به پنل» (phase 6B PR-5)', () => {
         expect(row.actorId).toBe(owner.id);
         expect(row.actorLabel).toBe(owner.username);
       }
+    });
+
+    it('cannot request or download the hosted owner’s own data export (a host action, behind a fresh code)', async () => {
+      const panel = await openPanel();
+      const id = await hostedBot(panel, 'alpha', DOMAIN);
+      const { scope, actor } = await entered(panel, id);
+      expect(
+        await codeOf(api.container.dataExport.requestOwn(scope, actor, { idempotencyKey: key() })),
+      ).toBe(IDENTITY_ERROR_CODES.IMPERSONATION_FORBIDDEN);
+      expect(
+        await codeOf(api.container.dataExport.downloadOwn(scope, actor, crypto.randomUUID())),
+      ).toBe(IDENTITY_ERROR_CODES.IMPERSONATION_FORBIDDEN);
+      expect(await codeOf(api.container.dataExport.listOwn(scope, actor))).toBe(
+        IDENTITY_ERROR_CODES.IMPERSONATION_FORBIDDEN,
+      );
     });
 
     it('cannot change the tenant’s admins, second factors, passwords or secrets', async () => {

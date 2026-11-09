@@ -39,6 +39,8 @@ MUTATIONS=(
   "password-change|$I/application/admin-management.service.ts|s/refuseImpersonatedAccountChange\\(actor, 'admin.password_change'\\);//|$ENTER_SUITE"
   "owner-session-liveness|$H/infrastructure/drizzle-hosting-enter.repository.ts|s/isNull\\(adminSessions.revokedAt\\),\\n            gt\\(adminSessions.expiresAt, now\\),//|$ENTER_SUITE"
   "section-close-revokes|$H/application/hosting-section.service.ts|s/await this.endEnteredSessions\\(installation, actor.id as string, now\\);//|$ENTER_SUITE"
+  "data-export-explicit|apps/api/src/modules/platform/data-export/application/data-export.service.ts|s/refuseImpersonatedHostAction\\(actor, action\\);//|$ENTER_SUITE"
+  "data-export-denied-key|packages/contracts/src/permissions.ts|s/'hosting.manage',\\n  'data.export',/'hosting.manage',/|$ENTER_SUITE"
   "host-target|$I/application/admin-management.service.ts|s/if \\(admin.kind === 'HOST'\\) \\{/if (false) {/|$ENTER_SUITE"
   "host-sign-in|$I/infrastructure/drizzle-admin.repository.ts|s/if \\(row === undefined \\x7c\\x7c row.kind !== 'OPERATOR' \\x7c\\x7c row.passwordHash === null\\) return null;/if (row === undefined) return null;/|$ENTER_SUITE"
 )
@@ -67,6 +69,8 @@ for entry in "${MUTATIONS[@]}"; do
     continue
   fi
   echo "== $name: mutated $file"
+  # the apps import @nexa/contracts from its dist: rebuild after touching the source
+  if [[ "$file" == packages/contracts/* ]]; then pnpm --filter @nexa/contracts build >/dev/null; fi
   if run_suite "$suite"; then
     echo "== $name: suite stayed GREEN with the rule reverted; FAILED"
     status=1
@@ -74,6 +78,7 @@ for entry in "${MUTATIONS[@]}"; do
     echo "== $name: RED, as it must be"
   fi
   git checkout -- "$file"
+  if [[ "$file" == packages/contracts/* ]]; then pnpm --filter @nexa/contracts build >/dev/null; fi
 done
 
 echo "== restored: the untouched suites"
