@@ -109,17 +109,26 @@ FROM base AS system
 # The keyring is fetched over HTTPS and dearmored to a file `apt` is told to
 # trust for this one repository, rather than added to the global trust store.
 # `gnupg` and `curl` go again in the same layer, so neither is in the image.
+#
+# RETRIES. apt.postgresql.org and www.postgresql.org sometimes fail a single request
+# (a 5xx or a reset) and took a whole image build, and a whole CI job, with them. apt
+# retries each fetch (`Acquire::Retries`), the key download retries inside curl, and
+# the two `apt-get update` calls and the key fetch are wrapped in a short retry loop.
+# Versions stay pinned by `PG_MAJOR`, and the purge stays.
 ARG PG_MAJOR=16
 RUN set -eux; \
-    apt-get update; \
+    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+      > /etc/apt/apt.conf.d/80-nexa-retries; \
+    retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -ge 5 ] && return 1; sleep $((n * 3)); done; }; \
+    retry apt-get -o APT::Update::Error-Mode=any update; \
     apt-get install -y --no-install-recommends ca-certificates curl gnupg; \
-    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-      | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg; \
+    retry sh -c 'curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor --yes -o /usr/share/keyrings/pgdg.gpg'; \
     echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
       > /etc/apt/sources.list.d/pgdg.list; \
-    apt-get update; \
+    retry apt-get -o APT::Update::Error-Mode=any update; \
     apt-get install -y --no-install-recommends "postgresql-client-${PG_MAJOR}" 7zip; \
     apt-get purge -y --auto-remove curl gnupg; \
+    rm -f /etc/apt/apt.conf.d/80-nexa-retries; \
     rm -rf /var/lib/apt/lists/*; \
     command -v 7z >/dev/null 2>&1 || ln -s "$(command -v 7zz)" /usr/local/bin/7z; \
     pg_dump --version; \

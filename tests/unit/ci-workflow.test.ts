@@ -598,6 +598,25 @@ describe('the CI workflow', () => {
     }
   });
 
+  describe('the Dockerfile survives a flaky apt.postgresql.org (C2)', () => {
+    const dockerfile = readFileSync(join(__dirname, '../../Dockerfile'), 'utf8');
+    const layer = dockerfile.slice(dockerfile.indexOf('ARG PG_MAJOR=16'));
+    const run = layer.slice(0, layer.indexOf('7z i >/dev/null'));
+
+    it('retries every apt fetch, and wraps the key download and both updates in a retry loop', () => {
+      expect(run).toContain('Acquire::Retries');
+      expect(run).toMatch(/retry\(\) \{/u);
+      expect(run.match(/retry apt-get -o APT::Update::Error-Mode=any update;/gu)).toHaveLength(2);
+      expect(run).toMatch(/retry sh -c 'curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors/u);
+    });
+
+    it('keeps the pinned major and the purge', () => {
+      expect(run).toContain('"postgresql-client-${PG_MAJOR}" 7zip');
+      expect(run).toContain('apt-get purge -y --auto-remove curl gnupg');
+      expect(run).toContain('rm -f /etc/apt/apt.conf.d/80-nexa-retries');
+    });
+  });
+
   describe('the image layer cache of the deployment jobs', () => {
     const jobs = ['deploy', 'deploy-update'] as const;
     const read = (path: string) => readFileSync(join(__dirname, '../..', path), 'utf8');
