@@ -25,7 +25,7 @@ export const WEB_FA_HOSTING_BACKUP = {
   'web.hosted_backup_password_title': 'رمز بکاپ این ربات',
   'web.hosted_backup_password_hint':
     'این رمز فایل‌های بکاپ را قفل می‌کند و مالک ربات آن را نمی‌بیند. تغییر آن فقط روی بکاپ‌های بعدی اثر دارد؛ بکاپ‌های قبلی با رمز قبلی باز می‌شوند.',
-  'web.hosted_backup_password_field': 'رمز تازه (دست‌کم ۱۲ نویسه)',
+  'web.hosted_backup_password_field': 'رمز تازه (دست‌کم 12 نویسه)',
   'web.hosted_backup_password_repeat': 'تکرار رمز',
   'web.hosted_backup_password_mismatch': 'دو رمز یکی نیستند.',
   'web.hosted_backup_run_now': 'بکاپ الان',
