@@ -1,7 +1,7 @@
 import { Children, Fragment, isValidElement, useId, useState, type ReactNode } from 'react';
 import { t } from '../i18n/web.fa';
 import { formatNumber } from '../format';
-import { Button, Banner, FilterChip, FilterChips, type Tone } from './kit';
+import { Button, Banner, FilterChip, FilterChips, Switch, type Tone } from './kit';
 import { Icon } from './icons';
 
 /**
@@ -381,6 +381,42 @@ export function SettingRow({
   );
 }
 
+/** A setting whose control is a switch. */
+export function SwitchSettingRow({
+  title,
+  description,
+  checked,
+  onChange,
+  disabled,
+  danger,
+  changed,
+}: {
+  title: string;
+  description?: ReactNode;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  danger?: boolean;
+  changed?: boolean;
+}) {
+  return (
+    <SettingRow
+      title={title}
+      {...(description === undefined ? {} : { description })}
+      {...(changed === undefined ? {} : { changed })}
+      control={
+        <Switch
+          checked={checked}
+          onChange={onChange}
+          label={title}
+          {...(disabled === undefined ? {} : { disabled })}
+          {...(danger === undefined ? {} : { danger })}
+        />
+      }
+    />
+  );
+}
+
 /**
  * The one sticky «N تغییر ذخیره‌نشده — ذخیره / لغو» bar of a settings page. Hidden while there
  * is nothing to save. Saving and cancelling stay the page's own handlers, so the page's
@@ -391,12 +427,15 @@ export function StickySaveBar({
   onSave,
   onCancel,
   saving = false,
+  saveDisabled = false,
   error,
 }: {
   changes: number;
   onSave: () => void;
   onCancel: () => void;
   saving?: boolean;
+  /** The page's own validation refuses the save (the reason is shown in `error`). */
+  saveDisabled?: boolean;
   error?: ReactNode;
 }) {
   if (changes <= 0) return null;
@@ -410,7 +449,7 @@ export function StickySaveBar({
       <Button variant="ghost" onClick={onCancel} disabled={saving}>
         {t('web.kit_settings_cancel')}
       </Button>
-      <Button variant="primary" onClick={onSave} disabled={saving}>
+      <Button variant="primary" onClick={onSave} disabled={saving || saveDisabled}>
         {saving ? t('web.kit_settings_saving') : t('web.kit_settings_save')}
       </Button>
     </div>

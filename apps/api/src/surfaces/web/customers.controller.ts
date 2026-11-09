@@ -73,6 +73,7 @@ export class CustomersController {
     });
     const text = page.q === undefined ? null : classifyListSearch(page.q);
     const result = await this.container.customers.list(scope, actor, {
+      withTotal: true,
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       // The shared cursor, the same one Panels uses. A cursor this server did not mint
       // is a 400 and never a silent restart of the traversal.
@@ -95,6 +96,8 @@ export class CustomersController {
     return {
       customers: result.items.map(toSummary),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
+      // Omitted, not null, when none could be produced in time (`listTotalSchema`).
+      ...(result.total === null ? {} : { total: result.total }),
     };
   }
 

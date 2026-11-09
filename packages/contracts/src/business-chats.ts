@@ -571,6 +571,11 @@ export const BUSINESS_CHAT_ROUTES = {
   send: (id: string) => `/business-chats/${encodeURIComponent(id)}/messages`,
   takeover: (id: string) => `/business-chats/${encodeURIComponent(id)}/takeover`,
   resume: (id: string) => `/business-chats/${encodeURIComponent(id)}/resume`,
+  /**
+   * Web redesign PR-10: one conversation's messages beyond the detail's window — older than a
+   * cursor, optionally searched. Read-only, `business_chats.view`.
+   */
+  history: (id: string) => `/business-chats/${encodeURIComponent(id)}/history`,
   /** Phase 4 PR-5: the per-conversation return, applied to every conversation a person holds. */
   resumeAll: '/business-chats/resume-all',
   connections: '/business-connections',
@@ -579,6 +584,40 @@ export const BUSINESS_CHAT_ROUTES = {
 export const BUSINESS_CHAT_LIST_LIMIT = 50;
 /** The detail view shows this many most recent messages; the transcript is bounded by design. */
 export const BUSINESS_CHAT_DETAIL_MESSAGES = 100;
+/** PR-10: one page of a conversation's history (`BUSINESS_CHAT_ROUTES.history`). */
+export const BUSINESS_CHAT_HISTORY_PAGE = 50;
+/** PR-10: the longest search text the history accepts. */
+export const BUSINESS_CHAT_HISTORY_QUERY_MAX = 100;
+
+/**
+ * PR-10 — who spoke, as the thread groups the origins (its filter chips) and as the history
+ * searches by. The customer is `INBOUND`. What this bot or Telegram sent by itself
+ * (`OWN_ECHO`, `OFFLINE`) is the automatic side; a person speaking for the account (`HUMAN`,
+ * `OTHER_BOT`) is the operator side. Every origin is in exactly one group.
+ */
+export const BUSINESS_MESSAGE_SENDERS = ['customer', 'ai', 'operator'] as const;
+export type BusinessMessageSender = (typeof BUSINESS_MESSAGE_SENDERS)[number];
+
+export const BUSINESS_MESSAGE_SENDER_ORIGINS: Readonly<
+  Record<BusinessMessageSender, readonly BusinessMessageOrigin[]>
+> = {
+  customer: ['INBOUND'],
+  ai: ['OWN_ECHO', 'OFFLINE'],
+  operator: ['HUMAN', 'OTHER_BOT'],
+};
+
+export function businessMessageSenderOf(origin: BusinessMessageOrigin): BusinessMessageSender {
+  switch (origin) {
+    case 'INBOUND':
+      return 'customer';
+    case 'OWN_ECHO':
+    case 'OFFLINE':
+      return 'ai';
+    case 'HUMAN':
+    case 'OTHER_BOT':
+      return 'operator';
+  }
+}
 
 const idempotencyKeySchema = z.string().min(8).max(128);
 
@@ -865,6 +904,27 @@ export const businessChatDetailResponseSchema = z.object({
   aiMode: z.enum(SUPPORT_AI_MODES).optional().catch(undefined),
 });
 export type BusinessChatDetailResponse = z.infer<typeof businessChatDetailResponseSchema>;
+
+/**
+ * PR-10 — the history's query. `before` is the id of a message of THIS conversation (the
+ * `nextCursor` a previous page returned, or the oldest message the client holds); the page
+ * holds the messages strictly older than it, newest first. `q` searches the message text
+ * (case-insensitive substring) and `sender` the speaker group, across the WHOLE conversation.
+ */
+export const businessChatHistoryQuerySchema = z.object({
+  before: z.uuid().optional(),
+  q: z.string().trim().min(1).max(BUSINESS_CHAT_HISTORY_QUERY_MAX).optional(),
+  sender: z.enum(BUSINESS_MESSAGE_SENDERS).optional(),
+});
+export type BusinessChatHistoryQuery = z.infer<typeof businessChatHistoryQuerySchema>;
+
+export const businessChatHistoryResponseSchema = z.object({
+  /** At most `BUSINESS_CHAT_HISTORY_PAGE`, newest first. */
+  messages: z.array(messageViewSchema),
+  /** The `before` of the next (older) page; null when this page reached the first message. */
+  nextCursor: z.string().nullable(),
+});
+export type BusinessChatHistoryResponse = z.infer<typeof businessChatHistoryResponseSchema>;
 
 export const businessChatControlResponseSchema = z.object({
   state: z.enum(BUSINESS_CONVERSATION_STATES),

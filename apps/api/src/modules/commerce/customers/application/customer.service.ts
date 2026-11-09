@@ -25,6 +25,7 @@ import {
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
+import { totalWithin } from '../../list-total-deadline.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
@@ -51,7 +52,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   CustomerCursor,
-  CustomerPage,
+  CustomerListing,
   CustomerRecord,
   CustomerRepository,
   CustomerSearch,
@@ -501,8 +502,10 @@ export class CustomerService {
       readonly search?: CustomerSearch;
       readonly limit?: number;
       readonly cursor?: CustomerCursor | null;
+      /** The count chip's total; opt-in, and ignored with a cursor (see `OrderListQuery`). */
+      readonly withTotal?: boolean;
     },
-  ): Promise<CustomerPage> {
+  ): Promise<CustomerListing> {
     await this.deps.guard.check(scope, actor, CUSTOMER_VIEW_PERMISSION);
     const search = query.search ?? {};
     const searching =
@@ -514,7 +517,13 @@ export class CustomerService {
       await this.deps.guard.check(scope, actor, CUSTOMER_SEARCH_PERMISSION);
     }
     const limit = Math.min(Math.max(query.limit ?? CUSTOMER_PAGE_DEFAULT, 1), CUSTOMER_PAGE_MAX);
-    return this.deps.repository.list(scope, search, limit, query.cursor ?? null);
+    // The count chip's total runs beside the page, never before it, and never fails it.
+    const wantTotal = query.withTotal === true && (query.cursor ?? null) === null;
+    const [page, total] = await Promise.all([
+      this.deps.repository.list(scope, search, limit, query.cursor ?? null),
+      wantTotal ? totalWithin(() => this.deps.repository.total(scope, search)) : null,
+    ]);
+    return { ...page, total };
   }
 
   /**

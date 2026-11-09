@@ -211,7 +211,7 @@ describe('the support AI settings page', () => {
     const { api } = settings();
     const tone = await screen.findByLabelText(t('web.sai_tone'));
     fireEvent.change(tone, { target: { value: 'مؤدب و کوتاه' } });
-    fireEvent.click(screen.getByRole('button', { name: t('web.sai_save') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.kit_settings_save') }));
     await waitFor(() => expect(calls(api, 'PUT', '/support-ai/config')).toHaveLength(1));
     const body = calls(api, 'PUT', '/support-ai/config')[0]!.body as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual(['config', 'expectedVersion', 'idempotencyKey']);
@@ -252,7 +252,9 @@ describe('the support AI settings page', () => {
     const settle = await screen.findByLabelText(t('web.sai_settle_delay_seconds'));
     fireEvent.change(settle, { target: { value: '2' } });
     expect(screen.getByText(t('web.sai_invalid_bounds'))).toBeTruthy();
-    const save = screen.getByRole('button', { name: t('web.sai_save') }) as HTMLButtonElement;
+    const save = screen.getByRole('button', {
+      name: t('web.kit_settings_save'),
+    }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
     fireEvent.click(save);
     expect(calls(api, 'PUT', '/support-ai/config')).toHaveLength(0);
@@ -273,7 +275,7 @@ describe('the support AI settings page', () => {
     fireEvent.click(auto);
     // The UI does not hide the option: the server decides, and the page warns first.
     expect(screen.getByText(t('web.sai_mode_auto_needs_owner'))).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: t('web.sai_save') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.kit_settings_save') }));
     await waitFor(() => expect(calls(api, 'PUT', '/support-ai/config')).toHaveLength(1));
     const body = calls(api, 'PUT', '/support-ai/config')[0]!.body as {
       config: { mode: string };

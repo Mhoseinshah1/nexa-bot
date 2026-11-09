@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { keepPageWhileTurning } from '../ui/paging';
+import { keepPageWhileTurning, listOf, useKeptTotal } from '../ui/paging';
 import {
   SERVICE_DELIVERY_STATES,
   SERVICE_OPERATOR_ACTIONS,
@@ -362,21 +362,22 @@ export function ServicesPage({
   // Program §13: the workspace's further filters, also in the URL.
   const filters = serviceFiltersOf(route, appliedSearch);
 
+  const servicesKey = [
+    'services',
+    lifecycle,
+    cursor,
+    state,
+    delivery,
+    appliedSearch,
+    filters.panelId,
+    filters.productId,
+    filters.locationKey,
+    filters.expiringWithinHours,
+  ];
   const services = useQuery(
     keepPageWhileTurning(
       {
-        queryKey: [
-          'services',
-          lifecycle,
-          cursor,
-          state,
-          delivery,
-          appliedSearch,
-          filters.panelId,
-          filters.productId,
-          filters.locationKey,
-          filters.expiringWithinHours,
-        ],
+        queryKey: servicesKey,
         queryFn: () =>
           fetchServices({
             limit: LIST_PAGE_SIZE,
@@ -497,6 +498,8 @@ export function ServicesPage({
   // Hidden while the list cannot answer: a control that mints a new query key is
   // a fresh request against a question the server has just refused.
   const { searchKey, clearAll } = useListClearAll(route, SERVICE_FILTER_KEYS);
+  // The server counts the first page only; a later page keeps the chip of the same list.
+  const total = useKeptTotal(services.data?.total, listOf(servicesKey, [1]));
   const toolbarHidden = !mayRequest(services, denied);
 
   const setFilter = (key: string, value: string | null) =>
@@ -582,7 +585,10 @@ export function ServicesPage({
     <>
       <PageHead
         title={t('web.services_title')}
-        // Redesign PR-1: no count chip — `GET /services` sends a keyset page and no total.
+        // PR-10: the server's total (exact, or «حدود N» when it is the planner's estimate);
+        // absent when it could not produce one in time, and then no chip is drawn.
+        count={total?.value}
+        countEstimated={total?.estimated}
         actions={
           <>
             <ListFreshness query={services} hidden={toolbarHidden} />

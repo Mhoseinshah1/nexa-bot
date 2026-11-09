@@ -6,6 +6,8 @@
  */
 export const WEB_FA_REDESIGN_KIT = {
   'web.kit_refresh': 'به‌روزرسانی',
+  // The count chip when the server sent the planner's estimate, not a count (PR-10).
+  'web.kit_count_estimated': 'حدود {n}',
   'web.kit_selected_count': '{n} مورد انتخاب شده',
   'web.kit_selection_clear': 'لغو انتخاب',
   'web.kit_selection_bar': 'عملیات روی موارد انتخاب‌شده',

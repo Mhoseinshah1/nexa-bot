@@ -1,4 +1,6 @@
+import { useRef } from 'react';
 import { hashKey, type QueryKey, type UseQueryOptions } from '@tanstack/react-query';
+import type { ListTotal } from '@nexa/contracts';
 
 /**
  * A server-paged list keeps the page it is showing on screen while the page «قبلی / بعدی»
@@ -44,6 +46,22 @@ function withoutNextCursor<T>(previous: T | undefined): T | undefined {
   if (typeof previous !== 'object' || previous === null || !('nextCursor' in previous))
     return previous;
   return { ...previous, nextCursor: null };
+}
+
+/**
+ * The count chip's total across page turns. The server counts the FIRST page of a list only
+ * (a page turn does not recount), so a later page carries none; the chip keeps the one the
+ * same list (same filters, any cursor) last showed and drops it when the list changes.
+ */
+export function useKeptTotal(
+  total: ListTotal | undefined,
+  /** What identifies the list, not the page: its filters, its search (`listOf` of its key). */
+  list: string,
+): ListTotal | undefined {
+  const kept = useRef<{ list: string; total: ListTotal } | null>(null);
+  if (total !== undefined) kept.current = { list, total };
+  else if (kept.current !== null && kept.current.list !== list) kept.current = null;
+  return total ?? kept.current?.total;
 }
 
 /** The query key without its cursor: what identifies the list, not the page. */

@@ -1,6 +1,7 @@
 import type {
   CustomerProfileFacts,
   ListSearchTerm,
+  ListTotal,
   CustomerStatus,
   RecordSource,
   ScopeContext,
@@ -123,6 +124,11 @@ export interface CustomerCursor {
   readonly id: UserId;
 }
 
+/** A page plus the count chip's total, which only the operator list asks for. */
+export interface CustomerListing extends CustomerPage {
+  readonly total: ListTotal | null;
+}
+
 export interface CustomerPage {
   readonly items: readonly CustomerRecord[];
   readonly nextCursor: CustomerCursor | null;
@@ -211,6 +217,13 @@ export interface CustomerRepository {
     cursor: CustomerCursor | null,
     tx?: unknown,
   ): Promise<CustomerPage>;
+
+  /**
+   * The count chip's total for the same filters as `list`, without its cursor (web
+   * redesign PR-10): exact when small, the planner's estimate when large, `null` when none
+   * could be produced in time. Never throws, and never waits on `list`.
+   */
+  total(scope: TenantContext, search: CustomerSearch): Promise<ListTotal | null>;
 
   /**
    * Sets the status, and returns whether the row actually moved.

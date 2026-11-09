@@ -2261,9 +2261,28 @@ export const customerListQuerySchema = z.object({
 });
 export type CustomerListQuery = z.infer<typeof customerListQuerySchema>;
 
+/**
+ * How many rows a list holds, for the count chip in a page head (web redesign PR-10).
+ *
+ * The keyset lists send a page and a cursor and never a total, so the Web Admin could not
+ * draw a count without lying (a client count is the length of the page). `value` is the
+ * number of rows the SAME filters select, in the caller's tenant. `estimated` is true when
+ * the server took the planner's row estimate instead of counting, which it does whenever
+ * the selection is large (a count over ~200k customers, services or orders would slow the
+ * list); the page then shows it as «حدود N». The field is absent when the server could not
+ * produce a figure in time: the list itself never waits for it, and never fails because of it.
+ */
+export const listTotalSchema = z.object({
+  value: z.number().int().nonnegative(),
+  estimated: z.boolean(),
+});
+export type ListTotal = z.infer<typeof listTotalSchema>;
+
 export const customerListResponseSchema = z.object({
   customers: z.array(customerSummarySchema),
   nextCursor: z.string().nullable(),
+  /** Count chip total; absent when none could be produced in time. See `listTotalSchema`. */
+  total: listTotalSchema.optional(),
 });
 export type CustomerListResponse = z.infer<typeof customerListResponseSchema>;
 
@@ -4197,6 +4216,8 @@ export type OrderListQuery = z.infer<typeof orderListQuerySchema>;
 export const orderListResponseSchema = z.object({
   orders: z.array(orderSummarySchema),
   nextCursor: z.string().nullable(),
+  /** Count chip total; absent when none could be produced in time. See `listTotalSchema`. */
+  total: listTotalSchema.optional(),
 });
 export type OrderListResponse = z.infer<typeof orderListResponseSchema>;
 
@@ -6564,6 +6585,8 @@ export type ServiceListQuery = z.infer<typeof serviceListQuerySchema>;
 export const serviceListResponseSchema = z.object({
   services: z.array(serviceSummarySchema),
   nextCursor: z.string().nullable(),
+  /** Count chip total; absent when none could be produced in time. See `listTotalSchema`. */
+  total: listTotalSchema.optional(),
 });
 export type ServiceListResponse = z.infer<typeof serviceListResponseSchema>;
 

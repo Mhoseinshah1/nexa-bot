@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { keepPageWhileTurning } from '../ui/paging';
+import { keepPageWhileTurning, useKeptTotal } from '../ui/paging';
 import { uuidV7Schema, type CustomerStatus, type CustomerSummaryResponse } from '@nexa/contracts';
 import { fetchCustomers } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
@@ -215,6 +215,10 @@ export function UsersPage({
     }),
   );
 
+  const total = useKeptTotal(
+    customers.data?.total,
+    [appliedStatus ?? '', appliedTag ?? '', appliedSearch, searching].join('|'),
+  );
   const rows = customers.data?.customers ?? [];
   const nextCursor = customers.data?.nextCursor ?? null;
 
@@ -398,6 +402,10 @@ export function UsersPage({
     <>
       <PageHead
         title={t('web.users_title')}
+        // PR-10: the server's total (exact, or «حدود N» when it is the planner's estimate);
+        // absent when it could not produce one in time, and then no chip is drawn.
+        count={total?.value}
+        countEstimated={total?.estimated}
         actions={
           <>
             <ListFreshness query={customers} hidden={toolbarHidden} />

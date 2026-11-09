@@ -1,9 +1,17 @@
-import type { BusinessChatDetailResponse } from '@nexa/contracts';
+import {
+  BUSINESS_CHAT_DETAIL_MESSAGES,
+  businessMessageSenderOf,
+  type BusinessChatDetailResponse,
+  type BusinessChatHistoryResponse,
+  type BusinessMessageSender,
+} from '@nexa/contracts';
 
 /**
  * The shape of a business conversation's thread (web redesign PR-3): what is drawn, in what
- * order, grouped how. Pure — no React, no fetching. The page hands it the messages and the
- * handoffs the detail response ALREADY carries; nothing here asks the server for more.
+ * order, grouped how. Pure — no React, no fetching. The page hands it the messages it holds —
+ * the detail's window and the older pages of the history it read (PR-10) — and the handoffs
+ * the detail carries; a search's hits come from the server, which searches the whole
+ * conversation.
  */
 
 export type ThreadMessage = BusinessChatDetailResponse['messages'][number];
@@ -15,6 +23,15 @@ export type ThreadFilter = (typeof THREAD_FILTERS)[number];
 
 /** How many entries are drawn first, and how many each «older» press reveals. */
 export const THREAD_PAGE_SIZE = 50;
+
+/** The speaker a filter asks the history's search for; null asks for every speaker. */
+export const THREAD_FILTER_SENDER: Readonly<Record<ThreadFilter, BusinessMessageSender | null>> = {
+  all: null,
+  customer: 'customer',
+  ai: 'ai',
+  operator: 'operator',
+  events: null,
+};
 
 export type ThreadEntry =
   | {
@@ -50,23 +67,15 @@ export function threadEntries(
 }
 
 /**
- * Who a message belongs to, for the filter. The customer is `INBOUND`. Everything this bot or
- * Telegram sent by itself (`OWN_ECHO`, `OFFLINE`) is the automatic side; a person speaking
- * for the account (`HUMAN`, `OTHER_BOT`) is the operator side.
+ * Who a message belongs to, for the filter: the contract's speaker groups
+ * (`businessMessageSenderOf`), the same the server's search uses. The customer is `INBOUND`;
+ * what this bot or Telegram sent by itself (`OWN_ECHO`, `OFFLINE`) is the automatic side; a
+ * person speaking for the account (`HUMAN`, `OTHER_BOT`) is the operator side.
  */
 export function entryMatchesFilter(entry: ThreadEntry, filter: ThreadFilter): boolean {
   if (filter === 'all') return true;
   if (entry.kind === 'event') return filter === 'events';
-  switch (filter) {
-    case 'customer':
-      return entry.message.origin === 'INBOUND';
-    case 'ai':
-      return entry.message.origin === 'OWN_ECHO' || entry.message.origin === 'OFFLINE';
-    case 'operator':
-      return entry.message.origin === 'HUMAN' || entry.message.origin === 'OTHER_BOT';
-    default:
-      return false;
-  }
+  return THREAD_FILTER_SENDER[filter] === businessMessageSenderOf(entry.message.origin);
 }
 
 /** Case-insensitive substring over the entry's own words; an event is searched by `eventText`. */
@@ -138,25 +147,96 @@ export function layoutThread(
 }
 
 /**
- * The entries to draw: the filter first, then — when nothing is searched — only the newest
- * `shown`. A search looks through the WHOLE conversation and shows every hit.
+ * The messages the thread holds: the detail's window (the fresher copy of a message, so an
+ * edit or a deletion shows) and the older pages the history returned, one entry per id.
+ */
+export function mergeMessages(
+  fresh: readonly ThreadMessage[],
+  older: readonly ThreadMessage[],
+): ThreadMessage[] {
+  const byId = new Map<string, ThreadMessage>();
+  for (const message of older) byId.set(message.id, message);
+  for (const message of fresh) byId.set(message.id, message);
+  return [...byId.values()];
+}
+
+/**
+ * Whether the server may hold messages older than the thread has: before any history page
+ * was read, only when the detail's window was full (a shorter one is the whole conversation);
+ * after, when the last page named a next cursor.
+ */
+export function historyHasMore(
+  detailMessages: number,
+  pages: readonly BusinessChatHistoryResponse[] | null,
+): boolean {
+  if (pages === null) return detailMessages >= BUSINESS_CHAT_DETAIL_MESSAGES;
+  const last = pages[pages.length - 1];
+  return last === undefined || last.nextCursor !== null;
+}
+
+/** The oldest message the thread holds — the history's first cursor. */
+export function oldestMessageId(messages: readonly ThreadMessage[]): string | null {
+  let oldest: ThreadMessage | null = null;
+  for (const message of messages) {
+    if (
+      oldest === null ||
+      message.sentAt < oldest.sentAt ||
+      (message.sentAt === oldest.sentAt && message.id < oldest.id)
+    ) {
+      oldest = message;
+    }
+  }
+  return oldest?.id ?? null;
+}
+
+/**
+ * The entries to draw when nothing is searched: the filter, then only the newest `shown`.
+ * `older` counts the held entries left above; `more` says the server holds older ones still,
+ * so the «older» button stays, and `nextCount` is what it would reveal.
  */
 export function visibleEntries(
   entries: readonly ThreadEntry[],
+  options: { readonly filter: ThreadFilter; readonly shown: number; readonly more: boolean },
+): {
+  readonly entries: ThreadEntry[];
+  readonly older: number;
+  readonly canLoadOlder: boolean;
+  readonly nextCount: number;
+} {
+  const matching = entries.filter((entry) => entryMatchesFilter(entry, options.filter));
+  const start = Math.max(0, matching.length - options.shown);
+  return {
+    entries: matching.slice(start),
+    older: start,
+    canLoadOlder: start > 0 || options.more,
+    nextCount: options.more ? THREAD_PAGE_SIZE : Math.min(THREAD_PAGE_SIZE, start),
+  };
+}
+
+/**
+ * A search's entries, oldest first: the server's hits (it searched the whole conversation by
+ * text and by the filter's speaker; none are asked for under «events») and the handoffs whose
+ * label holds the words, under «all» and «events».
+ */
+export function searchEntries(
+  hits: readonly ThreadMessage[],
+  escalations: readonly ThreadEscalation[],
   options: {
     readonly filter: ThreadFilter;
     readonly query: string;
-    readonly shown: number;
     readonly eventText: (escalation: ThreadEscalation) => string;
   },
-): { readonly entries: ThreadEntry[]; readonly older: number; readonly hits: number | null } {
-  const searching = options.query.trim() !== '';
-  const matching = entries.filter(
-    (entry) =>
-      entryMatchesFilter(entry, options.filter) &&
-      entryMatchesQuery(entry, options.query, options.eventText),
-  );
-  if (searching) return { entries: matching, older: 0, hits: matching.length };
-  const start = Math.max(0, matching.length - options.shown);
-  return { entries: matching.slice(start), older: start, hits: null };
+): ThreadEntry[] {
+  const messages = options.filter === 'events' ? [] : hits;
+  const events =
+    options.filter === 'all' || options.filter === 'events'
+      ? escalations.filter((escalation) =>
+          entryMatchesQuery(
+            { kind: 'event', id: escalation.id, at: escalation.createdAt, escalation },
+            options.query,
+            options.eventText,
+          ),
+        )
+      : [];
+  return threadEntries(messages, events);
 }

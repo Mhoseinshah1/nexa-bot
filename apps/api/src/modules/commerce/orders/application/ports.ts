@@ -1,5 +1,6 @@
 import type {
   ListSearchTerm,
+  ListTotal,
   CurrencyCode,
   Money,
   OrderId,
@@ -139,6 +140,11 @@ export interface OrderCursor {
   readonly id: OrderId;
 }
 
+/** A page plus the count chip's total, which only the operator list asks for. */
+export interface OrderListing extends OrderPage {
+  readonly total: ListTotal | null;
+}
+
 export interface OrderPage {
   readonly items: readonly OrderRecord[];
   readonly nextCursor: OrderCursor | null;
@@ -228,7 +234,23 @@ export interface OrderRepository {
     limit: number,
     cursor: OrderCursor | null,
     tx?: unknown,
+    /** `productIdsTitled`'s answer, when the caller already resolved it (see `total`). */
+    productIds?: readonly string[],
   ): Promise<OrderPage>;
+
+  /** The ids of this tenant's products whose current title contains the folded text. */
+  productIdsTitled(scope: TenantContext, folded: string, tx?: unknown): Promise<readonly string[]>;
+
+  /**
+   * The count chip's total for the same filters as `list`, without its cursor (web
+   * redesign PR-10): exact when small, the planner's estimate when large, `null` when none
+   * could be produced in time. Never throws, and never waits on `list`.
+   */
+  total(
+    scope: TenantContext,
+    search: OrderSearch,
+    productIds: readonly string[],
+  ): Promise<ListTotal | null>;
 
   /** The Telegram identity of each of these customers, inside the tenant, in one read. */
   customerIdentities(
