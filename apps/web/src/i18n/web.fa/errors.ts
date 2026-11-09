@@ -271,7 +271,8 @@ export const WEB_FA_ERRORS = {
     'اول نکسای مقصد را به‌روز کنید؛ این فایل از نسخهٔ تازه‌تری از نکسا است.',
   'web.err_tenant_archive_head_diverged':
     'این فایل از نکسایی با تاریخچهٔ پایگاه‌دادهٔ دیگری است و بازیابی نمی‌شود.',
-  'web.err_tenant_archive_tenant_exists': 'این ربات همین حالا روی این سرور هست.',
+  'web.err_tenant_archive_tenant_exists':
+    'این ربات همین حالا روی این سرور هست؛ برای برگرداندن داده‌هایش «جایگزینی ربات موجود» را انتخاب کنید.',
   'web.err_tenant_archive_bot_taken': 'ربات تلگرامِ این فایل روی این سرور به ربات دیگری وصل است.',
   'web.err_tenant_archive_domain_taken':
     'دامنهٔ این ربات روی این سرور مال ربات میزبانی‌شدهٔ دیگری است.',
@@ -292,8 +293,10 @@ export const WEB_FA_ERRORS = {
   'web.err_data_export_too_large':
     'حجم داده از حد یک فایل ZIP بیشتر است؛ با مدیر سرور تماس بگیرید.',
   'web.err_tenant_archive_purged': 'این ربات برای همیشه بسته شده است.',
-  'web.err_tenant_archive_replace_unavailable':
-    'بازیابی روی ربات موجود هنوز ممکن نیست؛ آن را به‌عنوان ربات تازه بازیابی کنید.',
+  'web.err_tenant_archive_replace_target_missing':
+    'ربات این فایل روی این سرور میزبانی نمی‌شود؛ آن را به‌عنوان ربات تازه بازیابی کنید.',
+  'web.err_tenant_archive_pre_replace_failed':
+    'پیش از جایگزینی باید از داده‌های فعلی ربات بکاپ سالم گرفته شود و نشد (رمز بکاپ این ربات را تعیین کرده‌اید؟)؛ چیزی جایگزین نشد.',
   'web.err_tenant_archive_unclassified_table':
     'این نسخه جدولی را می‌بیند که تکلیفش در بکاپ روشن نیست؛ بکاپ گرفته نشد.',
   'web.err_tenant_archive_rls_bypassed':
