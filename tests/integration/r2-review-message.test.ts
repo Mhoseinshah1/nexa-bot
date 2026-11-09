@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { withoutRtlMarks } from '../support/customer-text';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { money, paymentTrackingCode } from '@nexa/contracts';
 import {
@@ -59,7 +60,7 @@ describe('the receipt-review message is edited into its decision, once', () => {
   const toastOf = (sent: readonly Sent[]) =>
     sent.find((one) => one.method === 'answerCallbackQuery')?.body['text'];
   const captionOf = (sent: readonly Sent[], messageId: number) =>
-    String(editOf(sent, messageId)?.body['caption'] ?? '');
+    withoutRtlMarks(String(editOf(sent, messageId)?.body['caption'] ?? ''));
   async function referenceOf(payment: string): Promise<string> {
     const found = await rows<{ reference: string; code: string | null }>(
       f,
@@ -207,7 +208,7 @@ describe('the receipt-review message is edited into its decision, once', () => {
         (one.body['reply_parameters'] as { message_id?: number } | undefined)?.message_id === 507,
     );
     expect(replies).toHaveLength(1);
-    const record = String(replies[0]?.body['text']);
+    const record = withoutRtlMarks(String(replies[0]?.body['text']));
     expect(record.length).toBeGreaterThan(1024);
     expect(record).toContain(`کد پیگیری پرداخت: ${reference}`);
     expect(record).toContain('موجودی کیف پول پس از واریز: 60,000');
@@ -339,7 +340,9 @@ describe('the receipt-review message is edited into its decision, once', () => {
     expect(await paymentState(f, payment)).toBe('CONFIRMED');
     const onReviewer = edits(f.sent).find((one) => String(one.body['chat_id']) === TG.reviewer);
     expect(onReviewer?.method).toBe('editMessageCaption');
-    expect(String(onReviewer?.body['caption']).startsWith('✅ پرداخت تأیید شد\n')).toBe(true);
+    expect(
+      withoutRtlMarks(String(onReviewer?.body['caption'])).startsWith('✅ پرداخت تأیید شد\n'),
+    ).toBe(true);
     expect(String(onReviewer?.body['caption'])).toContain('نام محصول: پلن پایه');
 
     // The reviewer's copy was finalised with it: their late tap is answered and nothing else.
@@ -377,7 +380,7 @@ describe('the receipt-review message is edited into its decision, once', () => {
     const byChat = (chat: string) =>
       edits(f.sent)
         .filter((one) => String(one.body['chat_id']) === chat)
-        .map((one) => String(one.body['caption'] ?? ''))
+        .map((one) => withoutRtlMarks(String(one.body['caption'] ?? '')))
         .find((caption) => caption.startsWith('💳'));
     expect(byChat(TG.owner)).toContain('موجودی کیف پول پس از واریز: 90,000');
     const theirs = byChat(TG.reviewer) ?? '';

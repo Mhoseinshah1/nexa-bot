@@ -753,7 +753,9 @@ describe('a customer pays through the approved screens', () => {
       );
       expect(body).toContain('9️⃣ امکان بازگشت وجه دارید؟');
       expect(
-        body.endsWith('💡 در صورتی که جواب سوالتون رو نگرفتید میتونید به «پشتیبانی» مراجعه کنید.'),
+        body.endsWith(
+          '💡 در صورتی که جواب سوالتون رو نگرفتید میتونید به «☎️ پشتیبانی» مراجعه کنید.',
+        ),
       ).toBe(true);
       expect(lastMarkup()).toContain('"url":"https://t.me/nexa_support"');
       // WP-A7: the support screen also leads into the ticket desk. Round N

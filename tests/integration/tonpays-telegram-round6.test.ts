@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { withoutRtlMarks } from '../support/customer-text';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CATALOGUE_FA, DEFAULT_TEMPLATE_PRESENTATION, renderTemplateBody } from '@nexa/i18n';
 import {
@@ -364,7 +365,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     await inquireNow();
     const step = nextStepMessage();
     const screen = lastOn(step);
-    const text = String(screen?.['text']);
+    const text = withoutRtlMarks(String(screen?.['text']));
     expect(text).toContain('کمتر از مبلغ فاکتور بود');
     expect(text).toContain('6219861012345678');
     expect(text).toContain('Shop Card');
@@ -397,7 +398,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
       'https://tonpays.online/api/custom/v1/invoices/TP-REM123XYZ0/receipt',
     );
     await inquireNow();
-    const text = String(lastOn(step)?.['text']);
+    const text = withoutRtlMarks(String(lastOn(step)?.['text']));
     expect(text).toContain('رسید مابقی');
     expect(text).toContain('در انتظار پاسخ');
     expect(text).toContain('مبلغ مابقی: ۱۲۰٬۰۰۰ ریال\n(معادل ۱۲٬۰۰۰ تومان)');
@@ -416,7 +417,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     firstInvoice().remainingAmount = 12_000; // no card, no remainder invoice id
     await inquireNow();
     const step = nextStepMessage();
-    const text = String(lastOn(step)?.['text']);
+    const text = withoutRtlMarks(String(lastOn(step)?.['text']));
     expect(text).toContain('اطلاعات کارت مابقی را هنوز نفرستاده');
     expect(markupOf(lastOn(step))).not.toContain('copy_text');
   });
@@ -872,7 +873,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     ];
     await inquireNow();
     expect((await paymentOf(paymentId)).state).toBe('FAILED');
-    const text = String(lastOn(message)?.['text']);
+    const text = withoutRtlMarks(String(lastOn(message)?.['text']));
     expect(text).toContain('رسید خوانا نبود');
     expect(text).toContain('نام صاحب کارت مطابقت ندارد');
     const [facts] = await rows<{ reject_reasons: string[] }>(
@@ -1021,7 +1022,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     await inquireNow();
     const sent = newMessages().slice(before);
     expect(sent).toHaveLength(1);
-    const text = String(sent[0]!['text']);
+    const text = withoutRtlMarks(String(sent[0]!['text']));
     expect(text).toContain('کمتر از مبلغ فاکتور بود');
     expect(text).toContain('6219861012345678');
     expect(text).toContain('۱۲۰٬۰۰۰ ریال');

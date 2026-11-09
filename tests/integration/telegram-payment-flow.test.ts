@@ -10,7 +10,6 @@ import {
   type ProductId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatDateOnly, formatMoney } from '@nexa/i18n';
-import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -27,7 +26,7 @@ import {
   tenantB,
   testConfig,
 } from './harness';
-import { customerText } from '../support/customer-text';
+import { customerText, withoutRtlMarks } from '../support/customer-text';
 
 /**
  * The customer's PAYMENT flow over Telegram, against a real socket standing in for
@@ -65,7 +64,7 @@ const RECEIPT_RECEIVED_TEXT =
  * EXACTLY, because the receipt prompt opens with the same first sentence.
  */
 const invoiceFinalText = (code: string): string =>
-  plain(CATALOGUE_FA['bot.payment.received_for_review'])
+  customerText(CATALOGUE_FA['bot.payment.received_for_review'])
     .replace('{icon:info}', 'ℹ️')
     // Roadmap E6: the tracking code the invoice carried stays on its final state — PR-C: the
     // PUBLIC code, never the stored `:manual` reference.
@@ -391,14 +390,14 @@ describe('the customer payment flow over Telegram', () => {
 
     // The account summary; its balance line is the ledger's sum, not a column.
     const text = String(lastMessage()?.body['text']);
-    expect(text.startsWith('🎡 اطلاعات حساب کاربری شما:')).toBe(true);
+    expect(withoutRtlMarks(text).startsWith('🎡 اطلاعات حساب کاربری شما:')).toBe(true);
     // Owner spec §4: the balance line is the `wallet` appearance slot (its fallback 💰).
     expect(text).toContain(`💰 موجودی: ${formatMoney(money(750_000n, 'IRT'))}`);
     /*
      * Owner spec §3: after the user group, a blank line, then TODAY and the TIME, in the
      * tenant's zone and calendar (Asia/Tehran, Jalali by default) — the moment of drawing.
      */
-    expect(text).toMatch(
+    expect(withoutRtlMarks(text)).toMatch(
       /🔖 گروه کاربری: کاربر عادی\n\n📅 تاریخ: 14\d\d\/\d\d\/\d\d\n🕒 ساعت: \d\d:\d\d$/u,
     );
     const now = api.container.clock.now();
@@ -454,8 +453,8 @@ describe('the customer payment flow over Telegram', () => {
      */
     const texts = messages().map((one) => String(one.body['text']));
     expect(texts).toEqual([
-      plain(CATALOGUE_FA['bot.order.settled']),
-      plain(CATALOGUE_FA['bot.service.provisioning']),
+      customerText(CATALOGUE_FA['bot.order.settled']),
+      customerText(CATALOGUE_FA['bot.service.provisioning']),
     ]);
     const settled = texts[0] ?? '';
     for (const claim of ['آماده‌سازی', 'سرویس شما', 'در حال ساخت']) {
@@ -474,7 +473,7 @@ describe('the customer payment flow over Telegram', () => {
     await tap(`w:${orderId}`);
 
     expect(lastMessage()?.body['text']).toBe(
-      plain(CATALOGUE_FA['bot.wallet.insufficient']).replace(
+      customerText(CATALOGUE_FA['bot.wallet.insufficient']).replace(
         '{shortfall}',
         formatMoney(money(150_000n, 'IRT')),
       ),
@@ -522,10 +521,10 @@ describe('the customer payment flow over Telegram', () => {
      * that lost its follow-up on the replay path, fails here.
      */
     expect(messages().map((one) => String(one.body['text']))).toEqual([
-      plain(CATALOGUE_FA['bot.order.settled']),
-      plain(CATALOGUE_FA['bot.service.provisioning']),
-      plain(CATALOGUE_FA['bot.order.settled']),
-      plain(CATALOGUE_FA['bot.service.provisioning']),
+      customerText(CATALOGUE_FA['bot.order.settled']),
+      customerText(CATALOGUE_FA['bot.service.provisioning']),
+      customerText(CATALOGUE_FA['bot.order.settled']),
+      customerText(CATALOGUE_FA['bot.service.provisioning']),
     ]);
   });
 
@@ -586,7 +585,7 @@ describe('the customer payment flow over Telegram', () => {
 
     // Not parsed as "pay 1". The id fails UUID validation at the boundary, so it is an
     // unsupported tap — and NOTHING moved.
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.callback.stale']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.callback.stale']));
     expect(await payments()).toHaveLength(0);
     expect((await entries()).filter((e) => e['reason'] === 'PURCHASE')).toHaveLength(0);
   });
@@ -620,7 +619,7 @@ describe('the customer payment flow over Telegram', () => {
 
     // UNKNOWN, not FORBIDDEN: a distinct refusal would answer "does order X exist" for
     // anybody willing to guess ids.
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.order.unavailable']));
     expect(await payments()).toHaveLength(0);
     expect((await entries()).filter((e) => e['reason'] === 'PURCHASE')).toHaveLength(0);
   });
@@ -661,7 +660,7 @@ describe('the customer payment flow over Telegram', () => {
 
     await tap(`w:${theirOrder}`);
 
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.order.unavailable']));
     expect(await payments()).toHaveLength(0);
   });
 
@@ -672,7 +671,7 @@ describe('the customer payment flow over Telegram', () => {
 
     await tap(`w:${api.container.ids.uuid()}`);
 
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.order.unavailable']));
     expect(await payments()).toHaveLength(0);
   });
 
@@ -682,7 +681,7 @@ describe('the customer payment flow over Telegram', () => {
 
     await tap('w:not-a-uuid');
 
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.callback.stale']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.callback.stale']));
     expect(await payments()).toHaveLength(0);
   });
 
@@ -900,7 +899,7 @@ describe('the customer payment flow over Telegram', () => {
     await photo('too-late-receipt');
     expect(newMessages()).toHaveLength(1);
     expect(String(newMessages()[0]?.body['text'])).toBe(
-      plain(CATALOGUE_FA['bot.payment.not_pending']),
+      customerText(CATALOGUE_FA['bot.payment.not_pending']),
     );
     // Nothing that pays again; only the main menu (R12 F3 item 3: no reply is a dead end).
     expect(buttonsOf(newMessages()[0]).map((b) => b.callback_data)).toEqual(['mm:']);

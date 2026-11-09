@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { withoutRtlMarks } from '../support/customer-text';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -318,7 +319,7 @@ describe('terms and rules (program §6)', () => {
   }
 
   const textOf = (bodies: readonly Record<string, unknown>[]) =>
-    bodies.map((body) => String(body.text));
+    bodies.map((body) => withoutRtlMarks(String(body.text)));
 
   const dataOf = (bodies: readonly Record<string, unknown>[]) =>
     bodies.flatMap((body) => {
@@ -721,7 +722,9 @@ describe('terms and rules (program §6)', () => {
     expect(
       new Set(calls.filter((call) => call.method === 'editMessageText').map((c) => c.messageId)),
     ).toEqual(new Set([screen]));
-    expect((JSON.parse(shown.get(screen) ?? '[]') as unknown[])[0]).toBe(ACCEPTED);
+    expect(withoutRtlMarks(String((JSON.parse(shown.get(screen) ?? '[]') as unknown[])[0]))).toBe(
+      ACCEPTED,
+    );
     expect(calls.filter((call) => call.method === 'answerCallbackQuery')).toHaveLength(5);
 
     expect(await acceptances()).toHaveLength(1);

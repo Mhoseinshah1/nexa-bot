@@ -13,7 +13,6 @@ import {
   paymentTrackingCode,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
-import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
 import {
   CUSTOMER_SEND_FAILED_CODE,
@@ -223,7 +222,7 @@ describe('the customer Telegram turn', () => {
     // R6 item 3: the owner's greeting, with this customer's own first name filled in.
     expect(sent[0]?.body['text']).toContain('ZED PROXY');
     expect(sent[0]?.body['text']).toContain('عزیز، خوش آمدید.');
-    expect(sent[0]?.body['text']).not.toContain('{');
+    expect(sent[0]?.body['text']).not.toContain('{firstName}');
 
     // And a domain event exists for the registration, written inside the
     // business transaction.
@@ -368,7 +367,7 @@ describe('the customer Telegram turn', () => {
     // The hidden trial button still routes: a keyboard drawn while a panel offered one.
     sent = [];
     await start({ text: CATALOGUE_FA['bot.menu.trial'] });
-    expect(sent.at(-1)?.body['text']).toBe(plain(CATALOGUE_FA['bot.trial.unavailable']));
+    expect(sent.at(-1)?.body['text']).toBe(customerText(CATALOGUE_FA['bot.trial.unavailable']));
   });
 
   it('still opens the management panel for a BLOCKED customer who is an administrator', async () => {

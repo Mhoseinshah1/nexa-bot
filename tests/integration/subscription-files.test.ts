@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { withoutRtlMarks } from '../support/customer-text';
 import { createServer, type Server } from 'node:http';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -355,7 +356,7 @@ describe('Package E — RickPanel subscription files', () => {
       },
     ]);
     expect(await send(service.id)).toEqual({ outcome: 'SENT', sent: 2, failed: 0 });
-    expect(mediaOf(albums()[0]!.raw).map((item) => item.caption)).toEqual([
+    expect(mediaOf(albums()[0]!.raw).map((item) => withoutRtlMarks(String(item.caption)))).toEqual([
       `👤 نام کاربری: ${service.providerUsername}`,
       'panel caption',
     ]);

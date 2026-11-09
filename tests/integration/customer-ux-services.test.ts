@@ -1626,7 +1626,9 @@ describe('a customer looks after the services they bought', () => {
       expect(of('editMessageText'), 'no edit').toHaveLength(0);
       const raw = photos()[0]?.raw ?? '';
       expect(raw).toContain('name="photo"; filename="subscription.png"');
-      expect(captionOf(raw)).toBe(`🔗 لینک اشتراک شما:\n<code>${url}</code>`);
+      expect(withoutRtlMarks(captionOf(raw) ?? '')).toBe(
+        `🔗 لینک اشتراک شما:\n<code>${url}</code>`,
+      );
       expect(raw).toContain('name="reply_markup"');
       expect(buttonsOf(raw), 'the keyboard is under the same message').toEqual([
         `sv:${service.id}`,

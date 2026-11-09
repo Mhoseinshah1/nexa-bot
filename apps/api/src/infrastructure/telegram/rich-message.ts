@@ -155,7 +155,8 @@ export function richBlocksFromText(source: RichTextSource): RichBlock[] | null {
  * number of cells, and there must be a header and at least one data row — anything else is
  * ordinary paragraphs, so a stray line with pipes is never turned into a one-cell table.
  */
-const PIPE_ROW = /^\s*\|.*\|\s*$/u;
+// B2: a line the renderer marked starts with U+200F; it is whitespace for the structure rules.
+const PIPE_ROW = /^[\s\u200F]*\|.*\|\s*$/u;
 const SEPARATOR_CELL = /^:?-{3,}:?$/u;
 
 /** The cells of one pipe row, trimmed; null when the line is not a pipe row. */
@@ -257,7 +258,7 @@ export function plainTableText(text: string): string {
     const run = lines
       .slice(at, end)
       .map((line) =>
-        (/^\s*\|(.*)\|\s*$/u.exec(line)?.[1] ?? '').split('|').map((cell) => cell.trim()),
+        (/^[\s\u200F]*\|(.*)\|\s*$/u.exec(line)?.[1] ?? '').split('|').map((cell) => cell.trim()),
       );
     const data = run.filter((cells) => !cells.every((cell) => SEPARATOR_CELL.test(cell)));
     const isTable = data.length >= 2 && new Set(data.map((cells) => cells.length)).size === 1;
@@ -289,7 +290,7 @@ function shownText(node: RichText): string {
 function withoutBullet(line: Line): Line | null {
   const head = line[0];
   if (typeof head !== 'string') return null;
-  const match = /^\s*•\s?/u.exec(head);
+  const match = /^[\s\u200F]*•\s?/u.exec(head);
   if (match === null) return null;
   const rest = head.slice(match[0].length);
   const tail = line.slice(1);

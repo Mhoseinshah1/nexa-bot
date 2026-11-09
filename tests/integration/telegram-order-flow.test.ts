@@ -9,7 +9,6 @@ import {
   type ProductId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
-import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -404,7 +403,7 @@ describe('the customer purchase flow over Telegram', () => {
     expect(await orders(), 'an inactive category was sold through a direct reference').toHaveLength(
       0,
     );
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.order.unavailable']));
   });
 
   it('never lists a category with nothing sellable in it', async () => {
@@ -1048,7 +1047,7 @@ describe('the customer purchase flow over Telegram', () => {
     const answer = lastMessage();
     expect(answer?.url).toContain('/editMessageText');
     expect(String(answer?.body['text'])).toContain(
-      plain(CATALOGUE_FA['bot.order.cancelled_screen']).split('\n')[0] ?? '',
+      customerText(CATALOGUE_FA['bot.order.cancelled_screen']).split('\n')[0] ?? '',
     );
     expect(buttonsOf(answer).map((b) => b.callback_data)).not.toContain(`w:${orderId}`);
     expect(sent.filter((one) => one.url.includes('/deleteMessage'))).toHaveLength(1);
@@ -1108,7 +1107,7 @@ describe('the customer purchase flow over Telegram', () => {
     await products.setStatus(tenantA, sellable.id, 'ACTIVE', 'INACTIVE', api.container.clock.now());
 
     await tap(`p:${sellable.id}`);
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.order.unavailable']));
     expect(await orders()).toHaveLength(0);
   });
 
@@ -1125,7 +1124,7 @@ describe('the customer purchase flow over Telegram', () => {
     await tap(`p:${reseller.id}`);
     // Deliberately the SAME sentence as every other refusal: a distinct one would teach
     // a customer that a cheaper tier exists and that they are not in it.
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.order.unavailable']));
     expect(await orders()).toHaveLength(0);
   });
 
@@ -1186,7 +1185,7 @@ describe('the customer purchase flow over Telegram', () => {
     const response = await tap(`p:${sellable.id}`);
     expect(response.statusCode).toBe(201);
     expect(messages()).toHaveLength(before + 1);
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.order.unavailable']));
     expect(await orders()).toHaveLength(0);
   });
 
@@ -1246,7 +1245,7 @@ describe('the customer purchase flow over Telegram', () => {
     // pre-invoice (edited into the expired screen), never as a new message under it.
     expect(lastMessage()?.url).toContain('/editMessageText');
     expect(String(lastMessage()?.body['text'])).toContain(
-      plain(CATALOGUE_FA['bot.order.expired_screen']).split('\n')[0] ?? '',
+      customerText(CATALOGUE_FA['bot.order.expired_screen']).split('\n')[0] ?? '',
     );
     expect((await orders())[0]?.['state']).toBe('DRAFT');
     expect(await orderEvents()).toHaveLength(0);
@@ -1283,7 +1282,7 @@ describe('the customer purchase flow over Telegram', () => {
     await tap(`p:${theirs.id}`);
     // The same message a withdrawn product gets, on purpose: a distinct one would
     // answer "does this id exist in some tenant" for anybody willing to guess.
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.order.unavailable']));
     expect(await orders()).toHaveLength(0);
   });
 
@@ -1313,13 +1312,13 @@ describe('the customer purchase flow over Telegram', () => {
       },
     });
 
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.order.unavailable']));
     expect((await orders())[0]?.['state']).toBe('DRAFT');
   });
 
   it('answers malformed callback data without pretending to understand it', async () => {
     await tap('p:not-a-uuid');
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.callback.stale']));
+    expect(lastMessage()?.body['text']).toBe(customerText(CATALOGUE_FA['bot.callback.stale']));
     expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual(['mm:']);
     expect(await orders()).toHaveLength(0);
     // Still acknowledged: the button is still spinning whatever it said.

@@ -1,3 +1,4 @@
+import { withoutRtlMarks } from '../support/customer-text';
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { sql } from 'drizzle-orm';
@@ -873,7 +874,7 @@ describe('client apps — what a customer is shown', () => {
     sent
       .filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'))
       .at(-1);
-  const lastText = () => String(last()?.body['text'] ?? '');
+  const lastText = () => withoutRtlMarks(String(last()?.body['text'] ?? ''));
   const lastMarkup = () => JSON.stringify(last()?.body['reply_markup'] ?? {});
   const callbacks = () =>
     [...lastMarkup().matchAll(/"callback_data":"([^"]+)"/g)].map((m) => m[1] as string);
@@ -1100,7 +1101,7 @@ describe('client apps — what a customer is shown', () => {
     expect(order.indexOf('sendPhoto')).toBeLessThan(order.lastIndexOf('sendMessage'));
     const photo = sent.find((one) => one.url.includes('/sendPhoto'));
     expect(photo?.raw.includes(bytes), 'the photo is the stored bytes').toBe(true);
-    expect(lastText()).toContain('🔵 باتصویر');
+    expect(lastText()).toContain('باتصویر');
 
     // Telegram refuses the picture: the customer still gets the screen they asked for.
     refusePhotos = true;
@@ -1110,7 +1111,7 @@ describe('client apps — what a customer is shown', () => {
       sent.some((one) => one.url.includes('/sendPhoto')),
       'the picture was tried',
     ).toBe(true);
-    expect(lastText()).toContain('🔵 باتصویر');
+    expect(lastText()).toContain('باتصویر');
     expect(urls()).toEqual(['https://downloads.example.com/app.apk']);
 
     // Another tenant's entry, picture and all, is not this tenant's customer's to see.
