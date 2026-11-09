@@ -7,6 +7,7 @@ import {
   bigint,
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -19,6 +20,7 @@ import {
 import { sql } from 'drizzle-orm';
 import {
   BACKUP_ARCHIVE_FORMATS,
+  BACKUP_ARCHIVE_SCOPES,
   BACKUP_DELIVERY_STATES,
   BACKUP_RUN_STATES,
   BACKUP_STAGES,
@@ -30,6 +32,10 @@ import {
   RECOVERY_STAGES,
   RECOVERY_STATES,
   SECRET_PURPOSES,
+  TENANT_RESTORE_ACTIVE_STATES,
+  TENANT_RESTORE_MODES,
+  TENANT_RESTORE_STAGES,
+  TENANT_RESTORE_STATES,
 } from '@nexa/contracts';
 import { enumCheck, nullableEnumCheck, timestamptz } from './_shared.js';
 import { tenants } from './tenancy.js';
@@ -151,9 +157,23 @@ export const backupRuns = pgTable(
      * before this column, and on a run reclaimed as abandoned (no process was left to time it).
      */
     phaseDurationsMs: jsonb('phase_durations_ms'),
+    /**
+     * Phase 6B (ADR-0039 § 5): what the run archives — the whole database (`INSTALLATION`,
+     * every row before this column) or ONE hosted tenant's rows (`TENANT`, the logical tenant
+     * archive), and which tenant. Not `tenant_id`: the row is the INSTALLATION's record of an
+     * archive it took (no tenant policy applies to it), and `subject_tenant_id` names what was
+     * archived, never whose row this is. Both scopes share the single-active index below.
+     */
+    archiveScope: text('archive_scope').notNull().default('INSTALLATION'),
+    subjectTenantId: uuid('subject_tenant_id').references(() => tenants.id),
   },
   (table) => [
     check('backup_runs_trigger_check', enumCheck('trigger', BACKUP_TRIGGERS)),
+    check('backup_runs_archive_scope_check', enumCheck('archive_scope', BACKUP_ARCHIVE_SCOPES)),
+    check(
+      'backup_runs_subject_tenant_check',
+      sql`(archive_scope = 'TENANT') = (subject_tenant_id IS NOT NULL)`,
+    ),
     check('backup_runs_archive_format_check', enumCheck('archive_format', BACKUP_ARCHIVE_FORMATS)),
     check(
       'backup_runs_summary_delivery_state_check',
@@ -184,6 +204,10 @@ export const backupRuns = pgTable(
       .where(sql`state = 'RUNNING'`),
     /** The operator's list, and the scheduler's "when did we last succeed". */
     index('backup_runs_started_at_idx').on(table.startedAt),
+    /** A hosted tenant's archives, newest first (retention, the owner's list). */
+    index('backup_runs_subject_tenant_idx')
+      .on(table.subjectTenantId, table.startedAt)
+      .where(sql`subject_tenant_id IS NOT NULL`),
   ],
 );
 
@@ -649,5 +673,69 @@ export const processRuns = pgTable(
       'process_runs_restarts_check',
       sql`restarts >= 0 AND (restarts = 0) = (restarts_since IS NULL)`,
     ),
+  ],
+);
+
+/**
+ * Phase 6B (ADR-0039 § 4): one restore of a TENANT archive into this installation.
+ *
+ * OWNED BY THE INSTALLATION TENANT (`tenant_id`): the owner's request to bring a hosted bot in,
+ * and his record of how it went. `hosted_tenant_id` is the archive's tenant — no foreign key,
+ * because until APPLYING commits that tenant does not exist here (and a refused restore never
+ * creates it). The row is the restore's lock: one active per installation, by the partial
+ * unique index. `dry_run` is the verified scratch's summary (counts per table, the archive's
+ * head, the refusal checks passed) — counts and table names only, never a value.
+ *
+ * A restore never runs in the HTTP request that asks for it (ADR-0028, per tenant): the
+ * request writes this row, and the restore engine advances it.
+ */
+export const tenantRestores = pgTable(
+  'tenant_restores',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    hostedTenantId: uuid('hosted_tenant_id').notNull(),
+    mode: text('mode').notNull(),
+    state: text('state').notNull(),
+    stage: text('stage').notNull(),
+    /** SHA-256 of the uploaded archive file, lowercase hex: the confirmation is bound to it. */
+    artifactSha256: text('artifact_sha256').notNull(),
+    /** The archive's own id (its manifest's `archiveId`), once opened. */
+    archiveId: text('archive_id'),
+    dryRun: jsonb('dry_run'),
+    requestedByAdminId: uuid('requested_by_admin_id').notNull(),
+    confirmedAt: timestamptz('confirmed_at'),
+    /** REPLACE only: the verified PRE_REPLACE tenant archive of the rows being replaced. */
+    preReplaceRunId: uuid('pre_replace_run_id').references(() => backupRuns.id),
+    failureCode: text('failure_code'),
+    failureMessage: text('failure_message'),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+    finishedAt: timestamptz('finished_at'),
+  },
+  (table) => [
+    check('tenant_restores_mode_check', enumCheck('mode', TENANT_RESTORE_MODES)),
+    check('tenant_restores_state_check', enumCheck('state', TENANT_RESTORE_STATES)),
+    check('tenant_restores_stage_check', enumCheck('stage', TENANT_RESTORE_STAGES)),
+    check('tenant_restores_sha_check', sql`artifact_sha256 ~ '^[0-9a-f]{64}$'`),
+    check('tenant_restores_not_self_check', sql`tenant_id <> hosted_tenant_id`),
+    check(
+      'tenant_restores_finished_check',
+      sql`(state IN ('SUCCEEDED', 'FAILED')) = (finished_at IS NOT NULL)`,
+    ),
+    check('tenant_restores_failure_check', sql`(state = 'FAILED') = (failure_code IS NOT NULL)`),
+    uniqueIndex('tenant_restores_single_active_idx')
+      .on(table.tenantId)
+      .where(
+        sql`state IN (${sql.raw(TENANT_RESTORE_ACTIVE_STATES.map((s) => `'${s}'`).join(', '))})`,
+      ),
+    index('tenant_restores_tenant_created_idx').on(table.tenantId, table.createdAt),
+    foreignKey({
+      name: 'tenant_restores_requested_by_fk',
+      columns: [table.tenantId, table.requestedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
   ],
 );
