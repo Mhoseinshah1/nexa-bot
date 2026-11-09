@@ -1,4 +1,12 @@
 import {
+  HOSTED_BACKUP_ROUTES,
+  type HostedBackupResponse,
+  type HostedOwnBackupResponse,
+  type TenantRestoreUploadResponse,
+  type TenantRestoreView,
+  type TenantRestoresResponse,
+} from '@nexa/contracts';
+import {
   SERVICE_AUTO_DELETE_PREVIEW_ROUTE,
   serviceAutoDeletePreviewResponseSchema,
   type ServiceAutoDeletePreviewResponse,
@@ -6068,4 +6076,138 @@ export function saveResellerRequestQuestions(
   input: ResellerRequestQuestionsSaveRequest,
 ): Promise<ResellerRequestQuestionsResponse> {
   return post(RESELLER_REQUEST_ROUTES.questions, input, resellerRequestQuestionsResponseSchema);
+}
+
+// --- Phase 6B PR-2: hosted-bot backups and «بازیابی ربات از فایل» ------------------------------
+
+function hostedBackupPath(template: string, tenantId: string, runId?: string): string {
+  const path = hostingPath(template, tenantId);
+  return runId === undefined ? path : path.replace(':runId', encodeURIComponent(runId));
+}
+
+function restorePath(template: string, restoreId: string): string {
+  return template.replace(':restoreId', encodeURIComponent(restoreId));
+}
+
+export function fetchHostedBackup(tenantId: string): Promise<HostedBackupResponse> {
+  return authedGet(
+    hostedBackupPath(HOSTED_BACKUP_ROUTES.bot, tenantId),
+    hostingShape<HostedBackupResponse>(),
+  );
+}
+
+export function setHostedBackupSchedule(
+  tenantId: string,
+  body: {
+    idempotencyKey: string;
+    proof: HostingProof;
+    enabled: boolean;
+    dailyTime: string;
+    keep: number;
+  },
+): Promise<HostedBackupResponse> {
+  return post(
+    hostedBackupPath(HOSTED_BACKUP_ROUTES.schedule, tenantId),
+    body,
+    hostingShape<HostedBackupResponse>(),
+  );
+}
+
+/** The password travels once, in this body; it is never returned. */
+export function setHostedBackupPassword(
+  tenantId: string,
+  body: { idempotencyKey: string; proof: HostingProof; password: string },
+): Promise<HostedBackupResponse> {
+  return post(
+    hostedBackupPath(HOSTED_BACKUP_ROUTES.password, tenantId),
+    body,
+    hostingShape<HostedBackupResponse>(),
+  );
+}
+
+export function requestHostedBackupRun(
+  tenantId: string,
+  body: { idempotencyKey: string; proof: HostingProof },
+): Promise<HostedBackupResponse> {
+  return post(
+    hostedBackupPath(HOSTED_BACKUP_ROUTES.run, tenantId),
+    body,
+    hostingShape<HostedBackupResponse>(),
+  );
+}
+
+/** A POST (it spends a fresh code); the answer's body is the encrypted archive. */
+export async function downloadHostedArchive(
+  tenantId: string,
+  runId: string,
+  proof: HostingProof,
+): Promise<Blob> {
+  const response = await fetch(
+    `${API_PREFIX}${hostedBackupPath(HOSTED_BACKUP_ROUTES.download, tenantId, runId)}`,
+    {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json', accept: 'application/octet-stream' },
+      body: JSON.stringify({ proof }),
+    },
+  );
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw toApiError(response.status, payload);
+  }
+  return response.blob();
+}
+
+/** The hosted bot's own Web Admin: «managed by the host» and the last backup's time. */
+export function fetchOwnHostedBackup(): Promise<HostedOwnBackupResponse> {
+  return authedGet(HOSTED_BACKUP_ROUTES.own, hostingShape<HostedOwnBackupResponse>());
+}
+
+export function fetchTenantRestores(): Promise<TenantRestoresResponse> {
+  return authedGet(HOSTED_BACKUP_ROUTES.restores, hostingShape<TenantRestoresResponse>());
+}
+
+export async function uploadTenantRestore(file: File): Promise<TenantRestoreUploadResponse> {
+  const response = await fetch(`${API_PREFIX}${HOSTED_BACKUP_ROUTES.upload}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/octet-stream', accept: 'application/json' },
+    body: file,
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw toApiError(response.status, payload);
+  return payload as TenantRestoreUploadResponse;
+}
+
+export function dryRunTenantRestore(
+  restoreId: string,
+  body: { proof: HostingProof; password: string; slug?: string },
+): Promise<TenantRestoreView> {
+  return post(
+    restorePath(HOSTED_BACKUP_ROUTES.dryRun, restoreId),
+    body,
+    hostingShape<TenantRestoreView>(),
+  );
+}
+
+export function confirmTenantRestore(
+  restoreId: string,
+  body: { idempotencyKey: string; proof: HostingProof },
+): Promise<TenantRestoreView> {
+  return post(
+    restorePath(HOSTED_BACKUP_ROUTES.confirm, restoreId),
+    body,
+    hostingShape<TenantRestoreView>(),
+  );
+}
+
+export function cancelTenantRestore(
+  restoreId: string,
+  body: { proof: HostingProof },
+): Promise<TenantRestoreView> {
+  return post(
+    restorePath(HOSTED_BACKUP_ROUTES.cancel, restoreId),
+    body,
+    hostingShape<TenantRestoreView>(),
+  );
 }

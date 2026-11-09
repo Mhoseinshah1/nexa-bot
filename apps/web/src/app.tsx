@@ -40,7 +40,7 @@ import { OpsGroupPage } from './pages/ops-group';
 import { AppearancePage } from './pages/appearance';
 import { SystemPage } from './pages/system';
 import { AccountPage } from './pages/account';
-import { RecoveryPage } from './pages/recovery';
+import { BackupRoute } from './pages/hosted-own-backup';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
 import { PaymentsPage, PaymentDetailPage } from './pages/payments';
 import { CompensationsPage } from './pages/compensations';
@@ -1438,7 +1438,8 @@ export function resolve(
 
   if (route.path === '/recovery') {
     return {
-      element: <RecoveryPage route={route} permissions={permissions} />,
+      // Phase 6B PR-2: a hosted bot's own Web Admin sees «managed by the host» instead.
+      element: <BackupRoute route={route} permissions={permissions} />,
       crumbs: [{ label: t('web.nav_recovery') }],
       title: t('web.nav_recovery'),
     };
