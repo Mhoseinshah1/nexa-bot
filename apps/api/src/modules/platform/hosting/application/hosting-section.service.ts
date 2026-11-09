@@ -485,6 +485,7 @@ export class HostingSectionService {
   ): Promise<{ readonly method: SecondFactorMethod; readonly result: T }> {
     const proof = hostingProofSchema.parse(proofInput);
     const adminId = actor.id as string;
+    let verifiedFactorId: string | null = null;
     const verdict = await this.deps.uow.run(installation, async (tx): Promise<Verdict> => {
       const now = this.deps.clock.now();
       const factor = await this.deps.repository.lockFactor(installation, adminId, tx);
@@ -492,6 +493,7 @@ export class HostingSectionService {
       if (factor.lockedUntil !== null && factor.lockedUntil.getTime() > now.getTime()) {
         return { kind: 'LOCKED', until: factor.lockedUntil };
       }
+      verifiedFactorId = factor.id;
       const judged = await this.judge(installation, adminId, factor, proof, now, tx);
       if (judged.kind === 'REJECTED') {
         return { ...judged, lockedUntil: await this.countFailure(installation, factor, now, tx) };
@@ -524,9 +526,18 @@ export class HostingSectionService {
     // The action's own transaction: the proof is spent, and only now does `fn` run. A
     // failure in `fn` leaves the code spent (the next one is 30 s away), never re-usable.
     const { method } = verdict;
-    const result = await this.deps.uow.run(installation, async (tx) =>
-      fn(tx, this.deps.clock.now(), method),
-    );
+    // The factor is re-locked here: a server-side reset between the two transactions
+    // deletes it, and the proof that was accepted must not open anything after that.
+    const result = await this.deps.uow.run(installation, async (tx) => {
+      const current = await this.deps.repository.lockFactor(installation, adminId, tx);
+      if (current === null || current.state !== 'ACTIVE' || current.id !== verifiedFactorId) {
+        throw errors.preconditionFailed(
+          HOSTING_ERROR_CODES.SECOND_FACTOR_REQUIRED,
+          'Turn on the creator panel’s two-step code first.',
+        );
+      }
+      return fn(tx, this.deps.clock.now(), method);
+    });
     return { method, result };
   }
 

@@ -575,6 +575,8 @@ botctl admin check-2fa --username NAME
                            whether an administrator has two-step sign-in on
 botctl admin reset-2fa --username NAME --reason TEXT
                            owner recovery: remove two-step sign-in (audited)
+botctl admin reset-hosting-2fa --username NAME --reason TEXT
+                           owner recovery: remove the «میزبانی‌ها» section's own factor (audited)
 botctl admin reset-password USERNAME [--tenant SLUG]
                            owner recovery: set a new password, typed twice and hidden (audited)
 botctl customers prune-empty [--tenant SLUG]
@@ -3325,6 +3327,21 @@ neither one signs anybody in:
    botctl admin check-2fa --username owner          # prints on, pending or off
    botctl admin reset-2fa --username owner --reason "lost phone, identity checked in person"
    ```
+
+   The «میزبانی‌ها» section has its OWN authenticator and recovery codes (not the sign-in
+   factor above). When the owner lost both, from the host:
+
+   ```
+   botctl admin reset-hosting-2fa --username owner --reason "lost phone, identity checked in person"
+   ```
+
+   It takes the update lock and removes the section's factor (pending or active), its
+   recovery codes and the section sessions, and records `hosting.totp_reset` in the
+   INSTALLATION owner's audit log as `SYSTEM_JOB` (`via: SERVER_CLI`, with your reason). It
+   touches nothing else: the password, the sign-in factor and the Web Admin sessions stay, so
+   the owner opens «میزبانی‌ها» and enrols a new device. Only the installation owner (the
+   primary tenant's `owner` role) can be named. Outside an installed host:
+   `pnpm admin:hosting-2fa-reset --username NAME --reason TEXT` (`:dev` from source).
 
    A forgotten PASSWORD (as opposed to a lost authenticator) is the same kind of recovery:
 

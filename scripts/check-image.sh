@@ -33,6 +33,7 @@ ENTRYPOINTS=(
   dist/bootstrap-owner.cli.js
   dist/provision-installation.cli.js
   dist/admin-2fa-reset.cli.js
+  dist/admin-hosting-2fa-reset.cli.js
   dist/admin-password-reset.cli.js
   dist/customers-prune.cli.js
 )
@@ -58,6 +59,7 @@ run node --input-type=module -e "
   const provision = await import('/app/dist/provision-installation.cli.js');
   await import('/app/dist/bootstrap-owner.cli.js');
   await import('/app/dist/admin-2fa-reset.cli.js');
+  await import('/app/dist/admin-hosting-2fa-reset.cli.js');
   await import('/app/dist/admin-password-reset.cli.js');
   await import('/app/dist/customers-prune.cli.js');
   const api = await import('/app/dist/bootstrap.js');

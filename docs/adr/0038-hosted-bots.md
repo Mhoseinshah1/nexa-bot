@@ -139,5 +139,7 @@ hosted archive bundles ONE per-archive key, never this server's keyring (ADR-003
   erasure of its rows is not built — append-only tables (audit, operational events, outbox) refuse
   per-tenant deletes, so erasure needs its own design — designed (not built) in
   [ADR-0039](0039-tenant-backup-and-server-move.md) § 10.
-- A lost section factor with no recovery codes has no reset yet (the sign-in factor has
-  `admin-2fa-reset.cli.ts`); a matching CLI is a follow-up.
+- ~~A lost section factor with no recovery codes has no reset yet.~~ Closed:
+  `botctl admin reset-hosting-2fa --username NAME --reason TEXT`
+  (`admin-hosting-2fa-reset.cli.ts`) removes the section's factor, its recovery codes and the
+  section sessions, and audits `hosting.totp_reset` in the owner's log.

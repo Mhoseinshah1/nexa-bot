@@ -144,6 +144,10 @@ botctl — operate a Nexa installation
   botctl admin reset-2fa --username NAME --reason TEXT
                                            owner recovery: remove an administrator's two-step
                                            sign-in and end their sessions (audited)
+  botctl admin reset-hosting-2fa --username NAME --reason TEXT
+                                           owner recovery: remove the «میزبانی‌ها» section's own
+                                           two-step factor and its recovery codes (audited in the
+                                           owner's log); the sign-in and the password are untouched
   botctl admin reset-password USERNAME [--tenant SLUG]
                                            owner recovery: set a new password (typed twice, hidden;
                                            never an argument), clear the sign-in lockout, end their
@@ -197,6 +201,12 @@ is replaced on the bot's page in the Web Admin, not here.
 `admin reset-2fa` is the way back for an administrator who lost both their
 authenticator and their backup codes. It never sets a password and never signs
 anybody in: they still need their password, and enrol a new device afterwards.
+
+`admin reset-hosting-2fa` is the way back when the installation owner lost the «میزبانی‌ها»
+section's own authenticator and its recovery codes. It removes that factor, its codes and the
+section sessions, and writes `hosting.totp_reset` in the owner's audit log; the Web Admin
+sign-in, the password and the sessions are untouched, and the owner enrols a new device in the
+section afterwards.
 
 `admin reset-password` is the way back for an administrator who forgot their password.
 It asks for the new one twice on the terminal with echo off, passes it to the container on
@@ -2604,11 +2614,17 @@ cmd_admin() {
       nexa_compose run --rm --no-deps -T --entrypoint node api \
         dist/admin-2fa-reset.cli.js "$@"
       ;;
+    reset-hosting-2fa)
+      # A write: the same update lock as reset-2fa.
+      nexa_acquire_lock 0
+      nexa_compose run --rm --no-deps -T --entrypoint node api \
+        dist/admin-hosting-2fa-reset.cli.js "$@"
+      ;;
     reset-password)
       cmd_admin_reset_password "$@"
       ;;
     *)
-      nexa_die "usage: botctl admin <check-2fa|reset-2fa|reset-password> [--username NAME --reason TEXT | USERNAME] [--tenant SLUG]"
+      nexa_die "usage: botctl admin <check-2fa|reset-2fa|reset-hosting-2fa|reset-password> [--username NAME --reason TEXT | USERNAME] [--tenant SLUG]"
       ;;
   esac
 }
