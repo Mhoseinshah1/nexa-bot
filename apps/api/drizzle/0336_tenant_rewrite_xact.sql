@@ -1,0 +1,1 @@
+ALTER TABLE "tenant_restores" ADD COLUMN "rewrite_xact_id" bigint;

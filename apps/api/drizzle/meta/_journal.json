@@ -2353,6 +2353,20 @@
       "when": 1794251539116,
       "tag": "0335_host_admin_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 336,
+      "version": "7",
+      "when": 1794254318346,
+      "tag": "0336_tenant_rewrite_xact",
+      "breakpoints": true
+    },
+    {
+      "idx": 337,
+      "version": "7",
+      "when": 1794254327654,
+      "tag": "0337_tenant_rewrite_allowance",
+      "breakpoints": true
     }
   ]
 }
