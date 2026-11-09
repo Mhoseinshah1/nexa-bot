@@ -226,14 +226,9 @@ export async function liveTenantDigest(
         await pinSession(executor);
         const catalogue = await readCatalogue(executor);
         const named = manifest.tables.map((table) => table.name);
-        const digests = await canonicalDigests(
-          executor,
-          catalogue,
-          named,
-          tenantId,
-          cipher,
-          { columnsOf: (table) => columns.get(table) },
-        );
+        const digests = await canonicalDigests(executor, catalogue, named, tenantId, cipher, {
+          columnsOf: (table) => columns.get(table),
+        });
         for (const table of named) digests[table] ??= 'missing-table';
         const others = (await tenantLoadOrder(executor, catalogue)).filter(
           (table) => !columns.has(table),
