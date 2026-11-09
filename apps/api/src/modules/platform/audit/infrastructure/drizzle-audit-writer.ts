@@ -11,7 +11,11 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import { scopeTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { redactRecord } from '../../../../infrastructure/redaction.js';
 import type { BulkAuditWriter } from '../application/record-audit-many.js';
-import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
+import {
+  ScopeBound,
+  withSystemScope,
+  withSystemScopeIn,
+} from '../../../../infrastructure/persistence/database-scope.js';
 
 /**
  * The audit log.
@@ -45,9 +49,26 @@ export class DrizzleAuditWriter implements BulkAuditWriter {
     entry: AuditEntry,
     tx?: unknown,
   ): Promise<void> {
-    const executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
-
-    await executor.insert(auditLogs).values(this.row(scope, actor, entry));
+    const open = (tx as TransactionScope | undefined)?.tx;
+    if (actor.impersonation !== undefined) {
+      // D5: the installation owner acting inside a hosted bot. The row is HIS, in HIS log; the
+      // hosted tenant's log receives nothing. Same transaction when there is one, so the
+      // change and its record still commit together — on the system path, because the
+      // transaction is bound to the hosted tenant and RLS would refuse the installation's row.
+      const row = this.row(scope, actor, entry);
+      if (open === undefined) {
+        // The reason is LITERAL here and below, pinned in `tests/unit/system-path-allowlist.ts`.
+        await withSystemScope('audit: host owner acting in a hosted tenant', () =>
+          this.db.insert(auditLogs).values(row),
+        );
+      } else {
+        await withSystemScopeIn(open, 'audit: host owner acting in a hosted tenant', () =>
+          open.insert(auditLogs).values(row),
+        );
+      }
+      return;
+    }
+    await (open ?? this.db).insert(auditLogs).values(this.row(scope, actor, entry));
   }
 
   /**
@@ -61,6 +82,11 @@ export class DrizzleAuditWriter implements BulkAuditWriter {
     entries: readonly AuditEntry[],
     tx?: unknown,
   ): Promise<void> {
+    if (actor.impersonation !== undefined) {
+      // Never batched for an entered session: each goes through `record`'s owner path (D5).
+      for (const entry of entries) await this.record(scope, actor, entry, tx);
+      return;
+    }
     const executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
     const rows = entries.map((entry) => this.row(scope, actor, entry));
     for (let i = 0; i < rows.length; i += AUDIT_INSERT_CHUNK) {
@@ -69,13 +95,17 @@ export class DrizzleAuditWriter implements BulkAuditWriter {
   }
 
   private row(scope: ScopeContext, actor: ActorContext, entry: AuditEntry) {
+    const entered = actor.impersonation;
     return {
       id: this.ids.uuid(),
-      tenantId: scopeTenantId(scope),
+      // An entered session's row is the installation owner's (D5): his tenant, his id and
+      // name, and the hosted tenant he acted in. Never the hosted tenant's own log.
+      tenantId: entered === undefined ? scopeTenantId(scope) : entered.installationTenantId,
+      actedInTenantId: entered === undefined ? null : scopeTenantId(scope),
       occurredAt: this.clock.now(),
       actorType: actor.type,
-      actorId: actor.id,
-      actorLabel: actor.label,
+      actorId: entered === undefined ? actor.id : entered.ownerAdminId,
+      actorLabel: entered === undefined ? actor.label : entered.ownerLabel,
       action: entry.action,
       entityType: entry.entityType,
       entityId: entry.entityId,

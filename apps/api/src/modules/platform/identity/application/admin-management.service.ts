@@ -50,6 +50,7 @@ import {
   type IdempotencyNamespace,
   type IdempotencyStore,
 } from '@nexa/contracts';
+import { refuseImpersonatedAccountChange } from './impersonation.js';
 import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import { hashRequest } from '../../idempotency/infrastructure/drizzle-idempotency-store.js';
 import {
@@ -492,7 +493,7 @@ export class AdminManagementService {
         // Transaction-aware, for the same reason as setRoles: a read on the pool
         // after the lock does not participate in it, so the status this decision
         // rests on could differ from the one about to be overwritten.
-        const target = await this.requireAdmin(scope, targetId, tx);
+        const target = await this.requireOperatorTarget(scope, targetId, tx);
         // Re-checked against the id the DATABASE returned, not the one the caller
         // supplied. The boundary already canonicalises, and this is the check
         // that does not depend on it having: whatever row we are about to write
@@ -693,7 +694,7 @@ export class AdminManagementService {
 
         // Transaction-aware. A read on the pool after the lock does not
         // participate in it and can observe a different snapshot.
-        const target = await this.requireAdmin(scope, targetId, tx);
+        const target = await this.requireOperatorTarget(scope, targetId, tx);
         assertNotSelf(adminIdOf(actor), target.id);
 
         const current = await this.admins.roleKeysFor(scope, target.id, tx);
@@ -846,7 +847,7 @@ export class AdminManagementService {
         // nothing.
         await this.guard.check(scope, actor, 'admins.edit', tx);
 
-        const target = await this.requireAdmin(scope, targetId, tx);
+        const target = await this.requireOperatorTarget(scope, targetId, tx);
         const targetRoleKeys = await this.admins.roleKeysFor(scope, target.id, tx);
 
         // Binding a channel to the OWNER is a change to who may exercise owner
@@ -1026,7 +1027,7 @@ export class AdminManagementService {
         const now = this.clock.now();
         await this.guard.check(scope, actor, 'admins.edit', tx);
 
-        const target = await this.requireAdmin(scope, targetId, tx);
+        const target = await this.requireOperatorTarget(scope, targetId, tx);
         // Against the id the DATABASE returned, not the one the caller supplied.
         assertNotSelf(adminIdOf(actor), target.id);
 
@@ -1191,7 +1192,7 @@ export class AdminManagementService {
         const now = this.clock.now();
         await this.guard.check(scope, actor, 'admins.edit', tx);
 
-        const target = await this.requireAdmin(scope, targetId, tx);
+        const target = await this.requireOperatorTarget(scope, targetId, tx);
         assertNotSelf(adminIdOf(actor), target.id);
         const targetRoleKeys = await this.admins.roleKeysFor(scope, target.id, tx);
         if (targetRoleKeys.includes(OWNER_ROLE_KEY)) {
@@ -1350,7 +1351,7 @@ export class AdminManagementService {
         const now = this.clock.now();
         await this.guard.check(scope, actor, 'admins.edit', tx);
 
-        const target = await this.requireAdmin(scope, targetId, tx);
+        const target = await this.requireOperatorTarget(scope, targetId, tx);
         const revoked = await this.sessions.revokeAllForAdmin(
           scope,
           target.id,
@@ -1596,6 +1597,8 @@ export class AdminManagementService {
     input: unknown,
     context: PasswordChangeContext,
   ): Promise<void> {
+    // Phase 6B: the HOST principal has no password, and an entered session never sets one.
+    refuseImpersonatedAccountChange(actor, 'admin.password_change');
     const command = changePasswordRequestSchema.parse(input);
     const adminId = adminIdOf(actor);
     if (adminId === null) {
@@ -2582,6 +2585,24 @@ export class AdminManagementService {
       }
       throw error;
     }
+  }
+
+  /**
+   * The target of a CHANGE to an administrator. Phase 6B: the HOST principal (the installation
+   * owner's, in a hosted tenant) is not the tenant's to edit, disable, re-role, bind, reset or
+   * sign out — it answers exactly as an unknown id. The `nexa_host_admin_guard` trigger is the
+   * guarantee beneath this; this is the answer the operator sees.
+   */
+  private async requireOperatorTarget(
+    scope: ScopeContext,
+    id: AdminId,
+    tx?: unknown,
+  ): Promise<Admin> {
+    const admin = await this.requireAdmin(scope, id, tx);
+    if (admin.kind === 'HOST') {
+      throw errors.notFound(IDENTITY_ERROR_CODES.ADMIN_NOT_FOUND, 'No such administrator.');
+    }
+    return admin;
   }
 
   private async requireAdmin(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<Admin> {

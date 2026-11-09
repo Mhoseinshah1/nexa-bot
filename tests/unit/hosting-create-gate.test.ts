@@ -107,6 +107,7 @@ describe('the hosted-bot create gate', () => {
         systemProbe: fake,
         diskPaths: [],
         installationTenantId: () => null,
+        enter: fake,
       }).hosting.createGate();
     expect(built('production')).toEqual({ enabled: true, refusal: null });
     // The operator's flag is still the second key: off, production stays shut.

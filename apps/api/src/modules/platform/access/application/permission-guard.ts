@@ -1,5 +1,6 @@
 import {
   errors,
+  IMPERSONATION_DENIED_PERMISSIONS,
   INSTALLATION_ONLY_PERMISSIONS,
   isSystemContext,
   PLATFORM_ERROR_CODES,
@@ -233,10 +234,18 @@ export class PermissionGuard {
     if (actor.type === 'SYSTEM_JOB') {
       return new Set<PermissionKey>(SYSTEM_JOB_PERMISSIONS);
     }
-    return this.withoutForeignInstallationKeys(
+    const held = this.withoutForeignInstallationKeys(
       scope,
       await this.resolver.resolve(scope, actor, tx),
     );
+    if (actor.impersonation === undefined) return held;
+    // Phase 6B «ورود به پنل» (ADR-0039 § 9 refinement 3): an entered session never holds
+    // these, whatever the resolver answered — its admins, their permissions, panel
+    // credentials, backups, restores, the creator panel. Decided HERE, the one place every
+    // check passes through, so no caller can forget it.
+    const kept = new Set(held);
+    for (const key of IMPERSONATION_DENIED_PERMISSIONS) kept.delete(key);
+    return kept;
   }
 
   /** ADR-0039 F1: the installation-only keys, kept only in the installation tenant's scope. */

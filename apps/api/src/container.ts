@@ -1032,6 +1032,9 @@ import { buildHosting } from './modules/platform/hosting/infrastructure/build-ho
 import { buildHostedActivation } from './modules/platform/hosting/infrastructure/build-hosted-activation.js';
 import type { HostedActivationService } from './modules/platform/hosting/application/hosted-activation.service.js';
 import type { HostedOwnerActivationService } from './modules/platform/hosting/application/hosted-owner-activation.service.js';
+import { HostingEnterService } from './modules/platform/hosting/application/hosting-enter.service.js';
+import { DrizzleHostingEnterRepository } from './modules/platform/hosting/infrastructure/drizzle-hosting-enter.repository.js';
+import { DrizzleHostedActivationRepository } from './modules/platform/hosting/infrastructure/drizzle-hosted-activation.repository.js';
 import type {
   HostedDnsResolver,
   HostedTlsProbe,
@@ -1350,6 +1353,8 @@ export interface Container {
   readonly hostingSection: HostingSectionService;
   readonly hostedActivation: HostedActivationService;
   readonly hostedOwnerActivation: HostedOwnerActivationService;
+  /** Phase 6B «ورود به پنل»: mint (the owner, fresh code) and redeem (the hosted domain). */
+  readonly hostingEnter: HostingEnterService;
   readonly hosting: HostingService;
   readonly hostedBotExpiry: HostedBotExpiryService;
   /**
@@ -2258,6 +2263,8 @@ export function createContainer(
     logger,
   });
 
+  // Phase 6B «ورود به پنل»: entered sessions' liveness, asked by every authenticated request.
+  const hostingEnterRepository = new DrizzleHostingEnterRepository(database.db);
   const auth = new AuthenticationService(
     admins,
     roles,
@@ -2275,6 +2282,7 @@ export function createContainer(
     guard,
     { factors: secondFactors, challenges: loginChallenges, cipher },
     ownerAlerts,
+    hostingEnterRepository,
   );
 
   const adminManagement = new AdminManagementService(
@@ -2588,6 +2596,7 @@ export function createContainer(
       systemProbe,
       diskPaths: ['/', config.BACKUP_WORK_DIR],
       installationTenantId: () => installationTenantId,
+      enter: hostingEnterRepository,
     });
   // Phase 6A PR-4: the activation of a hosted bot (token, domain, SSL, webhook, one-time link)
   // and the Host → hosted-tenant resolution, over the same Telegram gateway and bootstrap.
@@ -2610,6 +2619,23 @@ export function createContainer(
     telegram: telegramBotGateway,
     ...(options.hostedNetwork?.dns === undefined ? {} : { dns: options.hostedNetwork.dns }),
     ...(options.hostedNetwork?.tls === undefined ? {} : { tls: options.hostedNetwork.tls }),
+  });
+  // Phase 6B «ورود به پنل» (ADR-0039 § 9): the owner's entry into a hosted bot's Web Admin.
+  const hostingEnter = new HostingEnterService({
+    repository: hostingRepository,
+    activations: new DrizzleHostedActivationRepository(database.db),
+    enter: hostingEnterRepository,
+    section: hostingSection,
+    owner: hostingOwner,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    audit,
+    uow,
+    clock,
+    ids,
+    sessionTtlSeconds: config.SESSION_TTL_SECONDS,
+    resolveHost: (host) => hostedOwnerActivation.resolveHost(host),
   });
 
   /*
@@ -9520,6 +9546,7 @@ export function createContainer(
     hosting,
     hostedActivation,
     hostedOwnerActivation,
+    hostingEnter,
     hostedBotExpiry,
     botTurnGuard,
     heavyJobs,

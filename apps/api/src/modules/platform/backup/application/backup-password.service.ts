@@ -14,6 +14,7 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
+import { refuseImpersonatedSecretWrite } from '../../identity/application/impersonation.js';
 import { requireInstallationScope } from '../../access/application/installation-scope.js';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import {
@@ -124,6 +125,8 @@ export class BackupPasswordService {
     },
     context: { ip: string | null },
   ): Promise<{ setAt: Date; replayed: boolean }> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'backup.archive_password');
     const denial = {
       action: 'backup.archive_password_set',
       entityType: 'BackupArchivePassword',

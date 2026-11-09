@@ -37,6 +37,7 @@ import {
   type HostedOwnerProvisioning,
 } from './drizzle-hosted-tenant-system-path.js';
 import { OsHostingServerProbe } from './os-server-probe.js';
+import type { DrizzleHostingEnterRepository } from './drizzle-hosting-enter.repository.js';
 
 /**
  * Phase 6A PR-3: the creator panel's services, assembled in one place so `container.ts`
@@ -70,6 +71,8 @@ export function buildHosting(deps: {
   readonly systemProbe: SystemProbe;
   readonly diskPaths: readonly string[];
   readonly installationTenantId: () => string | null;
+  /** Phase 6B «ورود به پنل»: built before the authentication service, which asks it too. */
+  readonly enter: DrizzleHostingEnterRepository;
 }): {
   readonly hostingSection: HostingSectionService;
   readonly hosting: HostingService;
@@ -102,6 +105,7 @@ export function buildHosting(deps: {
     ids: deps.ids,
     qr: deps.qr,
     verifyOwnPassword: deps.verifyOwnPassword,
+    entered: deps.enter,
   });
   const hosting = new HostingService({
     repository,

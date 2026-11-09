@@ -16,6 +16,7 @@ import {
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
+import { refuseImpersonatedSecretWrite } from '../../../platform/identity/application/impersonation.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -636,6 +637,8 @@ export class GatewayReceiptCaptureService {
       readonly text: string;
     },
   ): Promise<GatewayRefundCardResult> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'payment_gateway.refund_card');
     const requests = this.deps.providerRequests;
     const sealer = this.deps.refundCards;
     const card = parseRefundCardInput(input.text);

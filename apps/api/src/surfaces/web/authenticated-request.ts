@@ -9,6 +9,7 @@ import {
   SESSION_COOKIE_NAME,
   SESSION_COOKIE_NAME_SECURE,
   type ActorContext,
+  type ActorImpersonation,
   type Admin,
   type AdminSession,
   type CorrelationId,
@@ -207,7 +208,12 @@ export interface AdminRequestAuthenticator {
     resolveHost(host: string | null | undefined): Promise<unknown>;
   };
   readonly auth: {
-    authenticate(token: string): Promise<{ readonly admin: Admin; readonly session: AdminSession }>;
+    authenticate(token: string): Promise<{
+      readonly admin: Admin;
+      readonly session: AdminSession;
+      /** Phase 6B: set for an entered session; carried onto the actor. */
+      readonly impersonation?: ActorImpersonation | null;
+    }>;
   };
   readonly ids: { uuid(): string };
 }
@@ -235,13 +241,13 @@ export async function authenticateAdmin(
 ): Promise<{ scope: TenantContext; actor: ActorContext }> {
   const token = requireSessionToken(request, container.config.NODE_ENV === 'production');
   await assertOriginOrHostedDomain(container, request);
-  const { admin, session } = await container.auth.authenticate(token);
+  const { admin, session, impersonation } = await container.auth.authenticate(token);
   const correlationId = currentCorrelationId() ?? newCorrelationId(container.ids.uuid());
   // `botInstanceId: null`: every Web Admin record belongs to the TENANT — a tenant running
   // two bots administers one catalogue, one wallet, one set of panels.
   return {
     scope: { tenantId: admin.tenantId, botInstanceId: null },
-    actor: adminActor(admin, correlationId, request, session.id),
+    actor: adminActor(admin, correlationId, request, session.id, impersonation ?? null),
   };
 }
 
@@ -259,8 +265,15 @@ export function adminActor(
   correlationId: CorrelationId,
   request: FastifyRequest,
   sessionId: string,
+  /**
+   * Phase 6B «ورود به پنل»: the owner behind an entered session, from the session row's live
+   * check — never from the request. Its presence is what sends the audit row to his log and
+   * drops `IMPERSONATION_DENIED_PERMISSIONS`.
+   */
+  impersonation: ActorImpersonation | null = null,
 ): ActorContext {
   return {
+    ...(impersonation === null ? {} : { impersonation }),
     type: 'WEB_ADMIN',
     id: admin.id,
     // Captured now, so an audit row still names them after a rename.

@@ -26,6 +26,7 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
+import { refuseImpersonatedSecretWrite } from '../../identity/application/impersonation.js';
 import { ZodError } from 'zod';
 import { redactSecretText } from '../../../../infrastructure/redaction.js';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
@@ -386,6 +387,8 @@ export class BotManagementService {
     actor: ActorContext,
     input: { readonly idempotencyKey: string; readonly botId: string; readonly token: unknown },
   ): Promise<BotTokenReplacementOutcome> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'bot_instance.token');
     const botId = this.botId(input.botId);
     const denial = {
       action: 'bot_instance.token_replace',

@@ -19,6 +19,7 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
+import { refuseImpersonatedSecretWrite } from '../../../platform/identity/application/impersonation.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -172,6 +173,8 @@ export class GiftCardAdminService {
     actor: ActorContext,
     command: GiftCardBatchCreateCommand,
   ): Promise<GiftCardBatchView> {
+    // Phase 6B «ورود به پنل»: an entered session never seals a secret (ADR-0039 § 9).
+    refuseImpersonatedSecretWrite(actor, 'gift_card.batch_export');
     const denial = {
       action: GIFT_CARD_BATCH_CREATE_ACTION,
       entityType: 'GiftCardBatch',
