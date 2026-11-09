@@ -206,6 +206,8 @@ export type OpsTelegramFailure = {
   readonly retryable: boolean;
   readonly errorCode: string;
   readonly errorMessage: string;
+  /** Telegram's own `retry_after` of a 429, in ms, when it named one (B8's pacing honours it). */
+  readonly retryAfterMs?: number;
 };
 
 /**

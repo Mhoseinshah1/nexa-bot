@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { OPS_GROUP_MANAGED_SETTING_KEYS, featureFlagSchema } from '@nexa/contracts';
+import {
+  OPS_GROUP_MANAGED_SETTING_KEYS,
+  OPS_LOG_TOPIC_CATEGORIES,
+  featureFlagSchema,
+} from '@nexa/contracts';
 import { OpsGroupPage, opsGroupPollsFast } from '../../apps/web/src/pages/ops-group';
 import { SettingsPage } from '../../apps/web/src/pages/settings';
 import { FeaturesPage } from '../../apps/web/src/pages/features';
@@ -190,6 +194,50 @@ describe('Codex review #2 of PR #99', () => {
       .filter((call) => call.url.endsWith('/ops-group/test'))
       .map((call) => (call.body as { idempotencyKey: string }).idempotencyKey);
     expect(keys[0]).toBe(keys[1]);
+  });
+
+  it('B8: while the test is being sent every topic shows «در صف», then each shows its own result', async () => {
+    stubApi([
+      statusRoute(),
+      {
+        url: '/ops-group/test',
+        body: {
+          opsGroup: view(),
+          results: OPS_LOG_TOPIC_CATEGORIES.map((category, index) => ({
+            category,
+            outcome: index === 0 ? 'FAILED' : 'SENT',
+            errorCode: index === 0 ? 'telegram.rate_limited' : null,
+          })),
+        },
+      },
+    ]);
+    // Hold the test request open, as a paced send really is, so the waiting state is visible.
+    const respond = globalThis.fetch;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        if (String(input).endsWith('/ops-group/test')) await gate;
+        return respond(input as string, init);
+      }),
+    );
+    renderPage(page({ mayManage: true }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ارسال پیام آزمایشی' }));
+    const queued = await screen.findByTestId('ops-group-test-queued');
+    expect(queued.querySelectorAll('li')).toHaveLength(OPS_LOG_TOPIC_CATEGORIES.length);
+    expect(queued.textContent?.split('در صف').length).toBe(OPS_LOG_TOPIC_CATEGORIES.length + 1);
+    expect(screen.queryByTestId('ops-group-test')).toBeNull();
+
+    release();
+    const done = await screen.findByTestId('ops-group-test');
+    expect(screen.queryByTestId('ops-group-test-queued')).toBeNull();
+    expect(done.querySelectorAll('li')).toHaveLength(OPS_LOG_TOPIC_CATEGORIES.length);
+    expect(done.textContent).not.toContain('در صف');
+    expect(done.textContent).toContain('ارسال نشد');
+    expect(done.textContent).toContain('ارسال شد');
   });
 
   it('polls fast only for a pending code or a connected group not yet checked', () => {

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { PLATFORM_ERROR_CODES } from '@nexa/contracts';
+import { OPS_LOG_TOPIC_CATEGORIES, PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import type {
   OpsConnectCodeResponse,
   OpsGroupTestResponse,
@@ -398,7 +398,22 @@ function OpsGroupSettingsTab({ denied, mayManage }: { denied: boolean; mayManage
                   </Banner>
                 )}
 
-                {testResult !== null && (
+                {test.isPending && (
+                  /* B8: the test sends one topic at a time, paced for Telegram's rate limit, so
+                     every topic is «در صف» until the answer arrives with each one's result. */
+                  <ul className="ops-group-test" role="status" data-testid="ops-group-test-queued">
+                    {OPS_LOG_TOPIC_CATEGORIES.map((category) => (
+                      <li key={category}>
+                        <span>{t(TOPIC_NAME[category])}</span>
+                        <Badge tone="neutral" dot>
+                          {t('web.opsgroup_test_queued')}
+                        </Badge>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {!test.isPending && testResult !== null && (
                   <ul className="ops-group-test" role="status" data-testid="ops-group-test">
                     {testResult.map((result) => (
                       <li key={result.category}>

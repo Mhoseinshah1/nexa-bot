@@ -17,6 +17,9 @@ import type {
   TransportResult,
 } from '../../apps/api/src/modules/control/notifications/application/ports';
 import {
+  OPS_TEST_RATE_LIMIT_ATTEMPTS,
+  OPS_TEST_RATE_LIMIT_MAX_WAIT_MS,
+  OPS_TEST_SEND_GAP_MS,
   OpsGroupRouter,
   OpsGroupService,
 } from '../../apps/api/src/modules/control/ops-group/application/ops-group.service';
@@ -119,7 +122,27 @@ class FakeOpsTelegram implements OpsGroupTelegram {
     this.created.push({ chatId, name, threadId: this.nextThread });
     return { outcome: 'OK' as const, threadId: this.nextThread };
   }
+  /** B8: the next N sends answer HTTP 429 with this `retry_after` (ms), then succeed. */
+  rateLimited = 0;
+  rateLimitRetryAfterMs: number | undefined = 3_000;
+  /** B8: every send, in order, with the moment it was made on the shared timeline. */
+  timeline: string[] = [];
   async send(_token: string, chatId: string, threadId: number | null, text: string) {
+    this.timeline.push(`send:${String(threadId)}`);
+    if (this.rateLimited > 0) {
+      this.rateLimited -= 1;
+      return {
+        outcome: 'FAILED' as const,
+        retryable: true,
+        errorCode: 'telegram.rate_limited',
+        errorMessage: 'Too Many Requests: retry after 3',
+        ...(this.rateLimitRetryAfterMs === undefined
+          ? {}
+          : { retryAfterMs: this.rateLimitRetryAfterMs }),
+        topicMissing: false,
+        chatProblem: null,
+      };
+    }
     if (this.sendDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.sendDelayMs));
     this.sending?.();
     if (this.sendGate !== null) await this.sendGate;
@@ -176,6 +199,8 @@ describe('the operations log group (WP-A4)', () => {
   let provisioner: OpsTopicProvisioner;
   let repository: DrizzleOpsGroupRepository;
   let transport: ScriptedTransport;
+  /** B8: every pause the test send asked for, in ms; nothing really waits. */
+  let pauses: number[];
   let dispatcher: NotificationDispatcher;
   let keySeq = 0;
   const key = (label: string) => `${label}-${Date.now()}-${(keySeq += 1)}`;
@@ -197,6 +222,7 @@ describe('the operations log group (WP-A4)', () => {
     });
 
     telegram = new FakeOpsTelegram();
+    pauses = [];
     clock = new TestClock();
     repository = new DrizzleOpsGroupRepository(ctx.container.database.db);
     const c = ctx.container;
@@ -232,6 +258,10 @@ describe('the operations log group (WP-A4)', () => {
       logger: c.logger,
       // Small, so draining across passes is exercised with a handful of rows.
       requeueBatch: 2,
+      sleep: async (ms) => {
+        pauses.push(ms);
+        telegram.timeline.push(`pause:${String(ms)}`);
+      },
     });
     transport = new ScriptedTransport();
     dispatcher = new NotificationDispatcher(
@@ -1075,6 +1105,48 @@ describe('the operations log group (WP-A4)', () => {
       );
       expect(tested.opsGroup.lastDeliveredAt).not.toBeNull();
       expect(tested.opsGroup.topics.every((topic) => topic.lastDeliveredAt !== null)).toBe(true);
+    });
+
+    it('B8: paces the test — one topic at a time with the gap between them, never all at once', async () => {
+      await connectHealthy();
+      telegram.timeline = [];
+      const tested = await service.sendTest(tenantA, owner, { idempotencyKey: key('test') });
+      expect(tested.results.every((result) => result.outcome === 'SENT')).toBe(true);
+      // N topics: N sends and N-1 gaps, strictly alternating send, pause, send, ...
+      const n = OPS_LOG_TOPIC_CATEGORIES.length;
+      expect(pauses).toEqual(Array.from({ length: n - 1 }, () => OPS_TEST_SEND_GAP_MS));
+      expect(telegram.timeline).toHaveLength(2 * n - 1);
+      telegram.timeline.forEach((event, index) => {
+        expect(event.startsWith(index % 2 === 0 ? 'send:' : 'pause:'), event).toBe(true);
+      });
+    });
+
+    it('B8: a 429 delays the topic by Telegram’s retry_after and then sends it; it does not fail', async () => {
+      await connectHealthy();
+      pauses.length = 0;
+      telegram.rateLimited = 2;
+      telegram.rateLimitRetryAfterMs = 3_000;
+      const tested = await service.sendTest(tenantA, owner, { idempotencyKey: key('test') });
+      expect(tested.results.every((result) => result.outcome === 'SENT')).toBe(true);
+      // The first topic waited retry_after twice (3 s), on top of the gaps between topics.
+      expect(pauses.slice(0, 2)).toEqual([3_000, 3_000]);
+      expect(pauses.slice(2).every((ms) => ms === OPS_TEST_SEND_GAP_MS)).toBe(true);
+    });
+
+    it('B8: a limit that never lifts is that topic’s result (telegram.rate_limited), after bounded attempts, and the wait is capped', async () => {
+      await connectHealthy();
+      pauses.length = 0;
+      telegram.timeline = [];
+      telegram.rateLimited = 1_000;
+      telegram.rateLimitRetryAfterMs = 10 * 60_000;
+      const tested = await service.sendTest(tenantA, owner, { idempotencyKey: key('test') });
+      expect(tested.results.every((r) => r.errorCode === 'telegram.rate_limited')).toBe(true);
+      expect(Math.max(...pauses)).toBe(OPS_TEST_RATE_LIMIT_MAX_WAIT_MS);
+      // Bounded: the first send plus the retries, per topic.
+      const perTopic = OPS_TEST_RATE_LIMIT_ATTEMPTS;
+      expect(telegram.timeline.filter((e) => e.startsWith('send:'))).toHaveLength(
+        perTopic * OPS_LOG_TOPIC_CATEGORIES.length,
+      );
     });
 
     it('recreates a deleted topic during a test send', async () => {
