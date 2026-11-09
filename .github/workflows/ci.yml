@@ -707,8 +707,41 @@ jobs:
     if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      NEXA_CI_BUILDX: '1'
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # The image layer cache. A plain `docker build` on a fresh runner re-downloads
+      # every apt package and re-installs every dependency, every run. buildx with
+      # the GitHub Actions cache (scope `nexa-image-*`, shared by both deployment
+      # jobs and every run) restores them. Two steps warm the two stages that
+      # depend on neither the sources nor the build identity: `deps` (the pnpm
+      # install) and `system` (PostgreSQL client + 7-Zip). The smoke script's own
+      # `docker buildx build` (scripts/image-build.sh) then finds those layers in
+      # this job's builder and rebuilds only the compile. Nothing about what is
+      # built or checked changes: the smokes still build the full image with
+      # their own build arguments and run every assertion on it. Same pins as
+      # release.yml.
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Warm the image cache (dependencies)
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          target: deps
+          push: false
+          cache-from: type=gha,scope=nexa-image-deps
+          cache-to: type=gha,mode=max,scope=nexa-image-deps
+
+      - name: Warm the image cache (system packages)
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          target: system
+          push: false
+          cache-from: type=gha,scope=nexa-image-system
+          cache-to: type=gha,mode=max,scope=nexa-image-system
 
       # Build, start, migrate, serve, back up. Uses the production compose file
       # with the CI overlay, which changes only what CI cannot have.
@@ -739,8 +772,41 @@ jobs:
     if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    env:
+      NEXA_CI_BUILDX: '1'
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # The image layer cache. A plain `docker build` on a fresh runner re-downloads
+      # every apt package and re-installs every dependency, every run. buildx with
+      # the GitHub Actions cache (scope `nexa-image-*`, shared by both deployment
+      # jobs and every run) restores them. Two steps warm the two stages that
+      # depend on neither the sources nor the build identity: `deps` (the pnpm
+      # install) and `system` (PostgreSQL client + 7-Zip). The smoke script's own
+      # `docker buildx build` (scripts/image-build.sh) then finds those layers in
+      # this job's builder and rebuilds only the compile. Nothing about what is
+      # built or checked changes: the smokes still build the full image with
+      # their own build arguments and run every assertion on it. Same pins as
+      # release.yml.
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Warm the image cache (dependencies)
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          target: deps
+          push: false
+          cache-from: type=gha,scope=nexa-image-deps
+          cache-to: type=gha,mode=max,scope=nexa-image-deps
+
+      - name: Warm the image cache (system packages)
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          target: system
+          push: false
+          cache-from: type=gha,scope=nexa-image-system
+          cache-to: type=gha,mode=max,scope=nexa-image-system
 
       - name: Update and rollback smoke
         run: bash scripts/deployment-update-smoke.sh

@@ -365,6 +365,10 @@ describe('the CI workflow', () => {
       'heavy=false',
     );
     expect(decide('pull_request', 'CLAUDE.md\nPROGRESS.md\n')).toBe('heavy=false');
+    // PR #440: a round report in a docs/ subdirectory is docs. Its merge push to main still
+    // ran everything (below), by design.
+    expect(decide('pull_request', 'docs/round-reports/web-redesign.md\n')).toBe('heavy=false');
+    expect(decide('push', 'docs/round-reports/web-redesign.md\n')).toBe('heavy=true');
     // The release evidence always runs everything.
     expect(decide('push', 'docs/ci.md\n')).toBe('heavy=true');
     expect(decide('workflow_dispatch', 'docs/ci.md\n')).toBe('heavy=true');
@@ -592,5 +596,89 @@ describe('the CI workflow', () => {
         expect(step.uses, `${name}: ${step.uses} is not pinned to a SHA`).toMatch(/@[0-9a-f]{40}$/);
       }
     }
+  });
+
+  describe('the Dockerfile survives a flaky apt.postgresql.org (C2)', () => {
+    const dockerfile = readFileSync(join(__dirname, '../../Dockerfile'), 'utf8');
+    const layer = dockerfile.slice(dockerfile.indexOf('ARG PG_MAJOR=16'));
+    const run = layer.slice(0, layer.indexOf('7z i >/dev/null'));
+
+    it('retries every apt fetch, and wraps the key download and both updates in a retry loop', () => {
+      expect(run).toContain('Acquire::Retries');
+      expect(run).toMatch(/retry\(\) \{/u);
+      expect(run.match(/retry apt-get -o APT::Update::Error-Mode=any update;/gu)).toHaveLength(2);
+      expect(run).toMatch(/retry sh -c 'curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors/u);
+    });
+
+    it('keeps the pinned major and the purge', () => {
+      expect(run).toContain('"postgresql-client-${PG_MAJOR}" 7zip');
+      expect(run).toContain('apt-get purge -y --auto-remove curl gnupg');
+      expect(run).toContain('rm -f /etc/apt/apt.conf.d/80-nexa-retries');
+    });
+  });
+
+  describe('the image layer cache of the deployment jobs', () => {
+    const jobs = ['deploy', 'deploy-update'] as const;
+    const read = (path: string) => readFileSync(join(__dirname, '../..', path), 'utf8');
+
+    it('sets buildx up and warms the deps and system stages BEFORE the smoke builds the image', () => {
+      for (const name of jobs) {
+        const job = workflow.jobs[name]!;
+        const setup = job.steps.findIndex((s) => s.uses?.startsWith('docker/setup-buildx-action@'));
+        const smoke = job.steps.findIndex((s) =>
+          /scripts\/deployment(-update)?-smoke\.sh/u.test(s.run ?? ''),
+        );
+        expect(setup, `${name}: no buildx setup`).toBeGreaterThan(-1);
+        expect(smoke, `${name}: no smoke step`).toBeGreaterThan(setup);
+        const warm = job.steps.filter((s) => s.uses?.startsWith('docker/build-push-action@'));
+        expect(warm.map((s) => s.with?.['target'])).toEqual(['deps', 'system']);
+        for (const step of warm) {
+          expect(job.steps.indexOf(step)).toBeGreaterThan(setup);
+          expect(job.steps.indexOf(step)).toBeLessThan(smoke);
+          expect(step.with?.['push']).toBe(false);
+          expect(String(step.with?.['cache-from'])).toMatch(/^type=gha,scope=nexa-image-/u);
+          expect(String(step.with?.['cache-to'])).toMatch(/^type=gha,mode=max,scope=nexa-image-/u);
+        }
+        expect((job as unknown as { env?: Record<string, string> }).env?.['NEXA_CI_BUILDX']).toBe(
+          '1',
+        );
+      }
+    });
+
+    it('keeps the coverage: both smokes still build the FULL image, through buildx, with their own build arguments', () => {
+      for (const file of ['scripts/deployment-smoke.sh', 'scripts/deployment-update-smoke.sh']) {
+        const text = read(file);
+        expect(text, file).toContain('nexa_build_image ');
+        expect(text, file).toContain('--build-arg "BUILD_VERSION=');
+        expect(text, `${file} builds the release image with a bare docker build`).not.toMatch(
+          /^\s*docker build \\\n\s*--build-arg "BUILD_VERSION/mu,
+        );
+      }
+      const helper = read('scripts/image-build.sh');
+      expect(helper).toContain('docker buildx build --load');
+      expect(helper).toContain('docker build -t "$tag"'); // the local fallback
+      expect(helper).not.toMatch(/--target/u); // never a partial image
+    });
+
+    it('orders the Dockerfile so the apt layer and the install come before anything that carries the build identity', () => {
+      const dockerfile = read('Dockerfile');
+      const stage = (name: string) => dockerfile.search(new RegExp(`^FROM .* AS ${name}$`, 'mu'));
+      expect(stage('deps')).toBeGreaterThan(-1);
+      expect(stage('system')).toBeGreaterThan(-1);
+      const apt = dockerfile.indexOf(
+        'apt-get install -y --no-install-recommends "postgresql-client',
+      );
+      const firstArg = dockerfile.indexOf('ARG BUILD_VERSION', stage('system'));
+      expect(apt).toBeGreaterThan(stage('system'));
+      expect(
+        apt,
+        'the apt layer is after the build identity: it re-runs on every commit',
+      ).toBeLessThan(firstArg);
+      const install = dockerfile.indexOf('RUN pnpm install --frozen-lockfile');
+      expect(install).toBeGreaterThan(stage('deps'));
+      expect(install).toBeLessThan(dockerfile.indexOf('COPY . .'));
+      expect(dockerfile).toMatch(/^FROM system AS runtime$/mu);
+      expect(dockerfile).toMatch(/^FROM deps AS builder$/mu);
+    });
   });
 });

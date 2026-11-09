@@ -33,7 +33,7 @@ RUN corepack enable
 # Builder: install the whole workspace, build every package, then resolve the
 # api's PRODUCTION graph into a self-contained tree.
 # ---------------------------------------------------------------------------
-FROM base AS builder
+FROM base AS deps
 
 WORKDIR /src
 
@@ -47,6 +47,11 @@ COPY apps/miniapp/package.json apps/miniapp/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/i18n/package.json packages/i18n/
 RUN pnpm install --frozen-lockfile
+
+# Everything above depends on the manifests and the lockfile only; everything
+# below on the sources and the build identity. CI warms `deps` and `system`
+# into its layer cache (docs/ci.md), so a source change re-runs only what follows.
+FROM deps AS builder
 
 COPY . .
 
@@ -75,7 +80,70 @@ RUN pnpm --filter @nexa/api deploy --prod --legacy /deploy
 # ---------------------------------------------------------------------------
 # Runtime: artefacts and production dependencies. Nothing else.
 # ---------------------------------------------------------------------------
-FROM base AS runtime
+FROM base AS system
+
+# LAYER ORDER, on purpose: everything that does not depend on the build identity
+# (the PostgreSQL client and 7-Zip below) comes BEFORE `ARG`/`ENV BUILD_*` and
+# before anything copied from the builder. A changed build argument or source
+# file invalidates every layer after it, so with the apt layer after them every
+# build re-downloaded the same packages. Here it stays cached across commits
+# and releases (the CI image cache, docs/ci.md), and the network flake at
+# apt.postgresql.org is met once per cache miss instead of once per build.
+
+# THE POSTGRESQL CLIENT TOOLS, at the server's major version.
+#
+# `pg_dump`, `pg_restore` and `psql` are not optional extras here: the backup
+# pipeline shells out to them for every backup, and the recovery executor's
+# entire job — create a candidate, restore into it, inspect it, rename it into
+# place — is those three binaries. Without them the Web Admin offers four
+# controls that each end in a failed run, and the `recovery` container has
+# nothing it can do. This is Backup V1's dependency; it becomes operator-facing
+# here, which is why it is closed here.
+#
+# VERSION 16, from PGDG, not bookworm's own 15. `pg_dump` refuses a server newer
+# than itself, and `deploy/compose.yml` runs `postgres:16-alpine` — so the
+# distribution's client would fail on the very first dump with a version error.
+# `PG_MAJOR` is asserted against the compose image by a unit test, so the two
+# cannot drift apart silently.
+#
+# The keyring is fetched over HTTPS and dearmored to a file `apt` is told to
+# trust for this one repository, rather than added to the global trust store.
+# `gnupg` and `curl` go again in the same layer, so neither is in the image.
+#
+# RETRIES. apt.postgresql.org and www.postgresql.org sometimes fail a single request
+# (a 5xx or a reset) and took a whole image build, and a whole CI job, with them. apt
+# retries each fetch (`Acquire::Retries`), the key download retries inside curl, and
+# the two `apt-get update` calls and the key fetch are wrapped in a short retry loop.
+# Versions stay pinned by `PG_MAJOR`, and the purge stays.
+ARG PG_MAJOR=16
+RUN set -eux; \
+    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+      > /etc/apt/apt.conf.d/80-nexa-retries; \
+    retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -ge 5 ] && return 1; sleep $((n * 3)); done; }; \
+    retry apt-get -o APT::Update::Error-Mode=any update; \
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg; \
+    retry sh -c 'curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor --yes -o /usr/share/keyrings/pgdg.gpg'; \
+    echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list; \
+    retry apt-get -o APT::Update::Error-Mode=any update; \
+    apt-get install -y --no-install-recommends "postgresql-client-${PG_MAJOR}" 7zip; \
+    apt-get purge -y --auto-remove curl gnupg; \
+    rm -f /etc/apt/apt.conf.d/80-nexa-retries; \
+    rm -rf /var/lib/apt/lists/*; \
+    command -v 7z >/dev/null 2>&1 || ln -s "$(command -v 7zz)" /usr/local/bin/7z; \
+    pg_dump --version; \
+    pg_restore --version; \
+    psql --version; \
+    7z i >/dev/null
+
+# 7-ZIP (Round 4 PR-E, E4), in the same layer. Once the owner sets a backup password,
+# every backup is a 7z archive — LZMA2 inside, AES-256 with encrypted headers — that opens
+# in 7-Zip on Windows with that password alone; the pipeline seals it, verifies it by
+# restoring through it, and the recovery opens it. Debian bookworm's `7zip` package ships
+# the binary as `7zz`; it is linked to `7z`, the name `BACKUP_SEVEN_ZIP_BIN` defaults to,
+# and `7z i` proves it runs. Without it a password-protected backup fails at ENCRYPT.
+
+FROM system AS runtime
 
 ARG BUILD_VERSION=0.0.0-dev
 ARG BUILD_COMMIT=unknown
@@ -126,50 +194,6 @@ ENV MINIAPP_DIST_DIR=/app/miniapp
 # installing, from an artifact addressed by digest rather than from a git
 # checkout the production host is not required to have.
 COPY --from=builder --chown=node:node /src/deploy ./deploy
-
-# THE POSTGRESQL CLIENT TOOLS, at the server's major version.
-#
-# `pg_dump`, `pg_restore` and `psql` are not optional extras here: the backup
-# pipeline shells out to them for every backup, and the recovery executor's
-# entire job — create a candidate, restore into it, inspect it, rename it into
-# place — is those three binaries. Without them the Web Admin offers four
-# controls that each end in a failed run, and the `recovery` container has
-# nothing it can do. This is Backup V1's dependency; it becomes operator-facing
-# here, which is why it is closed here.
-#
-# VERSION 16, from PGDG, not bookworm's own 15. `pg_dump` refuses a server newer
-# than itself, and `deploy/compose.yml` runs `postgres:16-alpine` — so the
-# distribution's client would fail on the very first dump with a version error.
-# `PG_MAJOR` is asserted against the compose image by a unit test, so the two
-# cannot drift apart silently.
-#
-# The keyring is fetched over HTTPS and dearmored to a file `apt` is told to
-# trust for this one repository, rather than added to the global trust store.
-# `gnupg` and `curl` go again in the same layer, so neither is in the image.
-ARG PG_MAJOR=16
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates curl gnupg; \
-    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-      | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg; \
-    echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
-      > /etc/apt/sources.list.d/pgdg.list; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends "postgresql-client-${PG_MAJOR}" 7zip; \
-    apt-get purge -y --auto-remove curl gnupg; \
-    rm -rf /var/lib/apt/lists/*; \
-    command -v 7z >/dev/null 2>&1 || ln -s "$(command -v 7zz)" /usr/local/bin/7z; \
-    pg_dump --version; \
-    pg_restore --version; \
-    psql --version; \
-    7z i >/dev/null
-
-# 7-ZIP (Round 4 PR-E, E4), in the same layer. Once the owner sets a backup password,
-# every backup is a 7z archive — LZMA2 inside, AES-256 with encrypted headers — that opens
-# in 7-Zip on Windows with that password alone; the pipeline seals it, verifies it by
-# restoring through it, and the recovery opens it. Debian bookworm's `7zip` package ships
-# the binary as `7zz`; it is linked to `7z`, the name `BACKUP_SEVEN_ZIP_BIN` defaults to,
-# and `7z i` proves it runs. Without it a password-protected backup fails at ENCRYPT.
 
 # THE ARTIFACT DIRECTORIES, owned by the user that writes them.
 #
