@@ -756,7 +756,38 @@ describe('tenant archive (Phase 6B PR-1) — export, verify, restore, as nexa_ap
       m.host.capacityLimits = [{ resource: 'UPDATE_CONCURRENCY', mode: 'UNLIMITED', value: null }];
       await rewrite(dir, m, 'tenants', 'kind', 'RESELLER_BOT');
     });
+    // The target's own installation already wrote messages under the SAME shared aggregates and
+    // numbers HOSTED_2's archive carries (a setting key every tenant has): the archive's must be
+    // renumbered after the target's counter, never collide with it.
+    const shared = (
+      await owner.db.execute(sql`
+      SELECT aggregate_type, aggregate_id, sequence FROM outbox_messages
+       WHERE tenant_id = ${HOSTED_2} AND aggregate_type IN ('Setting', 'FeatureFlag', 'Template', 'System', 'Tenant')`)
+    ).rows as { aggregate_type: string; aggregate_id: string; sequence: number }[];
+    expect(shared.length).toBeGreaterThan(0);
+    for (const message of shared) {
+      await target.owner.db.execute(sql`
+        INSERT INTO outbox_messages (id, tenant_id, aggregate_type, aggregate_id, sequence, event_type,
+                                     payload, actor, correlation_id, occurred_at)
+        VALUES (${uuidv7Like()}, ${SEED_IDS.tenantA}, ${message.aggregate_type}, ${message.aggregate_id},
+                ${message.sequence}, 'SettingChanged', '{}'::jsonb, '{}'::jsonb, 'collide', now())
+        ON CONFLICT DO NOTHING`);
+      await target.owner.db.execute(sql`
+        INSERT INTO aggregate_sequences (aggregate_type, aggregate_id, last_sequence)
+        VALUES (${message.aggregate_type}, ${message.aggregate_id}, ${message.sequence})
+        ON CONFLICT (aggregate_type, aggregate_id)
+        DO UPDATE SET last_sequence = GREATEST(aggregate_sequences.last_sequence, excluded.last_sequence)`);
+    }
     await dryThenApply(forged);
+    const renumbered = (
+      await target.owner.db.execute(sql`
+      SELECT o.sequence, s.last_sequence::text AS last_sequence FROM outbox_messages o
+        JOIN aggregate_sequences s USING (aggregate_type, aggregate_id)
+       WHERE o.tenant_id = ${HOSTED_2} AND o.aggregate_type IN ('Setting', 'FeatureFlag', 'Template', 'System', 'Tenant')`)
+    ).rows as { sequence: number; last_sequence: string }[];
+    expect(renumbered.length).toBe(shared.length);
+    for (const row of renumbered)
+      expect(BigInt(row.sequence) <= BigInt(row.last_sequence)).toBe(true);
     const tenant = (
       await target.owner.db.execute(
         sql`SELECT kind, parent_tenant_id, status FROM tenants WHERE id = ${HOSTED_2}`,
