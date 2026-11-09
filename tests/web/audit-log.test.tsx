@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   AuditLogPage,
@@ -10,6 +11,7 @@ import { dayEnd, dayStart } from '../../apps/web/src/pages/tickets';
 import { TimelineCard } from '../../apps/web/src/pages/customer-360-sections';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
+import { SystemPage } from '../../apps/web/src/pages/system';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -211,12 +213,52 @@ describe('the audit log page', () => {
     expect(screen.queryByRole('link', { name: t('web.audit_export_csv') })).toBeNull();
   });
 
-  it('is a navigation entry for audit.view, and routes', () => {
-    const navEntry = NAV.find((candidate) => candidate.id === 'audit-log')!;
-    expect(navPermitted(navEntry, ['audit.view'])).toBe(true);
-    expect(navPermitted(navEntry, ['opslog.view'])).toBe(false);
-    const resolved = resolve({ path: '/audit-log', query: new URLSearchParams() }, ['audit.view']);
-    expect(resolved.title).toBe(t('web.audit_title'));
+  it('is no longer a navigation entry: «تاریخچهٔ تغییرات» is a tab of the System page', () => {
+    expect(NAV.find((candidate) => candidate.id === 'audit-log')).toBeUndefined();
+    const system = NAV.find((candidate) => candidate.id === 'system')!;
+    // The page is open to every admin; the tab keeps its own `audit.view` gate.
+    expect(navPermitted(system, [])).toBe(true);
+  });
+
+  it('redirects the old /audit-log path to the System audit tab, keeping its filters', async () => {
+    const resolved = resolve(
+      { path: '/audit-log', query: new URLSearchParams('actor=abc&result=DENIED') },
+      ['audit.view'],
+    );
+    renderPage(resolved.element as ReactElement);
+    await waitFor(() => expect(window.location.pathname).toBe('/system'));
+    const landed = new URLSearchParams(window.location.search);
+    expect(landed.get('section')).toBe('audit');
+    expect(landed.get('actor')).toBe('abc');
+    expect(landed.get('result')).toBe('DENIED');
+  });
+
+  it('is reached by an admin holding only audit.view, and asks nothing without it', async () => {
+    const auditRoute = { path: '/system', query: new URLSearchParams('section=audit') };
+    const api = stubApi([{ url: '/audit-log', body: { entries: [entry()], nextCursor: null } }]);
+    const { unmount } = renderPage(<SystemPage route={auditRoute} permissions={['audit.view']} />);
+    expect(await screen.findByRole('tab', { name: t('web.system_tab_audit') })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(await screen.findByRole('link', { name: t('web.audit_link_order') })).toBeTruthy();
+    expect(api.calls.some((call) => call.url.includes('/audit-log'))).toBe(true);
+    unmount();
+
+    const denied = stubApi([{ url: '/audit-log', body: { entries: [entry()], nextCursor: null } }]);
+    renderPage(<SystemPage route={auditRoute} permissions={['opslog.view']} />);
+    await screen.findByRole('tab', { name: t('web.system_tab_audit') });
+    await waitFor(() =>
+      expect(denied.calls.some((call) => call.url.includes('/audit-log'))).toBe(false),
+    );
+    expect(screen.queryByRole('link', { name: t('web.audit_link_order') })).toBeNull();
+  });
+
+  it('draws the export only with audit.export, inside the tab', async () => {
+    const auditRoute = { path: '/system', query: new URLSearchParams('section=audit') };
+    stubApi([{ url: '/audit-log', body: { entries: [], nextCursor: null } }]);
+    renderPage(<SystemPage route={auditRoute} permissions={['audit.view', 'audit.export']} />);
+    expect(await screen.findByRole('link', { name: t('web.audit_export_csv') })).toBeTruthy();
   });
 
   it('is opened from Customer 360 already scoped to that customer', async () => {

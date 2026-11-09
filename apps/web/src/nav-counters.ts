@@ -59,7 +59,7 @@ export function navCountersFrom(response: NavCountersResponse): NavCounters {
   };
   const one = (id: string, count: number | null, tone?: 'warn' | 'danger') =>
     put(id, count, tone, capped(count));
-  one('alerts', c.openConditions, 'warn');
+  one('inbox', c.openConditions, 'warn');
   // A ticket waiting for support is something to act on: the demo's yellow badge, not a grey one.
   one('tickets', c.ticketsAwaitingSupport, 'warn');
   one('panels', c.unhealthyPanels, 'danger');

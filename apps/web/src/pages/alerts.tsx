@@ -7,6 +7,7 @@ import {
   SECRET_READ_FAILED_CODE,
   type NotificationDetailResponse,
   type NotificationListResponse,
+  type OperationalEventListResponse,
   type OperationalSeverity,
 } from '@nexa/contracts';
 import { unreadableSecretAlertFa } from '@nexa/i18n';
@@ -30,10 +31,7 @@ import {
   DataTable,
   Empty,
   ErrorState,
-  FilterChip,
-  FilterChips,
   Num,
-  PageHead,
   StateSwitch,
   type Column,
   Quantity,
@@ -82,6 +80,38 @@ export const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
   CRITICAL: 'web.setting_severity_critical',
 };
 
+/** The operational event a management alert row draws (the `/ops-log` list's row). */
+export type AlertEvent = OperationalEventListResponse['events'][number];
+
+/**
+ * A one-shot record is HISTORY, not outstanding work — see `AlertsPage`. THREE kinds, not
+ * two: a recovery row closes the failure above it and nothing ever closes a recovery, so
+ * treating every non-one-shot null as an open failure put a warning "unresolved" badge on the
+ * row whose message announces the problem ended. Shared by the alerts table and by the
+ * unified list's alert cards, so a row reads the same wherever it is drawn.
+ */
+export function AlertStatusBadge({ row }: { row: AlertEvent }) {
+  return (
+    // THREE kinds, not two. A recovery row is inserted with its own
+    // `resolvedAt` null — it closes the failure above it and nothing ever
+    // closes a recovery — so treating every non-one-shot null as an open
+    // failure put a warning "unresolved" badge on the row whose message
+    // announces the problem ended. That is the same defect as the one-shot
+    // case, one classification along, and it is why the contract now names
+    // the recoveries as their own list rather than leaving them inside the
+    // lifecycle.
+    isOneShotManagementCode(row.code) || isConditionRecoveryCode(row.code) ? (
+      <Badge tone={isConditionRecoveryCode(row.code) ? 'ok' : 'neutral'} dot>
+        {isConditionRecoveryCode(row.code) ? t('web.event_recovered') : t('web.event_recorded')}
+      </Badge>
+    ) : (
+      <Badge tone={row.resolvedAt ? 'ok' : 'warn'} dot>
+        {row.resolvedAt ? t('web.resolved') : t('web.unresolved')}
+      </Badge>
+    )
+  );
+}
+
 /**
  * Management alerts.
  *
@@ -125,19 +155,19 @@ const ALERTS_PAGE_SIZE = LIST_PAGE_SIZE;
  */
 const ALERTS_REFRESH_MS = 30_000;
 
-export function AlertsPage({ denied }: { denied: boolean }) {
-  const [severity, setSeverity] = useState<string>('');
+export function AlertsPage({
+  denied,
+  openOnly = false,
+}: {
+  denied: boolean;
   /**
-   * Off by default.
-   *
-   * The management scope is already narrow, and most of what it carries — a
-   * denial, a lockout, an administrator added — is a one-shot RECORD that
-   * opens and is never resolved. Defaulting to "open only" showed those
-   * forever and framed them as outstanding work; the conditions that really
-   * are outstanding have their own card on the dashboard, which asks for
-   * `MANAGEMENT_CONDITIONS`. Here the default is history, newest first.
+   * The «هشدارهای باز» chip of the unified page (`/notification-center`) rather than the
+   * «هشدارهای ثبت‌شده» one. It was this page's own status filter; the unified page owns the
+   * chips now, and the scope still FOLLOWS the choice (see `scope` below).
    */
-  const [openOnly, setOpenOnly] = useState(false);
+  openOnly?: boolean;
+}) {
+  const [severity, setSeverity] = useState<string>('');
   /**
    * The cursor stack.
    *
@@ -147,7 +177,16 @@ export function AlertsPage({ denied }: { denied: boolean }) {
    * reverse query.
    */
   const [trail, setTrail] = useState<readonly { at: string; id: string }[]>([]);
-  const cursor = trail.length > 0 ? trail[trail.length - 1] : undefined;
+  /*
+   * A change of the chip starts again from the newest page, as a filter change does: the
+   * trail belongs to the chip it was walked under.
+   */
+  const [walked, setWalked] = useState(openOnly);
+  if (walked !== openOnly) {
+    setWalked(openOnly);
+    setTrail([]);
+  }
+  const cursor = walked === openOnly && trail.length > 0 ? trail[trail.length - 1] : undefined;
 
   const events = useQuery(
     keepPageWhileTurning(
@@ -263,53 +302,27 @@ export function AlertsPage({ denied }: { denied: boolean }) {
        * resolved/unresolved badge for those framed immutable facts as a
        * backlog, which is the reading this page exists to prevent.
        */
-      render: (row) =>
-        // THREE kinds, not two. A recovery row is inserted with its own
-        // `resolvedAt` null — it closes the failure above it and nothing ever
-        // closes a recovery — so treating every non-one-shot null as an open
-        // failure put a warning "unresolved" badge on the row whose message
-        // announces the problem ended. That is the same defect as the one-shot
-        // case, one classification along, and it is why the contract now names
-        // the recoveries as their own list rather than leaving them inside the
-        // lifecycle.
-        isOneShotManagementCode(row.code) || isConditionRecoveryCode(row.code) ? (
-          <Badge tone={isConditionRecoveryCode(row.code) ? 'ok' : 'neutral'} dot>
-            {isConditionRecoveryCode(row.code) ? t('web.event_recovered') : t('web.event_recorded')}
-          </Badge>
-        ) : (
-          <Badge tone={row.resolvedAt ? 'ok' : 'warn'} dot>
-            {row.resolvedAt ? t('web.resolved') : t('web.unresolved')}
-          </Badge>
-        ),
+      render: (row) => <AlertStatusBadge row={row} />,
     },
   ];
 
   return (
     <>
-      <PageHead
-        title={t('web.alerts_title')}
-        subtitle={t('web.alerts_intro')}
-        actions={
-          /*
-           * Gone once the answer is final, for the same reason the error card's
-           * retry is.
-           *
-           * `PageHead` renders ABOVE `StateSwitch`, so the state never reached
-           * this button: after a revoked permission the card below correctly
-           * offered nothing while the most obvious control on the page went on
-           * firing the refused request — one `access.permission_denied` event
-           * and one DENIED audit row per press, two in production because
-           * `main.tsx` retries once. Exactly the shape the round before this
-           * one fixed on the panel detail, left standing here.
-           */
-          !mayRequest(events, denied) ? undefined : (
-            <button type="button" className="btn sm" onClick={retryOf(events)}>
-              <Icon name="refresh" />
-              {t('web.refresh')}
-            </button>
-          )
-        }
-      />
+      {/*
+        Gone once the answer is final, for the same reason the error card's retry is: this
+        row renders ABOVE `StateSwitch`, so the state never reached it, and after a revoked
+        permission the card below correctly offered nothing while the most obvious control on
+        the page went on firing the refused request — one `access.permission_denied` event
+        and one DENIED audit row per press, two in production because `main.tsx` retries once.
+      */}
+      {mayRequest(events, denied) && (
+        <div className="alerts-head">
+          <button type="button" className="btn sm" onClick={retryOf(events)}>
+            <Icon name="refresh" />
+            {t('web.refresh')}
+          </button>
+        </div>
+      )}
 
       <Banner tone="info">{t('web.alerts_scope_body')}</Banner>
 
@@ -325,27 +338,6 @@ export function AlertsPage({ denied }: { denied: boolean }) {
           <ListFilterBar
             label={t('web.alerts_title')}
             filters={[
-              {
-                key: 'status',
-                label: t('web.status'),
-                // Demo parity: the status always has a value, so its chip always reads —
-                // «وضعیت: همه» by default; its × returns it to «همه».
-                active: openOnly ? t('web.unresolved') : t('web.all'),
-                onClear: () => filter(() => setOpenOnly(false)),
-                control: (
-                  <FilterChips label={t('web.status')}>
-                    <FilterChip pressed={openOnly} onClick={() => filter(() => setOpenOnly(true))}>
-                      {t('web.unresolved')}
-                    </FilterChip>
-                    <FilterChip
-                      pressed={!openOnly}
-                      onClick={() => filter(() => setOpenOnly(false))}
-                    >
-                      {t('web.all')}
-                    </FilterChip>
-                  </FilterChips>
-                ),
-              },
               {
                 key: 'severity',
                 label: t('web.severity'),
@@ -671,46 +663,45 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
 
   return (
     <>
-      <PageHead
-        title={t('web.notifications_title')}
-        subtitle={t('web.notifications_intro')}
-        actions={
-          mayTest ? (
-            <>
-              <button
-                type="button"
-                className="btn sm"
-                onClick={() =>
-                  test.mutate({
-                    idempotencyKey: submission.current({
-                      command: 'notifications.test',
-                      target: 'PAYMENTS',
-                    }),
+      {/* The delivery-log tab of the ops group: its title is the tab, so this is one muted
+          line and the test sends, not a page head. */}
+      <div className="notifications-head">
+        <p className="muted small">{t('web.notifications_intro')}</p>
+        {mayTest ? (
+          <div className="notifications-head-actions">
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() =>
+                test.mutate({
+                  idempotencyKey: submission.current({
+                    command: 'notifications.test',
                     target: 'PAYMENTS',
-                  })
-                }
-                disabled={test.isPending}
-              >
-                {t('web.send_test_payments')}
-              </button>
-              <button
-                type="button"
-                className="btn primary sm"
-                onClick={() =>
-                  test.mutate({
-                    idempotencyKey: submission.current({ command: 'notifications.test' }),
-                    target: 'OPERATIONS',
-                  })
-                }
-                disabled={test.isPending}
-              >
-                <Icon name="send" />
-                {test.isPending ? t('web.saving') : t('web.send_test')}
-              </button>
-            </>
-          ) : undefined
-        }
-      />
+                  }),
+                  target: 'PAYMENTS',
+                })
+              }
+              disabled={test.isPending}
+            >
+              {t('web.send_test_payments')}
+            </button>
+            <button
+              type="button"
+              className="btn primary sm"
+              onClick={() =>
+                test.mutate({
+                  idempotencyKey: submission.current({ command: 'notifications.test' }),
+                  target: 'OPERATIONS',
+                })
+              }
+              disabled={test.isPending}
+            >
+              <Icon name="send" />
+              {test.isPending ? t('web.saving') : t('web.send_test')}
+            </button>
+          </div>
+        ) : undefined}
+      </div>
 
       {/* A replay says it replayed. Answering "queued" for a call that queued
           nothing is the legacy pattern this screen exists to end. */}

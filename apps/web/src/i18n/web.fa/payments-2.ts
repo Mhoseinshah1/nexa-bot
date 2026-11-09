@@ -490,7 +490,7 @@ export const WEB_FA_PAYMENTS_2 = {
   'web.payment_gateway_enable_refused_webhook_secret_missing':
     'این درگاه روشن نشد: کلید وب‌هوک (IPN) آن ثبت نشده است. ابتدا کلید وب‌هوک را ثبت کنید، سپس دوباره روشن کنید.',
   'web.payment_gateway_enable_refused_verify_key_missing':
-    'این درگاه روشن نشد: کلید تأیید (verify) آن ثبت نشده است. ابتدا کلید تأیید را ثبت کنید، سپس دوباره روشن کنید.',
+    'این درگاه روشن نشد: کلید تأیید آن ثبت نشده است. ابتدا کلید تأیید را ثبت کنید، سپس دوباره روشن کنید.',
   'web.payment_gateway_enable_refused_rate_missing':
     'این درگاه روشن نشد: نرخ تبدیل آن ثبت نشده است. ابتدا نرخ را در فرم درگاه ثبت کنید، سپس دوباره روشن کنید.',
   'web.payment_gateway_enable_refused_fx_unavailable':

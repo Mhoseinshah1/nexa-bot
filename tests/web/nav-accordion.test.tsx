@@ -28,9 +28,7 @@ const BEFORE: readonly [
   PermissionKey | readonly PermissionKey[] | null,
   boolean,
 ][] = [
-  ['alerts', '/alerts', 'web.nav_alerts', 'alertOctagon', 'opslog.view', false],
   ['appearance', '/appearance', 'web.nav_appearance', 'palette', 'settings.view', false],
-  ['audit-log', '/audit-log', 'web.nav_audit_log', 'clock', 'audit.view', false],
   ['bot-buttons', '/bot-buttons', 'web.nav_bot_buttons', 'keyboard', 'settings.view', false],
   ['bots', '/bots', 'web.nav_bots', 'bots', 'settings.view', false],
   ['broadcasts', '/broadcasts', 'web.nav_broadcasts', 'send', 'broadcasts.view', false],
@@ -89,14 +87,13 @@ const BEFORE: readonly [
     false,
   ],
   [
-    'notifications',
-    '/notifications',
-    'web.nav_notifications',
-    'bell',
-    ['opslog.view', 'settings.edit'],
+    'ops-group',
+    '/ops-group',
+    'web.nav_ops_group',
+    'radio',
+    ['settings.view', 'opslog.view', 'settings.edit'],
     false,
   ],
-  ['ops-group', '/ops-group', 'web.nav_ops_group', 'radio', 'settings.view', false],
   ['orders', '/orders', 'web.nav_orders', 'orders', 'orders.view', false],
   ['panel-health', '/panel-health', 'web.nav_panel_health', 'activity', 'panels.view', false],
   ['panels', '/panels', 'web.nav_panels', 'panels', ['panels.view', 'panels.edit'], false],
@@ -256,10 +253,7 @@ const GROUPS: readonly [string, readonly string[]][] = [
       'features',
       'ops-group',
       'inbox',
-      'notifications',
-      'alerts',
       'incidents',
-      'audit-log',
       'bulk-operations',
       'system',
       'recovery',
@@ -318,11 +312,11 @@ const drawnHrefs = () =>
 const head = (group: string) => navGroupHeader(group) as HTMLButtonElement;
 
 describe('the navigation’s information architecture', () => {
-  it('keeps all 53 entries exactly once, each with its path, label, icon and permission', () => {
-    // 50 after the redesign, R10 D4's «کارت‌های هدیه», and phase 6A's «میزبانی‌ها».
-    expect(NAV).toHaveLength(53);
-    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(53);
-    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(53);
+  it('keeps all 50 entries exactly once, each with its path, label, icon and permission', () => {
+    // 50 after the redesign, R10 D4's «کارت‌های هدیه», and phase 6A's «میزبانی‌ها». Minus «هشدارها», «اعلان‌ها» (now the notification centre and the ops group's delivery tab) and «گزارش ممیزی» (the System page's audit tab).
+    expect(NAV).toHaveLength(50);
+    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(50);
+    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(50);
     const now = [...NAV]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((entry) => [
@@ -523,7 +517,7 @@ describe('the single-open accordion', () => {
   it('keeps every icon in the collapsed rail, where a header has no room for its label', () => {
     sidebar('/', ALL, OWNER, { collapsed: true });
     expect(document.querySelectorAll('.nav-group-head')).toHaveLength(0);
-    expect(drawnHrefs()).toHaveLength(53);
+    expect(drawnHrefs()).toHaveLength(50);
   });
 });
 

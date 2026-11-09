@@ -25,6 +25,7 @@ import {
   Badge,
   Banner,
   Card,
+  Disclosure,
   Ltr,
   PageHead,
   StateSwitch,
@@ -176,7 +177,10 @@ export function BotButtonsPage({
 
   return (
     <DirtyScope report={report}>
-      <PageHead title={t('web.bot_buttons_title')} subtitle={t('web.bot_buttons_intro')} />
+      <PageHead title={t('web.bot_buttons_title')} />
+      <Disclosure size="sm" summary={t('web.bot_buttons_about_fold')}>
+        <p className="muted small">{t('web.bot_buttons_intro')}</p>
+      </Disclosure>
       <DotTabs
         value={tab}
         onChange={setTab}

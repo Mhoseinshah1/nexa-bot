@@ -1603,7 +1603,7 @@ function ResultStep({ row }: { row: LegacyMigrationImportView }) {
         </>
       )}
       <p className="small">
-        <a className="link" href="/audit-log" onClick={onLink}>
+        <a className="link" href="/system?section=audit" onClick={onLink}>
           {t('web.lmg_audit_link')}
         </a>
       </p>

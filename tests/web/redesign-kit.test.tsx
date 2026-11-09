@@ -117,6 +117,51 @@ describe('QuickActionBar', () => {
     expect(screen.queryByRole('group', { name: 'حساب' })).toBeNull();
   });
 
+  it('skips a group whose only action is a fragment of absent actions', () => {
+    const none = false as boolean;
+    render(
+      <QuickActionBar
+        groups={[
+          { key: 'w', label: 'کیف پول', actions: [<QuickAction key="a" label="افزایش" />] },
+          {
+            key: 'x',
+            label: 'مدیریت',
+            actions: [
+              none && <QuickAction key="e" label="ویرایش" />,
+              <>
+                {none && <QuickAction label="توقف" />}
+                {none && <QuickAction label="ازسرگیری" />}
+              </>,
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByRole('group', { name: 'کیف پول' })).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'مدیریت' })).toBeNull();
+  });
+
+  it('keeps the actions inside a fragment that has some', () => {
+    render(
+      <QuickActionBar
+        groups={[
+          {
+            key: 'x',
+            label: 'مدیریت',
+            actions: [
+              <>
+                {(false as boolean) && <QuickAction label="توقف" />}
+                <QuickAction label="ازسرگیری" />
+              </>,
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByRole('group', { name: 'مدیریت' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'ازسرگیری' })).toBeTruthy();
+  });
+
   it('draws nothing when no group has an action', () => {
     render(<QuickActionBar groups={[{ key: 'x', label: 'حساب', actions: [null] }]} />);
     expect(screen.queryByRole('toolbar')).toBeNull();

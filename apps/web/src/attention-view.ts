@@ -171,7 +171,7 @@ export function dashboardAttentionItems(sources: AttentionSources): AttentionIte
     'web.dash_attn_conditions',
     c?.openConditions,
     'warn',
-    '/alerts',
+    '/notification-center?filter=open',
     COUNTER_CAP,
   );
   return items;

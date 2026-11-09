@@ -121,7 +121,7 @@ describe('the attention queue', () => {
       '/business-chats?state=HANDOFF_REQUIRED',
       // Review N1: the list filtered by the predicate the count uses.
       '/tickets?awaiting=support',
-      '/alerts',
+      '/notification-center?filter=open',
     ]);
     // Stalled = LEASE_EXPIRED + UNANNOUNCED (disjoint reasons): 3.
     const stuck = within(list).getByText(t('web.dash_attn_stuck_operations')).closest('a');

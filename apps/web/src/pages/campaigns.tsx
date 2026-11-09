@@ -1592,7 +1592,7 @@ export function CampaignNewPage({
   }
   return (
     <>
-      <PageHead title={t('web.campaign_new')} subtitle={t('web.campaigns_intro')} />
+      <PageHead title={t('web.campaign_new')} />
       <StateSwitch query={presentation}>
         {presentation.data !== undefined && (
           <CampaignForm

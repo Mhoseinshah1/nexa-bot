@@ -39,6 +39,7 @@ import {
   Banner,
   Card,
   DataTable,
+  Disclosure,
   Drawer,
   Duration,
   Field,
@@ -64,6 +65,8 @@ import { pollUnlessFinal } from '../polling';
 import { errorCopy, queryState, retryOf } from '../view-state';
 import { useSubmissionKey } from '../submission-key';
 import { DiagnosticsSection } from './system-diagnostics';
+import { AuditLogPage } from './audit-log';
+import { ListFreshness } from '../ui/list-search';
 import { errorText } from '../error-text';
 import { roleLabel } from '../rbac-labels';
 import { readinessDetailText } from '../readiness-labels';
@@ -84,7 +87,7 @@ import { ProviderText } from '../ui/technical-details';
  * and what the background monitor is configured to do.
  */
 
-const SECTIONS = ['status', 'diagnostics', 'monitor', 'admins', 'roles'] as const;
+const SECTIONS = ['status', 'diagnostics', 'monitor', 'admins', 'roles', 'audit'] as const;
 type Section = (typeof SECTIONS)[number];
 
 function isSection(value: string | null): value is Section {
@@ -112,22 +115,24 @@ export function SystemPage({
     <>
       <PageHead
         title={t('web.system_title')}
-        subtitle={
-          <>
-            {t('web.system_intro')}
-            {info.data !== undefined && (
-              <span className="system-build">
-                <span>
-                  {t('web.version')} <Ltr>{info.data.version}</Ltr>
+        {...(info.data !== undefined
+          ? {
+              actions: (
+                <span className="system-build">
+                  <Badge>
+                    {t('web.version')} <Ltr>{info.data.version}</Ltr>
+                  </Badge>
+                  <Badge>
+                    {t('web.environment')} <Ltr>{info.data.environment}</Ltr>
+                  </Badge>
                 </span>
-                <span>
-                  {t('web.environment')} <Ltr>{info.data.environment}</Ltr>
-                </span>
-              </span>
-            )}
-          </>
-        }
+              ),
+            }
+          : {})}
       />
+      <Disclosure size="sm" summary={t('web.system_about_fold')}>
+        <p className="muted small">{t('web.system_intro')}</p>
+      </Disclosure>
 
       <Tabs
         panelId="system-panel"
@@ -142,6 +147,8 @@ export function SystemPage({
           { id: 'admins', label: t('web.system_tab_admins') },
           // Phase D3: roles, the permission matrix and the effective-permission preview.
           { id: 'roles', label: t('web.system_tab_roles') },
+          // «گزارش ممیزی» moved here (`/audit-log` redirects): read with `audit.view`, exactly as it was.
+          { id: 'audit', label: t('web.system_tab_audit') },
         ]}
       />
 
@@ -161,6 +168,13 @@ export function SystemPage({
           <RolesSection
             denied={!permissions.includes('admins.view')}
             mayEdit={permissions.includes('admins.permissions.edit')}
+          />
+        )}
+        {section === 'audit' && (
+          <AuditLogPage
+            route={route}
+            denied={!permissions.includes('audit.view')}
+            mayExport={permissions.includes('audit.export')}
           />
         )}
       </TabPanel>
@@ -207,6 +221,9 @@ function StatusSection() {
 
   return (
     <>
+      <div className="toolbar">
+        <ListFreshness query={readiness} />
+      </div>
       {readiness.data !== undefined && (
         <div className="stat-grid system-stats">
           <StatCard

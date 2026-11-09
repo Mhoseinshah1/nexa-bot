@@ -257,12 +257,7 @@
   flex-wrap: wrap;
   gap: 4px;
 }
-.panels-filter {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  align-items: center;
-}
+
 /* Marzban's protocol checkboxes, spaced as a row that wraps. */
 .panel-protocols {
   display: flex;
@@ -272,9 +267,6 @@
 
 /* --- Bots ---------------------------------------------------------------------- */
 
-.bot-block + .bot-block {
-  margin-top: 24px;
-}
 .bot-head-badges,
 .bot-head-meta {
   display: inline-flex;
@@ -489,8 +481,7 @@
   padding-top: 10px;
   border-top: 1px solid var(--line);
 }
-.bb-switch-row,
-.bb-to-row {
+.bb-switch-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -629,7 +620,6 @@
 
 /* --- Payment routes and FX --------------------------------------------------------- */
 
-.gateways-name,
 .accounts-label {
   display: inline-flex;
   align-items: center;
@@ -724,9 +714,7 @@
 .ib-filter .input {
   width: 100%;
 }
-.ib-group + .ib-group {
-  margin-top: 16px;
-}
+
 .ib-list {
   list-style: none;
   margin: 0;

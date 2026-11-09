@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PLATFORM_ERROR_CODES,
   type RecoveryRequestSummary,
@@ -24,6 +24,9 @@ import { useSubmissionKey } from '../submission-key';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Banner, SecretInput } from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
+import { ImportForm } from './recovery-kit';
+
+function noop(): void {}
 
 const UNREADABLE_CODE = 'recovery.candidate_secrets_unreadable';
 
@@ -59,15 +62,22 @@ export function UnreadableSecretsPanel({
   recovery,
   mayRestore,
   sevenZip,
+  mayImportKit = false,
   onUpdated,
 }: {
   recovery: RecoveryRequestSummary;
   mayRestore: boolean;
+  /**
+   * `recovery.kit.import`: decides only whether the kit form is DRAWN here (the same
+   * `ImportForm` and mutation as the Recovery Kit card; the server checks the key again).
+   */
+  mayImportKit?: boolean;
   /** Whether the upload was a 7-Zip archive, whose test needs its password again. */
   sevenZip: boolean;
   onUpdated: (next: RecoveryRequestSummary) => void;
 }) {
   const list = unreadableSecretsOf(recovery);
+  const client = useQueryClient();
   const [password, setPassword] = useState('');
   const [asking, setAsking] = useState(false);
   const retestKey = useSubmissionKey();
@@ -128,9 +138,26 @@ export function UnreadableSecretsPanel({
             <section className="stack" aria-label={t('web.secret_unreadable_kit_choice')}>
               <h4>{t('web.secret_unreadable_kit_choice')}</h4>
               <p className="muted small">{t('web.secret_unreadable_kit_hint')}</p>
+              {/* The kit import sits in the choice it belongs to (it used to be a separate card above). */}
+              {mayImportKit ? (
+                <div className="stack inset" data-testid="unreadable-kit-import">
+                  <h5>{t('web.kit_import_title')}</h5>
+                  <p className="muted small">{t('web.kit_import_hint')}</p>
+                  <ImportForm
+                    onImported={() =>
+                      void client.invalidateQueries({ queryKey: ['installation-keys'] })
+                    }
+                    onDirty={noop}
+                  />
+                </div>
+              ) : (
+                <Banner tone="neutral">{t('web.kit_no_permission_import')}</Banner>
+              )}
               {sevenZip && (
                 <label className="field">
-                  <span className="field-label">{t('web.secret_unreadable_password_label')}</span>
+                  <span className="field-label">
+                    {t('web.secret_unreadable_archive_password_label')}
+                  </span>
                   <SecretInput
                     value={password}
                     onChange={(event) => setPassword(event.currentTarget.value)}

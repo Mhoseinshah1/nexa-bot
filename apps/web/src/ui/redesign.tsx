@@ -1,7 +1,7 @@
-import { useId, useState, type ReactNode } from 'react';
+import { Children, Fragment, isValidElement, useId, useState, type ReactNode } from 'react';
 import { t } from '../i18n/web.fa';
 import { formatNumber } from '../format';
-import { Button, Banner, FilterChip, FilterChips, Switch, type Tone } from './kit';
+import { Button, Banner, FilterChip, FilterChips, type Tone } from './kit';
 import { Icon } from './icons';
 
 /**
@@ -144,6 +144,23 @@ export interface QuickActionGroup {
 }
 
 /**
+ * What a group's actions really draw: arrays and fragments are opened, and `null`, `false`,
+ * `undefined` and `''` dropped. A fragment whose children are all absent (a page that hands
+ * over `<>{a && <X/>}{b && <Y/>}</>`) therefore counts as nothing, not as one action.
+ */
+function drawnActions(nodes: readonly ReactNode[]): ReactNode[] {
+  const out: ReactNode[] = [];
+  for (const node of Children.toArray(nodes as ReactNode)) {
+    if (isValidElement<{ children?: ReactNode }>(node) && node.type === Fragment) {
+      out.push(...drawnActions([node.props.children]));
+    } else if (node !== null && node !== undefined && typeof node !== 'boolean' && node !== '') {
+      out.push(node);
+    }
+  }
+  return out;
+}
+
+/**
  * The grouped quick-action bar of a detail page: groups with a small label, dangerous actions
  * red. A group with nothing to draw (every action absent for want of a permission) is not
  * drawn, and a bar with no group is not drawn.
@@ -158,9 +175,7 @@ export function QuickActionBar({
   const drawn = groups
     .map((group) => ({
       ...group,
-      actions: group.actions.filter(
-        (a) => a !== null && a !== undefined && a !== false && a !== '',
-      ),
+      actions: drawnActions(group.actions),
     }))
     .filter((group) => group.actions.length > 0);
   if (drawn.length === 0) return null;
@@ -363,42 +378,6 @@ export function SettingRow({
       </div>
       <div className="ctl">{control}</div>
     </div>
-  );
-}
-
-/** A setting whose control is a switch. */
-export function SwitchSettingRow({
-  title,
-  description,
-  checked,
-  onChange,
-  disabled,
-  danger,
-  changed,
-}: {
-  title: string;
-  description?: ReactNode;
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  disabled?: boolean;
-  danger?: boolean;
-  changed?: boolean;
-}) {
-  return (
-    <SettingRow
-      title={title}
-      {...(description === undefined ? {} : { description })}
-      {...(changed === undefined ? {} : { changed })}
-      control={
-        <Switch
-          checked={checked}
-          onChange={onChange}
-          label={title}
-          {...(disabled === undefined ? {} : { disabled })}
-          {...(danger === undefined ? {} : { danger })}
-        />
-      }
-    />
   );
 }
 

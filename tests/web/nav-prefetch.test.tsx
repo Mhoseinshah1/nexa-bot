@@ -93,7 +93,6 @@ describe('navigating between pages', () => {
 
     for (const [label, path] of [
       ['web.nav_users', '/users'],
-      ['web.nav_audit_log', '/audit-log'],
       ['web.nav_settings', '/settings'],
       ['web.nav_users', '/users'],
     ] as const) {
@@ -155,7 +154,8 @@ describe('the sidebar prefetch', () => {
       </QueryClientProvider>,
     );
     await screen.findByText('مدیر اصلی');
-    fireEvent.pointerEnter(link('web.nav_audit_log'));
+    // «تاریخچهٔ تغییرات» is the System page's audit tab; there is no sidebar link to prefetch it.
+    act(() => navigate('/system?section=audit'));
     await waitFor(() => expect(getsOf(api.calls, '/audit-log')).toBe(1));
 
     // Any mutation through the client's mutation cache, as every page's `useMutation` is.
@@ -166,40 +166,7 @@ describe('the sidebar prefetch', () => {
         .execute(undefined);
     });
 
-    fireEvent.click(link('web.nav_audit_log'));
     await waitFor(() => expect(getsOf(api.calls, '/audit-log')).toBe(2));
-  });
-
-  it('joins a prefetch still in flight instead of sending a second request', async () => {
-    const api = stubApi(ROUTES);
-    // Hold the audit log's answer until the page has mounted on top of the prefetch.
-    const answered = vi.fn();
-    let release: () => void = () => undefined;
-    const gate = new Promise<void>((done) => {
-      release = done;
-    });
-    const harness = globalThis.fetch;
-    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
-      String(input).includes('/audit-log')
-        ? gate.then(() => {
-            answered();
-            return harness(input as RequestInfo, init);
-          })
-        : harness(input as RequestInfo, init),
-    );
-    renderShell();
-    await screen.findByText('مدیر اصلی');
-
-    fireEvent.pointerEnter(link('web.nav_audit_log'));
-    fireEvent.click(link('web.nav_audit_log'));
-    await waitFor(() => expect(window.location.pathname).toBe('/audit-log'));
-    release();
-    await waitFor(() => expect(answered).toHaveBeenCalled());
-    await act(async () => {
-      await new Promise((done) => setTimeout(done, 50));
-    });
-    expect(answered).toHaveBeenCalledTimes(1);
-    expect(getsOf(api.calls, '/audit-log')).toBe(1);
   });
 
   it('asks the page again once its first screen is older than the freshness window', async () => {
@@ -232,8 +199,8 @@ describe('the sidebar prefetch', () => {
   it('never asks for a page whose own permission the actor does not hold', async () => {
     const api = stubApi(ROUTES);
     const client = new QueryClient();
-    // `audit.view` is the page's gate; holding the others is not enough.
-    prefetchNav(client, NAV_PREFETCH, '/audit-log', ['users.view', 'settings.view']);
+    // `settings.view` is the page's gate; holding the others is not enough.
+    prefetchNav(client, NAV_PREFETCH, '/settings', ['users.view', 'audit.view']);
     // A path with no entry asks for nothing, whatever the actor holds.
     prefetchNav(client, NAV_PREFETCH, '/payments', ['payments.view']);
     prefetchNav(client, NAV_PREFETCH, 'constructor', ['users.view']);
@@ -242,8 +209,8 @@ describe('the sidebar prefetch', () => {
     });
     expect(api.calls).toHaveLength(0);
 
-    prefetchNav(client, NAV_PREFETCH, '/audit-log', ['audit.view']);
-    await waitFor(() => expect(getsOf(api.calls, '/audit-log')).toBe(1));
+    prefetchNav(client, NAV_PREFETCH, '/settings', ['settings.view']);
+    await waitFor(() => expect(getsOf(api.calls, '/settings')).toBe(1));
   });
 
   it('prefetches only non-financial reference pages, each under its page gate', () => {
@@ -255,7 +222,6 @@ describe('the sidebar prefetch', () => {
       ),
     ).toEqual({
       '/users': 'users.view',
-      '/audit-log': 'audit.view',
       '/settings': 'settings.view',
     });
   });
@@ -265,9 +231,9 @@ describe('the sidebar prefetch', () => {
     const { client } = renderShell();
     await screen.findByText('مدیر اصلی');
 
-    fireEvent.pointerEnter(link('web.nav_audit_log'));
+    act(() => navigate('/system?section=audit'));
     await waitFor(() => expect(getsOf(api.calls, '/audit-log')).toBe(1));
-    act(() => navigate('/audit-log?result=DENIED'));
+    act(() => navigate('/system?section=audit&result=DENIED'));
 
     // The filtered page asked its OWN question; the bare page's answer is not it.
     await waitFor(() => expect(getsOf(api.calls, '/audit-log')).toBe(2));

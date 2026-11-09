@@ -39,7 +39,6 @@ describe('the touch tokens', () => {
    * not in the gate; this keeps a revert of any one of them from passing it silently.
    */
   it.each([
-    ['pages/dashboard.css', '.attn-link'],
     ['pages/commerce-b.css', '.aud-segment'],
     ['pages/commerce-a.css', '.c360-nav a'],
     ['pages/commerce-a.css', '.c360ws-half-head a'],

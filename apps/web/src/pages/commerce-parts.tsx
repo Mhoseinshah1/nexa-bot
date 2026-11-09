@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react';
-import { FilterChip, TwoColumn } from '../ui/kit';
+import { useState } from 'react';
+import { FilterChip } from '../ui/kit';
 import { setQueries, type Route } from '../router';
 
 /**
@@ -71,29 +71,4 @@ export function useListClearAll(
       clearUrlFilters(route, keys);
     },
   };
-}
-
-/**
- * W4, no layout holes: a long main + side detail page. The two columns share one height —
- * each column's LAST card stretches to it — and what would make the taller column run on
- * alone (`tail`) is drawn as full-width rows underneath. Pure CSS grid; nothing moves in
- * the DOM after render.
- */
-export function BalancedColumns({
-  main,
-  side,
-  tail,
-}: {
-  main: ReactNode;
-  side: ReactNode;
-  tail?: ReactNode;
-}) {
-  return (
-    <>
-      <div className="wb-balance">
-        <TwoColumn main={main} side={side} />
-      </div>
-      {tail !== undefined && <div className="wb-balance-tail stack">{tail}</div>}
-    </>
-  );
 }

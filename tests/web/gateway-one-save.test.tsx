@@ -40,7 +40,7 @@ const NOWPAYMENTS = {
 };
 
 const API_KEY = 'کلید API جدید';
-const IPN = 'کلید IPN جدید (IPN Secret)';
+const IPN = 'کلید IPN جدید (رمز IPN)';
 
 const open = async () => {
   renderPage(<PaymentGatewaysPage provider="NOWPAYMENTS" denied={false} mayEdit />);
