@@ -268,10 +268,14 @@ export const WEB_FA_ERRORS = {
   'web.err_backup_archive_auth_failed': 'فایل پشتیبان با این کلید باز نشد، یا فایل آسیب دیده است.',
   'web.err_backup_archive_malformed': 'این فایل پشتیبانِ معتبر نیست.',
   'web.err_move_bundle_malformed': 'این فایل بستهٔ انتقال معتبری نیست.',
-  'web.err_move_member_checksum_mismatch': 'یکی از بخش‌های بستهٔ انتقال با مجموع‌کنترلش نمی‌خواند؛ بسته آسیب دیده است.',
-  'web.err_move_head_newer': 'اول نکسای مقصد را به‌روز کنید؛ این بسته از نسخهٔ تازه‌تری از نکسا است.',
-  'web.err_move_head_diverged': 'این بسته از نکسایی با تاریخچهٔ پایگاه‌دادهٔ دیگری است و وارد نمی‌شود.',
-  'web.err_move_target_not_fresh': 'این سرور از قبل کسب‌وکار دارد؛ بسته فقط روی سرور تازه وارد می‌شود.',
+  'web.err_move_member_checksum_mismatch':
+    'یکی از بخش‌های بستهٔ انتقال با مجموع‌کنترلش نمی‌خواند؛ بسته آسیب دیده است.',
+  'web.err_move_head_newer':
+    'اول نکسای مقصد را به‌روز کنید؛ این بسته از نسخهٔ تازه‌تری از نکسا است.',
+  'web.err_move_head_diverged':
+    'این بسته از نکسایی با تاریخچهٔ پایگاه‌دادهٔ دیگری است و وارد نمی‌شود.',
+  'web.err_move_target_not_fresh':
+    'این سرور از قبل کسب‌وکار دارد؛ بسته فقط روی سرور تازه وارد می‌شود.',
   'web.err_move_member_failed': 'ساخت یکی از بخش‌های بسته به تأیید نرسید.',
   'web.err_move_installation_restore_failed': 'بازیابی نصب انجام نشد.',
   'web.err_move_hosted_mismatch': 'یک ربات میزبانی‌شده با نصب بازیابی‌شده نمی‌خواند.',
