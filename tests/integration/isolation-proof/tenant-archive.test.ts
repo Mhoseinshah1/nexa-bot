@@ -765,6 +765,20 @@ describe('tenant archive (Phase 6B PR-1) — export, verify, restore, as nexa_ap
       code: PLATFORM_ERROR_CODES.BACKUP_ARCHIVE_MALFORMED,
     });
     expect(await tenantRows()).toBe(0);
+    // The refusal came AFTER the manifest and key bundle were extracted: the open itself is
+    // inside the plaintext cleanup boundary, so nothing of the archive stays on disk.
+    const leftover = join(root, 'open-refused');
+    await expect(
+      restoreService(small, target.app).restore({
+        installationTenantId: SEED_IDS.tenantA,
+        actorAdminId: target.actor,
+        archivePath,
+        password: PASSWORD,
+        directory: leftover,
+        mode: 'NEW',
+      }),
+    ).rejects.toMatchObject({ code: PLATFORM_ERROR_CODES.BACKUP_ARCHIVE_MALFORMED });
+    await expect(readdir(leftover)).rejects.toMatchObject({ code: 'ENOENT' });
   }, 600_000);
 
   it('a crafted archive lands HOSTED, with no expiry and no capacity limits of its own choosing', async () => {

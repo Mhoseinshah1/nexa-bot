@@ -432,26 +432,28 @@ export class TenantRestoreService {
     const apply = input.confirmRequestId !== undefined;
     const id = input.confirmRequestId ?? this.deps.ids.uuid();
     let confirmedTenant: string | null = null;
-    if (apply) {
-      const confirmed = await this.deps.requests.confirm(scope, {
-        id,
-        artifactSha256,
-        now: this.deps.clock.now(),
-      });
-      if (confirmed === null) {
-        throw new NexaError({
-          kind: 'PRECONDITION_FAILED',
-          code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
-          message: 'There is no verified dry run of this archive file to confirm.',
-        });
-      }
-      confirmedTenant = confirmed.hostedTenantId;
-    }
     let created = apply;
     const admitted = await this.deps.heavyJobs.runWhenAdmitted(
       'RESTORE',
       input.installationTenantId,
       async () => {
+        if (apply) {
+          // Confirm only once admitted: a refused admission must leave the row VERIFIED (retryable),
+          // not stranded in VERIFYING behind the single-active-restore index.
+          const confirmed = await this.deps.requests.confirm(scope, {
+            id,
+            artifactSha256,
+            now: this.deps.clock.now(),
+          });
+          if (confirmed === null) {
+            throw new NexaError({
+              kind: 'PRECONDITION_FAILED',
+              code: TENANT_ARCHIVE_ERROR_CODES.VERIFICATION_FAILED,
+              message: 'There is no verified dry run of this archive file to confirm.',
+            });
+          }
+          confirmedTenant = confirmed.hostedTenantId;
+        }
         try {
           const summary = await this.deps.engine.restore({
             archivePath: input.archivePath,

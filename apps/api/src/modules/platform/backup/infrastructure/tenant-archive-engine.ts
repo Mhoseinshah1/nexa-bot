@@ -191,20 +191,28 @@ export class PostgresTenantArchiveEngine implements TenantArchiveEngine, TenantR
     ) => Promise<T>,
   ): Promise<T> {
     await onStage('OPEN');
-    const opened = await openTenantArchive({
-      archivePath: input.archivePath,
-      password: input.password,
-      directory: input.directory,
-      sevenZip: this.deps.sevenZip,
-      limits: {
-        maxExtractedBytes: this.deps.maxExtractedBytes ?? 32 * 1024 ** 3,
-        headroomBytes: this.deps.headroomBytes ?? 1024 ** 3,
-        freeBytes: async () => {
-          const info = await statfs(input.directory).catch(() => null);
-          return info === null ? null : Number(info.bavail) * Number(info.bsize);
+    let opened: OpenedTenantArchive;
+    try {
+      opened = await openTenantArchive({
+        archivePath: input.archivePath,
+        password: input.password,
+        directory: input.directory,
+        sevenZip: this.deps.sevenZip,
+        limits: {
+          maxExtractedBytes: this.deps.maxExtractedBytes ?? 32 * 1024 ** 3,
+          headroomBytes: this.deps.headroomBytes ?? 1024 ** 3,
+          freeBytes: async () => {
+            const info = await statfs(input.directory).catch(() => null);
+            return info === null ? null : Number(info.bavail) * Number(info.bsize);
+          },
         },
-      },
-    });
+      });
+    } catch (error) {
+      // Opening may have extracted entries before it failed (a later part's checksum): the
+      // plaintext boundary includes the open itself.
+      await removeAll([input.directory]);
+      throw error;
+    }
     try {
       await onOpened(opened);
       await onStage('SCHEMA');
