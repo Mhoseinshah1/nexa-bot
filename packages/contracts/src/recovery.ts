@@ -211,9 +211,10 @@ export const RECOVERY_EVENTS = [
   'NOT_READY',
   'ABANDONED',
   /**
-   * NEXA-FIX-RESTORE-SECRETS §2.3, choice 1: after a `recovery.candidate_secrets_unreadable`
-   * refusal the owner imported the old server's Recovery Kit, and the SAME request is
-   * verified and restore-tested again from its kept upload.
+   * NEXA-FIX-RESTORE-SECRETS §2.3: after a `recovery.candidate_secrets_unreadable` refusal
+   * the SAME request is verified and restore-tested again from its kept upload (a key added
+   * to this server's configuration since). The Recovery Kit that used to precede it is gone
+   * (SFR A1).
    */
   'RETEST',
   /**
@@ -339,9 +340,10 @@ export const RECOVERY_FAILURE_CODES = [
   /** Authenticated decryption failed. One code for all four causes. */
   'recovery.archive_auth_failed',
   /**
-   * The archive names a KEK this installation does not hold. Since ADR-0032 this
-   * is answered by importing the writing installation's Recovery Kit, then
-   * uploading the archive again.
+   * The archive names a KEK this installation does not hold: a keyring `.nxb` (no backup
+   * password) from another installation. Refused for good — the Recovery Kit that once
+   * opened it is removed (SFR A1); a backup made with a backup password carries its keys
+   * and restores anywhere with the file and the password.
    */
   'recovery.archive_foreign_key',
   /** The decrypted bytes are not the bytes the manifest describes. */
@@ -380,7 +382,7 @@ export const RECOVERY_FAILURE_CODES = [
    * The restored database holds secrets sealed under a key this installation
    * does not hold — not configured, not imported. Cutting over to it would
    * produce an installation that cannot read its own bot tokens and panel
-   * credentials. Import the Recovery Kit of the installation that wrote it.
+   * credentials. Only on rows written before `candidate_secrets_unreadable` existed.
    */
   'recovery.candidate_keys_missing',
   /**
@@ -578,12 +580,6 @@ export const recoveryRestoreTestSchema = z.object({
       }),
     )
     .optional(),
-  /**
-   * Whether importing the old installation's Recovery Kit could help: true when the
-   * archive carried NO key bundle (an archive from before self-contained backups, or
-   * a keyring `.nxb`), so the old server's keys are not in it.
-   */
-  canUploadKit: z.boolean().optional(),
   /** How many keys the archive itself carried, wrapped under its backup password. */
   bundledKeys: z.number().int().nonnegative().optional(),
   /**
@@ -647,8 +643,8 @@ export type RecoveryConfirmation = z.infer<typeof recoveryConfirmationSchema>;
  */
 /**
  * §2.3 choice 1: run the verification and restore test again on the SAME request, after
- * a `recovery.candidate_secrets_unreadable` refusal (typically after importing the old
- * server's Recovery Kit). `archivePassword` as in the verify request: a 7-Zip upload's
+ * a `recovery.candidate_secrets_unreadable` refusal (after a key was added to this server's
+ * configuration). `archivePassword` as in the verify request: a 7-Zip upload's
  * password, used once and never stored.
  */
 export const recoveryRetestRequestSchema = z.object({
