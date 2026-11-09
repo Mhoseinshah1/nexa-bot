@@ -22,6 +22,7 @@ import {
   tenantA,
   type TestContext,
 } from './harness';
+import { withoutRtlMarks } from '../support/customer-text';
 
 /**
  * Shared rig for the Round 9 characterization tests (`r9-char-*.test.ts`).
@@ -371,7 +372,9 @@ export function viewOf(
   return {
     intent: result.intent,
     key: result.replyKey,
-    text: maskIds(String(body?.['text'] ?? body?.['caption'] ?? '')),
+    // B2: the pins state the catalogue's WORDS; the RIGHT-TO-LEFT MARK the renderer adds at the
+    // start of Persian lines is pinned by `rtl-marks.test.ts` and the wallet-summary wire test.
+    text: withoutRtlMarks(maskIds(String(body?.['text'] ?? body?.['caption'] ?? ''))),
     ...(replyKeyboard === undefined ? {} : { replyKeyboard }),
     buttons: (markup?.inline_keyboard ?? []).map((row) =>
       row.map(

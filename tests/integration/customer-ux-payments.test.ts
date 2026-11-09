@@ -26,6 +26,7 @@ import {
   tenantA,
   type TestContext,
 } from './harness';
+import { withoutRtlMarks } from '../support/customer-text';
 
 /**
  * Money through the approved screens (customer UX completion §D, §E, §F, §O, §Q): the
@@ -252,7 +253,7 @@ describe('a customer pays through the approved screens', () => {
   const messages = () =>
     sent.filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'));
   const last = () => messages()[messages().length - 1];
-  const lastText = () => String(last()?.body['text'] ?? '');
+  const lastText = () => withoutRtlMarks(String(last()?.body['text'] ?? ''));
   const lastMarkup = () => JSON.stringify(last()?.body['reply_markup'] ?? {});
   const buttonsOf = (markup: string): string[] =>
     [...markup.matchAll(/"callback_data":"([^"]+)"/g)].map((m) => m[1] as string);
@@ -384,7 +385,7 @@ describe('a customer pays through the approved screens', () => {
       await draftTo(productId);
       const drawn = messages().slice(before);
       const last = drawn[drawn.length - 1];
-      const text = String(last?.body['text']);
+      const text = withoutRtlMarks(String(last?.body['text']));
       expect(text.length).toBeLessThanOrEqual(4096);
       expect(text).toContain(longest.split('\n')[0] ?? 'MISSING');
       expect(text).toContain('🛒 سفارش شما آماده پرداخت است');
@@ -493,6 +494,16 @@ describe('a customer pays through the approved screens', () => {
       const result = await handle(text('/wallet'));
       expect(result.replyKey).toBe('bot.wallet.summary');
       const body = lastText();
+      // B2: on the wire every non-blank line — «🕒 ساعت: …» last — starts with the RIGHT-TO-LEFT
+      // MARK, so an iPhone draws the whole screen right-aligned; the id stays inside its <code>.
+      const raw = String(last()?.body['text'] ?? '');
+      expect(
+        raw
+          .split('\n')
+          .filter((line) => line.trim() !== '')
+          .every((line) => line.startsWith('\u200F')),
+      ).toBe(true);
+      expect(raw).toContain('<code>910910</code>');
       expect(body.startsWith('🎡 اطلاعات حساب کاربری شما:\n\n')).toBe(true);
       // R4 A3: the id is tap-to-copy, so it is sent inside `<code>`.
       expect(body).toContain('🪪 شناسه کاربری: <code>910910</code>');
@@ -839,7 +850,7 @@ describe('a customer pays through the approved screens', () => {
       const texts = sent
         .slice(from)
         .filter((one) => one.url.includes('/sendMessage'))
-        .map((one) => String(one.body['text'] ?? ''));
+        .map((one) => withoutRtlMarks(String(one.body['text'] ?? '')));
       expect(texts).toHaveLength(2);
       expect(texts[0]?.length).toBeGreaterThan(1024);
       expect(texts[0]).toMatch(/https:\/\/t\.me\/acme_store_bot\?start=ref-[A-Za-z0-9]+$/u);
@@ -912,7 +923,7 @@ describe('a customer pays through the approved screens', () => {
       const texts = sent
         .slice(from)
         .filter((one) => one.url.includes('/sendMessage'))
-        .map((one) => String(one.body['text'] ?? ''));
+        .map((one) => withoutRtlMarks(String(one.body['text'] ?? '')));
       expect(texts).toHaveLength(2);
       expect(texts[0]?.startsWith('💼 دعوت به ربات')).toBe(true);
       expect(texts[0]).toContain('🔗 https://t.me/');

@@ -1,6 +1,5 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { applyRtlMarks } from '@nexa/i18n';
 import { tenantA } from './harness';
 import { makePin, makeRig, viewOf, type View } from './r9-char-support';
 
@@ -18,20 +17,7 @@ import { makePin, makeRig, viewOf, type View } from './r9-char-support';
 const CUSTOMER = '931001';
 const ADMIN = '931002';
 
-/**
- * The pins are written as the catalogue words them. B2 puts a RIGHT-TO-LEFT MARK in front of each
- * Persian line the client would draw left-aligned, so the expected TEXT goes through the same
- * rule; the rest of a view (buttons, keyboard labels, keys) is pinned literally.
- */
-const marked = (views: Record<string, View>): Record<string, View> =>
-  Object.fromEntries(
-    Object.entries(views).map(([name, view]) => [
-      name,
-      { ...view, text: applyRtlMarks(view.text) },
-    ]),
-  );
-
-const pin = makePin(marked(expectedViews()), (actual, expected, label) =>
+const pin = makePin(expectedViews(), (actual, expected, label) =>
   expect(actual, label).toEqual(expected),
 );
 

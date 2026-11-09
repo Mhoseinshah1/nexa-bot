@@ -29,6 +29,7 @@ import {
   tenantA,
   type TestContext,
 } from './harness';
+import { bodyWithoutRtlMarks } from '../support/customer-text';
 
 /**
  * R2 (v0.3.5 real-test items 5 and 11): the purchase and top-up wizards evolve through ONE
@@ -84,7 +85,9 @@ describe('the wizard is one message, edited in place', () => {
       request.on('end', () => {
         let body: Record<string, unknown>;
         try {
-          body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+          body = bodyWithoutRtlMarks(
+            JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>,
+          );
         } catch {
           body = {};
         }
