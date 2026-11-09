@@ -82,7 +82,27 @@ Program: `NEXA-WEB-REDESIGN` (owner brief). One session = at most two PRs.
 - Settings: an unchanged value can no longer be re-saved and Enter in a field no longer submits (the bar needs a real edit).
 - Docs for sessions 4–6 are committed on the session branch and shipped in one docs PR at the end of session 6.
 
-## Handoff (next: session 5 = PR-8 + PR-9, then session 6 = PR-10)
+## Session 5 — PR-8 + PR-9
 
-- PR-8 `feat/web-redesign-system` (notification centre + alerts merge, notifications → ops-group tab «گزارش ارسال‌ها», audit log → System tab, incidents + «رخدادها» bug, bulk operations, system, recovery); PR-9 sweep; PR-10 follow-ups (§3.1).
-- Start from latest `main`.
+- **PR-8 #437 — system group** (merge 924429550): menu 6 → 3. «اعلان‌ها و هشدارها» (`/notification-center`; `/alerts` redirects; four chips, red strip,
+  one row for an item that is both inbox and alert, bell drawer); «اعلان‌ها» → tab «گزارش ارسال‌ها» on «گروه لاگ»; «گزارش ممیزی» → tab «تاریخچهٔ تغییرات»
+  on «سامانه» (permissions kept per tab); incidents open in a side drawer; system, bulk operations; recovery (kit import inside the unreadable-secrets
+  card, archive-password label). Opus permission review: one real finding (two `/ops-log` polls without `pollUnlessFinal`), fixed with Codex's P2
+  (older page waits for both feeds) in one commit. Inventories `pr8-inventory-{a,b,c}.md`.
+- **PR-9 #438 — sweep** (merge 7b033b625): leftover subtitles, ~60 dead CSS classes and unused components removed, empty quick-action group fixed,
+  shots over all 74 routes clean (five unfixtured GETs got fixtures), dark theme audited, English phrases translated. Codex: two CSS rules built from
+  dynamic class names (avatar tints, sparkline size) restored.
+
+### Decisions taken (session 5)
+
+- **«رخدادها» bug not reproduced.** Every route into an incident loads `GET /incidents/:id` (200 for every listed incident, committed HTTP test
+  `incidents-http`); the only API path that says «رخداد پیدا نشد» is a malformed list cursor, which the web never sends. No API change. The incident now
+  opens in a drawer by its own id. Needs the owner's exact screen text and entry point if it still happens.
+- No regression test exists for Codex's pagination P2 on the unified list (the page shows no rows while the alerts feed loads, so the pager is absent either
+  way); the guard (`feedsReady`) is in place without a failing-without-it test.
+- «هشدارهای ثبت‌شده» = the whole management history (no «not open» filter on the server).
+
+## Handoff (next: session 6 = PR-10)
+
+- Branches ready (not yet PR): `feat/web-redesign-followups-1` (support AI form), `-2` (business-chat history API, Opus), `-3` (list totals, Opus plan review done).
+- Assemble into `feat/web-redesign-followups`, merge main, one PR, Codex, CI, merge.
