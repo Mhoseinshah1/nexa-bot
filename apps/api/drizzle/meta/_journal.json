@@ -2315,8 +2315,15 @@
     {
       "idx": 330,
       "version": "7",
-      "when": 1794237398949,
-      "tag": "0330_hosted_backups",
+      "when": 1794240243010,
+      "tag": "0330_tenant_restore_lease",
+      "breakpoints": true
+    },
+    {
+      "idx": 331,
+      "version": "7",
+      "when": 1794244928782,
+      "tag": "0331_hosted_backups",
       "breakpoints": true
     }
   ]
