@@ -50,6 +50,7 @@ const WRITERS: Readonly<Record<SecretPurpose, string>> = {
   'backup.archive_password': 'modules/platform/backup/application/backup-password.service.ts',
   'gift_card.batch_export': 'modules/commerce/gift-cards/application/gift-card-admin.service.ts',
   'hosting.totp_secret': 'modules/platform/hosting/application/hosting-section.service.ts',
+  'hosting.archive_password': 'modules/platform/hosting/application/hosted-backup.service.ts',
 };
 
 /**
@@ -67,6 +68,10 @@ const ENCRYPT_SITES: Readonly<Record<string, string>> = {
   'modules/platform/panels/infrastructure/drizzle-panel-credentials.ts':
     'reached from panel.service.ts create / setCredentials (refuse)',
   'modules/platform/hosting/application/hosting-section.service.ts': 'writer: hosting.totp_secret',
+  'modules/platform/hosting/application/hosted-backup.service.ts':
+    'writer: hosting.archive_password',
+  'modules/platform/hosting/application/tenant-restore-admin.service.ts':
+    'writer: hosting.archive_password (dry run seals the upload password; refuses)',
   'modules/platform/backup/application/backup-password.service.ts':
     'writer: backup.archive_password',
   'modules/platform/backup/infrastructure/tenant-archive-secrets.ts':

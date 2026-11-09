@@ -1,4 +1,5 @@
 import { storedFailureMessage } from '../../backup/application/stored-failure.js';
+import { refuseImpersonatedSecretWrite } from '../../identity/application/impersonation.js';
 import {
   errors,
   HOSTING_ERROR_CODES,
@@ -170,6 +171,7 @@ export class TenantRestoreAdminService {
       'hosting.tenant_restore_dry_run',
       restoreId,
     );
+    refuseImpersonatedSecretWrite(actor, 'hosting.archive_password');
     const command = tenantRestoreDryRunRequestSchema.parse(input);
     const workspace = this.deps.workspaces.open(restoreId);
     if (!(await workspace.exists()) || (await this.deps.requests.byId(installation, restoreId))) {
