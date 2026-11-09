@@ -102,7 +102,25 @@ Program: `NEXA-WEB-REDESIGN` (owner brief). One session = at most two PRs.
   way); the guard (`feedsReady`) is in place without a failing-without-it test.
 - «هشدارهای ثبت‌شده» = the whole management history (no «not open» filter on the server).
 
-## Handoff (next: session 6 = PR-10)
+## Session 6 — PR-10
 
-- Branches ready (not yet PR): `feat/web-redesign-followups-1` (support AI form), `-2` (business-chat history API, Opus), `-3` (list totals, Opus plan review done).
-- Assemble into `feat/web-redesign-followups`, merge main, one PR, Codex, CI, merge.
+- **PR-10 #439 — follow-ups** (merge a904e889c): (1) Support AI form → five collapsible sections + one sticky save bar, per-field dirty state, cancel
+  restores, validation error keeps edits; the endpoint needs the whole document, so save sends it built from the loaded values (recorded). (2) Business-chat
+  history: read-only `GET /business-chats/:id/history` (cursor «before message id», 50 newest first, server-side search by text and speaker, RLS, existing
+  permission) built by Opus; the thread uses it for «older» and search; HTTP tests for gaps/duplicates, search past the first page, another tenant, a
+  viewer without the permission; eight API and six web mutation checks caught. (3) List totals: optional `total {value, estimated}` on customers, orders,
+  services; chips «حدود N» on users/services/orders; EXPLAIN estimate, capped exact count, own short transaction, 1.5 s bound, opt-in, no total on a cursor.
+  Opus reviewed the plans once; four findings fixed. Codex clean.
+- CI: the 200k-row fixture of `list-total.test.ts` hung in `beforeAll` on one shard; fixture bounded (explicit codes, chunks, step timings, timeouts, 50k floor)
+  — root cause is best evidence (per-row code trigger, 23 indexes), not proven. Merge fix: the sweep had removed `SwitchSettingRow`, restored.
+
+### Decisions taken (session 6)
+
+- Chips for the other lists (beyond users/services/orders) need their own repository `total()`: left out.
+- Under a client filter «older» still reads pages of all messages; search results refresh on text/filter change, not with the 15 s detail poll.
+
+## Handoff (program complete)
+
+- All of PR-0 … PR-10 are merged. Open: the «رخدادها» bug was not reproduced (needs the owner's exact screen text and entry point); the five client-app fields the
+  owner will remove in a later round; `backup.daily_time` input in `backup-schedule.tsx` still uses the browser time input (not `TimeField24`).
+- Owner test-server checklist ends with `sudo botctl roles disable provisioner monitor`.
