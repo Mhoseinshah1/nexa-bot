@@ -1251,11 +1251,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '📲 برنامه‌های پیشنهادی برای این سیستم عامل:\n\nبرای دیدن لینک دانلود و آموزش اتصال، یکی از برنامه‌های زیر را انتخاب کنید.',
   'bot.apps.platform_empty':
     'برای این بخش فعلاً برنامه‌ای معرفی نشده است. سیستم عامل دیگری را انتخاب کنید یا از بخش «☎️ پشتیبانی» کمک بگیرید.',
-  'bot.apps.detail': '{app}\n\n{description}\n\n📖 آموزش اتصال:\n{guide}',
+  'bot.apps.detail': '{app}\n\n📖 آموزش اتصال:\n{guide}',
   'bot.apps.detail_files':
-    '{app}\n\n{description}\n\n📖 آموزش اتصال:\n{guide}\n\n📁 این برنامه فایل‌های اتصال را هم می‌پذیرد. فایل‌ها را با دکمهٔ «📁 دریافت فایل‌های اتصال» در صفحهٔ سرویس خود دریافت کنید.',
-  'bot.apps.download_button': '⬇️ دانلود از سایت رسمی',
-  'bot.apps.alternative_button': '🏪 فروشگاه یا لینک دیگر',
+    '{app}\n\n📖 آموزش اتصال:\n{guide}\n\n📁 این برنامه فایل‌های اتصال را هم می‌پذیرد. فایل‌ها را با دکمهٔ «📁 دریافت فایل‌های اتصال» در صفحهٔ سرویس خود دریافت کنید.',
+  'bot.apps.download_button': '📥 دانلود',
+  'bot.apps.alternative_button': '🔗 لینک جایگزین',
   'bot.apps.help_button': '🎬 ویدیو و راهنمای بیشتر',
   'bot.apps.back_button': '🔙 بازگشت به فهرست برنامه‌ها',
   'bot.apps.platforms_button': '🔙 انتخاب سیستم عامل دیگر',

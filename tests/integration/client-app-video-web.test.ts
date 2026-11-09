@@ -45,15 +45,10 @@ describe('the Web Admin’s «add video from Telegram» flow', () => {
   const entry = (): ClientAppInput => ({
     platform: 'ANDROID',
     name: 'برنامهٔ نمونه',
-    icon: null,
-    description: 'سازگار با لینک اشتراک',
     officialUrl: 'https://downloads.example.com/app.apk',
     alternativeUrl: null,
     helpUrl: null,
     guide: '1. برنامه را نصب کنید',
-    deliveryKinds: [],
-    protocols: [],
-    providerTypes: [],
     sortOrder: 10,
   });
 

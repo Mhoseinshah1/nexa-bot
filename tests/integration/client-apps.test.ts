@@ -77,15 +77,10 @@ function entry(overrides: Partial<ClientAppInput> = {}): ClientAppInput {
   return {
     platform: 'ANDROID',
     name: 'برنامهٔ نمونه',
-    icon: null,
-    description: 'سازگار با لینک اشتراک',
     officialUrl: 'https://downloads.example.com/app.apk',
     alternativeUrl: null,
     helpUrl: null,
     guide: '1. برنامه را نصب کنید\n2. لینک اشتراک را وارد کنید',
-    deliveryKinds: [],
-    protocols: [],
-    providerTypes: [],
     sortOrder: 10,
     ...overrides,
   };
@@ -901,7 +896,7 @@ describe('client apps — what a customer is shown', () => {
   });
 
   it('opens from /apps and from the menu label, and lists ENABLED apps in the operator’s order', async () => {
-    const second = await add({ name: 'دوم', sortOrder: 20, icon: '🔵' });
+    const second = await add({ name: 'دوم', sortOrder: 20 });
     const first = await add({ name: 'اول', sortOrder: 10 });
     const hidden = await add({ name: 'خاموش', sortOrder: 15 });
     await ctx.container.clientApps.setStatus(tenantA, owner, {
@@ -920,7 +915,7 @@ describe('client apps — what a customer is shown', () => {
     const list = await handle(tap('to:ANDROID', REZA));
     expect(list.replyKey).toBe('bot.apps.platform');
     expect(callbacks()).toEqual([`ca:${first}`, `ca:${second}`, 'tu:', 'mm:']);
-    expect(lastMarkup()).toContain('🔵 دوم');
+    expect(lastMarkup()).toContain('دوم');
     expect(lastMarkup()).not.toContain('خاموش');
 
     // A disabled entry tapped from an older message is gone, not served.
@@ -937,42 +932,88 @@ describe('client apps — what a customer is shown', () => {
     expect(callbacks()).toEqual([`ca:${other}`, 'tu:', 'mm:']);
   });
 
-  it('filters by what the customer’s REAL service is, and shows all to a customer with none', async () => {
+  it('B6: shows every app to every customer, whatever their service is and whatever an older row still holds in the retired compatibility columns', async () => {
     const anyApp = await add({ name: 'همه‌کاره', sortOrder: 1 });
-    const vless = await add({ name: 'VLESS', sortOrder: 2, protocols: ['vless'] });
-    const filesOnly = await add({
-      name: 'فایلی',
-      sortOrder: 3,
-      deliveryKinds: ['CONNECTION_FILES'],
-    });
-    const rick = await add({ name: 'ریک', sortOrder: 4, providerTypes: ['rickpanel'] });
-    const vmess = await add({ name: 'VMESS', sortOrder: 5, protocols: ['vmess'] });
+    // Rows an older release wrote: the retired columns hold delivery kinds, protocols and a
+    // panel type that, then, would have hidden the app from Maryam's Marzban link service.
+    const old = async (
+      name: string,
+      sortOrder: number,
+      column: 'delivery_kinds' | 'protocols' | 'provider_types',
+      members: string,
+    ) => {
+      const id = ctx.container.ids.uuid();
+      await ctx.container.database.db.execute(
+        sql`INSERT INTO client_apps (id, tenant_id, platform, name, description, official_url, guide, sort_order)
+            VALUES (${id}, ${tenantA.tenantId}, 'ANDROID', ${name}, 'd', 'https://downloads.example.com/a', 'g', ${sortOrder})`,
+      );
+      await ctx.container.database.db.execute(
+        sql`UPDATE client_apps SET ${sql.raw(column)} = ARRAY[${sql.raw(`'${members}'`)}]::text[] WHERE id = ${id}`,
+      );
+      return id;
+    };
+    const vmess = await old('VMESS', 5, 'protocols', 'vmess');
+    const filesOnly = await old('فایلی', 3, 'delivery_kinds', 'CONNECTION_FILES');
+    const rick = await old('ریک', 4, 'provider_types', 'rickpanel');
     const serviceId = await activeService(maryam);
 
     // Reza has bought nothing: every enabled Android app.
     await handle(tap('to:ANDROID', REZA));
-    expect(callbacks().slice(0, 5)).toEqual([
+    expect(callbacks().slice(0, 4)).toEqual([
       `ca:${anyApp}`,
-      `ca:${vless}`,
       `ca:${filesOnly}`,
       `ca:${rick}`,
       `ca:${vmess}`,
     ]);
 
-    // Maryam's service is a Marzban link over vless, with no connection files.
+    // Maryam's service is a Marzban link over vless, with no connection files: she is shown
+    // the same four — the retired columns hide nothing.
     await handle(tap('to:ANDROID', MARYAM));
-    expect(callbacks()).toEqual([`ca:${anyApp}`, `ca:${vless}`, 'tu:', 'mm:']);
+    expect(callbacks()).toEqual([
+      `ca:${anyApp}`,
+      `ca:${filesOnly}`,
+      `ca:${rick}`,
+      `ca:${vmess}`,
+      'tu:',
+      'mm:',
+    ]);
 
     // Her app screen: the links as URL buttons, then the existing redelivery action for
     // her one service — never the subscription URL itself.
-    const detail = await handle(tap(`ca:${vless}`, MARYAM));
+    const detail = await handle(tap(`ca:${vmess}`, MARYAM));
     expect(detail.replyKey).toBe('bot.apps.detail');
-    expect(urls()).toEqual(['https://downloads.example.com/app.apk']);
+    expect(urls()).toEqual(['https://downloads.example.com/a']);
     expect(callbacks()).toEqual([`r:${serviceId}`, 'to:ANDROID', 'mm:']);
     const services = new DrizzleServiceRepository(ctx.container.database.db);
     const url = (await services.findById(tenantA, serviceId))?.subscriptionUrl ?? '';
     expect(url).not.toBe('');
     expect(JSON.stringify(last()?.body)).not.toContain(url);
+  });
+
+  it('B6: the download and alternative-link buttons are labelled from the bot texts, and an owner override wins', async () => {
+    const id = await add({ name: 'برچسب', alternativeUrl: 'https://store.example.com/a' });
+    await handle(tap(`ca:${id}`, REZA));
+    expect(lastMarkup()).toContain('📥 دانلود');
+    expect(lastMarkup()).toContain('🔗 لینک جایگزین');
+
+    await ctx.container.templatesService.set(tenantA, owner, {
+      key: 'bot.apps.download_button',
+      body: '⬇️ دریافت برنامه',
+      expectedVersion: null,
+      expectedRevision: null,
+      idempotencyKey: key(),
+    });
+    await ctx.container.templatesService.set(tenantA, owner, {
+      key: 'bot.apps.alternative_button',
+      body: '🏪 لینک دیگر',
+      expectedVersion: null,
+      expectedRevision: null,
+      idempotencyKey: key(),
+    });
+    await handle(tap(`ca:${id}`, REZA));
+    expect(lastMarkup()).toContain('⬇️ دریافت برنامه');
+    expect(lastMarkup()).toContain('🏪 لینک دیگر');
+    expect(lastMarkup()).not.toContain('📥 دانلود');
   });
 
   it('sends the guide as plain text, with an unsafe link that got into a row reduced to its label', async () => {
@@ -1022,8 +1063,8 @@ describe('client apps — what a customer is shown', () => {
   });
 
   it('sends an app’s picture ahead of its screen, and the screen alone when Telegram refuses it', async () => {
-    const plain = await add({ name: 'بی‌تصویر', icon: '🟢', sortOrder: 1 });
-    const pictured = await add({ name: 'باتصویر', icon: '🔵', sortOrder: 2 });
+    const plain = await add({ name: 'بی‌تصویر', sortOrder: 1 });
+    const pictured = await add({ name: 'باتصویر', sortOrder: 2 });
     const bytes = png(200, 200);
     await ctx.container.clientApps.uploadImage(tenantA, owner, {
       id: pictured,
@@ -1041,15 +1082,15 @@ describe('client apps — what a customer is shown', () => {
       idempotencyKey: key(),
     });
 
-    // The list is buttons, which carry text only: the emoji stays what marks each app.
+    // The list is buttons, which carry text only: the app's name.
     await handle(tap('to:ANDROID', REZA));
-    expect(lastMarkup()).toContain('🔵 باتصویر');
+    expect(lastMarkup()).toContain('باتصویر');
 
     // No picture: the emoji-and-text screen, exactly as before, and no photo at all.
     sent = [];
     expect((await handle(tap(`ca:${plain}`, REZA))).replyKey).toBe('bot.apps.detail');
     expect(sent.some((one) => one.url.includes('/sendPhoto'))).toBe(false);
-    expect(lastText()).toContain('🟢 بی‌تصویر');
+    expect(lastText()).toContain('بی‌تصویر');
 
     // A picture: the photo first, carrying the stored bytes, then the same screen.
     sent = [];

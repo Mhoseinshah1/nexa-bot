@@ -29,9 +29,7 @@ import { ROUTE_NAME_KEYS } from '../../messaging/application/customer-screens.js
 import type {
   ClientAppRecord,
   ClientAppRepository,
-  CustomerServiceFact,
 } from '../../../control/client-apps/application/ports.js';
-import { isClientAppRelevant } from '../../../control/client-apps/domain/relevance.js';
 import type { ProvisionedServiceFacts } from '../../../control/client-apps/application/customer-service-facts.js';
 import type { SupportFaqRepository } from '../../../control/support/application/ports.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
@@ -66,6 +64,7 @@ export interface SupportContextBuilderDeps {
   readonly services: Pick<ProvisioningService, 'supportServicesForCustomer'>;
   readonly reader: SupportContextReader;
   readonly clientApps: Pick<ClientAppRepository, 'list'>;
+  /** B6: no longer read — client apps are not filtered by the customer's services. */
   readonly serviceFacts: Pick<ProvisionedServiceFacts, 'factsOf'>;
   readonly faqs: Pick<SupportFaqRepository, 'list'>;
   /** TB8: approved, enabled support knowledge (ADR-0035 §1). */
@@ -174,7 +173,7 @@ export class SupportContextBuilder {
           services: [],
           orders: [],
           payments: [],
-          clientApps: clientAppsFor(appRows, [], selected.builtAppIds),
+          clientApps: clientAppsFor(appRows, selected.builtAppIds),
           incidents: [],
           knowledge,
           ...catalogueEntries(catalogue, this.deps.format),
@@ -215,7 +214,7 @@ export class SupportContextBuilder {
       // L4: over ALL of the customer's services, not the page shown — the recent ones only.
       this.deps.reader.anyUnreconciledService(scope, customer.id, reviewSince),
     ]);
-    const [cards, appFacts, catalogue, presentation] = await Promise.all([
+    const [cards, catalogue, presentation] = await Promise.all([
       services.length === 0
         ? Promise.resolve([] as readonly SupportServiceCardFact[])
         : this.deps.reader.serviceCardFacts(
@@ -226,7 +225,6 @@ export class SupportContextBuilder {
               productId: service.productId,
             })),
           ),
-      this.deps.serviceFacts.factsOf(scope, services),
       this.catalogueFor(scope, customer.id, services, now),
       this.deps.presentation?.presentationFor(scope) ??
         Promise.resolve(DEFAULT_SUPPORT_PRESENTATION),
@@ -250,7 +248,7 @@ export class SupportContextBuilder {
         payments: paymentFacts.map((payment, index) =>
           paymentEntry(payment, index, this.deps.format),
         ),
-        clientApps: clientAppsFor(appRows, appFacts, selected.builtAppIds),
+        clientApps: clientAppsFor(appRows, selected.builtAppIds),
         incidents: incidents.slice(0, SUPPORT_CONTEXT_LIMITS.incidents).map((incident) => ({
           customerMessage: clip(incident.customerMessage, 2000),
           startedAt: incident.startedAt.toISOString(),
@@ -556,23 +554,23 @@ function routeLabelKeyOf(payment: SupportPaymentFact): TemplateKey | null {
 }
 
 /**
- * The enabled apps `isClientAppRelevant` admits for these service facts — the customer
- * screen's own rule (WP-A10), so an unlinked peer (no facts) sees every enabled app — in
- * the operator's order, rendered the way the customer's detail screen renders them.
+ * The enabled apps, in the operator's order, rendered the way the customer's detail screen
+ * renders them. B6: an app applies to every service, so the customer's services no longer
+ * filter it (the customer screen's own rule).
  */
 function clientAppsFor(
   rows: readonly ClientAppRecord[],
-  facts: readonly CustomerServiceFact[],
   /** D2: apps whose guide a selected knowledge article already carries: sent without it. */
   builtAppIds: ReadonlySet<string> = new Set(),
 ): SupportContextClientApp[] {
   return rows
-    .filter((row) => row.status === 'ENABLED' && isClientAppRelevant(row, facts))
+    .filter((row) => row.status === 'ENABLED')
     .slice(0, SUPPORT_CONTEXT_LIMITS.clientApps)
     .map((row) => ({
       platform: row.platform,
       name: clip(neutralizeClientAppBareLinks(row.name), 128),
-      description: clip(neutralizeClientAppBareLinks(row.description), 512),
+      // B6: an app has no short description any more; the field stays in the payload, empty.
+      description: '',
       guide: builtAppIds.has(row.id) ? '' : clipGuide(renderClientAppGuide(row.guide)),
       helpUrl: row.helpUrl === null ? null : normalizeClientAppUrl(row.helpUrl),
       officialUrl: normalizeClientAppUrl(row.officialUrl),

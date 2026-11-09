@@ -189,7 +189,7 @@ export function clientAppScreen(
   );
   return {
     key: detail.filesNote ? 'bot.apps.detail_files' : 'bot.apps.detail',
-    values: { app: detail.title, description: detail.description, guide: detail.guide },
+    values: { app: detail.title, guide: detail.guide },
     buttons,
     orderId: null,
     ...(detail.image === null

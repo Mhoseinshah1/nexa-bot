@@ -16,16 +16,11 @@ export interface ClientAppRecord {
   readonly id: string;
   readonly platform: ClientAppPlatform;
   readonly name: string;
-  readonly icon: string | null;
-  readonly description: string;
   readonly officialUrl: string;
   readonly alternativeUrl: string | null;
   readonly helpUrl: string | null;
   /** RAW, as the operator wrote it. Rendered by `renderClientAppGuide` where it is sent. */
   readonly guide: string;
-  readonly deliveryKinds: readonly ClientAppDeliveryKind[];
-  readonly protocols: readonly ClientAppProtocol[];
-  readonly providerTypes: readonly ProviderType[];
   readonly status: ClientAppStatus;
   readonly sortOrder: number;
   readonly version: number;

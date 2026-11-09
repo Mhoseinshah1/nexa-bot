@@ -8,7 +8,6 @@ import {
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
-import { isClientAppRelevant } from '../domain/relevance.js';
 import type {
   ClientAppImageContent,
   ClientAppRecord,
@@ -30,9 +29,8 @@ export interface ClientAppListing {
 export interface ClientAppDetail {
   readonly id: string;
   readonly platform: ClientAppPlatform;
-  /** The icon, when set, and the name. */
+  /** The name. */
   readonly title: string;
-  readonly description: string;
   /** `renderClientAppGuide` of the stored guide: plain text, safe for any parse mode. */
   readonly guide: string;
   /**
@@ -76,8 +74,9 @@ export interface ClientAppCatalogDeps {
  * this instead is that it writes nothing and reads only the tenant the scope names and
  * the services of the customer the update came from.
  *
- * Only ENABLED rows are ever returned, and a platform's list keeps only the apps
- * `isClientAppRelevant` admits for this customer's live services.
+ * Only ENABLED rows are ever returned. B6: every one of them is offered to every customer — an
+ * app applies to every service, so nothing about the customer's services (delivery kind,
+ * protocol, panel type) hides one.
  */
 export class ClientAppCatalog {
   constructor(private readonly deps: ClientAppCatalogDeps) {}
@@ -102,11 +101,7 @@ export class ClientAppCatalog {
     platform: ClientAppPlatform,
   ): Promise<readonly ClientAppListing[]> {
     const rows = await this.deps.repository.list(scope, { platform, status: 'ENABLED' });
-    if (rows.length === 0) return [];
-    const facts = await this.deps.facts.factsFor(scope, customerId);
-    return rows
-      .filter((row) => isClientAppRelevant(row, facts))
-      .map((row) => ({ id: row.id, label: titleOf(row) }));
+    return rows.map((row) => ({ id: row.id, label: titleOf(row) }));
   }
 
   /**
@@ -127,9 +122,9 @@ export class ClientAppCatalog {
     if (row === null || row.status !== 'ENABLED') return null;
 
     const facts = await this.deps.facts.factsFor(scope, customerId);
-    const readsFiles = row.deliveryKinds.includes('CONNECTION_FILES');
-    const readsLinks =
-      row.deliveryKinds.length === 0 || row.deliveryKinds.includes('SUBSCRIPTION_LINK');
+    // B6: an app applies to every service, so it reads links AND files wherever the service can.
+    const readsFiles = true;
+    const readsLinks = true;
     const only = facts.length === 1 ? (facts[0] as CustomerServiceFact) : null;
     // The bytes only when the row says there are some: most entries have none.
     const image =
@@ -139,7 +134,6 @@ export class ClientAppCatalog {
       id: row.id,
       platform: row.platform,
       title: titleOf(row),
-      description: neutralizeClientAppBareLinks(row.description),
       guide: renderClientAppGuide(row.guide),
       officialUrl: safeLink(row.officialUrl),
       alternativeUrl: safeLink(row.alternativeUrl),
@@ -164,7 +158,7 @@ function safeLink(url: string | null): string | null {
 }
 
 /**
- * The icon, when set, and the name — on the list's button and atop the detail.
+ * The name — on the list's button and atop the detail.
  *
  * Every operator string this read returns goes through the contract's neutralisation, not
  * only the guide (Codex review #2 of PR #95, C6): validation refuses a bare unsafe link in
@@ -172,5 +166,5 @@ function safeLink(url: string | null): string | null {
  * `www.` host to auto-link in the plain-text message.
  */
 function titleOf(row: ClientAppRecord): string {
-  return neutralizeClientAppBareLinks(row.icon === null ? row.name : `${row.icon} ${row.name}`);
+  return neutralizeClientAppBareLinks(row.name);
 }

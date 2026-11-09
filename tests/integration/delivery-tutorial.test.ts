@@ -416,15 +416,10 @@ describe('a panel’s tutorial after delivery', () => {
     const app = await ctx.container.clientApps.create(tenantA, owner, {
       platform: 'ANDROID',
       name: 'Sing-box',
-      icon: null,
-      description: 'سازگار با لینک اشتراک',
       officialUrl: 'https://downloads.example.com/app.apk',
       alternativeUrl: null,
       helpUrl: null,
       guide: '1. برنامه را نصب کنید',
-      deliveryKinds: [],
-      protocols: [],
-      providerTypes: [],
       sortOrder: 10,
       idempotencyKey: 'app-singbox',
     });
