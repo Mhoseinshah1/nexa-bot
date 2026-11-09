@@ -17,6 +17,7 @@ This file was moved verbatim out of `CLAUDE.md` on 2026-10-24. It holds project 
 - [Phase 2 control plane](#phase-2-control-plane)
 - [Phase 6 capacity and usernames](#phase-6-capacity-and-usernames)
 - [Phase 6A creator panel](#phase-6a-creator-panel-میزبانیها-pr-3)
+- [Phase 6B tenant backup, move, export and enter](#phase-6b-tenant-backup-move-export-and-enter)
 - [Deployment](#deployment)
 - [Backup](#backup)
 - [Cleanup after a Mirza import (v0.9.7)](#cleanup-after-a-mirza-import-v097)
@@ -608,6 +609,41 @@ hosted bots was closed in production until PR-1 (RLS) and PR-5 (isolation proof)
 the worker served every tenant under its own RLS binding (PR-6): the compiled
 `HOSTED_BOTS_PRODUCTION_RELEASE_MARKER` is flipped by PR-6 and nothing else, and
 `HOSTED_BOTS_CREATE_ENABLED` stays the operator's second key.
+
+## Phase 6B tenant backup, move, export and enter
+
+Built (ten PRs, `docs/round-reports/phase-6b.md`; decisions in
+[ADR-0039](adr/0039-tenant-backup-and-server-move.md) § "As built"; the move guide is
+`docs/server-move.md`). Binding facts:
+
+- **Archive.** A hosted bot has its own encrypted archive: it bundles ONE per-archive key (never the
+  server's keyring), is exported as `nexa_app`, verified in a scratch database and restored as a
+  new HOSTED child. An archive is untrusted input: expiry, capacity limits and host policy are
+  never taken from it; the kind is forced to HOSTED; unpublished outbox rows are restored EXHAUSTED
+  (never relayed). Every table is in an inventory a test checks (227 at 6B).
+- **Backups product.** Schedule 04:30, keep 7, password set by the creator; «بکاپ الان» is a
+  request the worker takes; download is a POST that spends a fresh code; delivery only to the
+  bot's own group, never the owner's topic; failure text is stored through `storedFailureMessage`.
+- **Restore.** From a file (dry run, then confirm with a fresh code, applied by the recovery role)
+  or over the same hosted bot (REPLACE, also for DELETED): a `PRE_REPLACE` archive first, one
+  transaction, locked re-check of counts and checksums, panel transitions refused meanwhile.
+- **Installation-only.** The installation archive, backup password and whole-installation restore
+  belong to the installation tenant alone (`INSTALLATION_ONLY_PERMISSIONS`; F1 was a real hole).
+- **Open export.** ZIP of CSVs (BOM) with `README.fa.md`, heavy queue, 24 h link, 4 GiB cap
+  (`data_export.too_large`). `data.export` is denied to «ورود به پنل» sessions.
+- **«ورود به پنل».** 15-minute single-use token bound to the hosted domain; HOST admin only;
+  no row in the hosted tenant's audit log, one in the owner's.
+- **Server move.** `botctl move export|import|verify|abort`; freeze marker `/etc/nexa/move-frozen`
+  blocks `restart`/`update`/`rollback` until `move abort`; the import checks head and freshness and
+  compares each hosted member to its live tenant by canonical digest.
+- **Reset.** `botctl admin reset-hosting-2fa --username --reason`.
+
+Not done (decided, not forgotten): the owner's installation backup still contains hosted rows
+(ADR-0039 § 6; this conflicts with ADR-0025's exclusion rule and ADR-0028's cutover and needs an
+owner decision); media-library files in the export; a second fresh code for the host's download;
+ZIP64; restoring a hosted tenant missing from the installation backup inside `move import` (kept in
+`move-unrestored/`, exit 2); `botctl telegram register-hosted`; physical erasure of a purged tenant
+(designed only, ADR-0039 § 10). The real-provider TonPays acceptance is unchanged.
 
 ## Deployment
 
