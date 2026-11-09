@@ -66,6 +66,27 @@ export interface ActorContext {
    * not a signed-in administrator wearing a different hat.
    */
   readonly sessionId?: string;
+  /**
+   * Phase 6B «ورود به پنل» (D5, ADR-0039 § 9 refinement 4): present when the installation
+   * owner is acting inside a hosted tenant through an entered session. `id` is then the hosted
+   * tenant's HOST principal (the rows it writes keep their composite admin foreign keys), and
+   * THIS names the person: the audit writer records the act in the INSTALLATION's log, as the
+   * owner, with the hosted tenant as `acted_in_tenant_id`, and writes nothing to the hosted
+   * tenant's own audit log. Built only by the server from the session row, never from a request.
+   */
+  readonly impersonation?: ActorImpersonation;
+}
+
+/** Who is really acting behind a HOST principal (`ActorContext.impersonation`). */
+export interface ActorImpersonation {
+  /** The installation tenant, whose audit log records the act. */
+  readonly installationTenantId: string;
+  /** The installation owner's own admin id there. */
+  readonly ownerAdminId: string;
+  /** The owner's username, captured at the request, as every actor label is. */
+  readonly ownerLabel: string;
+  /** The «میزبانی‌ها» section session the entered session was opened from and ends with. */
+  readonly hostingSessionId: string;
 }
 
 export const actorRefSchema = z.object({
