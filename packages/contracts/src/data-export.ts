@@ -45,6 +45,12 @@ export const DATA_EXPORT_ERROR_CODES = {
   NOT_HOSTED: 'data_export.not_hosted',
   /** An export of this tenant is already being made. */
   IN_PROGRESS: 'data_export.in_progress',
+  /**
+   * The reasons a FAILED export records (never thrown at a requester): the work could not be
+   * finished, or one file would pass the ZIP's 4 GiB limit (no ZIP64 is written).
+   */
+  FAILED: 'data_export.failed',
+  TOO_LARGE: 'data_export.too_large',
 } as const;
 export type DataExportErrorCode =
   (typeof DATA_EXPORT_ERROR_CODES)[keyof typeof DATA_EXPORT_ERROR_CODES];
