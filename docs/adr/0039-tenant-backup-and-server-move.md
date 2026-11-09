@@ -701,8 +701,37 @@ Changes to the design above, each decided in PR-1 and binding on later PRs:
   hosted group and retention under `hosted/<tenantId>/` are PR-2. The system-path reason
   `tenant archive: bind a hosted tenant for restore` is not used: the restore binds the
   restored tenant with `withTenantScopeIn` inside its one system-path transaction.
-- **The older-head test** restores an archive taken at head N−2 (`0327`) onto N (`0329`, the
-  first head that writes this format), migrating the scratch across both.
+- **The older-head test** restores an archive taken at head N−2 onto N, migrating the scratch
+  across both (`0327` onto `0329`, the first head that writes this format, when PR-1 merged;
+  `0328` onto `0330` after the review fixes below).
+
+## Security review of PR-1 (`fix/6b-tenant-archive-review`)
+
+A read-only review of the merged engine found five problems; each fix has a test that fails
+when it is reverted (`scripts/claude/tenant-archive-mutation.sh`):
+
+- **No row data in a failure message.** A failed restore INSERT surfaces as drizzle's
+  `Failed query: … params: <values>`. `tenant_restores.failure_message` and a tenant run's
+  `backup_runs.failure_message` now hold a `NexaError`'s own message, or the error chain as
+  `error-diagnostics.ts` describes it for a log (type, SQLSTATE, constraint, table, column, a
+  message with its quoted spans blanked) — never a raw `error.message` (`stored-failure.ts`).
+- **A killed run's plaintext and scratch are swept.** The orphan sweep (worker start, an
+  installation backup) and the housekeeping debris sweep also walk `hosted/<tenant>/<run>/`;
+  the orphan sweep judges such a directory only by a TENANT run row of exactly that tenant, and
+  removes `plain/` and `verify/` (the whole directory for an unverified failure, as the run's
+  own `catch` would). Inside an admitted archive or restore, the idle `nexa_tarc_<16 hex>`
+  scratch databases on the verify server are dropped WITHOUT `FORCE`, so one with a session
+  stays (reported, never cut off).
+- **A crashed restore no longer holds the slot.** `tenant_restores` carries ADR-0025's lease
+  (`lease_owner`, `lease_heartbeat_at`, migration `0330`), refreshed every minute; once admitted,
+  a restore FAILS every in-progress request whose lease is 15 minutes stale
+  (`tenant_archive.lease_expired`) — never adopts it — before taking the slot. A `VERIFIED` dry
+  run is not reclaimed: its cancel and expiry stay PR-2's (above).
+- **A restore refuses a connection that bypasses RLS** (`tenant_archive.rls_bypassed`), before
+  anything is opened, as the export does: the copy relies on RLS `WITH CHECK`.
+- **The confirmation is bound to the bytes read.** The restore copies the upload into its private
+  work directory through a SHA-256 and reads only that copy; a copy whose hash is not the one
+  the request or its confirmation names is refused before it is opened.
 
 ## As built in PR-3 (`feat/6b-data-export`) — the open data export
 

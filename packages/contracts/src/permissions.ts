@@ -1029,6 +1029,22 @@ export const SYSTEM_JOB_PERMISSIONS = [
 ] as const satisfies readonly PermissionKey[];
 
 /**
+ * ADR-0039 finding F1 (Phase 6B): the keys that act on the WHOLE installation — its backup
+ * archive, a backup now, a whole-database restore, the creator panel. The seeded `owner` role
+ * is every key in its own tenant, a hosted or reseller bot's owner included, so a role can
+ * never be what keeps these from another tenant's administrators: the guard drops them from
+ * every scope that is not the installation tenant's (and from every scope while no
+ * installation tenant is known). The installation's backup and recovery services also refuse
+ * any other scope outright (`backup.installation_only`, not-found).
+ */
+export const INSTALLATION_ONLY_PERMISSIONS = [
+  'backup.run',
+  'backup.download',
+  'recovery.restore',
+  'hosting.manage',
+] as const satisfies readonly PermissionKey[];
+
+/**
  * Resolution: effective = (role permissions ∪ GRANT overrides) − DENY overrides.
  * DENY always wins, and anything not listed is denied.
  */

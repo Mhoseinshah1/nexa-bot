@@ -28,8 +28,13 @@ export const TENANT_ARCHIVE_ERROR_CODES = {
   REPLACE_UNAVAILABLE: 'tenant_archive.replace_unavailable',
   /** A live table this release does not classify. */
   UNCLASSIFIED_TABLE: 'tenant_archive.unclassified_table',
-  /** The export's connection bypasses row-level security. */
+  /** The export's or the restore's connection bypasses row-level security. */
   RLS_BYPASSED: 'tenant_archive.rls_bypassed',
+  /**
+   * A restore stopped reporting (its lease heartbeat went stale) and the next restore took the
+   * installation's one restore slot over by FAILING it — never by adopting it (ADR-0025).
+   */
+  LEASE_EXPIRED: 'tenant_archive.lease_expired',
 } as const;
 export type TenantArchiveErrorCode =
   (typeof TENANT_ARCHIVE_ERROR_CODES)[keyof typeof TENANT_ARCHIVE_ERROR_CODES];

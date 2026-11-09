@@ -35,6 +35,8 @@ describe('recovery: refused uploads are removed, uploads in progress are not', (
   });
   beforeEach(async () => {
     await ctx.reset();
+    // ADR-0039 F1: the installation's recovery answers its own tenant only.
+    ctx.container.setInstallationTenant(tenantA.tenantId);
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-sweep', roleKeys: ['owner'] }),
     );

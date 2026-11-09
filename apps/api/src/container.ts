@@ -2229,7 +2229,9 @@ export function createContainer(
   // because there were no admins. `SYSTEM_JOB` still holds only its explicit
   // contract set: nothing here reintroduces an actor-type bypass.
   const permissionResolver = new AdminPermissionResolver(admins, roles, clock);
-  const guard = new PermissionGuard(permissionResolver, opsLog);
+  // ADR-0039 F1: the installation-only keys are held in the installation tenant only. The
+  // closure reads `installationTenantId` (declared below) at call time, never at construction.
+  const guard = new PermissionGuard(permissionResolver, opsLog, () => installationTenantId);
 
   // One counter per subject for every path that checks a password: login and
   // `changeOwnPassword` both go through this, so an attacker locked out of one
@@ -8681,6 +8683,7 @@ export function createContainer(
     opsLog,
   });
   const recoveryService = new RecoveryService({
+    installationTenantId: () => installationTenantId,
     requests: recoveryRequests,
     idempotency,
     workspaces: recoveryWorkspaces,
@@ -8728,6 +8731,7 @@ export function createContainer(
    * filesystem and the surface must not build a path.
    */
   const backupPasswords = new BackupPasswordService({
+    installationTenantId: () => installationTenantId,
     uow,
     guard,
     audit,
@@ -8829,6 +8833,7 @@ export function createContainer(
     logger,
   });
   const backupAdmin = new BackupAdminService({
+    installationTenantId: () => installationTenantId,
     ownerAlerts,
     runs: backupRuns,
     archivePassword: (scope) => backupPasswords.status(scope),

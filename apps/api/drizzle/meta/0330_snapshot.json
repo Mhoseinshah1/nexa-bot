@@ -1,5 +1,5 @@
 {
-  "id": "6c9399a3-934c-4150-9aae-54b8e3d52ecb",
+  "id": "d477860f-b6bf-46c5-9374-6a87cdca54a8",
   "prevId": "280e1025-1fc2-4602-8657-b34bf65e1421",
   "version": "7",
   "dialect": "postgresql",
@@ -8420,6 +8420,18 @@
         "failure_message": {
           "name": "failure_message",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_owner": {
+          "name": "lease_owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_heartbeat_at": {
+          "name": "lease_heartbeat_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
@@ -46658,233 +46670,6 @@
         "hosting_totp_factors_attempts_check": {
           "name": "hosting_totp_factors_attempts_check",
           "value": "failed_attempts >= 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.tenant_data_exports": {
-      "name": "tenant_data_exports",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "requested_by_admin_id": {
-          "name": "requested_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "requested_by_host": {
-          "name": "requested_by_host",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "requested_at": {
-          "name": "requested_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "lease_owner": {
-          "name": "lease_owner",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "heartbeat_at": {
-          "name": "heartbeat_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "attempts": {
-          "name": "attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "file_name": {
-          "name": "file_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "bytes": {
-          "name": "bytes",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sha256": {
-          "name": "sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ready_at": {
-          "name": "ready_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "removed_at": {
-          "name": "removed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "failure_code": {
-          "name": "failure_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "tenant_data_exports_single_active_idx": {
-          "name": "tenant_data_exports_single_active_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "state IN ('REQUESTED', 'RUNNING')",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "tenant_data_exports_tenant_requested_idx": {
-          "name": "tenant_data_exports_tenant_requested_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "requested_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "tenant_data_exports_queue_idx": {
-          "name": "tenant_data_exports_queue_idx",
-          "columns": [
-            {
-              "expression": "state",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "requested_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "state IN ('REQUESTED', 'RUNNING')",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "tenant_data_exports_expiry_idx": {
-          "name": "tenant_data_exports_expiry_idx",
-          "columns": [
-            {
-              "expression": "expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "state = 'READY'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "tenant_data_exports_tenant_id_tenants_id_fk": {
-          "name": "tenant_data_exports_tenant_id_tenants_id_fk",
-          "tableFrom": "tenant_data_exports",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "tenant_data_exports_state_check": {
-          "name": "tenant_data_exports_state_check",
-          "value": "state IN ('REQUESTED', 'RUNNING', 'READY', 'FAILED', 'EXPIRED')"
-        },
-        "tenant_data_exports_sha_check": {
-          "name": "tenant_data_exports_sha_check",
-          "value": "sha256 IS NULL OR sha256 ~ '^[0-9a-f]{64}$'"
-        },
-        "tenant_data_exports_attempts_check": {
-          "name": "tenant_data_exports_attempts_check",
-          "value": "attempts >= 0"
-        },
-        "tenant_data_exports_ready_check": {
-          "name": "tenant_data_exports_ready_check",
-          "value": "(state IN ('READY', 'EXPIRED')) = (file_name IS NOT NULL AND sha256 IS NOT NULL AND expires_at IS NOT NULL AND ready_at IS NOT NULL)"
-        },
-        "tenant_data_exports_failure_check": {
-          "name": "tenant_data_exports_failure_check",
-          "value": "(state = 'FAILED') = (failure_code IS NOT NULL)"
         }
       },
       "isRLSEnabled": false

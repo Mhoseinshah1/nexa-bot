@@ -14,6 +14,7 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
+import { requireInstallationScope } from '../../access/application/installation-scope.js';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import {
   recordMutationDenial,
@@ -83,6 +84,8 @@ export interface BackupPasswordServiceDeps {
     context: { ip: string | null },
     action: string,
   ) => Promise<void>;
+  /** ADR-0039 F1: the installation tenant; the password is set in its scope only. */
+  readonly installationTenantId: () => string | null;
 }
 
 /** Characters 7-Zip's one-line stdin read would cut or mangle. */
@@ -126,6 +129,9 @@ export class BackupPasswordService {
       entityType: 'BackupArchivePassword',
       entityId: null,
     };
+    // ADR-0039 F1: the installation's password, set in the installation's scope only — a
+    // hosted bot's owner holds every key in their own tenant, and the host sets theirs.
+    requireInstallationScope(scope, this.deps.installationTenantId);
     // The permission BEFORE the step-up: a holder of a session without the permission
     // must not be able to use this endpoint to test account passwords.
     try {

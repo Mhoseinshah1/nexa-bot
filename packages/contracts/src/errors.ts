@@ -348,6 +348,12 @@ export const PLATFORM_ERROR_CODES = {
   /** A run finished and its own row could not be read back. */
   BACKUP_RUN_MISSING: 'backup.run_missing',
   /**
+   * ADR-0039 F1: the installation's backup and recovery were asked for from a scope that is
+   * not the installation tenant's (a hosted or reseller bot's Web Admin). Not-found, never
+   * permission-denied: a denial for something that exists elsewhere is itself a disclosure.
+   */
+  BACKUP_INSTALLATION_ONLY: 'backup.installation_only',
+  /**
    * A backup could not take the installation's lock.
    *
    * NOT the ordinary busy answer — that is a return value, because one backup

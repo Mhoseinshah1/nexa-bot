@@ -102,6 +102,8 @@ describe('migration 0031 — the Backup and Recovery role backfill', () => {
   beforeEach(async () => {
     ctx ??= await createTestContext();
     await ctx.reset();
+    // ADR-0039 F1: `recovery.restore` is held in the installation tenant only.
+    ctx.container.setInstallationTenant(tenantA.tenantId);
   });
 
   afterAll(async () => {

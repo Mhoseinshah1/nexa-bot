@@ -2315,15 +2315,8 @@
     {
       "idx": 330,
       "version": "7",
-      "when": 1794234735278,
-      "tag": "0330_tenant_data_exports",
-      "breakpoints": true
-    },
-    {
-      "idx": 331,
-      "version": "7",
-      "when": 1794234745830,
-      "tag": "0331_data_export_permission_grant",
+      "when": 1794240243010,
+      "tag": "0330_tenant_restore_lease",
       "breakpoints": true
     }
   ]

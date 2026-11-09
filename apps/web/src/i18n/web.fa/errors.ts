@@ -295,9 +295,12 @@ export const WEB_FA_ERRORS = {
   'web.err_tenant_archive_unclassified_table':
     'این نسخه جدولی را می‌بیند که تکلیفش در بکاپ روشن نیست؛ بکاپ گرفته نشد.',
   'web.err_tenant_archive_rls_bypassed':
-    'اتصال پایگاه‌داده جداسازی ربات‌ها را دور می‌زند؛ بکاپ جداگانه گرفته نشد.',
+    'اتصال پایگاه‌داده جداسازی ربات‌ها را دور می‌زند؛ بکاپ یا بازیابی جداگانه انجام نشد.',
+  'web.err_tenant_archive_lease_expired':
+    'این بازیابی دیگر گزارش پیشرفت نداد و متوقف‌شده حساب شد؛ آن را دوباره شروع کنید.',
   'web.err_backup_checksum_mismatch': 'محتوای پشتیبان با چک‌سام آن نمی‌خواند.',
   'web.err_backup_run_missing': 'سابقهٔ این پشتیبان‌گیری پیدا نشد.',
+  'web.err_backup_installation_only': 'بکاپ و بازیابی این ربات را میزبان مدیریت می‌کند.',
   'web.err_backup_tool_failed': 'ابزار پشتیبان‌گیری اجرا نشد.',
   'web.err_backup_tool_oom_killed': 'حافظهٔ سرور کافی نبود.',
   'web.err_backup_memory_insufficient':

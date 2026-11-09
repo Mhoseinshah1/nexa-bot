@@ -602,6 +602,42 @@ describe('the backup volume on disk', () => {
     expect(await readdir(join(root, 'lost+found'))).toEqual(['dump.pgcustom']);
   });
 
+  /** Security review of PR #447, finding 2: a killed tenant archive run's plaintext. */
+  it('sweeps hosted/<tenant>/<run>/{plain,verify} nothing has written for the grace, never a running run’s or the archive', async () => {
+    const tenant = '0192f000-0000-7000-8000-0000000000a1';
+    const killed = '0192f000-0000-7000-8000-0000000000a2';
+    const running = '0192f000-0000-7000-8000-0000000000a3';
+    const writing = '0192f000-0000-7000-8000-0000000000a4';
+    const old = new Date(NOW.getTime() - 3 * DAY);
+    const recent = new Date(NOW.getTime() - 60_000);
+    for (const id of [killed, running, writing]) {
+      const run = join(root, 'hosted', tenant, id);
+      await mkdir(join(run, 'plain', 'data'), { recursive: true });
+      await mkdir(join(run, 'verify'), { recursive: true });
+      await writeFile(join(run, 'plain', 'data', 'x.copy'), 'a tenant row');
+      await writeFile(join(run, 'archive.7z'), 'sealed');
+      const partAt = id === writing ? recent : old;
+      await utimes(join(run, 'plain', 'data', 'x.copy'), partAt, partAt);
+      for (const path of [join(run, 'plain', 'data'), join(run, 'plain'), join(run, 'verify')]) {
+        await utimes(path, old, old);
+      }
+    }
+    const sweep = await new FilesystemBackupDebris(root).sweepPlaintext({
+      olderThan: new Date(NOW.getTime() - DAY),
+      skipIds: new Set([running]),
+    });
+    const at = (id: string, ...rest: string[]) => join(root, 'hosted', tenant, id, ...rest);
+    expect(sweep.survived).toEqual([]);
+    expect([...sweep.removed].sort()).toEqual(
+      [at(killed, 'plain'), at(killed, 'verify'), at(writing, 'verify')].sort(),
+    );
+    // The part being written two levels down keeps its directory.
+    expect(sweep.pending).toBe(1);
+    expect(await readdir(at(killed))).toEqual(['archive.7z']);
+    expect(await readdir(at(writing, 'plain', 'data'))).toEqual(['x.copy']);
+    expect((await readdir(at(running))).sort()).toEqual(['archive.7z', 'plain', 'verify']);
+  });
+
   it('keeps a CLI scratch directory looking alive while its command runs', async () => {
     const directory = join(root, `${CLI_SCRATCH_PREFIX}restore-x`);
     await mkdir(directory);
