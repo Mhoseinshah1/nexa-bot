@@ -1559,6 +1559,14 @@ cmd_move_export() {
   frozen="$(move_frozen_file)"
   if [ -e "$frozen" ]; then
     nexa_warn "this server is already frozen for a move; taking the export again."
+    # An interrupted freeze (marker written, roles not all stopped) is finished here, before any
+    # snapshot; the marker keeps the ORIGINAL list for 'move abort'.
+    roles="$(move_running_roles)"
+    if [ -n "$roles" ]; then
+      nexa_step "finishing the freeze: stopping ${roles}"
+      # shellcheck disable=SC2086
+      nexa_compose stop $roles || nexa_die "stopping ${roles} failed; the server stays marked frozen. Run 'botctl move abort' to undo."
+    fi
   else
     roles="$(move_running_roles)"
     (umask 077 && printf '%s\n' "$roles" >"$frozen") || nexa_die "cannot write ${frozen}."
@@ -1698,11 +1706,30 @@ cmd_move_import() {
   nexa_step "restoring the installation (verify, restore-test, pre-restore backup, cutover)"
   botctl_run_child move_import_step "$password" import-installation "$MOVE_CONTAINER_DIR" ||
     nexa_die "نصب بازیابی نشد. پیام بالا را ببینید. provisioner و monitor خاموش ماندند."
+  # The restore released the recovery quiesce: the worker's outbox relay would now rewrite
+  # published_at rows the hosted verification compares with the frozen archive. The writers stay
+  # stopped until the verification and the activation marks are done, then start again.
+  local writers="" role
+  for role in $(move_running_roles); do
+    case "$role" in worker | api | assistant) writers="${writers:+${writers} }${role}" ;; esac
+  done
+  if [ -n "$writers" ]; then
+    nexa_step "pausing ${writers} while the hosted bots are verified"
+    # shellcheck disable=SC2086
+    nexa_compose stop $writers || nexa_die "stopping ${writers} failed; nothing was verified. Start them with 'botctl restart' after fixing it."
+  fi
   nexa_step "verifying every hosted bot against the restored installation"
   local status=0
   botctl_run_child move_import_step "$password" import-hosted "$MOVE_CONTAINER_DIR" "${move_args[@]}" ||
     status=$?
   password=""
+  if [ "$status" -eq 0 ] || [ "$status" -eq 2 ]; then
+    if [ -n "$writers" ]; then
+      nexa_step "starting ${writers} again"
+      # shellcheck disable=SC2086
+      nexa_compose start $writers || nexa_die "starting ${writers} failed; start them with 'botctl restart'."
+    fi
+  fi
   case "$status" in
     0) nexa_ok "the move is imported; follow the checklist above" ;;
     2) nexa_warn "the move is imported, but some hosted bots must be restored from their files (listed above)" ;;

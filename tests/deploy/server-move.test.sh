@@ -162,6 +162,17 @@ assert_contains "a failed export did not keep the freeze" "$(cat "${NEXA_CONFIG_
 assert_contains "the way back is not named" "$BOTCTL_OUTPUT" "move abort"
 fake_set move_export_exit 0
 
+test_case "a retried export finishes an interrupted freeze before the snapshot"
+printf 'api worker monitor recovery\n' >"${NEXA_CONFIG_DIR}/move-frozen"
+fake_set running_services "api worker postgres redis"
+reset_docker_log
+tty_botctl_answers "$PW" "$PW" -- move export --out "$OUT" --allow-foreground
+assert_contains "the remaining roles were not stopped on retry" "$(docker_log)" "stop api worker"
+assert_equals "the retry rewrote the original role list" \
+  "api worker monitor recovery" "$(cat "${NEXA_CONFIG_DIR}/move-frozen" 2>/dev/null)"
+rm -f -- "$OUT"
+fake_set running_services "api worker monitor recovery postgres redis caddy backup-verify"
+
 test_case "a bundle whose copy does not hash to the sealed SHA-256 is refused"
 fake_set move_bundle_reported OTHERBYTES
 reset_docker_log
@@ -202,6 +213,11 @@ assert_contains "the hosted step was not given the owner's domain" "$log" \
 assert_contains "the checklist was not printed" "$BOTCTL_OUTPUT" "CHECKLIST-FA"
 assert_contains "the work directory was not removed" \
   "$(cat "${FAKE_DIR}/move_removed" 2>/dev/null)" ".cli-move-fake2"
+
+stop_hosted="$(grep -n 'stop worker\|stop api worker' <<<"$log" | tail -n1 | cut -d: -f1)"
+assert_ok "the writers were not paused between the restore and the hosted verification" \
+  test "${restore_at:-999}" -lt "${stop_hosted:-0}" -a "${stop_hosted:-999}" -lt "${hosted_at:-0}"
+assert_contains "the writers were not started again after verification" "$log" "start api worker"
 
 test_case "a failed installation restore stops before the hosted bots, roles still off"
 fake_set move_import_exit 1
