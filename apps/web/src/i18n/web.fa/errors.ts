@@ -287,6 +287,12 @@ export const WEB_FA_ERRORS = {
     'این نسخه جدولی را می‌بیند که تکلیفش در بکاپ روشن نیست؛ بکاپ گرفته نشد.',
   'web.err_tenant_archive_rls_bypassed':
     'اتصال پایگاه‌داده جداسازی ربات‌ها را دور می‌زند؛ بکاپ جداگانه گرفته نشد.',
+  'web.err_tenant_archive_restore_cancelled': 'این بازیابی لغو شد.',
+  'web.err_tenant_archive_dry_run_expired':
+    'بررسی این فایل یک روز بی‌تأیید ماند و کنار گذاشته شد؛ دوباره بارگذاری کنید.',
+  'web.err_hosting_backup_password_required':
+    'برای این ربات هنوز رمز بکاپ تعیین نشده؛ بدون رمز بکاپ گرفته نمی‌شود.',
+  'web.err_hosting_archive_not_found': 'این فایل بکاپ دیگر روی سرور نیست.',
   'web.err_backup_checksum_mismatch': 'محتوای پشتیبان با چک‌سام آن نمی‌خواند.',
   'web.err_backup_run_missing': 'سابقهٔ این پشتیبان‌گیری پیدا نشد.',
   'web.err_backup_installation_only': 'بکاپ و بازیابی این ربات را میزبان مدیریت می‌کند.',

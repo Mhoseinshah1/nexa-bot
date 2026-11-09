@@ -173,6 +173,8 @@ export const ERROR_TEXT = {
   'tenant_archive.replace_unavailable': 'web.err_tenant_archive_replace_unavailable',
   'tenant_archive.unclassified_table': 'web.err_tenant_archive_unclassified_table',
   'tenant_archive.rls_bypassed': 'web.err_tenant_archive_rls_bypassed',
+  'tenant_archive.restore_cancelled': 'web.err_tenant_archive_restore_cancelled',
+  'tenant_archive.dry_run_expired': 'web.err_tenant_archive_dry_run_expired',
   'backup.checksum_mismatch': 'web.err_backup_checksum_mismatch',
   'backup.run_missing': 'web.err_backup_run_missing',
   'backup.installation_only': 'web.err_backup_installation_only',
@@ -202,6 +204,8 @@ export const ERROR_TEXT = {
   'capacity.owner_only': 'web.err_capacity_owner_only',
   // Phase 6A PR-3: the creator panel «میزبانی‌ها».
   'hosting.owner_only': 'web.err_hosting_owner_only',
+  'hosting.backup_password_required': 'web.err_hosting_backup_password_required',
+  'hosting.archive_not_found': 'web.err_hosting_archive_not_found',
   'hosting.second_factor_required': 'web.err_hosting_second_factor_required',
   'hosting.second_factor_active': 'web.err_hosting_second_factor_active',
   'hosting.enrolment_expired': 'web.err_hosting_enrolment_expired',

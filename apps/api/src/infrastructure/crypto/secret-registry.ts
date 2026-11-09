@@ -9,6 +9,7 @@ import {
   backupArchivePasswords,
   botInstances,
   giftCardBatches,
+  hostedBotBackupPolicies,
   legacyNxpkgImports,
   panelCredentials,
   paymentGatewayCredentials,
@@ -922,6 +923,81 @@ const giftCardBatchExport: SecretColumn = {
   },
 };
 
+/**
+ * Phase 6B PR-2 (ADR-0039 § 7): a hosted bot's archive password, set by the installation owner
+ * on its `hosted_bot_backup_policies` row (the INSTALLATION tenant's). NULLABLE: a bot with no
+ * password has none, and such a row is not a stored secret. The entity is the policy row's id.
+ */
+const hostedArchivePassword: SecretColumn = {
+  purpose: 'hosting.archive_password',
+  table: 'hosted_bot_backup_policies',
+  ciphertextColumn: 'password_ciphertext',
+  keyIdColumn: 'password_key_id',
+  entityIdColumn: 'id',
+
+  async all(db) {
+    const rows = await db
+      .select({
+        ciphertext: hostedBotBackupPolicies.passwordCiphertext,
+        keyId: hostedBotBackupPolicies.passwordKeyId,
+      })
+      .from(hostedBotBackupPolicies)
+      .where(isNotNull(hostedBotBackupPolicies.passwordCiphertext));
+    return rows.flatMap((row) =>
+      typeof row.ciphertext === 'string' && typeof row.keyId === 'string'
+        ? [{ ciphertext: row.ciphertext, keyId: row.keyId }]
+        : [],
+    );
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: hostedBotBackupPolicies.id })
+      .from(hostedBotBackupPolicies)
+      .where(
+        cursor === null
+          ? isNotNull(hostedBotBackupPolicies.passwordCiphertext)
+          : and(
+              isNotNull(hostedBotBackupPolicies.passwordCiphertext),
+              gt(hostedBotBackupPolicies.id, cursor),
+            ),
+      )
+      .orderBy(asc(hostedBotBackupPolicies.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: hostedBotBackupPolicies.id,
+        tenantId: hostedBotBackupPolicies.tenantId,
+        ciphertext: hostedBotBackupPolicies.passwordCiphertext,
+        keyId: hostedBotBackupPolicies.passwordKeyId,
+      })
+      .from(hostedBotBackupPolicies)
+      .where(eq(hostedBotBackupPolicies.id, id))
+      .for('update')
+      .limit(1);
+    if (row === undefined || row.ciphertext === null || row.keyId === null) return null;
+    return { id: row.id, tenantId: row.tenantId, ciphertext: row.ciphertext, keyId: row.keyId };
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(hostedBotBackupPolicies)
+      .set({ passwordCiphertext: next.ciphertext, passwordKeyId: next.keyId })
+      .where(
+        and(
+          eq(hostedBotBackupPolicies.id, id),
+          eq(hostedBotBackupPolicies.passwordCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: hostedBotBackupPolicies.id });
+    return updated.length > 0;
+  },
+};
+
 export const SECRET_COLUMNS: readonly SecretColumn[] = [
   botInstanceToken,
   panelUsername,
@@ -937,4 +1013,5 @@ export const SECRET_COLUMNS: readonly SecretColumn[] = [
   legacyNxpkgPackageKey,
   backupArchivePassword,
   giftCardBatchExport,
+  hostedArchivePassword,
 ];

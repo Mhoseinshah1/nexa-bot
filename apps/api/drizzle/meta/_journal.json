@@ -2311,6 +2311,13 @@
       "when": 1794221819500,
       "tag": "0329_tenant_archive",
       "breakpoints": true
+    },
+    {
+      "idx": 330,
+      "version": "7",
+      "when": 1794237398949,
+      "tag": "0330_hosted_backups",
+      "breakpoints": true
     }
   ]
 }
