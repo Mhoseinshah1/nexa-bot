@@ -226,6 +226,8 @@ async function main(): Promise<void> {
         // Phase 6B PR-2: every hosted bot's scheduled and requested archives. No flag: each
         // bot's own schedule is a row, read on every pass.
         ['hosted-backups', true, () => container.hostedBackupLoop.isFresh(at)],
+        // Phase 6B PR-3: the open data export; idle (and fresh) unless one was requested.
+        ['data-export-runner', true, () => container.dataExportRunner.isFresh(at)],
         // Phase 6A PR-2: the owner's disk, memory and worker-lag alerts.
         ['capacity-monitor', true, () => container.capacityMonitorLoop.isFresh(at)],
       ];
@@ -411,6 +413,8 @@ async function main(): Promise<void> {
   container.backupHousekeeping.start();
   // Phase 6B PR-2: hosted-bot archives, one at a time through the heavy-job queue.
   container.hostedBackupLoop.start();
+  // Phase 6B PR-3: the open data export's ZIPs, through the heavy-job queue.
+  container.dataExportRunner.start();
   // E1: the owner's legacy-data compaction, once requested. Idle otherwise.
   container.legacyCompactionExecutor.start();
   // Phase 6A PR-2: the server's disk, memory and worker lag, for the owner's group only.

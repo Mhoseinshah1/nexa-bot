@@ -25,6 +25,7 @@ import { prefetchNav, type NavPrefetch } from './nav-prefetch';
 import { BottomNav, CommandSearch, Sidebar, Topbar, useCommandShortcut } from './shell';
 import { DashboardPage } from './pages/dashboard';
 import { HostingPage } from './pages/hosting';
+import { DataExportPage } from './pages/data-export';
 import { PanelsPage, PanelDetailPage, NewPanelPage, ProvidersPage } from './pages/panels';
 import { PanelHealthPage } from './pages/panel-health';
 import { SettingsPage, settingsQuery } from './pages/settings';
@@ -261,6 +262,7 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/ops-group',
   '/recovery',
   '/hosting',
+  '/data-export',
   '/system',
 ];
 
@@ -1463,6 +1465,15 @@ export function resolve(
       element: <HostingPage denied={!may('hosting.manage')} />,
       crumbs: [{ label: t('web.nav_hosting') }],
       title: t('web.nav_hosting'),
+    };
+  }
+
+  // Phase 6B PR-3: a hosted bot's own data export. The server charges `data.export` on every call.
+  if (route.path === '/data-export') {
+    return {
+      element: <DataExportPage denied={!may('data.export')} />,
+      crumbs: [{ label: t('web.nav_data_export') }],
+      title: t('web.nav_data_export'),
     };
   }
 

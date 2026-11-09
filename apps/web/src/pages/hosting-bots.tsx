@@ -50,6 +50,7 @@ import { fromLocalInput, toLocalInput } from './incidents';
 import { CodePromptDialog, HOSTING_BOTS_KEY, HOSTING_SERVER_KEY } from './hosting-parts';
 import { ActivationSection } from './hosting-activation';
 import { HostedBackupSection } from './hosting-backup';
+import { DataExportSection } from './hosting-data-export';
 
 /**
  * The hosted bots: one card each, and the dialogs behind its actions. Every action asks for a
@@ -267,6 +268,12 @@ function BotCard({
           is still stopped, and only then may ACTIVATE bring it back. */}
       {(bot.state === 'ACTIVE' || bot.state === 'SUSPENDED' || bot.state === 'DELETED') && (
         <ActivationSection bot={bot} />
+      )}
+      {/* Phase 6B PR-3: the bot's data as a ZIP of CSV files, behind a fresh code. */}
+      {!closed && (
+        <Disclosure summary={t('web.hosting_action_data_export')} size="sm">
+          <DataExportSection bot={bot} />
+        </Disclosure>
       )}
       {!closed && (
         <Disclosure summary={t('web.hosted_backup_title')} size="sm">

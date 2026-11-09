@@ -82,6 +82,10 @@ export const AUDIT_CRITICAL_ACTIONS: Readonly<Record<string, readonly Permission
   'backup.archive_downloaded': ['backup.download'],
   // E4: whoever sets the backup password decides what every future archive opens with.
   'backup.archive_password_set': ['backup.download'],
+  // Phase 6B PR-3: the open data export — asking for one and taking the file are both charged
+  // on the CRITICAL `data.export` (`DataExportService`).
+  'data_export.requested': ['data.export'],
+  'data_export.downloaded': ['data.export'],
   'recovery.confirm': ['recovery.restore'],
   'recovery.confirmed': ['recovery.restore'],
   // NEXA-FIX-RESTORE-SECRETS §2.3: re-running a refused restore test, and accepting to

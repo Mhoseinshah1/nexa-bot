@@ -46,6 +46,10 @@ import {
 import {
   // Phase 6A (D1): the installation owner's creator panel.
   HOSTING_ROUTES,
+  DATA_EXPORT_ROUTES,
+  type DataExportHostRequest,
+  type DataExportRequestResponse,
+  type DataExportsResponse,
   // Phase 6A PR-4: the activation of a hosted bot.
   HOSTED_ACTIVATION_ROUTES,
   HOSTING_ACTIVATION_ROUTES,
@@ -5808,6 +5812,46 @@ export function disableGiftCardBatch(
   body: GiftCardDisableRequest,
 ): Promise<GiftCardDisableResponse> {
   return post(GIFT_CARD_ROUTES.disable(batchId), body, giftCardDisableResponseSchema);
+}
+
+// --- Phase 6B PR-3: «خروجی داده», the open data export ------------------------------------
+
+/** A hosted bot's owner: their own exports. */
+export function fetchDataExports(): Promise<DataExportsResponse> {
+  return authedGet(DATA_EXPORT_ROUTES.own, { parse: (v) => v as DataExportsResponse });
+}
+
+export function requestDataExport(idempotencyKey: string): Promise<DataExportRequestResponse> {
+  return post(
+    DATA_EXPORT_ROUTES.own,
+    { idempotencyKey },
+    { parse: (v) => v as DataExportRequestResponse },
+  );
+}
+
+/** A same-origin link: the browser downloads the ZIP with the session cookie. */
+export function dataExportDownloadHref(id: string): string {
+  return `${API_PREFIX}${DATA_EXPORT_ROUTES.ownDownload.replace(':id', encodeURIComponent(id))}`;
+}
+
+// The installation owner's door, from the hosting section: one hosted bot's exports.
+export function fetchHostedDataExports(tenantId: string): Promise<DataExportsResponse> {
+  return authedGet(hostingPath(DATA_EXPORT_ROUTES.hosted, tenantId), {
+    parse: (v) => v as DataExportsResponse,
+  });
+}
+
+export function requestHostedDataExport(
+  tenantId: string,
+  body: DataExportHostRequest,
+): Promise<DataExportRequestResponse> {
+  return post(hostingPath(DATA_EXPORT_ROUTES.hosted, tenantId), body, {
+    parse: (v) => v as DataExportRequestResponse,
+  });
+}
+
+export function hostedDataExportDownloadHref(tenantId: string, id: string): string {
+  return `${API_PREFIX}${hostingPath(DATA_EXPORT_ROUTES.hostedDownload, tenantId).replace(':id', encodeURIComponent(id))}`;
 }
 
 // --- Phase 6A (D1): «میزبانی‌ها», the installation owner's creator panel ---------------------

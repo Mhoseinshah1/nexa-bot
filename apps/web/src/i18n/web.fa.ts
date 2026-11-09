@@ -29,6 +29,7 @@ import { WEB_FA_LEGACY } from './web.fa/legacy';
 import { WEB_FA_ERRORS } from './web.fa/errors';
 import { WEB_FA_HOSTING } from './web.fa/hosting';
 import { WEB_FA_HOSTING_BACKUP } from './web.fa/hosting-backup';
+import { WEB_FA_DATA_EXPORT } from './web.fa/data-export';
 import { WEB_FA_REDESIGN_KIT } from './web.fa/redesign-kit';
 
 /*
@@ -58,6 +59,7 @@ export const WEB_FA = {
   ...WEB_FA_ERRORS,
   ...WEB_FA_HOSTING,
   ...WEB_FA_HOSTING_BACKUP,
+  ...WEB_FA_DATA_EXPORT,
   ...WEB_FA_REDESIGN_KIT,
 } as const;
 
