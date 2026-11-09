@@ -265,6 +265,28 @@ export const WEB_FA_ERRORS = {
   'web.err_backup_already_running': 'پشتیبان‌گیری دیگری در جریان است.',
   'web.err_backup_archive_auth_failed': 'فایل پشتیبان با این کلید باز نشد، یا فایل آسیب دیده است.',
   'web.err_backup_archive_malformed': 'این فایل پشتیبانِ معتبر نیست.',
+  'web.err_tenant_archive_head_newer':
+    'اول نکسای مقصد را به‌روز کنید؛ این فایل از نسخهٔ تازه‌تری از نکسا است.',
+  'web.err_tenant_archive_head_diverged':
+    'این فایل از نکسایی با تاریخچهٔ پایگاه‌دادهٔ دیگری است و بازیابی نمی‌شود.',
+  'web.err_tenant_archive_tenant_exists': 'این ربات همین حالا روی این سرور هست.',
+  'web.err_tenant_archive_bot_taken': 'ربات تلگرامِ این فایل روی این سرور به ربات دیگری وصل است.',
+  'web.err_tenant_archive_domain_taken':
+    'دامنهٔ این ربات روی این سرور مال ربات میزبانی‌شدهٔ دیگری است.',
+  'web.err_tenant_archive_unique_collision':
+    'بخشی از داده‌های این فایل با داده‌های ربات دیگری روی این سرور تداخل دارد.',
+  'web.err_tenant_archive_verification_failed':
+    'فایل بازیابی شد اما با شمارش‌ها و چک‌سام‌های خودش نخواند؛ چیزی نوشته نشد.',
+  'web.err_tenant_archive_has_child_tenants':
+    'رباتی که زیرمجموعه دارد هنوز جداگانه بکاپ گرفته نمی‌شود.',
+  'web.err_tenant_archive_not_hosted': 'فقط از ربات‌های میزبانی‌شده بکاپ جداگانه گرفته می‌شود.',
+  'web.err_tenant_archive_purged': 'این ربات برای همیشه بسته شده است.',
+  'web.err_tenant_archive_replace_unavailable':
+    'بازیابی روی ربات موجود هنوز ممکن نیست؛ آن را به‌عنوان ربات تازه بازیابی کنید.',
+  'web.err_tenant_archive_unclassified_table':
+    'این نسخه جدولی را می‌بیند که تکلیفش در بکاپ روشن نیست؛ بکاپ گرفته نشد.',
+  'web.err_tenant_archive_rls_bypassed':
+    'اتصال پایگاه‌داده جداسازی ربات‌ها را دور می‌زند؛ بکاپ جداگانه گرفته نشد.',
   'web.err_backup_checksum_mismatch': 'محتوای پشتیبان با چک‌سام آن نمی‌خواند.',
   'web.err_backup_run_missing': 'سابقهٔ این پشتیبان‌گیری پیدا نشد.',
   'web.err_backup_tool_failed': 'ابزار پشتیبان‌گیری اجرا نشد.',

@@ -39,6 +39,10 @@ describe('customer notes never reach a customer surface', () => {
       'apps/api/src/modules/commerce/customers/application/customer-crm-ports.ts',
       'apps/api/src/modules/commerce/customers/application/customer-crm.service.ts',
       'apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer-crm.repository.ts',
+      // Phase 6B PR-1: the tenant archive inventory classifies the table (TENANT: the notes
+      // travel in the hosted tenant's own encrypted archive). Data only; it reads no note and
+      // reaches no customer surface.
+      'apps/api/src/modules/platform/backup/application/tenant-archive-inventory.ts',
       'apps/api/src/surfaces/web/customer-crm.controller.ts',
     ]);
   });

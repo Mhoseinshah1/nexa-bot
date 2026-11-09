@@ -126,8 +126,31 @@ export type BackupDeliveryState = (typeof BACKUP_DELIVERY_STATES)[number];
  * the installation looked like just before it was replaced is the row they need
  * to be able to find, and `trigger` is how they find it.
  */
-export const BACKUP_TRIGGERS = ['MANUAL', 'SCHEDULED', 'PRE_RESTORE'] as const;
+export const BACKUP_TRIGGERS = [
+  'MANUAL',
+  'SCHEDULED',
+  'PRE_RESTORE',
+  'PRE_REPLACE',
+  'MOVE',
+] as const;
 export type BackupTrigger = (typeof BACKUP_TRIGGERS)[number];
+/*
+ * Phase 6B (ADR-0039 § 4, § 8): `PRE_REPLACE` is the tenant archive taken of a hosted
+ * tenant's current rows before a restore replaces them — ADR-0028's pre-restore backup, per
+ * tenant — and `MOVE` is a member of a server-move bundle, sealed with the bundle password
+ * and never delivered or retained by a schedule. Values, not paths: both runs go through
+ * the same six stages as every other run.
+ */
+
+/**
+ * What a `backup_runs` row archives (ADR-0039 § 5): the whole database (`INSTALLATION`, the
+ * pipeline of ADR-0025), or ONE hosted tenant's rows (`TENANT`, the logical tenant archive).
+ * Both kinds share the row machinery and `backup_runs_single_active_idx`, so the database
+ * refuses a second RUNNING archive of either scope. A `TENANT` row names its tenant in
+ * `subject_tenant_id`; an `INSTALLATION` row names none.
+ */
+export const BACKUP_ARCHIVE_SCOPES = ['INSTALLATION', 'TENANT'] as const;
+export type BackupArchiveScope = (typeof BACKUP_ARCHIVE_SCOPES)[number];
 
 /**
  * The archive container's magic and version.

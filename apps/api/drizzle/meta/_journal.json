@@ -2304,6 +2304,13 @@
       "when": 1794197970591,
       "tag": "0328_drop_recovery_kit_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 329,
+      "version": "7",
+      "when": 1794221819500,
+      "tag": "0329_tenant_archive",
+      "breakpoints": true
     }
   ]
 }

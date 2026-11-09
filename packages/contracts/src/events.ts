@@ -324,6 +324,48 @@ export const AGGREGATE_TYPES = [
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
 /**
+ * Phase 6B (ADR-0039 § 1): whose an aggregate's id is, for the tenant archive.
+ *
+ * `TENANT_ROW`: the id is a row of ONE tenant (a uuid of its customer, order, admin, bot…), so
+ * its `aggregate_sequences` counter and its `outbox_messages` sequence numbers are that
+ * tenant's alone and travel with it unchanged.
+ *
+ * `SHARED_KEY`: the id is a key every tenant uses (a setting or template key, a feature-flag
+ * key, `system`) or names a tenant other tenants also write about (`Tenant`: the installation
+ * records a hosted tenant's lifecycle under its id). The counter is the INSTALLATION's, shared
+ * by every tenant: it is never exported, and a restore renumbers the archive's messages of such
+ * an aggregate after the target's own counter. A new aggregate type must say which it is.
+ */
+export const AGGREGATE_OWNERSHIP: Readonly<Record<AggregateType, 'TENANT_ROW' | 'SHARED_KEY'>> = {
+  System: 'SHARED_KEY',
+  Tenant: 'SHARED_KEY',
+  BotInstance: 'TENANT_ROW',
+  Setting: 'SHARED_KEY',
+  Admin: 'TENANT_ROW',
+  Template: 'SHARED_KEY',
+  FeatureFlag: 'SHARED_KEY',
+  Customer: 'TENANT_ROW',
+  Order: 'TENANT_ROW',
+  Payment: 'TENANT_ROW',
+  Wallet: 'TENANT_ROW',
+  Service: 'TENANT_ROW',
+  ProvisioningOperation: 'TENANT_ROW',
+  Discount: 'TENANT_ROW',
+  Referral: 'TENANT_ROW',
+  Trial: 'TENANT_ROW',
+  OpsLogGroup: 'TENANT_ROW',
+  Ticket: 'TENANT_ROW',
+  Broadcast: 'TENANT_ROW',
+  BulkOperation: 'TENANT_ROW',
+  TermsVersion: 'TENANT_ROW',
+  CustomerTag: 'TENANT_ROW',
+  Incident: 'TENANT_ROW',
+  LegacyImportMapRow: 'TENANT_ROW',
+  GiftCardBatch: 'TENANT_ROW',
+  ResellerRequest: 'TENANT_ROW',
+};
+
+/**
  * Payload schemas, keyed by event type. A consumer parses with these rather
  * than trusting the envelope's `unknown`.
  */

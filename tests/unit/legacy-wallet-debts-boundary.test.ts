@@ -50,6 +50,10 @@ const ALLOWED = new Set([
   // counts the tenant's debt rows to report them beside the balances. A row count only: no
   // amount, no write, and it refuses a production database by name.
   'apps/api/src/modules/platform/legacy-cutover/infrastructure/pg-cutover-reconciliation.reader.ts',
+  // Phase 6B PR-1: the tenant archive inventory names the table to classify it (TENANT: a
+  // hosted tenant's rows travel in its archive like every other table's). Data only: it reads
+  // no amount and no money path consults it; the export copies rows, it never interprets them.
+  'apps/api/src/modules/platform/backup/application/tenant-archive-inventory.ts',
 ]);
 
 describe('the legacy wallet debt boundary (never collected)', () => {
