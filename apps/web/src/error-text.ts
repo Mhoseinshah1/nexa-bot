@@ -175,6 +175,7 @@ export const ERROR_TEXT = {
   'tenant_archive.rls_bypassed': 'web.err_tenant_archive_rls_bypassed',
   'backup.checksum_mismatch': 'web.err_backup_checksum_mismatch',
   'backup.run_missing': 'web.err_backup_run_missing',
+  'backup.installation_only': 'web.err_backup_installation_only',
   'backup.tool_failed': 'web.err_backup_tool_failed',
   'backup.tool_oom_killed': 'web.err_backup_tool_oom_killed',
   'backup.memory_insufficient': 'web.err_backup_memory_insufficient',
