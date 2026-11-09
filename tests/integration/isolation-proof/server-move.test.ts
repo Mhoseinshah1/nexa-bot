@@ -125,7 +125,10 @@ describe('server move (Phase 6B PR-4) — export two hosted bots and the install
   beforeAll(async () => {
     workRoot = await mkdtemp(join(tmpdir(), 'nexa-move-work-'));
     scratch = await mkdtemp(join(tmpdir(), 'nexa-move-'));
-    world = await buildWorld({ BACKUP_WORK_DIR: workRoot });
+    world = await buildWorld({
+      BACKUP_WORK_DIR: workRoot,
+      RECOVERY_WORK_DIR: join(workRoot, 'recovery'),
+    });
     app = createDatabase(testAppDatabaseUrl(), 4);
     owner = createDatabase(testOwnerDatabaseUrl(), 2);
     expect(await app.scopeEnforcement()).toBe('enforcing');
