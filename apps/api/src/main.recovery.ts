@@ -182,6 +182,28 @@ async function main(): Promise<void> {
   const uploadSweep = setInterval(sweepUploads, UPLOAD_SWEEP_INTERVAL_MS);
   uploadSweep.unref();
 
+  // Phase 6B PR-2 (ADR-0039 § 4): «بازیابی ربات از فایل» — apply a confirmed hosted restore,
+  // expire a dry run nobody confirmed within a day, and remove the uploads nothing needs (A3).
+  // Here and never in the API: no request restores into the database serving it.
+  let tenantRestoreRunning = false;
+  const tenantRestoreTimer = setInterval(() => {
+    // One pass at a time: an apply can run for minutes.
+    if (tenantRestoreRunning) return;
+    tenantRestoreRunning = true;
+    void container.tenantRestoreAdmin
+      .tick()
+      .catch((error: unknown) => {
+        container.logger.warn(
+          { err: error instanceof Error ? error.message : String(error) },
+          'the hosted restore pass failed; it runs again shortly',
+        );
+      })
+      .finally(() => {
+        tenantRestoreRunning = false;
+      });
+  }, config.RECOVERY_TICK_MS);
+  tenantRestoreTimer.unref();
+
   container.recoveryExecutor.start();
   executorStartedAt = container.clock.now().getTime();
   container.migrationExecutor.start();

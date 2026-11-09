@@ -1029,6 +1029,7 @@ import { HeavyJobGate } from './modules/platform/capacity/application/heavy-job-
 import { CapacityMonitor } from './modules/platform/capacity/application/capacity-monitor.js';
 // Phase 6A PR-3: the creator panel.
 import { buildHosting } from './modules/platform/hosting/infrastructure/build-hosting.js';
+import { buildHostedBackups } from './modules/platform/hosting/infrastructure/build-hosted-backups.js';
 import { buildHostedActivation } from './modules/platform/hosting/infrastructure/build-hosted-activation.js';
 import type { HostedActivationService } from './modules/platform/hosting/application/hosted-activation.service.js';
 import type { HostedOwnerActivationService } from './modules/platform/hosting/application/hosted-owner-activation.service.js';
@@ -1204,6 +1205,17 @@ export interface Container {
    * overdue conditions (E5). Constructed in every role, started in the worker.
    */
   readonly backupHousekeeping: BackupHousekeeping;
+  /**
+   * Phase 6B PR-2 (ADR-0039 § 7): hosted-bot backups — the owner's per-bot schedule,
+   * password and archives in «میزبانی‌ها», the tenant archive and restore services over
+   * PR-1's engine, and the worker's loop (started in the worker only).
+   */
+  readonly hostedBackups: ReturnType<typeof buildHostedBackups>['hostedBackups'];
+  readonly hostedBackupLoop: ReturnType<typeof buildHostedBackups>['hostedBackupLoop'];
+  readonly tenantArchives: ReturnType<typeof buildHostedBackups>['tenantArchives'];
+  readonly tenantRestores: ReturnType<typeof buildHostedBackups>['tenantRestores'];
+  readonly tenantRestoreRequests: ReturnType<typeof buildHostedBackups>['tenantRestoreRequests'];
+  readonly tenantRestoreAdmin: ReturnType<typeof buildHostedBackups>['tenantRestoreAdmin'];
   /**
    * Round 8 (B1): removes what killed backup runs left in their directories. Inside every
    * run, and once at worker start.
@@ -8840,6 +8852,67 @@ export function createContainer(
     schedule: () => backupSchedule.effective(),
     disk: backupDiskState,
   });
+  /*
+   * Phase 6B PR-2 (ADR-0039 § 7): hosted-bot backups. Delivery is to the HOSTED bot's own
+   * operations group only — the ops-group topic is asked in the hosted tenant's scope, and
+   * there is no fallback chat (`BACKUP_TELEGRAM_*` is the owner's).
+   */
+  const {
+    hostedBackups,
+    hostedBackupLoop,
+    tenantArchives,
+    tenantRestores,
+    tenantRestoreRequests,
+    tenantRestoreAdmin,
+  } = buildHostedBackups({
+    database,
+    scratch: backupTools,
+    sevenZip: {
+      binary: config.BACKUP_SEVEN_ZIP_BIN,
+      level: config.BACKUP_SEVEN_ZIP_LEVEL,
+      threads: config.BACKUP_SEVEN_ZIP_THREADS,
+      cpuLimit: backupCpuLimit,
+      memoryBudgetMb: config.BACKUP_SEVEN_ZIP_MEMORY_MB,
+      memoryHeadroomMb: config.BACKUP_SEVEN_ZIP_HEADROOM_MB,
+      readAvailableMb: readMemAvailableMb,
+      sealTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
+      openTimeoutMs: config.BACKUP_RESTORE_TIMEOUT_MS,
+    },
+    workRoot: config.BACKUP_WORK_DIR,
+    recoveryWorkRoot: config.RECOVERY_WORK_DIR,
+    cipher: credentialCipher,
+    kdf: config.PASSWORD_HASH_PROFILE === 'fast' ? FAST_KDF : PRODUCTION_KDF,
+    release: config.BUILD_VERSION,
+    installationTenantId: () => installationTenantId,
+    runs: backupRuns,
+    heavyJobs,
+    leaseOwner,
+    section: hostingSection,
+    owner: hostingOwner,
+    bots: hostingRepository,
+    guard,
+    idempotency,
+    audit,
+    clock,
+    ids,
+    ownerAlerts,
+    opsGroup: new OpsGroupBackupTopicAdapter(opsGroups, opsGroupBots, () =>
+      systemJobActor('hosted-backup-delivery', newCorrelationId(ids.uuid())),
+    ),
+    channelFor: (target) =>
+      new TelegramBackupDelivery({
+        apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+        token: target.token,
+        chatId: target.chatId,
+        messageThreadId: target.threadId,
+        timeoutMs: config.BACKUP_DELIVERY_TIMEOUT_MS,
+      }),
+    settings: settingsResolver,
+    render: (scope, key, values) => templateResolver.render(scope, key, values, 'fa'),
+    // Declared further down; read per tick, never at construction.
+    quiesced: () => recoveryQuiesced(),
+    logger,
+  });
 
   /*
    * The installation tenant is cached once at startup, so a restore whose tenant id differs
@@ -10024,6 +10097,12 @@ export function createContainer(
     backupOffsite,
     backupScheduler,
     backupHousekeeping,
+    hostedBackups,
+    hostedBackupLoop,
+    tenantArchives,
+    tenantRestores,
+    tenantRestoreRequests,
+    tenantRestoreAdmin,
     backupOrphanSweep,
     recoveryQuiesced,
     backupRuns,
@@ -10137,6 +10216,7 @@ export function createContainer(
       );
       backupScheduler.stop();
       backupHousekeeping.stop();
+      await hostedBackupLoop.stop();
       await capacityMonitorLoop.stop();
       legacyCompactionExecutor.stop();
       recoveryExecutor.stop();

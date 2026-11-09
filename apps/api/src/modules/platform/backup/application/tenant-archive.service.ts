@@ -4,6 +4,7 @@ import {
   NexaError,
   PLATFORM_ERROR_CODES,
   TENANT_ARCHIVE_ERROR_CODES,
+  type BackupDeliveryState,
   type BackupPhaseDurationsMs,
   type BackupStage,
   type BackupTrigger,
@@ -97,8 +98,31 @@ export interface HeavyJobRunner {
   ): Promise<{ readonly ran: true; readonly result: T } | { readonly ran: false }>;
 }
 
+/**
+ * Phase 6B PR-2 (ADR-0039 § 7): where a VERIFIED hosted archive goes besides this server —
+ * the hosted bot's OWN operations group's backups topic, by its own bot, if it connected one.
+ * Never the owner's group, never the owner's `BACKUP_TELEGRAM_*` fallback chat. Reached only
+ * from a VERIFY_RESTORE that passed.
+ */
+export interface HostedArchiveDelivery {
+  deliver(input: {
+    readonly tenantId: string;
+    readonly runId: string;
+    readonly archivePath: string;
+    readonly archiveBytes: number;
+    readonly checksum: string;
+    readonly at: Date;
+  }): Promise<{
+    readonly state: BackupDeliveryState;
+    readonly detail: string | null;
+    readonly attemptedAt: Date | null;
+  }>;
+}
+
 export interface TenantArchiveServiceDeps {
   readonly runs: BackupRunRepository;
+  /** Absent: kept on this server, `NOT_ATTEMPTED` (PR-1's behaviour). */
+  readonly delivery?: HostedArchiveDelivery;
   readonly engine: TenantArchiveEngine;
   readonly heavyJobs: HeavyJobRunner;
   readonly clock: Clock;
@@ -231,6 +255,38 @@ export class TenantArchiveService {
       const plaintextLeft = await workspace.discardPlaintext();
       // ---- DELIVER (only from a verified archive) ---------------------------
       await progress('DELIVER');
+      let delivered: {
+        readonly state: BackupDeliveryState;
+        readonly detail: string | null;
+        readonly attemptedAt: Date | null;
+      } = {
+        state: 'NOT_ATTEMPTED',
+        detail: 'Kept on this server: hosted archives are not sent to the owner’s topic.',
+        attemptedAt: null,
+      };
+      if (this.deps.delivery !== undefined) {
+        try {
+          delivered = await this.deps.delivery.deliver({
+            tenantId: input.tenantId,
+            runId: id,
+            archivePath: workspace.archivePath,
+            archiveBytes: sealed.archiveBytes,
+            checksum: dumped.manifestSha256,
+            at: this.deps.clock.now(),
+          });
+        } catch (error) {
+          // A delivery that threw is not a failed archive: the verified file stays here.
+          delivered = {
+            state: 'FAILED_DEFINITIVE',
+            detail:
+              `The hosted group delivery failed: ${error instanceof Error ? error.message : String(error)}`.slice(
+                0,
+                500,
+              ),
+            attemptedAt: this.deps.clock.now(),
+          };
+        }
+      }
       lap('DELIVER');
       // ---- CLEANUP ---------------------------------------------------------
       stage = 'CLEANUP';
@@ -247,8 +303,9 @@ export class TenantArchiveService {
         archiveBytes,
         checksum,
         verifiedAt,
-        deliveryState: 'NOT_ATTEMPTED',
-        deliveryDetail: 'Kept on this server: hosted archives are not sent to the owner’s topic.',
+        deliveryState: delivered.state,
+        deliveryAttemptedAt: delivered.attemptedAt,
+        deliveryDetail: delivered.detail,
         cleanupOk: leftovers.length === 0,
         cleanupDetail: leftovers.length === 0 ? null : leftovers.join(', '),
         archiveFormat: 'SEVEN_ZIP',
@@ -414,6 +471,8 @@ export class TenantRestoreService {
     readonly slug?: string;
     /** Absent: a dry run. Present: the confirmation of that VERIFIED dry run, which applies. */
     readonly confirmRequestId?: string;
+    /** A dry run's request id, chosen by the caller (its upload is filed under it). */
+    readonly requestId?: string;
   }): Promise<{ readonly requestId: string; readonly summary: TenantRestoreSummary } | null> {
     if (input.mode === 'REPLACE') {
       throw new NexaError({
@@ -430,7 +489,7 @@ export class TenantRestoreService {
     };
     const artifactSha256 = await this.deps.engine.sha256(input.archivePath);
     const apply = input.confirmRequestId !== undefined;
-    const id = input.confirmRequestId ?? this.deps.ids.uuid();
+    const id = input.confirmRequestId ?? input.requestId ?? this.deps.ids.uuid();
     let confirmedTenant: string | null = null;
     let created = apply;
     const admitted = await this.deps.heavyJobs.runWhenAdmitted(
