@@ -216,3 +216,4 @@ export * from './tenant-archive-errors.js';
 /** Phase 6A PR-3: the creator panel — hosted bots, their lifecycle and the section's 2FA. */
 export * from './hosting.js';
 export * from './hosting-activation.js';
+export * from './hosting-backup.js';
