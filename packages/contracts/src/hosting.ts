@@ -90,6 +90,11 @@ export const HOSTING_SESSION_COOKIE_NAME_SECURE = `__Host-${HOSTING_SESSION_COOK
 // ---------------------------------------------------------------------------
 
 export const HOSTING_ERROR_CODES = {
+  /**
+   * Phase 6B replace: a hosted bot is being replaced from an archive (its REPLACE request is
+   * VERIFYING or APPLYING); its state does not change until that ends.
+   */
+  REPLACE_IN_PROGRESS: 'hosting.replace_in_progress',
   /** Not the installation owner (another tenant's admin, a non-owner admin, a job). */
   OWNER_ONLY: 'hosting.owner_only',
   /** No active section factor yet: enrol first. */
