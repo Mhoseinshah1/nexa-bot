@@ -2252,7 +2252,10 @@ export class AdminManagementService {
   ): Promise<void> {
     if (adminIdOf(actor) === null) return;
     const held = await this.guard.permissionsOf(scope, actor, tx);
-    const excess = [...new Set(permissions)].filter((one) => !held.has(one)).sort();
+    const excess = this.guard
+      .delegableIn(scope, new Set(permissions))
+      .filter((one) => !held.has(one))
+      .sort();
     if (excess.length > 0) {
       throw errors.permissionDenied(
         IDENTITY_ERROR_CODES.ADMIN_PRIVILEGE_ESCALATION,
@@ -2308,7 +2311,10 @@ export class AdminManagementService {
       for (const permission of role.permissions) granting.add(permission);
     }
 
-    const excess = [...granting].filter((permission) => !held.has(permission as never)).sort();
+    const excess = this.guard
+      .delegableIn(scope, granting as Set<PermissionKey>)
+      .filter((permission) => !held.has(permission))
+      .sort();
     if (excess.length > 0) {
       throw errors.permissionDenied(
         IDENTITY_ERROR_CODES.ADMIN_PRIVILEGE_ESCALATION,

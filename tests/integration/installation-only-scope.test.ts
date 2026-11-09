@@ -184,4 +184,26 @@ describe('installation-only backup and recovery (ADR-0039 F1)', () => {
     const rows = await context.container.database.db.select().from(recoveryRequests);
     expect(rows).toHaveLength(0);
   });
+
+  it('a hosted owner can still create and re-role administrators with the seeded technical role (Codex P2)', async () => {
+    const management = context.container.adminManagement;
+    // `technical` carries `backup.run`, an installation-only key the hosted owner cannot hold.
+    const created = await management.create(tenantB, hostedOwnerActor, {
+      username: 'hosted-technical',
+      displayName: 'Technical',
+      password: 'a-perfectly-fine-password',
+      roleKeys: ['technical'],
+    });
+    const other = await createAdmin(context.container, tenantB, { username: 'hosted-second' });
+    await expect(
+      management.setRoles(tenantB, hostedOwnerActor, other.id, {
+        roleKeys: ['owner'],
+        reason: 'tenant-local role change',
+      }),
+    ).resolves.toBeDefined();
+    expect(created.roleKeys).toEqual(['technical']);
+    // The recipient still cannot exercise them: the guard filters per scope.
+    const recipient = await context.container.admins.findByUsername(tenantB, 'hosted-technical');
+    expect(recipient).not.toBeNull();
+  });
 });
