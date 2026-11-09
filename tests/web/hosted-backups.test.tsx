@@ -109,7 +109,9 @@ describe('the backup page of a hosted bot’s own Web Admin', () => {
       },
     ]);
     const permissions: PermissionKey[] = ['backup.view'];
-    renderPage(<BackupRoutePage route={{ path: '/recovery' } as never} permissions={permissions} />);
+    renderPage(
+      <BackupRoutePage route={{ path: '/recovery' } as never} permissions={permissions} />,
+    );
     expect(await screen.findByText(t('web.hosted_own_backup_body'))).toBeInTheDocument();
     expect(screen.getByText(t('web.hosted_own_backup_last'))).toBeInTheDocument();
     expect(api.calls.map((call) => call.url)).toEqual([url(HOSTED_BACKUP_ROUTES.own)]);
