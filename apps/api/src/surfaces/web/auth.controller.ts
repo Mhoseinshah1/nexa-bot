@@ -30,6 +30,7 @@ import {
 } from './authenticated-request.js';
 import type { LoginResult } from '../../modules/platform/identity/application/authentication.service.js';
 import { withoutForeignHostingPermission } from '../../modules/platform/hosting/application/hosting-owner-guard.js';
+import { withoutInstallationDataExport } from '../../modules/platform/data-export/application/shown-permissions.js';
 
 /**
  * The Web Admin authentication surface.
@@ -125,15 +126,23 @@ export class AuthController {
     };
   }
 
-  /** The chrome list: `hosting.manage` only for the installation owner (phase 6A PR-3). */
+  /**
+   * The chrome list: `hosting.manage` only for the installation owner (phase 6A PR-3),
+   * `data.export` only for a hosted bot's (phase 6B PR-3).
+   */
   private shownPermissions(described: {
     readonly admin: { readonly tenantId: string };
     readonly roleKeys: readonly string[];
     readonly permissions: readonly PermissionKey[];
   }): string[] {
-    return withoutForeignHostingPermission(described.permissions, {
+    const shown = withoutForeignHostingPermission(described.permissions, {
       tenantId: described.admin.tenantId,
       roleKeys: described.roleKeys,
+      installationTenantId: this.container.installationTenantId,
+    });
+    // `data.export` is drawn for a hosted bot's session only (phase 6B PR-3).
+    return withoutInstallationDataExport(shown as PermissionKey[], {
+      tenantId: described.admin.tenantId,
       installationTenantId: this.container.installationTenantId,
     });
   }
