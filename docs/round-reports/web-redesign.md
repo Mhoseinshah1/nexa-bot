@@ -65,11 +65,62 @@ Program: `NEXA-WEB-REDESIGN` (owner brief). One session = at most two PRs.
 - Broadcast pause/resume/cancel stay in the report card with their own confirms (not moved to a head bar).
 - Campaign detail on a finished campaign draws an empty «مدیریت کمپین» group (cosmetic, from `QuickActionBar`; sweep PR-9).
 
-## Handoff (next: session 4 = PR-6 + PR-7)
+## Session 4 — PR-6 + PR-7
 
-- Start from latest `main`. PR-6 `feat/web-redesign-resellers-bot` (resellers +detail, tiers, plans, bots, bot buttons, appearance, content,
-  terms, client apps); PR-7 `feat/web-redesign-panels-settings` (panels +detail, panel health, providers, settings, features, ops group).
-- Opus diff review for money actions: reseller credit, tier prices, reseller plans.
-- Bot buttons: drag and drop only (`LayoutDnd`), keyboard reorder; Appearance QR drag/resize + `quietZoneModules`; panels/features rules in §2.5.
-- Settings pages use the sticky save bar; time inputs `TimeField24`.
-- Owner check list for PR-4/PR-5 is in the issue #358 comment.
+- **PR-6 #435 — resellers + bot group** (merge 2c5520196): resellers / tiers / plans (fold, status chips, name opens the drawer), bots, content, terms,
+  client apps (form fields untouched), bot buttons on `LayoutDnd` only (main menu + service layout, max 3 per row, keyboard reorder, no move buttons),
+  Appearance QR stage (drag + corner resize, `quietZoneModules` field). Opus money review of the reseller pages: SAFE. Codex P2 (read-only menu
+  items must stay keyboard-selectable) fixed with a test. CI fix: falsification rows for the replaced chip drag retired (EXPECTED 2861 → 2854).
+- **PR-7 #436 — panels, settings, features, ops group** (merge 15b2387fe): panels list (provider name only, health + error in one cell, no
+  sideways scroll), panel detail (action bar, KPI row, RickPanel/custom read-only provider rules), panel health, providers, settings (collapsible
+  sections + one sticky save bar over each row's own submit), features (own scroll panel), ops group (`TimeField24`). Opus review of the settings
+  save bar and panel activation display: SAFE. Codex clean. Inventories: `pr6-inventory-{a,b}.md`, `pr7-inventory-{a,b}.md`.
+
+### Decisions taken (session 4)
+
+- No `/resellers/:id` route exists: the reseller «detail» is the existing standing drawer (`reseller-edit.tsx`, unchanged).
+- Settings: an unchanged value can no longer be re-saved and Enter in a field no longer submits (the bar needs a real edit).
+- Docs for sessions 4–6 are committed on the session branch and shipped in one docs PR at the end of session 6.
+
+## Session 5 — PR-8 + PR-9
+
+- **PR-8 #437 — system group** (merge 924429550): menu 6 → 3. «اعلان‌ها و هشدارها» (`/notification-center`; `/alerts` redirects; four chips, red strip,
+  one row for an item that is both inbox and alert, bell drawer); «اعلان‌ها» → tab «گزارش ارسال‌ها» on «گروه لاگ»; «گزارش ممیزی» → tab «تاریخچهٔ تغییرات»
+  on «سامانه» (permissions kept per tab); incidents open in a side drawer; system, bulk operations; recovery (kit import inside the unreadable-secrets
+  card, archive-password label). Opus permission review: one real finding (two `/ops-log` polls without `pollUnlessFinal`), fixed with Codex's P2
+  (older page waits for both feeds) in one commit. Inventories `pr8-inventory-{a,b,c}.md`.
+- **PR-9 #438 — sweep** (merge 7b033b625): leftover subtitles, ~60 dead CSS classes and unused components removed, empty quick-action group fixed,
+  shots over all 74 routes clean (five unfixtured GETs got fixtures), dark theme audited, English phrases translated. Codex: two CSS rules built from
+  dynamic class names (avatar tints, sparkline size) restored.
+
+### Decisions taken (session 5)
+
+- **«رخدادها» bug not reproduced.** Every route into an incident loads `GET /incidents/:id` (200 for every listed incident, committed HTTP test
+  `incidents-http`); the only API path that says «رخداد پیدا نشد» is a malformed list cursor, which the web never sends. No API change. The incident now
+  opens in a drawer by its own id. Needs the owner's exact screen text and entry point if it still happens.
+- No regression test exists for Codex's pagination P2 on the unified list (the page shows no rows while the alerts feed loads, so the pager is absent either
+  way); the guard (`feedsReady`) is in place without a failing-without-it test.
+- «هشدارهای ثبت‌شده» = the whole management history (no «not open» filter on the server).
+
+## Session 6 — PR-10
+
+- **PR-10 #439 — follow-ups** (merge a904e889c): (1) Support AI form → five collapsible sections + one sticky save bar, per-field dirty state, cancel
+  restores, validation error keeps edits; the endpoint needs the whole document, so save sends it built from the loaded values (recorded). (2) Business-chat
+  history: read-only `GET /business-chats/:id/history` (cursor «before message id», 50 newest first, server-side search by text and speaker, RLS, existing
+  permission) built by Opus; the thread uses it for «older» and search; HTTP tests for gaps/duplicates, search past the first page, another tenant, a
+  viewer without the permission; eight API and six web mutation checks caught. (3) List totals: optional `total {value, estimated}` on customers, orders,
+  services; chips «حدود N» on users/services/orders; EXPLAIN estimate, capped exact count, own short transaction, 1.5 s bound, opt-in, no total on a cursor.
+  Opus reviewed the plans once; four findings fixed. Codex clean.
+- CI: the 200k-row fixture of `list-total.test.ts` hung in `beforeAll` on one shard; fixture bounded (explicit codes, chunks, step timings, timeouts, 50k floor)
+  — root cause is best evidence (per-row code trigger, 23 indexes), not proven. Merge fix: the sweep had removed `SwitchSettingRow`, restored.
+
+### Decisions taken (session 6)
+
+- Chips for the other lists (beyond users/services/orders) need their own repository `total()`: left out.
+- Under a client filter «older» still reads pages of all messages; search results refresh on text/filter change, not with the 15 s detail poll.
+
+## Handoff (program complete)
+
+- All of PR-0 … PR-10 are merged. Open: the «رخدادها» bug was not reproduced (needs the owner's exact screen text and entry point); the five client-app fields the
+  owner will remove in a later round; `backup.daily_time` input in `backup-schedule.tsx` still uses the browser time input (not `TimeField24`).
+- Owner test-server checklist ends with `sudo botctl roles disable provisioner monitor`.
