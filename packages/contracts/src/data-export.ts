@@ -26,3 +26,22 @@ export const DATA_EXPORT_README_NAME = 'README.fa.md';
 
 /** The download's file name's prefix; the tenant's slug and the date follow. */
 export const DATA_EXPORT_FILE_PREFIX = 'nexa-data';
+
+/**
+ * Every refusal of the data export. «آماده نیست» and «منقضی شد» are the two the ADR names; the
+ * others are what a request and a download can meet.
+ */
+export const DATA_EXPORT_ERROR_CODES = {
+  /** The file is not made yet (still queued or running), or the export failed. */
+  NOT_READY: 'data_export.not_ready',
+  /** The 24 h deadline passed; the file is gone. Ask for a new export. */
+  EXPIRED: 'data_export.expired',
+  /** No such export in this tenant (or it is another requester's). */
+  NOT_FOUND: 'data_export.not_found',
+  /** Only a hosted bot's data is exported; the installation's own tenant is not. */
+  NOT_HOSTED: 'data_export.not_hosted',
+  /** An export of this tenant is already being made. */
+  IN_PROGRESS: 'data_export.in_progress',
+} as const;
+export type DataExportErrorCode =
+  (typeof DATA_EXPORT_ERROR_CODES)[keyof typeof DATA_EXPORT_ERROR_CODES];
