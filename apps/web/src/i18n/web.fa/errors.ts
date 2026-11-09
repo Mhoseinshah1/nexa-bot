@@ -280,6 +280,15 @@ export const WEB_FA_ERRORS = {
   'web.err_tenant_archive_has_child_tenants':
     'رباتی که زیرمجموعه دارد هنوز جداگانه بکاپ گرفته نمی‌شود.',
   'web.err_tenant_archive_not_hosted': 'فقط از ربات‌های میزبانی‌شده بکاپ جداگانه گرفته می‌شود.',
+  'web.err_data_export_not_ready': 'خروجی هنوز آماده نیست.',
+  'web.err_data_export_expired': 'مهلت دانلود این خروجی تمام شده است؛ خروجی تازه‌ای درخواست کنید.',
+  'web.err_data_export_not_found': 'چنین خروجی‌ای پیدا نشد.',
+  'web.err_data_export_not_hosted': 'خروجی داده فقط برای ربات‌های میزبانی‌شده است.',
+  'web.err_data_export_in_progress':
+    'یک خروجی برای این ربات در حال ساخت است؛ تا آماده شدن آن صبر کنید.',
+  'web.err_data_export_failed': 'ساخت خروجی ناموفق بود؛ دوباره درخواست دهید.',
+  'web.err_data_export_too_large':
+    'حجم داده از حد یک فایل ZIP بیشتر است؛ با مدیر سرور تماس بگیرید.',
   'web.err_tenant_archive_purged': 'این ربات برای همیشه بسته شده است.',
   'web.err_tenant_archive_replace_unavailable':
     'بازیابی روی ربات موجود هنوز ممکن نیست؛ آن را به‌عنوان ربات تازه بازیابی کنید.',

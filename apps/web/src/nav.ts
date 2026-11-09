@@ -662,6 +662,19 @@ export const NAV: readonly NavEntry[] = [
     permission: 'hosting.manage',
     group: 'web.navgroup_system',
   },
+  {
+    /*
+     * Phase 6B PR-3: «خروجی داده», a hosted bot's owner taking a plain copy of their data.
+     * `data.export` is CRITICAL and the owner's; the server also refuses the installation's own
+     * tenant (its session is not even shown the key), and checks the permission on every call.
+     */
+    id: 'data-export',
+    path: '/data-export',
+    label: 'web.nav_data_export',
+    icon: 'download',
+    permission: 'data.export',
+    group: 'web.navgroup_system',
+  },
 ];
 
 /**

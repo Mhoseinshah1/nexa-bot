@@ -13,7 +13,7 @@ import { navGroupHeader, renderPage, stubApi } from './harness';
  * The sidebar's information architecture and its single-open accordion.
  *
  * What this file defends: the ten groups hold exactly the owner's entries, in the owner's
- * order; every one of the 50 entries (the three retired legacy pages are gone) survived with its path, label, icon, permission and
+ * order; every one of the 51 entries (the three retired legacy pages are gone) survived with its path, label, icon, permission and
  * owner-only flag untouched (a snapshot taken from the navigation BEFORE the regrouping); only
  * one group is open at a time; the group that owns the current route opens on the first
  * render and on every navigation; permission filtering happens before anything is drawn.
@@ -54,6 +54,8 @@ const BEFORE: readonly [
   ['content', '/content', 'web.nav_templates', 'content', 'templates.view', false],
   ['custom-service', '/custom-service', 'web.nav_custom_service', 'sliders', 'catalog.view', false],
   ['dashboard', '/', 'web.nav_overview', 'dashboard', null, false],
+  // Phase 6B PR-3: «خروجی داده», a hosted bot's owner taking a plain copy of their data.
+  ['data-export', '/data-export', 'web.nav_data_export', 'download', 'data.export', false],
   ['discounts', '/discounts', 'web.nav_discounts', 'discounts', 'catalog.view', false],
   [
     'extra-devices',
@@ -258,6 +260,7 @@ const GROUPS: readonly [string, readonly string[]][] = [
       'system',
       'recovery',
       'hosting',
+      'data-export',
     ],
   ],
 ];
@@ -312,11 +315,11 @@ const drawnHrefs = () =>
 const head = (group: string) => navGroupHeader(group) as HTMLButtonElement;
 
 describe('the navigation’s information architecture', () => {
-  it('keeps all 50 entries exactly once, each with its path, label, icon and permission', () => {
-    // 50 after the redesign, R10 D4's «کارت‌های هدیه», and phase 6A's «میزبانی‌ها». Minus «هشدارها», «اعلان‌ها» (now the notification centre and the ops group's delivery tab) and «گزارش ممیزی» (the System page's audit tab).
-    expect(NAV).toHaveLength(50);
-    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(50);
-    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(50);
+  it('keeps all 51 entries exactly once, each with its path, label, icon and permission', () => {
+    // 51 after the redesign, R10 D4's «کارت‌های هدیه», phase 6A's «میزبانی‌ها» and phase 6B's «خروجی داده». Minus «هشدارها», «اعلان‌ها» (now the notification centre and the ops group's delivery tab) and «گزارش ممیزی» (the System page's audit tab).
+    expect(NAV).toHaveLength(51);
+    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(51);
+    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(51);
     const now = [...NAV]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((entry) => [
@@ -517,7 +520,7 @@ describe('the single-open accordion', () => {
   it('keeps every icon in the collapsed rail, where a header has no room for its label', () => {
     sidebar('/', ALL, OWNER, { collapsed: true });
     expect(document.querySelectorAll('.nav-group-head')).toHaveLength(0);
-    expect(drawnHrefs()).toHaveLength(50);
+    expect(drawnHrefs()).toHaveLength(51);
   });
 });
 
