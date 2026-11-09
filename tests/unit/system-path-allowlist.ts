@@ -191,4 +191,13 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'reason: idempotency retention: interactive keys',
   'reason: outbox retention: published messages',
   'reason: restore-exclusion',
+  // Phase 6B PR-1 (ADR-0039): the tenant archive. Binding a hosted tenant from installation
+  // work is checked once on the system path (HOSTED child of this installation, no children);
+  // the restore's dry run reads ACROSS tenants for the keys no two tenants may share (tenant
+  // id, slug, bot, domain, the GLOBAL unique keys); and its one transaction writes the new
+  // tenant row and the owner's register, the only rows of it that are not the restored
+  // tenant's own (those are written bound to it, under RLS).
+  'reason: tenant archive: bind a hosted tenant for export',
+  'reason: tenant archive: create the restored tenant and its register',
+  'reason: tenant archive: global key collisions before restore',
 ];
