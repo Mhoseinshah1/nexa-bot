@@ -158,6 +158,7 @@ import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
 import { SecretReentryService } from './modules/platform/recovery/application/secret-reentry.service.js';
 import { DrizzleSecretReentryReader } from './modules/platform/recovery/infrastructure/drizzle-secret-reentry.reader.js';
 import { hostname } from 'node:os';
+import { getHeapStatistics } from 'node:v8';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import { InstallationKeyring } from './infrastructure/crypto/installation-keyring.js';
 import { FAST_KIT_KDF, PRODUCTION_KIT_KDF } from './infrastructure/crypto/recovery-kit.js';
@@ -9110,6 +9111,11 @@ export function createContainer(
       ? {}
       : { leases: new DrizzleLegacyNxpkgImportRepository(leaseDatabase.db) }),
     isTransientFailure: isTransientDatabaseFailure,
+    // SFR A2: the heap the import role runs in, so a dry run that dies of memory says so.
+    heapProbe: () => {
+      const heap = getHeapStatistics();
+      return { usedBytes: heap.used_heap_size, limitBytes: heap.heap_size_limit };
+    },
     logger,
   });
   const backupScheduler = new BackupScheduler({

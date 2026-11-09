@@ -110,16 +110,26 @@ describe('the production compose topology', () => {
     // into a development one (Secure-less cookies, an optional CSRF check, weak hashing).
     const anchor = compose.slice(compose.indexOf('x-app-common:'), compose.indexOf('\nservices:'));
     expect(anchor).toMatch(
-      /^ {2}environment:\n(?: {4}#.*\n| {4}[A-Z_]+: .*\n)* {4}NODE_ENV: production\n/m,
+      /^ {2}environment: &app-environment\n(?: {4}#.*\n| {4}[A-Z_]+: .*\n)* {4}NODE_ENV: production\n/m,
     );
     const roles = ['api', 'worker', 'monitor', 'provisioner', 'assistant', 'recovery'];
     for (const role of roles) {
       const block = serviceBlock(compose, role);
       expect(block, `${role} does not merge the shared anchor`).toContain('<<: *app-common');
-      // A service-level `environment:` would REPLACE the anchor's map, pin included.
-      expect(block, `${role} overrides environment and loses the pin`).not.toMatch(
-        /^ {4}environment:/m,
-      );
+      // A service-level `environment:` would REPLACE the anchor's map, pin included —
+      // unless it merges the shared map back (the recovery role's heap, SFR A2).
+      if (/^ {4}environment:/m.test(block)) {
+        expect(block, `${role} overrides environment and loses the pin`).toMatch(
+          /^ {4}environment:\n {6}<<: \*app-environment\n/m,
+        );
+      }
+    }
+    // And resolved, as compose merges it: every role still carries the pin.
+    const resolved = parse(compose, { merge: true }) as {
+      services: Record<string, { environment?: Record<string, string> }>;
+    };
+    for (const role of roles) {
+      expect(resolved.services[role]?.environment?.['NODE_ENV'], role).toBe('production');
     }
     // Control: every service that merges the anchor is one of the roles above.
     const merging = [...compose.matchAll(/\n {2}([a-z-]+):\n {4}<<: \*app-common/g)].map(
@@ -127,6 +137,32 @@ describe('the production compose topology', () => {
     );
     expect(merging.sort()).toEqual([...roles].sort());
     expect(compose).not.toMatch(/NODE_ENV:\s*development/);
+  });
+
+  it('pins the V8 heap for the recovery role alone, over whatever nexa.env says (SFR A2)', () => {
+    // A Mirza dry run of a 133 MB .nxpkg died five times with "JavaScript heap out of memory"
+    // in a 655 MB recovery container. The heap is sized beside the limit (NEXA_HEAP_RECOVERY_MB
+    // in deploy.env, about 75 % of NEXA_MEM_RECOVERY) and set in the service's `environment`,
+    // which wins over `env_file`: a NODE_OPTIONS an operator left in nexa.env cannot replace it.
+    const resolved = parse(compose, { merge: true }) as {
+      services: Record<string, { environment?: Record<string, string>; mem_limit?: string }>;
+    };
+    const recovery = resolved.services['recovery'];
+    expect(recovery?.environment?.['NODE_OPTIONS']).toBe(
+      '--max-old-space-size=${NEXA_HEAP_RECOVERY_MB:-1228}',
+    );
+    expect(recovery?.mem_limit).toBe('${NEXA_MEM_RECOVERY:-1638m}');
+    // The defaults agree with each other: 1228 is 75 % of 1638, the 8 GB host's limit.
+    expect(Math.floor((1638 * 75) / 100)).toBe(1228);
+    // No other service sets it: the other roles keep V8's own sizing.
+    for (const [name, service] of Object.entries(resolved.services)) {
+      if (name === 'recovery') continue;
+      expect(service.environment?.['NODE_OPTIONS'], `${name} sets NODE_OPTIONS`).toBeUndefined();
+    }
+    // In `environment`, never only in an env_file, which is the precedence that matters.
+    expect(serviceBlock(compose, 'recovery')).toMatch(
+      /^ {4}environment:\n {6}<<: \*app-environment\n {6}NODE_OPTIONS: --max-old-space-size=/m,
+    );
   });
 
   it('mounts no Docker socket, uses no host network and runs nothing privileged', () => {

@@ -537,6 +537,19 @@ function Summary({ row, mayManage }: { row: LegacyMigrationImportView; mayManage
           {t(ERROR_LABELS[row.errorCode])} <Ltr>{row.errorCode}</Ltr>
         </Banner>
       )}
+      {row.status === 'DRY_RUN_FAILED' && row.progress.attemptsExhaustedCause != null && (
+        <Banner tone="danger">
+          {row.progress.attemptsExhaustedCause === 'MEMORY' && row.progress.memoryPeak != null
+            ? t('web.lmg_exhausted_memory')
+                .replace('{attempts}', formatNumber(row.progress.dryRunAttempts))
+                .replace('{used}', formatNumber(row.progress.memoryPeak.heapUsedMb))
+                .replace('{limit}', formatNumber(row.progress.memoryPeak.heapLimitMb))
+            : t('web.lmg_exhausted_unknown').replace(
+                '{attempts}',
+                formatNumber(row.progress.dryRunAttempts),
+              )}
+        </Banner>
+      )}
       {row.errorCode !== null &&
         row.status !== 'DRY_RUN_FAILED' &&
         row.progress.refusalCounts.length > 0 && (

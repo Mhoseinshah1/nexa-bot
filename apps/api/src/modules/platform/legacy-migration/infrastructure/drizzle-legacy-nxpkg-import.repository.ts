@@ -361,6 +361,29 @@ export class DrizzleLegacyNxpkgImportRepository implements LegacyNxpkgImportRepo
     return updated.length > 0;
   }
 
+  async recordMemoryPeak(input: {
+    readonly id: string;
+    readonly leaseOwner: string;
+    readonly heapUsedMb: number;
+    readonly heapLimitMb: number;
+  }): Promise<void> {
+    const peak = JSON.stringify({ heapUsedMb: input.heapUsedMb, heapLimitMb: input.heapLimitMb });
+    // jsonb_set on the column as it is NOW: a step's own progress write is never overwritten by
+    // a stale copy, and a lower reading never replaces a higher one.
+    await this.db
+      .update(t)
+      .set({
+        progress: sql`jsonb_set(coalesce(${t.progress}, '{}'::jsonb), '{memoryPeak}', ${peak}::jsonb)`,
+      })
+      .where(
+        and(
+          eq(t.id, input.id),
+          eq(t.claimedBy, input.leaseOwner),
+          sql`coalesce((${t.progress} -> 'memoryPeak' ->> 'heapUsedMb')::bigint, -1) < ${input.heapUsedMb}`,
+        ),
+      );
+  }
+
   async release(input: {
     readonly id: string;
     readonly leaseOwner: string;
