@@ -193,6 +193,7 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
       readonly failureCode: string;
       readonly failureMessage: string;
       readonly now: Date;
+      readonly includeConfirmed?: boolean;
     },
     tx?: unknown,
   ): Promise<boolean> {
@@ -210,7 +211,7 @@ export class DrizzleTenantRestoreRepository implements TenantRestoreRepository {
           eq(tenantRestores.tenantId, requireTenantId(scope)),
           eq(tenantRestores.id, input.id),
           eq(tenantRestores.state, 'VERIFIED'),
-          isNull(tenantRestores.confirmRequestedAt),
+          ...(input.includeConfirmed === true ? [] : [isNull(tenantRestores.confirmRequestedAt)]),
         ),
       )
       .returning({ id: tenantRestores.id });

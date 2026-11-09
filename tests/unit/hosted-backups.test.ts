@@ -270,9 +270,15 @@ describe('«بازیابی ربات از فایل»: the recovery role’s pass'
     rows: TenantRestoreRecord[],
     files: Record<string, string | null>,
     restoreFails?: Error,
+    withdrawResult = true,
   ) {
-    const restored: { confirmRequestId?: string; password: string }[] = [];
-    const withdrawn: { id: string; failureCode: string; failureMessage?: string }[] = [];
+    const restored: { confirmRequestId?: string; password: string; slug?: string }[] = [];
+    const withdrawn: {
+      id: string;
+      failureCode: string;
+      failureMessage?: string;
+      includeConfirmed?: boolean;
+    }[] = [];
     const removed: string[] = [];
     const service = new TenantRestoreAdminService({
       section: {} as never,
@@ -293,7 +299,7 @@ describe('«بازیابی ربات از فایل»: the recovery role’s pass'
         requestConfirm: async () => true,
         withdraw: async (_s, input) => {
           withdrawn.push(input);
-          return true;
+          return withdrawResult;
         },
         staleDryRuns: async (_s, before) =>
           rows
@@ -376,6 +382,34 @@ describe('«بازیابی ربات از فایل»: the recovery role’s pass'
     const message = t.withdrawn[0]?.failureMessage ?? '';
     expect(message).not.toContain('params:');
     expect(message).not.toContain(marker);
+  });
+
+  it('applies the slug the owner chose at the dry run', async () => {
+    const id = '01900000-0000-7000-8000-0000000000c4';
+    const t = admin(
+      [
+        record({
+          id,
+          confirmRequestedAt: new Date('2026-11-08T23:30:00Z'),
+          dryRun: { slug: 'chosen-slug' },
+        }),
+      ],
+      { [id]: JSON.stringify({ ciphertext: 'sealed:pw', keyId: 'k1' }) },
+    );
+    await t.service.tick();
+    expect(t.restored).toEqual([expect.objectContaining({ slug: 'chosen-slug' })]);
+  });
+
+  it('fails a confirmed row it never claimed, and keeps its upload when that did not land', async () => {
+    const id = '01900000-0000-7000-8000-0000000000c5';
+    const rows = [record({ id, confirmRequestedAt: new Date('2026-11-08T23:30:00Z') })];
+    const landed = admin(rows, { [id]: null });
+    await landed.service.tick();
+    expect(landed.withdrawn).toEqual([expect.objectContaining({ id, includeConfirmed: true })]);
+    expect(landed.removed).toContain(id);
+    const missed = admin(rows, { [id]: null }, undefined, false);
+    await missed.service.tick();
+    expect(missed.removed).not.toContain(id);
   });
 
   it('expires a dry run nobody confirmed within a day; a fresh one stays', async () => {

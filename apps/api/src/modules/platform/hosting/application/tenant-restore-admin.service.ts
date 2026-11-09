@@ -56,6 +56,8 @@ export interface TenantRestoreRequests {
       readonly failureCode: string;
       readonly failureMessage: string;
       readonly now: Date;
+      /** The recovery role fails a CONFIRMED row its restore never claimed. */
+      readonly includeConfirmed?: boolean;
     },
     tx?: unknown,
   ): Promise<boolean>;
@@ -405,6 +407,10 @@ export class TenantRestoreAdminService {
         directory: workspace.scratchDirectory,
         mode: 'NEW',
         confirmRequestId: row.id,
+        // The slug the owner chose at the dry run: the apply must not fall back to the archive's.
+        ...(typeof (row.dryRun as { slug?: unknown } | null)?.slug === 'string'
+          ? { slug: (row.dryRun as { slug: string }).slug }
+          : {}),
       });
       if (outcome === null) return; // the queue is busy: the row stays confirmed, next pass
       this.deps.logger.info(
@@ -413,9 +419,10 @@ export class TenantRestoreAdminService {
       );
     } catch (error) {
       // The restore service FAILs a row it moved; a row it never claimed is withdrawn here.
-      await this.deps.requests
+      const failed = await this.deps.requests
         .withdraw(installation, {
           id: row.id,
+          includeConfirmed: true,
           failureCode:
             error instanceof NexaError ? error.code : 'tenant_archive.verification_failed',
           // Only a NexaError's own, code-authored sentence is stored; any other error (a drizzle
@@ -431,6 +438,10 @@ export class TenantRestoreAdminService {
         { restoreId: row.id, code: error instanceof NexaError ? error.code : null },
         'a confirmed hosted restore failed',
       );
+      // The upload goes only once the row is failed; otherwise the next pass retries it (the
+      // sweep removes the files of a row that finished some other way).
+      if (failed) await workspace.remove();
+      return;
     }
     await workspace.remove();
   }
