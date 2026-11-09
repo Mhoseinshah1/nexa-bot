@@ -23,7 +23,6 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
-import { withTenantScopeIn } from '../../../../infrastructure/persistence/database-scope.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   recordMutationDenial,
@@ -190,7 +189,7 @@ export class DataExportService {
       hosted,
     );
     await this.requireHosted(installation, hosted);
-    const rows = await this.deps.repository.list(
+    const rows = await this.deps.repository.hostList(
       { tenantId: hosted, botInstanceId: null } as TenantContext,
       DATA_EXPORT_LIST_LIMIT,
     );
@@ -248,7 +247,7 @@ export class DataExportService {
         );
       },
     );
-    return { export: await this.requireView(target, exportId), replayed: false };
+    return { export: await this.requireView(target, exportId, true), replayed: false };
   }
 
   async downloadHosted(
@@ -269,7 +268,7 @@ export class DataExportService {
     await this.requireHosted(installation, hosted);
     const target = { tenantId: hosted, botInstanceId: null } as TenantContext;
     const exportId = parseExportId(exportIdRaw);
-    const row = await this.deps.repository.find(target, exportId);
+    const row = await this.deps.repository.hostFind(target, exportId);
     if (row === null) throw notFound();
     const download = await this.open(row);
     try {
@@ -373,21 +372,26 @@ export class DataExportService {
     method?: string,
   ): Promise<void> {
     const now = this.deps.clock.now();
-    const insert = async (): Promise<void> => {
-      if ((await this.deps.repository.active(target, tx)) !== null) {
-        throw errors.conflict(
-          DATA_EXPORT_ERROR_CODES.IN_PROGRESS,
-          'An export of this data is already being made.',
-        );
-      }
-      await this.deps.repository.insert(
-        target,
-        { id: exportId, requestedByAdminId: actor.id as string, requestedByHost: byHost, now },
-        tx,
+    const hostDoor = target.tenantId !== home.tenantId;
+    const repository = this.deps.repository;
+    const active = hostDoor
+      ? await repository.hostActive(target, tx)
+      : await repository.active(target, tx);
+    if (active !== null) {
+      throw errors.conflict(
+        DATA_EXPORT_ERROR_CODES.IN_PROGRESS,
+        'An export of this data is already being made.',
       );
+    }
+    const row = {
+      id: exportId,
+      requestedByAdminId: actor.id as string,
+      requestedByHost: byHost,
+      now,
     };
-    if (target.tenantId === home.tenantId) await insert();
-    else await withTenantScopeIn(tx.tx, target, insert);
+    // The host's door writes ANOTHER tenant's row: on the system path, under its own reason.
+    if (hostDoor) await repository.hostInsert(target, row, tx);
+    else await repository.insert(target, row, tx);
     await this.deps.audit.record(
       home,
       actor,
@@ -453,7 +457,14 @@ export class DataExportService {
       requestHash,
     );
     if (found === null) return null;
-    return { export: await this.requireView(target, found.result.exportId), replayed: true };
+    return {
+      export: await this.requireView(
+        target,
+        found.result.exportId,
+        target.tenantId !== home.tenantId,
+      ),
+      replayed: true,
+    };
   }
 
   /** The file of a READY export, or the refusal that says why not. */
@@ -490,8 +501,14 @@ export class DataExportService {
     };
   }
 
-  private async requireView(scope: TenantContext, id: string): Promise<DataExportView> {
-    const row = await this.deps.repository.find(scope, id);
+  private async requireView(
+    scope: TenantContext,
+    id: string,
+    host = false,
+  ): Promise<DataExportView> {
+    const row = host
+      ? await this.deps.repository.hostFind(scope, id)
+      : await this.deps.repository.find(scope, id);
     if (row === null) throw notFound();
     return this.view(row);
   }

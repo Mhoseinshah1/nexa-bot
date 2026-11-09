@@ -18,6 +18,7 @@
 #   installation-ok     the installation's own tenant can be exported
 #   short-deadline      the worker's deadline is no longer 24 h
 #   never-class         tenant_data_exports loses its NEVER classification
+#   host-tenant-bound   the host door's insert binds the hosted tenant instead of the system path
 set -uo pipefail
 
 if [[ -z "${TEST_DATABASE_URL:-}" || "${TEST_DATABASE_URL}" != "${DATABASE_URL:-}" ]]; then
@@ -80,6 +81,11 @@ MUTATIONS = {
         (f"{DX}/application/data-export.runner.ts",
          "expiresAt: new Date(now.getTime() + DATA_EXPORT_TTL_MS),",
          "expiresAt: new Date(now.getTime() + 60_000),"),
+    ]),
+    "host-tenant-bound": ("integration", {}, [
+        (f"{DX}/infrastructure/drizzle-data-export.repository.ts",
+         "  return open === undefined ? withSystemScope(reason, fn) : withSystemScopeIn(open, reason, fn);",
+         "  return open === undefined ? withSystemScope(reason, fn) : fn();"),
     ]),
     "never-class": ("unit", {}, [
         ("apps/api/src/modules/platform/backup/application/tenant-archive-inventory.ts",

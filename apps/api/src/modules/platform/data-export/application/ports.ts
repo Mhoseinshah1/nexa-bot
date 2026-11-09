@@ -50,6 +50,22 @@ export interface DataExportRepository {
   /** The export being made for this tenant, if any. */
   active(scope: TenantContext, tx?: unknown): Promise<DataExportRow | null>;
 
+  // --- the installation owner's door (another tenant's rows, on the system path) --------
+  /** `list`/`find`/`active`/`insert` for a HOSTED tenant, each under its own system-path reason. */
+  hostList(scope: TenantContext, limit: number): Promise<DataExportRow[]>;
+  hostFind(scope: TenantContext, id: string): Promise<DataExportRow | null>;
+  hostActive(scope: TenantContext, tx: unknown): Promise<DataExportRow | null>;
+  hostInsert(
+    scope: TenantContext,
+    row: {
+      readonly id: string;
+      readonly requestedByAdminId: string;
+      readonly requestedByHost: boolean;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<void>;
+
   // --- the worker -----------------------------------------------------------------------
   /** The oldest REQUESTED (or abandoned RUNNING) export, claimed for `leaseOwner`. */
   claimNext(input: {

@@ -247,6 +247,56 @@ describe('data export from «میزبانی‌ها» (phase 6B PR-3)', () => {
     ).toBe(DATA_EXPORT_ERROR_CODES.NOT_FOUND);
   });
 
+  it('writes a hosted bot’s export row on the system path, under its own reason — never by binding that tenant', async () => {
+    const panel = await openPanel();
+    const { id, hostedScope } = await createBot(panel);
+    const db = api.container.database.db;
+    const sqlTag = (await import('drizzle-orm')).sql;
+    // A probe on the table: what the session says it is acting as when the row is written.
+    await db.execute(
+      sqlTag`CREATE TABLE IF NOT EXISTS dx_reason_probe (role text, reason text, tenant text)`,
+    );
+    await db.execute(sqlTag`TRUNCATE dx_reason_probe`);
+    await db.execute(sqlTag`
+      CREATE OR REPLACE FUNCTION dx_reason_probe_fn() RETURNS trigger
+        LANGUAGE plpgsql SECURITY DEFINER AS $$
+      BEGIN
+        INSERT INTO dx_reason_probe VALUES (current_setting('role'),
+          coalesce(current_setting('app.system_reason', true), ''),
+          coalesce(current_setting('app.current_tenant_id', true), ''));
+        RETURN NEW;
+      END $$`);
+    await db.execute(sqlTag`
+      CREATE TRIGGER dx_reason_probe_trg BEFORE INSERT ON tenant_data_exports
+        FOR EACH ROW EXECUTE FUNCTION dx_reason_probe_fn()`);
+    try {
+      const asked = await api.container.dataExport.requestHosted(
+        tenantA,
+        ownerActor,
+        panel.token,
+        id,
+        { idempotencyKey: key(), proof: { code: code(panel.secret) } },
+      );
+      const probe = (await db.execute(sqlTag`SELECT role, reason FROM dx_reason_probe`)).rows as {
+        role: string;
+        reason: string;
+      }[];
+      expect(probe).toEqual([
+        {
+          role: 'nexa_system',
+          reason: 'data-export: host requests an export for a hosted bot',
+        },
+      ]);
+      expect(asked.export.id).toBeDefined();
+      // The hosted bot's own door still binds its own tenant.
+      expect(hostedScope.tenantId).toBe(id);
+    } finally {
+      await db.execute(sqlTag`DROP TRIGGER IF EXISTS dx_reason_probe_trg ON tenant_data_exports`);
+      await db.execute(sqlTag`DROP FUNCTION IF EXISTS dx_reason_probe_fn()`);
+      await db.execute(sqlTag`DROP TABLE IF EXISTS dx_reason_probe`);
+    }
+  });
+
   it('refuses with no section session, a wrong or spent code, a non-owner, and another tenant’s owner — changing nothing', async () => {
     const panel = await openPanel();
     const { id, hostedActor, hostedScope } = await createBot(panel);

@@ -743,6 +743,16 @@ Decisions of PR-3, binding on later PRs (the design above, "The open data export
   `data export: bind the exported tenant` reason of the list above is not used): the worker's
   four cross-tenant sweeps are scope-less `@ScopeBound` methods, pinned as
   `DrizzleDataExportRepository.claimNext`, `.expireDue`, `.failAbandoned` and `.pendingRemoval`.
+- **The host door is on the system path.** The installation owner's door reads and writes a
+  HOSTED tenant's export rows, so it never binds that tenant's scope: `hostList`, `hostFind`,
+  `hostActive` and `hostInsert` run under the literal reasons `data-export: host lists the
+exports of a hosted bot`, `…host finds an export of a hosted bot`, `…host checks the active
+export of a hosted bot` and `…host requests an export for a hosted bot` (each pinned in
+  `tests/unit/system-path-allowlist.ts`; `withSystemScope` on the pool, `withSystemScopeIn` on
+  the owner's own transaction for the request), with the hosted tenant as the predicate of every
+  statement. The hosted owner's own door stays tenant-bound. An integration probe (a trigger on
+  the table) asserts the request is written as `nexa_system` under its reason; the mutation
+  `host-tenant-bound` of `scripts/claude/data-export-mutation.sh` turns it red.
 - **The worker** (`DataExportRunner`, in the worker role, 15 s tick, fresh while idle or working):
   expires and removes, fails abandoned work (three attempts), claims the oldest request
   (`FOR UPDATE SKIP LOCKED`, a lease it refreshes), waits for the heavy-job queue

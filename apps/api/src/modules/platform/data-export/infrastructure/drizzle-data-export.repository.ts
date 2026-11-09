@@ -7,7 +7,11 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
-import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
+import {
+  ScopeBound,
+  withSystemScope,
+  withSystemScopeIn,
+} from '../../../../infrastructure/persistence/database-scope.js';
 import { tenantDataExports } from '../../../../infrastructure/persistence/schema.js';
 import {
   requireTenantId,
@@ -17,6 +21,111 @@ import type { DataExportRepository, DataExportRow } from '../application/ports.j
 
 function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
+}
+
+/**
+ * The installation owner's door reads and writes a HOSTED tenant's export rows (ADR-0038
+ * «Cross-tenant work»): on the system path under its own literal reason, never by binding the
+ * hosted tenant's scope. On the owner's transaction when given one (`withSystemScopeIn`), on
+ * the pool otherwise. The tenant predicate stays in every statement.
+ */
+async function acrossTenants<T>(tx: unknown, reason: string, fn: () => Promise<T>): Promise<T> {
+  const open = (tx as TransactionScope | undefined)?.tx;
+  return open === undefined ? withSystemScope(reason, fn) : withSystemScopeIn(open, reason, fn);
+}
+
+// The statements, as plain functions: a method of the `@ScopeBound` class would re-bind the
+// scope it is handed, and the host door must stay on the system path.
+async function insertRow(
+  db: Database,
+  scope: TenantContext,
+  row: {
+    readonly id: string;
+    readonly requestedByAdminId: string;
+    readonly requestedByHost: boolean;
+    readonly now: Date;
+  },
+  tx?: unknown,
+): Promise<void> {
+  try {
+    await executorOf(db, tx)
+      .insert(tenantDataExports)
+      .values({
+        id: row.id,
+        tenantId: requireTenantId(scope),
+        state: 'REQUESTED',
+        requestedByAdminId: row.requestedByAdminId,
+        requestedByHost: row.requestedByHost,
+        requestedAt: row.now,
+        updatedAt: row.now,
+      });
+  } catch (error) {
+    // The partial unique index: another request won the race to the one active slot.
+    if ((error as { code?: unknown }).code === '23505') {
+      throw errors.conflict(
+        DATA_EXPORT_ERROR_CODES.IN_PROGRESS,
+        'An export of this data is already being made.',
+      );
+    }
+    throw error;
+  }
+}
+
+async function findRow(
+  db: Database,
+  scope: TenantContext,
+  id: string,
+  tx?: unknown,
+): Promise<DataExportRow | null> {
+  const [row] = await executorOf(db, tx)
+    .select()
+    .from(tenantDataExports)
+    .where(
+      and(eq(tenantDataExports.tenantId, requireTenantId(scope)), eq(tenantDataExports.id, id)),
+    )
+    .limit(1);
+  return row === undefined ? null : toRow(row);
+}
+
+async function listRows(
+  db: Database,
+  scope: TenantContext,
+  limit: number,
+  tx?: unknown,
+  filter?: { readonly requestedByHost?: boolean },
+): Promise<DataExportRow[]> {
+  const rows = await executorOf(db, tx)
+    .select()
+    .from(tenantDataExports)
+    .where(
+      and(
+        eq(tenantDataExports.tenantId, requireTenantId(scope)),
+        filter?.requestedByHost === undefined
+          ? undefined
+          : eq(tenantDataExports.requestedByHost, filter.requestedByHost),
+      ),
+    )
+    .orderBy(desc(tenantDataExports.requestedAt), desc(tenantDataExports.id))
+    .limit(limit);
+  return rows.map(toRow);
+}
+
+async function activeRow(
+  db: Database,
+  scope: TenantContext,
+  tx?: unknown,
+): Promise<DataExportRow | null> {
+  const [row] = await executorOf(db, tx)
+    .select()
+    .from(tenantDataExports)
+    .where(
+      and(
+        eq(tenantDataExports.tenantId, requireTenantId(scope)),
+        inArray(tenantDataExports.state, [...ACTIVE]),
+      ),
+    )
+    .limit(1);
+  return row === undefined ? null : toRow(row);
 }
 
 type Row = typeof tenantDataExports.$inferSelect;
@@ -66,39 +175,11 @@ export class DrizzleDataExportRepository implements DataExportRepository {
     },
     tx?: unknown,
   ): Promise<void> {
-    try {
-      await executorOf(this.db, tx)
-        .insert(tenantDataExports)
-        .values({
-          id: row.id,
-          tenantId: requireTenantId(scope),
-          state: 'REQUESTED',
-          requestedByAdminId: row.requestedByAdminId,
-          requestedByHost: row.requestedByHost,
-          requestedAt: row.now,
-          updatedAt: row.now,
-        });
-    } catch (error) {
-      // The partial unique index: another request won the race to the one active slot.
-      if ((error as { code?: unknown }).code === '23505') {
-        throw errors.conflict(
-          DATA_EXPORT_ERROR_CODES.IN_PROGRESS,
-          'An export of this data is already being made.',
-        );
-      }
-      throw error;
-    }
+    await insertRow(this.db, scope, row, tx);
   }
 
   async find(scope: TenantContext, id: string, tx?: unknown): Promise<DataExportRow | null> {
-    const [row] = await executorOf(this.db, tx)
-      .select()
-      .from(tenantDataExports)
-      .where(
-        and(eq(tenantDataExports.tenantId, requireTenantId(scope)), eq(tenantDataExports.id, id)),
-      )
-      .limit(1);
-    return row === undefined ? null : toRow(row);
+    return findRow(this.db, scope, id, tx);
   }
 
   async list(
@@ -107,34 +188,47 @@ export class DrizzleDataExportRepository implements DataExportRepository {
     tx?: unknown,
     filter?: { readonly requestedByHost?: boolean },
   ): Promise<DataExportRow[]> {
-    const rows = await executorOf(this.db, tx)
-      .select()
-      .from(tenantDataExports)
-      .where(
-        and(
-          eq(tenantDataExports.tenantId, requireTenantId(scope)),
-          filter?.requestedByHost === undefined
-            ? undefined
-            : eq(tenantDataExports.requestedByHost, filter.requestedByHost),
-        ),
-      )
-      .orderBy(desc(tenantDataExports.requestedAt), desc(tenantDataExports.id))
-      .limit(limit);
-    return rows.map(toRow);
+    return listRows(this.db, scope, limit, tx, filter);
   }
 
   async active(scope: TenantContext, tx?: unknown): Promise<DataExportRow | null> {
-    const [row] = await executorOf(this.db, tx)
-      .select()
-      .from(tenantDataExports)
-      .where(
-        and(
-          eq(tenantDataExports.tenantId, requireTenantId(scope)),
-          inArray(tenantDataExports.state, [...ACTIVE]),
-        ),
-      )
-      .limit(1);
-    return row === undefined ? null : toRow(row);
+    return activeRow(this.db, scope, tx);
+  }
+
+  // --- the installation owner's door: another tenant's rows, on the system path --------------
+  // `scope` is the HOSTED tenant, the predicate of every statement; the reason is the audit.
+
+  hostList(scope: TenantContext, limit: number): Promise<DataExportRow[]> {
+    return acrossTenants(undefined, 'data-export: host lists the exports of a hosted bot', () =>
+      listRows(this.db, scope, limit),
+    );
+  }
+
+  hostFind(scope: TenantContext, id: string): Promise<DataExportRow | null> {
+    return acrossTenants(undefined, 'data-export: host finds an export of a hosted bot', () =>
+      findRow(this.db, scope, id),
+    );
+  }
+
+  hostActive(scope: TenantContext, tx: unknown): Promise<DataExportRow | null> {
+    return acrossTenants(tx, 'data-export: host checks the active export of a hosted bot', () =>
+      activeRow(this.db, scope, tx),
+    );
+  }
+
+  hostInsert(
+    scope: TenantContext,
+    row: {
+      readonly id: string;
+      readonly requestedByAdminId: string;
+      readonly requestedByHost: boolean;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<void> {
+    return acrossTenants(tx, 'data-export: host requests an export for a hosted bot', () =>
+      insertRow(this.db, scope, row, tx),
+    );
   }
 
   async claimNext(input: {
