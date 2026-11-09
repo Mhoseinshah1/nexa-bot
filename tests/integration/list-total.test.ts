@@ -30,7 +30,22 @@ import { createTestContext, tenantA, tenantB, type TestContext } from './harness
  * `services-plan.test.ts` does, because 600 000 settled orders is a fixture nobody can
  * afford and nothing here asserts product behaviour.
  */
+/** The target rows per table for tenant A; `FLOOR` is the least a slow runner may stop at. */
 const BIG = 200_000;
+/**
+ * An explicit, valid public code for row `n` (base 30 over the codes' own alphabet, eight
+ * digits, unique per tenant). A row with a code skips `nexa_assign_public_code`, which draws
+ * a random code and probes the table for it with dynamic SQL, per row, 400 000 times here.
+ */
+const codeOf = (n: string) =>
+  [1, 30, 900, 27_000, 810_000, 24_300_000, 729_000_000, 21_870_000_000]
+    .map(
+      (unit) =>
+        `substr('23456789ABCDEFGHJKMNPQRSTVWXYZ', 1 + ((${n}::bigint / ${String(unit)}) % 30)::int, 1)`,
+    )
+    .join(' || ');
+const FLOOR = 50_000;
+const CHUNK = 25_000;
 const SMALL = 3_000;
 const BLOCKED = 7;
 /** Generous for a loaded CI runner and still two orders below a scan of 200k rows ×3. */
@@ -39,16 +54,55 @@ const BOUND_MS = 400;
 describe('list totals on large tables', () => {
   let ctx: TestContext;
 
+  /** What tenant A actually holds: the target, unless the fixture's time budget ran out first. */
+  const rowsA = { customers: 0, orders: 0, services: 0 };
+
   beforeAll(async () => {
-    ctx = await createTestContext();
-    await ctx.reset();
+    const began = performance.now();
+    const step = (what: string, since: number) =>
+      process.stderr.write(
+        `list-total fixture: ${what} ${String(Math.round(performance.now() - since))} ms ` +
+          `(${String(Math.round(performance.now() - began))} ms in)\n`,
+      );
+    const at = async <T>(what: string, run: () => Promise<T>): Promise<T> => {
+      const since = performance.now();
+      process.stderr.write(`list-total fixture: ${what} ...\n`);
+      const out = await run();
+      step(what, since);
+      return out;
+    };
+    ctx = await at('context + reset', async () => {
+      const created = await createTestContext();
+      await created.reset();
+      return created;
+    });
     await ctx.container.database.withClient(async (client) => {
-      await client.query('SET statement_timeout = 0');
+      /*
+       * A stall must END, with the step that stalled in the message. `statement_timeout = 0`
+       * (the first version, copied from `services-plan.test.ts`) let one lock wait or one slow
+       * FK check hang the hook for its whole 600 s on CI. A statement now gets two minutes and
+       * a lock wait thirty seconds.
+       */
+      await client.query("SET statement_timeout = '120s'");
+      await client.query("SET lock_timeout = '30s'");
+      await client.query("SET synchronous_commit = 'off'");
+      /*
+       * Skip FK triggers where the role may: they are per-row index probes into the parent
+       * tables, which is what made 200k services slow on a loaded runner. The ids below are
+       * generated to match, so the rows are the same either way. Not available to a
+       * non-superuser (local development), where the checks simply run.
+       */
+      const replica = await client
+        .query("SET session_replication_role = 'replica'")
+        .then(() => true)
+        .catch(() => false);
+      process.stderr.write(`list-total fixture: FK triggers skipped: ${String(replica)}\n`);
       try {
         for (const [scope, offset, rows] of [
           [tenantA, 0, BIG],
           [tenantB, BIG, SMALL],
         ] as const) {
+          const isBig = scope === tenantA;
           const panelId = ctx.container.ids.uuid();
           const productId = ctx.container.ids.uuid();
           const customerId = ctx.container.ids.uuid();
@@ -70,58 +124,105 @@ describe('list totals on large tables', () => {
                VALUES ($1::uuid, $2::uuid, $3, 'ACTIVE')`,
             [customerId, scope.tenantId, String(700_000_000 + offset)],
           );
-          await client.query(
-            `INSERT INTO customers
-               (id, tenant_id, telegram_user_id, username, status, blocked_at, created_at)
-               SELECT gen_random_uuid(), $1::uuid, ($2::int + g)::text, 'member' || ($2::int + g),
-                      CASE WHEN g <= $4::int THEN 'BLOCKED' ELSE 'ACTIVE' END,
-                      CASE WHEN g <= $4::int THEN now() END,
-                      now() - ((g) || ' seconds')::interval
-                 FROM generate_series(1, $3::int) AS g`,
-            [scope.tenantId, 900_000_000 + offset, rows, scope === tenantA ? BLOCKED : 0],
+          const blocked = scope === tenantA ? BLOCKED : 0;
+          /*
+           * Chunked, with a time budget for each table (tenant A only). A chunk is its own
+           * statement, so progress is logged and a slow runner stops at the budget with what it
+           * has instead of hanging: the table keeps at least `FLOOR` rows, still far above the
+           * planner threshold, and the assertions below use the rows actually inserted.
+           */
+          const fill = async (
+            table: 'customers' | 'orders' | 'services',
+            target: number,
+            budgetMs: number,
+            insert: (from: number, to: number) => Promise<unknown>,
+          ): Promise<number> => {
+            const since = performance.now();
+            let done = 0;
+            while (done < target) {
+              const to = Math.min(done + CHUNK, target);
+              await insert(done + 1, to);
+              done = to;
+              if (isBig && done >= FLOOR && performance.now() - since > budgetMs) break;
+            }
+            step(`${scope === tenantA ? 'A' : 'B'} ${table} x${String(done)}`, since);
+            return done;
+          };
+          const customersDone = await fill('customers', rows, 25_000, (from, to) =>
+            client.query(
+              `INSERT INTO customers
+                 (id, tenant_id, telegram_user_id, username, status, blocked_at, created_at)
+                 SELECT gen_random_uuid(), $1::uuid, ($2::int + g)::text, 'member' || ($2::int + g),
+                        CASE WHEN g <= $5::int THEN 'BLOCKED' ELSE 'ACTIVE' END,
+                        CASE WHEN g <= $5::int THEN now() END,
+                        now() - ((g) || ' seconds')::interval
+                   FROM generate_series($3::int, $4::int) AS g`,
+              [scope.tenantId, 900_000_000 + offset, from, to, blocked],
+            ),
           );
-          await client.query(
-            `INSERT INTO orders
-               (id, tenant_id, customer_id, state, product_id, panel_id, line_title,
-                line_duration_days, line_traffic_bytes, line_unit_price_amount, line_quantity,
-                subtotal_amount, discount_amount, total_amount, currency, quote, settled_at,
-                refunded_at, created_at)
-               SELECT ('00000000-0000-4000-8000-' || lpad(($2::int + g)::text, 12, '0'))::uuid,
-                      $1::uuid, $3::uuid,
-                      CASE WHEN g <= $7::int THEN 'REFUNDED' ELSE 'PAID' END,
-                      $4::uuid, $5::uuid, 'total', 30,
-                      53687091200, 250000, 1, 250000, 0, 250000, 'IRT', '{}'::jsonb, now(),
-                      CASE WHEN g <= $7::int THEN now() END,
-                      now() - ((g) || ' seconds')::interval
-                 FROM generate_series(1, $6::int) AS g`,
-            [scope.tenantId, offset, customerId, productId, panelId, rows, BLOCKED],
+          const ordersDone = await fill('orders', rows, 40_000, (from, to) =>
+            client.query(
+              `INSERT INTO orders
+                 (id, tenant_id, customer_id, state, product_id, panel_id, line_title,
+                  line_duration_days, line_traffic_bytes, line_unit_price_amount, line_quantity,
+                  subtotal_amount, discount_amount, total_amount, currency, quote, settled_at,
+                  refunded_at, created_at, code)
+                 SELECT ('00000000-0000-4000-8000-' || lpad(($2::int + g)::text, 12, '0'))::uuid,
+                        $1::uuid, $3::uuid,
+                        CASE WHEN g <= $8::int THEN 'REFUNDED' ELSE 'PAID' END,
+                        $4::uuid, $5::uuid, 'total', 30,
+                        53687091200, 250000, 1, 250000, 0, 250000, 'IRT', '{}'::jsonb, now(),
+                        CASE WHEN g <= $8::int THEN now() END,
+                        now() - ((g) || ' seconds')::interval,
+                        ${codeOf('($2::int + g)')}
+                   FROM generate_series($6::int, $7::int) AS g`,
+              [scope.tenantId, offset, customerId, productId, panelId, from, to, blocked],
+            ),
           );
-          await client.query(
-            `INSERT INTO services
-               (id, tenant_id, customer_id, order_id, panel_id, product_id, provider_username,
-                state, delivery_state, traffic_limit_bytes, traffic_used_bytes, created_at,
-                updated_at, provisioned_at, delivered_at)
-               SELECT gen_random_uuid(), $1::uuid, $2::uuid,
-                      ('00000000-0000-4000-8000-' || lpad(($3::int + g)::text, 12, '0'))::uuid,
-                      $4::uuid, $5::uuid, 'nxtotal' || ($3::int + g), 'ACTIVE', 'DELIVERED',
-                      53687091200, 0,
-                      now() - ((g) || ' seconds')::interval,
-                      now() - ((g) || ' seconds')::interval,
-                      now() - ((g) || ' seconds')::interval,
-                      now() - ((g) || ' seconds')::interval
-                 FROM generate_series(1, $6::int) AS g`,
-            [scope.tenantId, customerId, offset, panelId, productId, rows],
+          // One service per order, so a service never outruns the orders that exist.
+          const servicesDone = await fill('services', ordersDone, 60_000, (from, to) =>
+            client.query(
+              `INSERT INTO services
+                 (id, tenant_id, customer_id, order_id, panel_id, product_id, provider_username,
+                  state, delivery_state, traffic_limit_bytes, traffic_used_bytes, created_at,
+                  updated_at, provisioned_at, delivered_at, code)
+                 SELECT gen_random_uuid(), $1::uuid, $2::uuid,
+                        ('00000000-0000-4000-8000-' || lpad(($3::int + g)::text, 12, '0'))::uuid,
+                        $4::uuid, $5::uuid, 'nxtotal' || ($3::int + g), 'ACTIVE', 'DELIVERED',
+                        53687091200, 0,
+                        now() - ((g) || ' seconds')::interval,
+                        now() - ((g) || ' seconds')::interval,
+                        now() - ((g) || ' seconds')::interval,
+                        now() - ((g) || ' seconds')::interval,
+                        ${codeOf('($3::int + g)')}
+                   FROM generate_series($6::int, $7::int) AS g`,
+              [scope.tenantId, customerId, offset, panelId, productId, from, to],
+            ),
           );
+          if (isBig) {
+            rowsA.customers = customersDone + 1;
+            rowsA.orders = ordersDone;
+            rowsA.services = servicesDone;
+          }
         }
         // The planner estimates from STATISTICS; an un-analysed table looks empty.
-        await client.query('ANALYZE customers');
-        await client.query('ANALYZE orders');
-        await client.query('ANALYZE services');
+        for (const table of ['customers', 'orders', 'services']) {
+          const since = performance.now();
+          await client.query(`ANALYZE ${table}`);
+          step(`ANALYZE ${table}`, since);
+        }
       } finally {
+        await client.query('RESET session_replication_role').catch(() => undefined);
         await client.query('RESET statement_timeout');
+        await client.query('RESET lock_timeout');
+        await client.query('RESET synchronous_commit');
       }
     });
-  }, 600_000);
+    process.stderr.write(
+      `list-total fixture: ready in ${String(Math.round(performance.now() - began))} ms, ` +
+        `tenant A holds ${JSON.stringify(rowsA)}\n`,
+    );
+  }, 240_000);
 
   afterAll(async () => {
     await ctx?.close();
@@ -136,23 +237,26 @@ describe('list totals on large tables', () => {
   const within = (value: number, expected: number) =>
     expect(Math.abs(value - expected) / expected).toBeLessThan(0.1);
 
-  it('estimates the customers of a 200k tenant instead of counting them', async () => {
+  it('estimates the customers of a large tenant instead of counting them', async () => {
+    // The planner path needs far more rows than its 5 000 threshold; a slow runner may have
+    // stopped the fixture early, but never below this.
+    expect(Math.min(rowsA.customers, rowsA.orders, rowsA.services)).toBeGreaterThanOrEqual(FLOOR);
     const repository = new DrizzleCustomerRepository(ctx.container.database.db);
     const { result, ms } = await timed(() => repository.total(tenantA, {}));
     expect(result).not.toBeNull();
     expect(result?.estimated).toBe(true);
-    within(result?.value ?? 0, BIG + 1);
+    within(result?.value ?? 0, rowsA.customers);
     expect(ms).toBeLessThan(BOUND_MS);
   });
 
-  it('estimates the orders and the services of a 200k tenant the same way', async () => {
+  it('estimates the orders and the services of a large tenant the same way', async () => {
     const orders = new DrizzleOrderRepository(ctx.container.database.db);
     const services = new DrizzleServiceRepository(ctx.container.database.db);
     const o = await timed(() => orders.total(tenantA, {}, []));
     const s = await timed(() => services.total(tenantA, {}));
     for (const [one, expected] of [
-      [o, BIG],
-      [s, BIG],
+      [o, rowsA.orders],
+      [s, rowsA.services],
     ] as const) {
       expect(one.result?.estimated).toBe(true);
       within(one.result?.value ?? 0, expected);
