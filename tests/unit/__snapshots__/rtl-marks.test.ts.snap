@@ -1,0 +1,18 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`renderTemplateBody > bot.wallet.summary: every line that starts with an icon is marked; the code span is intact 1`] = `
+"‏{icon:account} اطلاعات حساب کاربری شما:
+
+‏{icon:identity} شناسه کاربری: <code>123456</code>
+‏{icon:user} نام: Ali
+‏{icon:phone} شماره تماس: ثبت شده
+‏{icon:time} زمان ثبت‌نام: 1404/10/11 13:30
+‏{icon:wallet} موجودی: 1,000 تومان
+‏{icon:purchase} تعداد سرویس‌های خریداری‌شده: 2 عدد
+‏{icon:invoice} تعداد فاکتورهای پرداخت‌شده: 3 عدد
+‏{icon:referral} تعداد زیرمجموعه‌های شما: 4 نفر
+‏{icon:group} گروه کاربری: عادی
+
+‏{icon:date} تاریخ: 1405/08/18
+‏{icon:clock} ساعت: 15:35"
+`;

@@ -7,7 +7,6 @@ export const WEB_FA_PRODUCTS = {
   // OPS-A redesign (round W, wave 2): client apps.
   'web.client_apps_section_identity': 'برنامه',
   'web.client_apps_section_links': 'لینک‌ها',
-  'web.client_apps_section_compat': 'سازگاری',
   'web.client_apps_preview_chat': 'پیام ربات',
   'web.client_apps_delete_title': 'حذف برنامه',
   'web.client_apps_delete_yes': 'بله، حذف شود',
@@ -16,7 +15,7 @@ export const WEB_FA_PRODUCTS = {
   'web.client_apps_subtitle':
     'برنامه‌هایی که ربات در بخش «📱 دانلود برنامه و آموزش اتصال» به مشتری پیشنهاد می‌دهد، با لینک دانلود و آموزش هر کدام. هر تغییر از همان لحظه در ربات دیده می‌شود.',
   'web.client_apps_hint':
-    'مشتری فقط برنامه‌های فعال را می‌بیند، به ترتیب عدد ترتیب، و اگر سرویسی دارد فقط برنامه‌هایی که با سرویسش سازگارند. سیستم عاملی که برنامه‌ای ندارد همان آموزش کلی خودش را نشان می‌دهد.',
+    'مشتری همهٔ برنامه‌های فعال هر سیستم عامل را می‌بیند، به ترتیب عدد ترتیب؛ هر برنامه برای همهٔ سرویس‌ها است. سیستم عاملی که برنامه‌ای ندارد همان آموزش کلی خودش را نشان می‌دهد. متن دکمه‌های دانلود و لینک جایگزین را از «متن‌های ربات» (بخش دانلود برنامه و آموزش اتصال) تغییر دهید.',
   'web.client_apps_empty': 'هنوز برنامه‌ای ثبت نشده است.',
   'web.client_apps_empty_hint':
     'هیچ لینک پیش‌فرضی همراه نصب نیست. با «افزودن برنامه» برنامه‌هایی را که خودتان پیشنهاد می‌کنید ثبت کنید؛ تا آن زمان ربات آموزش کلی هر سیستم عامل را نشان می‌دهد.',
@@ -33,11 +32,6 @@ export const WEB_FA_PRODUCTS = {
   'web.client_apps_platform_linux': 'لینوکس',
   'web.client_apps_platform_other': 'سایر',
   'web.client_apps_name': 'نام برنامه',
-  'web.client_apps_icon': 'نماد',
-  'web.client_apps_icon_hint':
-    'اختیاری؛ یک ایموجی یا نشانهٔ کوتاه که پیش از نام نمایش داده می‌شود.',
-  'web.client_apps_icon_invalid': 'نماد باید کوتاه و بدون فاصله باشد.',
-  'web.client_apps_description': 'توضیح کوتاه',
   'web.client_apps_official_url': 'لینک دانلود رسمی',
   'web.client_apps_url_hint': 'مثلاً نشانی صفحهٔ دانلود سازندهٔ برنامه، با https://',
   'web.client_apps_alternative_url': 'لینک فروشگاه یا لینک جایگزین',
@@ -48,15 +42,6 @@ export const WEB_FA_PRODUCTS = {
   'web.client_apps_guide': 'آموزش اتصال',
   'web.client_apps_guide_hint':
     'متن ساده. خطی که با - شروع شود فهرست می‌شود، خطی که با عدد و نقطه شروع شود یک مرحله است، و [متن](https://…) یک پیوند. خط خالی پاراگراف‌ها را جدا می‌کند.',
-  'web.client_apps_delivery': 'نوع تحویل سرویس',
-  'web.client_apps_compat_hint':
-    'برای نمایش به همه چیزی را انتخاب نکنید. اگر انتخاب کنید، به مشتری‌ای که سرویسش با هیچ‌کدام سازگار نیست نشان داده نمی‌شود.',
-  'web.client_apps_delivery_link': 'لینک اشتراک',
-  'web.client_apps_delivery_files': 'فایل‌های اتصال',
-  'web.client_apps_protocols': 'پروتکل‌ها',
-  'web.client_apps_providers': 'نوع پنل',
-  'web.client_apps_compat': 'سازگاری',
-  'web.client_apps_compat_any': 'همه',
   'web.client_apps_order': 'ترتیب',
   'web.client_apps_sort_hint': 'عدد کوچک‌تر بالاتر نشان داده می‌شود.',
   'web.client_apps_sort_invalid': 'ترتیب باید عددی صحیح از 0 تا 100٬000 باشد.',

@@ -32,6 +32,7 @@ import {
 } from './harness';
 import { setBucket } from './usage-sync-fixtures';
 import { monitorBudgetReserveFor, usageSyncBudgetReserveFor } from '../../apps/api/src/container';
+import { withoutRtlMarks } from '../support/customer-text';
 
 /**
  * The service self-care screens (customer UX completion §G, §H, §P, §Q): the paged list,
@@ -269,13 +270,13 @@ describe('a customer looks after the services they bought', () => {
     runtime().handle(tenantA, systemActor('bot'), update);
   const messages = () => sent.filter((one) => one.url.includes('/sendMessage'));
   const last = () => messages()[messages().length - 1];
-  const lastText = () => String(last()?.body['text'] ?? '');
+  const lastText = () => withoutRtlMarks(String(last()?.body['text'] ?? ''));
   const lastMarkup = () => JSON.stringify(last()?.body['reply_markup'] ?? {});
   // Owner spec §2.3: a page, a card from the list and the way back EDIT the tapped message.
   const drawn = () =>
     sent.filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'));
   const lastDrawn = () => drawn()[drawn().length - 1];
-  const lastDrawnText = () => String(lastDrawn()?.body['text'] ?? '');
+  const lastDrawnText = () => withoutRtlMarks(String(lastDrawn()?.body['text'] ?? ''));
   const lastDrawnMarkup = () => JSON.stringify(lastDrawn()?.body['reply_markup'] ?? {});
   /** A tap on one particular message — the list the bot sent, say. */
   const tapOn = (data: string, messageId: number) => {
@@ -1625,7 +1626,9 @@ describe('a customer looks after the services they bought', () => {
       expect(of('editMessageText'), 'no edit').toHaveLength(0);
       const raw = photos()[0]?.raw ?? '';
       expect(raw).toContain('name="photo"; filename="subscription.png"');
-      expect(captionOf(raw)).toBe(`🔗 لینک اشتراک شما:\n<code>${url}</code>`);
+      expect(withoutRtlMarks(captionOf(raw) ?? '')).toBe(
+        `🔗 لینک اشتراک شما:\n<code>${url}</code>`,
+      );
       expect(raw).toContain('name="reply_markup"');
       expect(buttonsOf(raw), 'the keyboard is under the same message').toEqual([
         `sv:${service.id}`,

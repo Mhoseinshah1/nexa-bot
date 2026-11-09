@@ -9,7 +9,7 @@ import {
   type ProductId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
-import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
+import { customerText as plain } from '../support/customer-text';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -208,6 +208,21 @@ describe('Item 12: an old MirzaBot button, through the webhook', () => {
   const messages = () =>
     sent.filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'));
   const lastMessage = () => messages()[messages().length - 1];
+  /**
+   * B1: a typed message nobody recognised is answered with `bot.unknown_command` and then the
+   * main menu with no extra tap, so the unknown sentence is the SECOND-to-last message and the
+   * last one is the menu's greeting with its keyboard.
+   */
+  const unknownAnswer = () => {
+    const menu = messages()[messages().length - 1];
+    expect(String(menu?.body['text']), 'the main menu follows the unknown sentence').toContain(
+      'خوش برگشتی',
+    );
+    expect(
+      (menu?.body['reply_markup'] as { keyboard?: unknown } | undefined)?.keyboard,
+    ).toBeDefined();
+    return messages()[messages().length - 2];
+  };
   const answers = () => sent.filter((one) => one.url.includes('/answerCallbackQuery'));
   const buttonsOf = (message: Sent | undefined) =>
     (
@@ -390,7 +405,7 @@ describe('Item 12: an old MirzaBot button, through the webhook', () => {
 
   it('keeps a typed unknown message on its own answer: the stale sentence is for buttons only', async () => {
     await command('backuser');
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownAnswer()?.body['text']).toBe(plain(CATALOGUE_FA['bot.unknown_command']));
 
     // A message with no text at all (a sticker) is UNSUPPORTED like an unreadable tap, and
     // still is not a tap: no stale sentence. (R12 F3 item 3, "no dead ends", gives the
@@ -412,8 +427,8 @@ describe('Item 12: an old MirzaBot button, through the webhook', () => {
         },
       },
     });
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
-    expect(buttonsOf(lastMessage()).map((button) => button.callback_data)).toEqual(['mm:']);
+    expect(unknownAnswer()?.body['text']).toBe(plain(CATALOGUE_FA['bot.unknown_command']));
+    expect(buttonsOf(unknownAnswer()).map((button) => button.callback_data)).toEqual(['mm:']);
   });
 
   it('leaves a customer’s order in flight untouched by a legacy tap, and the order still payable', async () => {

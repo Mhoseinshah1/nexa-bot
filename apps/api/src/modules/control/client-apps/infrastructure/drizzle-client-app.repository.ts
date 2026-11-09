@@ -1,13 +1,10 @@
 import { and, asc, count, eq, sql } from 'drizzle-orm';
 import {
   CLIENT_APP_PLATFORMS,
-  type ClientAppDeliveryKind,
   type ClientAppImageMimeType,
   type ClientAppInput,
   type ClientAppPlatform,
-  type ClientAppProtocol,
   type ClientAppStatus,
-  type ProviderType,
   type ScopeContext,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
@@ -33,15 +30,10 @@ const COLUMNS = {
   id: clientApps.id,
   platform: clientApps.platform,
   name: clientApps.name,
-  icon: clientApps.icon,
-  description: clientApps.description,
   officialUrl: clientApps.officialUrl,
   alternativeUrl: clientApps.alternativeUrl,
   helpUrl: clientApps.helpUrl,
   guide: clientApps.guide,
-  deliveryKinds: clientApps.deliveryKinds,
-  protocols: clientApps.protocols,
-  providerTypes: clientApps.providerTypes,
   status: clientApps.status,
   sortOrder: clientApps.sortOrder,
   version: clientApps.version,
@@ -59,15 +51,10 @@ interface Row {
   readonly id: string;
   readonly platform: string;
   readonly name: string;
-  readonly icon: string | null;
-  readonly description: string;
   readonly officialUrl: string;
   readonly alternativeUrl: string | null;
   readonly helpUrl: string | null;
   readonly guide: string;
-  readonly deliveryKinds: string[];
-  readonly protocols: string[];
-  readonly providerTypes: string[];
   readonly status: string;
   readonly sortOrder: number;
   readonly version: number;
@@ -88,15 +75,10 @@ function toRecord(row: Row): ClientAppRecord {
     id: row.id,
     platform: row.platform as ClientAppPlatform,
     name: row.name,
-    icon: row.icon,
-    description: row.description,
     officialUrl: row.officialUrl,
     alternativeUrl: row.alternativeUrl,
     helpUrl: row.helpUrl,
     guide: row.guide,
-    deliveryKinds: row.deliveryKinds as ClientAppDeliveryKind[],
-    protocols: row.protocols as ClientAppProtocol[],
-    providerTypes: row.providerTypes as ProviderType[],
     status: row.status as ClientAppStatus,
     sortOrder: row.sortOrder,
     version: row.version,
@@ -122,19 +104,22 @@ function toRecord(row: Row): ClientAppRecord {
   };
 }
 
+/**
+ * What an entry is written with (B6). The retired columns — `icon`, `description`,
+ * `delivery_kinds`, `protocols`, `provider_types` — are neither written here nor read by
+ * `COLUMNS`: an update leaves whatever an older row holds exactly as it was, and an insert
+ * gives them their permissive values (no icon, no compatibility, and the name as the
+ * description, because `client_apps_description_check` still requires one that is not blank).
+ * No data is dropped, so a backup of an older release restores into this schema unchanged.
+ */
 function mutable(input: ClientAppInput) {
   return {
     platform: input.platform,
     name: input.name,
-    icon: input.icon,
-    description: input.description,
     officialUrl: input.officialUrl,
     alternativeUrl: input.alternativeUrl,
     helpUrl: input.helpUrl,
     guide: input.guide,
-    deliveryKinds: [...input.deliveryKinds],
-    protocols: [...input.protocols],
-    providerTypes: [...input.providerTypes],
     sortOrder: input.sortOrder,
   };
 }
@@ -206,6 +191,8 @@ export class DrizzleClientAppRepository implements ClientAppRepository {
       .insert(clientApps)
       .values({
         ...mutable(input),
+        // Retired, and kept NOT NULL + non-blank by the table's CHECK: the name stands in.
+        description: input.name,
         id: input.id,
         tenantId,
         status: input.status,

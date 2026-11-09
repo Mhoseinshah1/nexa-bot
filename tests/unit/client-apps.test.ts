@@ -20,7 +20,6 @@ import {
   type ClientAppPlatform,
   type UserId,
 } from '@nexa/contracts';
-import { isClientAppRelevant } from '../../apps/api/src/modules/control/client-apps/domain/relevance';
 import { ClientAppCatalog } from '../../apps/api/src/modules/control/client-apps/application/client-app-catalog';
 import {
   ProvisionedServiceFacts,
@@ -96,7 +95,6 @@ describe('an entry as the operator writes it', () => {
   const valid = {
     platform: 'ANDROID',
     name: 'نمونه',
-    description: 'توضیح کوتاه',
     officialUrl: 'https://downloads.example.com/a.apk',
     guide: '1. نصب کنید',
     sortOrder: 10,
@@ -108,17 +106,35 @@ describe('an entry as the operator writes it', () => {
       officialUrl: 'HTTPS://Downloads.Example.com/a.apk',
       alternativeUrl: '  ',
       helpUrl: null,
-      icon: '',
     });
     expect(parsed).toMatchObject({
       officialUrl: 'https://downloads.example.com/a.apk',
       alternativeUrl: null,
       helpUrl: null,
-      icon: null,
-      deliveryKinds: [],
-      protocols: [],
-      providerTypes: [],
     });
+  });
+
+  it('B6: has no icon, short description or compatibility; a client that still sends them has them ignored', () => {
+    const parsed = clientAppInputSchema.parse({
+      ...valid,
+      icon: '🟢',
+      description: 'توضیح کوتاه',
+      deliveryKinds: ['CONNECTION_FILES'],
+      protocols: ['vless'],
+      providerTypes: ['marzban'],
+    });
+    expect(Object.keys(parsed).sort()).toEqual(
+      ['alternativeUrl', 'guide', 'helpUrl', 'name', 'officialUrl', 'platform', 'sortOrder'].sort(),
+    );
+    // …and what the retired fields used to refuse is no longer a reason to refuse an entry.
+    expect(clientAppInputSchema.safeParse({ ...valid, icon: '🟢 x' }).success).toBe(true);
+    expect(clientAppInputSchema.safeParse({ ...valid, providerTypes: ['hiddify'] }).success).toBe(
+      true,
+    );
+    const shown = Object.keys(clientAppSchema.shape);
+    for (const retired of ['icon', 'description', 'deliveryKinds', 'protocols', 'providerTypes']) {
+      expect(shown).not.toContain(retired);
+    }
   });
 
   it.each([
@@ -126,14 +142,10 @@ describe('an entry as the operator writes it', () => {
     ['an event handler in the guide', { guide: '<img src=x onerror=alert(1)>' }],
     ['a javascript: link in the guide', { guide: '[باز کن](javascript:alert(1))' }],
     ['an http link in the guide', { guide: '[دانلود](http://example.com/a)' }],
-    ['a data: URL in the description', { description: 'data:text/html,hi' }],
     ['markup in the name', { name: '<b>نام</b>' }],
     ['a control character', { guide: 'یک\u0000دو' }],
     ['a line break in the name', { name: 'یک\nدو' }],
-    ['a spaced icon', { icon: '🟢 x' }],
     ['a javascript: alternative link', { alternativeUrl: 'javascript:alert(1)' }],
-    ['a repeated compatibility member', { providerTypes: ['marzban', 'marzban'] }],
-    ['a provider this release does not know', { providerTypes: ['hiddify'] }],
     ['a platform the contract does not know', { platform: 'AMIGA' }],
   ])('refuses %s', (_label, change) => {
     expect(clientAppInputSchema.safeParse({ ...valid, ...change }).success).toBe(false);
@@ -159,7 +171,6 @@ describe('an entry as the operator writes it', () => {
   ])('refuses %s', (_label, text) => {
     expect(clientAppTextProblem(text)).toBe('UNSAFE_LINK');
     expect(clientAppInputSchema.safeParse({ ...valid, guide: text }).success).toBe(false);
-    expect(clientAppInputSchema.safeParse({ ...valid, description: text }).success).toBe(false);
   });
 
   it.each([
@@ -214,49 +225,6 @@ describe('the guide as a customer reads it', () => {
 });
 
 describe('which apps a customer is shown', () => {
-  const any = { deliveryKinds: [], protocols: [], providerTypes: [] } as const;
-  const marzbanLink = {
-    deliveryKinds: ['SUBSCRIPTION_LINK'],
-    protocols: ['vless'],
-    providerType: 'marzban',
-  } as const;
-  const rickpanelFiles = {
-    deliveryKinds: ['SUBSCRIPTION_LINK', 'CONNECTION_FILES'],
-    protocols: null,
-    providerType: 'rickpanel',
-  } as const;
-
-  it('shows everything to a customer with no live service', () => {
-    expect(isClientAppRelevant({ ...any, providerTypes: ['rickpanel'] }, [])).toBe(true);
-  });
-
-  it('shows an app that names nothing to everybody', () => {
-    expect(isClientAppRelevant(any, [marzbanLink])).toBe(true);
-  });
-
-  it('hides a files-only app from a customer whose panel cannot hand files over', () => {
-    const filesOnly = { ...any, deliveryKinds: ['CONNECTION_FILES'] } as const;
-    expect(isClientAppRelevant(filesOnly, [marzbanLink])).toBe(false);
-    expect(isClientAppRelevant(filesOnly, [rickpanelFiles])).toBe(true);
-  });
-
-  it('filters by panel type and by a KNOWN protocol, never by an unknown one', () => {
-    expect(isClientAppRelevant({ ...any, providerTypes: ['rickpanel'] }, [marzbanLink])).toBe(
-      false,
-    );
-    expect(isClientAppRelevant({ ...any, protocols: ['vmess'] }, [marzbanLink])).toBe(false);
-    expect(isClientAppRelevant({ ...any, protocols: ['vless', 'vmess'] }, [marzbanLink])).toBe(
-      true,
-    );
-    // RickPanel's activation names no protocols: unknown, so it excludes nothing.
-    expect(isClientAppRelevant({ ...any, protocols: ['vmess'] }, [rickpanelFiles])).toBe(true);
-  });
-
-  it('shows an app that fits ANY one of the customer’s services', () => {
-    const rickOnly = { ...any, providerTypes: ['rickpanel'] } as const;
-    expect(isClientAppRelevant(rickOnly, [marzbanLink, rickpanelFiles])).toBe(true);
-  });
-
   it('reads protocols from the activation’s own schema, and unknown otherwise', () => {
     expect(
       protocolsOf('marzban', {
@@ -281,15 +249,10 @@ function record(overrides: Partial<ClientAppRecord> & { id: string }): ClientApp
   return {
     platform: 'ANDROID',
     name: 'App',
-    icon: null,
-    description: 'd',
     officialUrl: 'https://downloads.example.com/a',
     alternativeUrl: null,
     helpUrl: null,
     guide: '- g',
-    deliveryKinds: [],
-    protocols: [],
-    providerTypes: [],
     status: 'ENABLED',
     sortOrder: 0,
     version: 1,
@@ -335,36 +298,39 @@ const fact = (overrides: Partial<CustomerServiceFact> = {}): CustomerServiceFact
 describe('the customer’s catalogue', () => {
   const rows = [
     record({ id: uuid(3), name: 'Third', sortOrder: 30 }),
-    record({ id: uuid(1), name: 'First', icon: '🟢', sortOrder: 10 }),
+    record({ id: uuid(1), name: 'First', sortOrder: 10 }),
     record({ id: uuid(2), name: 'Hidden', status: 'DISABLED', sortOrder: 20 }),
-    record({ id: uuid(4), name: 'Files only', deliveryKinds: ['CONNECTION_FILES'], sortOrder: 5 }),
+    record({ id: uuid(4), name: 'Fourth', sortOrder: 5 }),
     record({ id: uuid(5), name: 'iOS app', platform: 'IOS' }),
   ];
 
-  it('lists a platform’s ENABLED apps in the operator’s order, with the icon on the label', async () => {
+  it('lists a platform’s ENABLED apps in the operator’s order, labelled with the name alone', async () => {
     const apps = await catalog(rows, []).appsFor(TENANT, CUSTOMER, 'ANDROID');
-    expect(apps.map((app) => app.label)).toEqual(['Files only', '🟢 First', 'Third']);
+    expect(apps.map((app) => app.label)).toEqual(['Fourth', 'First', 'Third']);
   });
 
-  it('drops what does not fit the customer’s service', async () => {
-    const apps = await catalog(rows, [fact()]).appsFor(TENANT, CUSTOMER, 'ANDROID');
-    expect(apps.map((app) => app.label)).toEqual(['🟢 First', 'Third']);
+  it('B6: shows every app to every customer — nothing about their services hides one', async () => {
+    const services = [
+      fact(),
+      fact({ serviceId: uuid(901), providerType: 'rickpanel', deliveryKinds: [], protocols: null }),
+    ];
+    for (const facts of [[], [fact()], services]) {
+      const apps = await catalog(rows, facts).appsFor(TENANT, CUSTOMER, 'ANDROID');
+      expect(apps.map((app) => app.label)).toEqual(['Fourth', 'First', 'Third']);
+    }
   });
 
   it('offers «Other» only while it holds an app the customer may see', async () => {
     expect(await catalog(rows, []).platformsFor(TENANT, CUSTOMER)).toEqual(
       CONNECTION_GUIDE_PLATFORMS,
     );
-    const withOther = [
-      ...rows,
-      record({ id: uuid(6), platform: 'OTHER', providerTypes: ['rickpanel'] }),
-    ];
+    const withOther = [...rows, record({ id: uuid(6), platform: 'OTHER' })];
     expect(await catalog(withOther, []).platformsFor(TENANT, CUSTOMER)).toEqual(
       CLIENT_APP_PLATFORMS,
     );
-    // The only OTHER app is for RickPanel, and this customer is on Marzban.
+    // B6: an app applies to every service, so a customer on any panel is offered «Other» too.
     expect(await catalog(withOther, [fact()]).platformsFor(TENANT, CUSTOMER)).toEqual(
-      CONNECTION_GUIDE_PLATFORMS,
+      CLIENT_APP_PLATFORMS,
     );
   });
 
@@ -381,20 +347,14 @@ describe('the customer’s catalogue', () => {
     ).toEqual(['https://video.example.com/a', undefined, undefined]);
   });
 
-  it('neutralises a stored bare unsafe link in the name and description, keeping a safe one (C6)', async () => {
-    const written = record({
-      id: uuid(9),
-      icon: '🟢',
-      name: 'App http://x.example/a.apk',
-      description: 'از www.x.example بگیرید، یا https://ok.example/a.',
-    });
+  it('neutralises a stored bare unsafe link in the name (C6)', async () => {
+    const written = record({ id: uuid(9), name: 'App http://x.example/a.apk www.x.example' });
     const reader = catalog([written], []);
     const [listed] = await reader.appsFor(TENANT, CUSTOMER, 'ANDROID');
-    expect(listed?.label).toBe('🟢 App ');
+    expect(listed?.label).toBe('App  ');
     const detail = await reader.appFor(TENANT, CUSTOMER, uuid(9));
-    expect(detail?.title).toBe('🟢 App ');
-    expect(detail?.description).toBe('از  بگیرید، یا https://ok.example/a.');
-    for (const text of [listed?.label, detail?.title, detail?.description]) {
+    expect(detail?.title).toBe('App  ');
+    for (const text of [listed?.label, detail?.title]) {
       expect(text).not.toContain('http://');
       expect(text).not.toContain('www.');
     }
@@ -410,7 +370,6 @@ describe('the customer’s catalogue', () => {
   it('offers the one service’s existing actions, and the files note only where files exist', async () => {
     const files = record({
       id: uuid(7),
-      deliveryKinds: ['SUBSCRIPTION_LINK', 'CONNECTION_FILES'],
       guide: '- [دانلود](https://downloads.example.com/x)',
     });
     const one = await catalog([files], [fact({ filesOffered: true })]).appFor(
@@ -496,8 +455,7 @@ describe('the bot’s guide screens', () => {
     const detail = {
       id: uuid(1),
       platform: 'IOS' as const,
-      title: '🟢 App',
-      description: 'd',
+      title: 'App',
       guide: '• g',
       officialUrl: 'https://downloads.example.com/a',
       alternativeUrl: 'https://store.example.com/a',
@@ -509,7 +467,7 @@ describe('the bot’s guide screens', () => {
     };
     const screen = clientAppScreen(detail);
     expect(screen.key).toBe('bot.apps.detail_files');
-    expect(screen.values).toEqual({ app: '🟢 App', description: 'd', guide: '• g' });
+    expect(screen.values).toEqual({ app: 'App', guide: '• g' });
     expect(callbacks(screen)).toEqual([
       'https://downloads.example.com/a',
       'https://store.example.com/a',

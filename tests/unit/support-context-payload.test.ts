@@ -491,15 +491,10 @@ describe('TB3 support context — the builder over fakes', () => {
       id: 'app-1',
       platform: 'ANDROID',
       name: 'App',
-      icon: null,
-      description: 'desc',
       officialUrl: 'https://example.com/app',
       alternativeUrl: null,
       helpUrl: null,
       guide: 'x'.repeat(2500),
-      deliveryKinds: [],
-      protocols: [],
-      providerTypes: [],
       status: 'ENABLED',
     } as unknown as ClientAppRecord;
     return {

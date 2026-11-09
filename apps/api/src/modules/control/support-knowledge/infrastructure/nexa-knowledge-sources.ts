@@ -245,7 +245,7 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
   }
 
   /**
-   * ENABLED apps: name, description, the rendered guide and (Phase 4 PR-2) the official and help
+   * ENABLED apps: name, the rendered guide and (Phase 4 PR-2) the official and help
    * links, first — so a long guide clipped to the article bound never cuts the links.
    */
   private async clientApps(scope: TenantContext) {
@@ -259,7 +259,6 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
       ].filter((line) => line !== '');
       const body = [
         links.join('\n'),
-        neutralizeClientAppBareLinks(app.description),
         renderClientAppGuide(app.guide),
         BUILD_LABELS.appLinks,
       ].filter((line) => line.trim() !== '');

@@ -158,9 +158,9 @@ function replyOf(
   return { key, values, buttons, orderId: null, ...(edit ? { edit: true } : {}) };
 }
 
-/** The app as the panel names it: its icon, when the operator set one, and its name. */
-export function appTitle(app: Pick<ClientAppRecord, 'icon' | 'name'>): string {
-  return app.icon === null ? app.name : `${app.icon} ${app.name}`;
+/** The app as the panel names it: its name (B6: an app has no icon any more). */
+export function appTitle(app: Pick<ClientAppRecord, 'name'>): string {
+  return app.name;
 }
 
 const appButton = (code: AppCode, appId: string, key: Parameters<typeof templateButton>[0]) =>

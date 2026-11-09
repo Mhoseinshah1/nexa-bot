@@ -730,7 +730,7 @@ describe('TB3 — support context', () => {
     expect(built.payload.orders.map((order) => order.state)).toEqual(['AWAITING_PAYMENT']);
   });
 
-  it('client apps: an app restricted to another provider is not offered to a customer on Marzban', async () => {
+  it('client apps (B6): every enabled app is offered, whatever panel type an older row still holds in its retired column', async () => {
     const panel = await fx.panel(); // provider_type 'marzban'
     const me = await customer('900240');
     await liveService(me, panel);
@@ -742,8 +742,12 @@ describe('TB3 — support context', () => {
                           'desc', 'https://play.example.com/sanaei', 'g', 'ENABLED',
                           ARRAY['sanaei']::text[])`);
     const linked = await ctx.container.supportContext.build(tenantA, me);
-    expect(linked.payload.clientApps.map((app) => app.name)).toEqual(['AnyApp']);
-    // An unlinked peer has no services to filter by, and is shown both (WP-A10's rule).
+    // The retired `provider_types` column is no longer read: the Marzban customer sees both.
+    expect(linked.payload.clientApps.map((app) => app.name).sort()).toEqual([
+      'AnyApp',
+      'SanaeiOnly',
+    ]);
+    // And so does an unlinked peer, with no services at all.
     const unlinked = await ctx.container.supportContext.build(tenantA, null);
     expect(unlinked.payload.clientApps.map((app) => app.name).sort()).toEqual([
       'AnyApp',

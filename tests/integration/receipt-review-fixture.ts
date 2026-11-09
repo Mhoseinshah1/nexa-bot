@@ -25,6 +25,7 @@ import {
   tenantA,
   type TestContext,
 } from './harness';
+import { withoutRtlMarks } from '../support/customer-text';
 
 /**
  * The shared fixture of the WP10 follow-up suites: the administrators' receipt push, Block
@@ -520,7 +521,7 @@ export const lastReply = (f: ReceiptFixture): Record<string, unknown> => {
 };
 
 export const lastText = (f: ReceiptFixture) =>
-  String(lastReply(f)['text'] ?? lastReply(f)['caption'] ?? '');
+  withoutRtlMarks(String(lastReply(f)['text'] ?? lastReply(f)['caption'] ?? ''));
 
 export const lastKeyboard = (f: ReceiptFixture) => keyboardOf(lastReply(f));
 

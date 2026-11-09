@@ -19,15 +19,10 @@ function app(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     id: APP_ID,
     platform: 'ANDROID',
     name: 'برنامهٔ نمونه',
-    icon: '🟢',
-    description: 'سازگار با لینک اشتراک',
     officialUrl: 'https://downloads.example.com/app.apk',
     alternativeUrl: null,
     helpUrl: null,
     guide: '1. نصب کنید\n2. لینک را وارد کنید',
-    deliveryKinds: [],
-    protocols: [],
-    providerTypes: [],
     status: 'ENABLED',
     sortOrder: 10,
     version: 2,
@@ -66,15 +61,10 @@ describe('formProblems', () => {
   const valid = {
     platform: 'ANDROID' as const,
     name: 'نمونه',
-    icon: '',
-    description: 'توضیح',
     officialUrl: 'https://downloads.example.com/a.apk',
     alternativeUrl: '',
     helpUrl: '',
     guide: '- یک',
-    deliveryKinds: [],
-    protocols: [],
-    providerTypes: [],
     sortOrder: '0',
   };
 
@@ -106,7 +96,7 @@ describe('formProblems', () => {
 });
 
 describe('the apps page', () => {
-  it('lists the entries with platform, compatibility and status, and a view-only role gets no controls', async () => {
+  it('lists the entries with platform, name and status — no icon, no compatibility — and a view-only role gets no controls', async () => {
     stubApi([
       listAndRow(
         [
@@ -115,9 +105,6 @@ describe('the apps page', () => {
             id: 'second',
             platform: 'OTHER',
             name: 'Files client',
-            icon: null,
-            deliveryKinds: ['CONNECTION_FILES'],
-            providerTypes: ['rickpanel'],
             status: 'DISABLED',
           }),
         ],
@@ -126,13 +113,9 @@ describe('the apps page', () => {
     ]);
     renderPage(<ClientAppsPage denied={false} mayEdit={false} />);
 
-    expect(await screen.findByText('🟢 برنامهٔ نمونه')).toBeInTheDocument();
+    expect(await screen.findByText('برنامهٔ نمونه')).toBeInTheDocument();
     expect(screen.getByText('Files client')).toBeInTheDocument();
     expect(screen.getByText(t('web.client_apps_platform_other'))).toBeInTheDocument();
-    expect(screen.getByText(t('web.client_apps_compat_any'))).toBeInTheDocument();
-    expect(
-      screen.getByText(`${t('web.client_apps_delivery_files')} · RickPanel`),
-    ).toBeInTheDocument();
     expect(screen.getByText(t('web.client_apps_disabled'))).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: t('web.client_apps_new') })).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.client_apps_edit') })).toBeNull();
@@ -144,7 +127,6 @@ describe('the apps page', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_new') }));
     fill(t('web.client_apps_name'), 'برنامهٔ تازه');
-    fill(t('web.client_apps_description'), 'توضیح کوتاه');
     fill(t('web.client_apps_guide'), '- نصب\n- ورود لینک');
     fill(t('web.client_apps_official_url'), 'javascript:alert(1)');
     fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_save') }));
@@ -154,7 +136,6 @@ describe('the apps page', () => {
 
     fill(t('web.client_apps_official_url'), 'https://downloads.example.com/new.apk');
     fill(t('web.client_apps_alternative_url'), 'https://store.example.com/app');
-    fireEvent.click(screen.getByLabelText(t('web.client_apps_delivery_link')));
     fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_save') }));
 
     await waitFor(() => {
@@ -165,18 +146,35 @@ describe('the apps page', () => {
     expect(posted?.body).toEqual({
       platform: 'ANDROID',
       name: 'برنامهٔ تازه',
-      icon: null,
-      description: 'توضیح کوتاه',
       officialUrl: 'https://downloads.example.com/new.apk',
       alternativeUrl: 'https://store.example.com/app',
       helpUrl: null,
       guide: '- نصب\n- ورود لینک',
-      deliveryKinds: ['SUBSCRIPTION_LINK'],
-      protocols: [],
-      providerTypes: [],
       sortOrder: 0,
       idempotencyKey: expect.any(String) as unknown,
     });
+  });
+
+  it('B6: the form has the name, OS, links, guide and order — no icon, short description or compatibility', async () => {
+    stubApi([listAndRow([], app())]);
+    const view = renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_new') }));
+    for (const label of [
+      'web.client_apps_platform',
+      'web.client_apps_name',
+      'web.client_apps_official_url',
+      'web.client_apps_alternative_url',
+      'web.client_apps_help_url',
+      'web.client_apps_guide',
+    ] as const) {
+      expect(screen.getByLabelText(t(label))).toBeInTheDocument();
+    }
+    for (const gone of ['app-icon', 'app-description']) {
+      expect(view.container.querySelector(`#${gone}`)).toBeNull();
+    }
+    // No compatibility checkboxes (delivery kind, protocol, panel type) anywhere in the form.
+    expect(view.container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(view.container.querySelector('.client-apps-sets')).toBeNull();
   });
 
   it('previews an injection attempt as text, never as markup', async () => {
@@ -185,7 +183,6 @@ describe('the apps page', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_new') }));
     fill(t('web.client_apps_name'), 'نمونه');
-    fill(t('web.client_apps_description'), 'توضیح');
     fill(
       t('web.client_apps_guide'),
       '<img src=x onerror="alert(1)">\n- گام\n[باز کن](javascript:alert(1))\n[دانلود](https://downloads.example.com/a)',
@@ -216,14 +213,14 @@ describe('the apps page', () => {
     renderPage(<ClientAppsPage denied={false} mayEdit />);
 
     fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
-    fill(t('web.client_apps_description'), 'توضیح تازه');
+    fill(t('web.client_apps_name'), 'نام تازه');
     fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_save') }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
     });
     const edit = api.calls.find((call) => call.method === 'POST');
     expect(edit?.url.endsWith(`/client-apps/${APP_ID}`)).toBe(true);
-    expect(edit?.body).toMatchObject({ description: 'توضیح تازه', expectedVersion: 2 });
+    expect(edit?.body).toMatchObject({ name: 'نام تازه', expectedVersion: 2 });
 
     // The kit's dialog asks, with labelled buttons. Declined: nothing is sent.
     fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_delete') }));
@@ -282,22 +279,17 @@ describe('the apps page', () => {
     expect(screen.queryByText(t('web.changed_elsewhere'), { exact: false })).toBeNull();
   });
 
-  it('previews a stored bare unsafe link in the name and description as the bot sends it (C6)', async () => {
-    stubApi([
-      listAndRow(
-        [app({ name: 'App http://x.example/a.apk', description: 'از www.x.example بگیرید' })],
-        app(),
-      ),
-    ]);
+  it('previews a stored bare unsafe link in the name as the bot sends it (C6)', async () => {
+    stubApi([listAndRow([app({ name: 'App http://x.example/a.apk' })], app())]);
     renderPage(<ClientAppsPage denied={false} mayEdit />);
     fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
     const preview = screen.getByTestId('client-app-preview');
-    expect(preview.textContent).toContain('🟢 App');
+    expect(preview.textContent).toContain('App');
     expect(preview.textContent).not.toContain('http://');
     expect(preview.textContent).not.toContain('www.');
     // And the form refuses to save it back.
     fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_save') }));
-    expect((await screen.findAllByText(t('web.client_apps_problem_link'))).length).toBe(2);
+    expect((await screen.findAllByText(t('web.client_apps_problem_link'))).length).toBe(1);
   });
 
   it('asks for nothing it may not see', () => {

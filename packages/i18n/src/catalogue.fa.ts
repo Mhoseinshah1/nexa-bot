@@ -30,7 +30,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // Round 4 PR-D: every operations log type's body, in `ops-log.fa.ts`.
   ...OPS_LOG_BODIES_FA,
   'bot.ping.reply': 'سلام. ربات فعال است. شناسه پیگیری: {correlationId}',
-  'bot.unknown_command': 'این دستور شناخته نشد. برای دیدن فهرست دستورها /help را بفرستید.',
+  'bot.unknown_command': '{icon:error} پیام شما شناسایی نشد. لطفاً از دکمه‌های منو استفاده کنید.',
   'bot.callback.stale': '{icon:info} این دکمه دیگر فعال نیست. برای ادامه، دکمهٔ زیر را بزنید.',
   'error.internal': 'خطایی رخ داد. لطفاً بعداً دوباره تلاش کنید.',
   'error.permission_denied': 'شما به این بخش دسترسی ندارید.',
@@ -166,11 +166,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // because a customer cannot pay yet and an instruction they cannot follow is the
   // defect this comment was written about.
   // R6 item 3: the owner's greetings. Every variable is filled at send time from the receiving
-  // customer's own data; the «🛒 خرید اشتراک» and «🧪 سرویس تست» names are the main-menu buttons'.
+  // customer's own data; the «🔐 خرید اشتراک» and «اشتراک رایگان {تست}» names are the main-menu buttons'.
   'bot.start.welcome':
-    'ZED PROXY\n━━━━━━━━━━━━\n{firstName} عزیز، خوش آمدید.\n\n✓ اتصال پایدار با لوکیشن‌های متنوع\n✓ کار با همه اپ‌های داخلی بدون خاموش کردن فیلترشکن\n✓ سرویس تست رایگان قبل از خرید\n✓ پشتیبانی از داخل همین ربات\n\nبرای شروع از منوی پایین «🛒 خرید اشتراک» یا «🧪 سرویس تست» را بزنید.',
+    'ZED PROXY\n━━━━━━━━━━━━\n{firstName} عزیز، خوش آمدید.\n\n✓ اتصال پایدار با لوکیشن‌های متنوع\n✓ کار با همه اپ‌های داخلی بدون خاموش کردن فیلترشکن\n✓ سرویس تست رایگان قبل از خرید\n✓ پشتیبانی از داخل همین ربات\n\nبرای شروع از منوی پایین «🔐 خرید اشتراک» یا «اشتراک رایگان {تست}» را بزنید.',
   'bot.start.welcome_back':
-    '👋 سلام {firstName}، خوش برگشتی\n\n📱 {activeServices} سرویس فعال داری\n{icon:time} نزدیک‌ترین انقضا: {nearestExpiry}\n\nاگه سرویست داره تموم می‌شه، از «📱 سرویس‌های من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
+    '👋 سلام {firstName}، خوش برگشتی\n\n📱 {activeServices} سرویس فعال داری\n{icon:time} نزدیک‌ترین انقضا: {nearestExpiry}\n\nاگه سرویست داره تموم می‌شه، از «🛍 سرویس های من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
   // Package B: mandatory channel membership.
   'bot.channels.join_required':
@@ -1009,13 +1009,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    */
   'bot.service.expiry_first':
     '{icon:warning} سرویس «{service}» تا {days} روز دیگر به پایان اعتبار می‌رسد (تاریخ: {expiresAt}).\n' +
-    'برای جلوگیری از قطع شدن، از بخش «سرویس‌های من» تمدید کنید.',
+    'برای جلوگیری از قطع شدن، از بخش «🛍 سرویس های من» تمدید کنید.',
   'bot.service.expiry_second':
     '{icon:warning} تنها {days} روز تا پایان اعتبار سرویس «{service}» مانده است (تاریخ: {expiresAt}).\n' +
-    'برای جلوگیری از قطع شدن، همین حالا از بخش «سرویس‌های من» تمدید کنید.',
+    'برای جلوگیری از قطع شدن، همین حالا از بخش «🛍 سرویس های من» تمدید کنید.',
   'bot.service.expired':
     '{icon:inactive} اعتبار سرویس «{service}» در {expiresAt} به پایان رسید.\n' +
-    'از بخش «سرویس‌های من» می‌توانید آن را تمدید کنید.',
+    'از بخش «🛍 سرویس های من» می‌توانید آن را تمدید کنید.',
   /*
    * WP-A9: the usage sentences speak in traffic REMAINING, as the thresholds now do, and
    * the final one no longer says the traffic ran out — its default is 5% remaining. At a
@@ -1023,21 +1023,21 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    */
   'bot.service.usage_first':
     '{icon:traffic} تنها {remainingPercent} درصد از حجم سرویس «{service}» باقی مانده است ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
-    'در صورت نیاز می‌توانید از بخش «سرویس‌های من» حجم اضافه کنید.',
+    'در صورت نیاز می‌توانید از بخش «🛍 سرویس های من» حجم اضافه کنید.',
   'bot.service.usage_second':
     '{icon:traffic} تنها {remainingPercent} درصد از حجم سرویس «{service}» باقی مانده است ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
-    'برای جلوگیری از قطع شدن، از بخش «سرویس‌های من» حجم اضافه کنید.',
+    'برای جلوگیری از قطع شدن، از بخش «🛍 سرویس های من» حجم اضافه کنید.',
   'bot.service.usage_final':
     '{icon:traffic} حجم سرویس «{service}» رو به پایان است: {remainingPercent} درصد باقی مانده ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
-    'از بخش «سرویس‌های من» می‌توانید حجم اضافه کنید.',
+    'از بخش «🛍 سرویس های من» می‌توانید حجم اضافه کنید.',
   /* WP-A9: the week-out warning and the day of expiry. */
   'bot.service.expiry_early':
     '{icon:warning} سرویس «{service}» تا {days} روز دیگر به پایان اعتبار می‌رسد (تاریخ: {expiresAt}).\n' +
-    'می‌توانید از بخش «سرویس‌های من» آن را تمدید کنید.',
+    'می‌توانید از بخش «🛍 سرویس های من» آن را تمدید کنید.',
   // Not «امروز»: for a deadline just after local midnight this is sent before midnight.
   'bot.service.expiry_day':
     '{icon:warning} اعتبار سرویس «{service}» به‌زودی، در {expiresAt}، به پایان می‌رسد.\n' +
-    'برای جلوگیری از قطع شدن، همین حالا از بخش «سرویس‌های من» تمدید کنید.',
+    'برای جلوگیری از قطع شدن، همین حالا از بخش «🛍 سرویس های من» تمدید کنید.',
   /* Round 10, D1: the two notices of automatic renewal. */
   'bot.service.auto_renew_funds_short':
     '{icon:warning} تمدید خودکار سرویس «{service}» انجام نشد، چون موجودی کیف پول برای مبلغ تمدید ({price}) کافی نیست.\n' +
@@ -1048,7 +1048,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'زمان حذف: {deleteAt}',
   'bot.service.auto_renew_price_changed':
     '{icon:warning} تمدید خودکار سرویس «{service}» انجام نشد، چون مبلغ تمدید ({price}) از مبلغی که هنگام فعال‌سازی پذیرفته بودید ({consented}) بیشتر شده است.\n' +
-    'مبلغی از حساب شما کسر نشده است. می‌توانید از بخش «سرویس‌های من» سرویس را تمدید کنید و تمدید خودکار را دوباره فعال کنید.',
+    'مبلغی از حساب شما کسر نشده است. می‌توانید از بخش «🛍 سرویس های من» سرویس را تمدید کنید و تمدید خودکار را دوباره فعال کنید.',
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
   'bot.service.renew_button': '💊 تمدید سرویس',
@@ -1204,7 +1204,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * names neither, and points at the one place a figure is shown.
    */
   'bot.refund.completed':
-    'بازپرداخت شما انجام شد. اگر مبلغ به کیف پول بازگشته باشد، موجودی جدید را در «💰 کیف پول» ببینید.',
+    'بازپرداخت شما انجام شد. اگر مبلغ به کیف پول بازگشته باشد، موجودی جدید را در «🏦 کیف پول + شارژ» ببینید.',
 
   /*
    * Customer UX completion — the owner's approved defaults, verbatim
@@ -1222,7 +1222,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.connected_button': '🥰 وصل شدم',
   'bot.service.problem_button': '😐 مشکل دارم',
   'bot.service.connected_ack':
-    '🥰 عالی! از استفادهٔ شما سپاسگزاریم. هر زمان مشکلی داشتید از بخش «پشتیبانی» کمک بگیرید.',
+    '🥰 عالی! از استفادهٔ شما سپاسگزاریم. هر زمان مشکلی داشتید از بخش «☎️ پشتیبانی» کمک بگیرید.',
   'bot.tutorial.choose': '📚 سیستم عامل خود را انتخاب کنید:',
   'bot.tutorial.android_button': '🤖 اندروید',
   'bot.tutorial.ios_button': '🍎 آیفون (iOS)',
@@ -1233,15 +1233,15 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // says only what is true of every v2ray-compatible client and points at support. The
   // operator rewrites them from Content for the apps they actually recommend.
   'bot.tutorial.android':
-    '🤖 اتصال در اندروید\n\n1. یک برنامهٔ سازگار با v2ray را از فروشگاه نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه گزینهٔ افزودن از کلیپ‌بورد (Import) را بزنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+    '🤖 اتصال در اندروید\n\n1. یک برنامهٔ سازگار با v2ray را از فروشگاه نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه گزینهٔ افزودن از کلیپ‌بورد (Import) را بزنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «☎️ پشتیبانی» کمک بگیرید.',
   'bot.tutorial.ios':
-    '🍎 اتصال در آیفون\n\n1. یک برنامهٔ سازگار با v2ray را از App Store نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک (Subscription) اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+    '🍎 اتصال در آیفون\n\n1. یک برنامهٔ سازگار با v2ray را از App Store نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک (Subscription) اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «☎️ پشتیبانی» کمک بگیرید.',
   'bot.tutorial.windows':
-    '🪟 اتصال در ویندوز\n\n1. یک برنامهٔ سازگار با v2ray را دانلود و اجرا کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+    '🪟 اتصال در ویندوز\n\n1. یک برنامهٔ سازگار با v2ray را دانلود و اجرا کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «☎️ پشتیبانی» کمک بگیرید.',
   'bot.tutorial.macos':
-    '💻 اتصال در مک\n\n1. یک برنامهٔ سازگار با v2ray را نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+    '💻 اتصال در مک\n\n1. یک برنامهٔ سازگار با v2ray را نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «☎️ پشتیبانی» کمک بگیرید.',
   'bot.tutorial.linux':
-    '🐧 اتصال در لینوکس\n\n1. یک کلاینت سازگار با v2ray را نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+    '🐧 اتصال در لینوکس\n\n1. یک کلاینت سازگار با v2ray را نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «☎️ پشتیبانی» کمک بگیرید.',
   // WP-A10: app downloads and connection guides. No app, store or link is named: the
   // entries are the operator's, and the defaults below say only what is true of all.
   'bot.command.apps': 'دانلود برنامه و آموزش اتصال',
@@ -1250,12 +1250,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.apps.platform':
     '📲 برنامه‌های پیشنهادی برای این سیستم عامل:\n\nبرای دیدن لینک دانلود و آموزش اتصال، یکی از برنامه‌های زیر را انتخاب کنید.',
   'bot.apps.platform_empty':
-    'برای این بخش فعلاً برنامه‌ای معرفی نشده است. سیستم عامل دیگری را انتخاب کنید یا از بخش «پشتیبانی» کمک بگیرید.',
-  'bot.apps.detail': '{app}\n\n{description}\n\n📖 آموزش اتصال:\n{guide}',
+    'برای این بخش فعلاً برنامه‌ای معرفی نشده است. سیستم عامل دیگری را انتخاب کنید یا از بخش «☎️ پشتیبانی» کمک بگیرید.',
+  'bot.apps.detail': '{app}\n\n📖 آموزش اتصال:\n{guide}',
   'bot.apps.detail_files':
-    '{app}\n\n{description}\n\n📖 آموزش اتصال:\n{guide}\n\n📁 این برنامه فایل‌های اتصال را هم می‌پذیرد. فایل‌ها را با دکمهٔ «📁 دریافت فایل‌های اتصال» در صفحهٔ سرویس خود دریافت کنید.',
-  'bot.apps.download_button': '⬇️ دانلود از سایت رسمی',
-  'bot.apps.alternative_button': '🏪 فروشگاه یا لینک دیگر',
+    '{app}\n\n📖 آموزش اتصال:\n{guide}\n\n📁 این برنامه فایل‌های اتصال را هم می‌پذیرد. فایل‌ها را با دکمهٔ «📁 دریافت فایل‌های اتصال» در صفحهٔ سرویس خود دریافت کنید.',
+  'bot.apps.download_button': '📥 دانلود',
+  'bot.apps.alternative_button': '🔗 لینک جایگزین',
   'bot.apps.help_button': '🎬 ویدیو و راهنمای بیشتر',
   'bot.apps.back_button': '🔙 بازگشت به فهرست برنامه‌ها',
   'bot.apps.platforms_button': '🔙 انتخاب سیستم عامل دیگر',
@@ -1264,7 +1264,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.menu.main_button': '🏠 بازگشت به منوی اصلی',
   'bot.faq.heading': '💡 سوالات متداول ⁉️',
   'bot.faq.item': '{number} {question}\n\n{icon:success} {answer}',
-  'bot.faq.footer': '💡 در صورتی که جواب سوالتون رو نگرفتید میتونید به «پشتیبانی» مراجعه کنید.',
+  'bot.faq.footer': '💡 در صورتی که جواب سوالتون رو نگرفتید میتونید به «☎️ پشتیبانی» مراجعه کنید.',
   'bot.faq.default_1_question':
     'فیلترشکن شما آیپی ثابته؟ میتونم برای صرافی های ارز دیجیتال استفاده کنم؟',
   'bot.faq.default_1_answer':

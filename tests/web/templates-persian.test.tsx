@@ -52,7 +52,9 @@ const editor = (key: string) => document.getElementById(`body-${key}`) as HTMLTe
  * mounted (see the draft case below).
  */
 const hidden = (key: string) =>
-  (document.getElementById(`template-item-${key}`) as HTMLElement).closest('[hidden]') !== null;
+  // B5: a row the filters leave out is not drawn at all, which reads as hidden just the same.
+  document.getElementById(`template-item-${key}`) === null ||
+  document.getElementById(`template-item-${key}`)?.closest('[hidden]') !== null;
 /** Opens a template's card in the editor column, as an operator picks it from the list. */
 const open = (key: string) =>
   fireEvent.click(document.getElementById(`template-item-${key}`) as HTMLElement);
@@ -102,8 +104,10 @@ describe('a template card', () => {
     expect(editor(BALANCE).value).toBe('موجودی کیف پول شما: {balance}');
     const english = templateDefinition(BALANCE).placeholders[0]?.description ?? '';
     expect(screen.queryByText(english)).toBeNull();
-    // A token that means something narrower in this message says so.
-    expect(screen.getAllByText('نام کاربری ادمین').length).toBeGreaterThan(0);
+    // A token that means something narrower in this message says so — on that message's card,
+    // which is mounted once its row is opened (B5).
+    open(LINKED);
+    expect((await screen.findAllByText('نام کاربری ادمین')).length).toBeGreaterThan(0);
   });
 
   /**

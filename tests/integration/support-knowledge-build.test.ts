@@ -379,15 +379,10 @@ describe('the knowledge build (TB9)', () => {
       idempotencyKey: key('app'),
       platform: 'ANDROID',
       name: 'برنامهٔ نمونه',
-      icon: null,
-      description: 'سازگار با لینک اشتراک',
       officialUrl: 'https://downloads.example.com/app.apk',
       alternativeUrl: null,
       helpUrl: 'https://help.example.com/guide',
       guide: '1. برنامه را نصب کنید',
-      deliveryKinds: [],
-      protocols: [],
-      providerTypes: [],
       sortOrder: 10,
     });
     await c.supportFaqs.create(tenantA, owner, {

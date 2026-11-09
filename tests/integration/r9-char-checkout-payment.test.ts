@@ -243,7 +243,7 @@ function expectedViews(): Record<string, View> {
     'cancelled.close': {
       intent: 'PAY_METHODS_CLOSE',
       key: 'bot.start.welcome_back',
-      text: '👋 سلام x، خوش برگشتی\n\n📱 ۰ سرویس فعال داری\n\nاگه سرویست داره تموم می\u200cشه، از «📱 سرویس\u200cهای من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
+      text: '👋 سلام x، خوش برگشتی\n\n📱 ۰ سرویس فعال داری\n\nاگه سرویست داره تموم می\u200cشه، از «🛍 سرویس های من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
       buttons: [],
       replyKeyboard: [
         ['🔐 خرید اشتراک'],

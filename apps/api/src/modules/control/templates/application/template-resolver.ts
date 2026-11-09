@@ -114,6 +114,25 @@ export class TemplateResolver {
   }
 
   /**
+   * B2: a WHOLE customer message — `render` plus the RIGHT-TO-LEFT MARK at the start of each
+   * Persian line the client would otherwise draw left-aligned (`applyRtlMarks`). Not for a
+   * button label (a tap sends the label back as text) and not for a block that is rendered
+   * into a bigger message; both keep using `render`.
+   */
+  async renderMessage(
+    scope: ScopeContext,
+    key: TemplateKey,
+    values: TemplateValues,
+    locale: Locale = DEFAULT_TEMPLATE_LOCALE,
+    tx?: unknown,
+  ): Promise<string> {
+    const { definition, body, presentation } = await this.prepare(scope, key, values, locale, tx);
+    return this.catalogue.render(definition, body, values, locale, presentation, {
+      rtlMarks: true,
+    });
+  }
+
+  /**
    * R4 PR-F (F6): the same rendering twice from ONE resolution — `text`, exactly what
    * `render` returns, and `marked`, the same text with every date value wrapped in the
    * instant marks (`renderTemplateBody`'s `markInstants`) for the rich-message builder.
@@ -129,9 +148,13 @@ export class TemplateResolver {
   ): Promise<{ readonly text: string; readonly marked: string }> {
     const { definition, body, presentation } = await this.prepare(scope, key, values, locale, tx);
     return {
-      text: this.catalogue.render(definition, body, values, locale, presentation),
+      // B2: both are the message the customer reads, so both carry the marks.
+      text: this.catalogue.render(definition, body, values, locale, presentation, {
+        rtlMarks: true,
+      }),
       marked: this.catalogue.render(definition, body, values, locale, presentation, {
         markInstants: true,
+        rtlMarks: true,
       }),
     };
   }

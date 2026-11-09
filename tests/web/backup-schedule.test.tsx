@@ -164,16 +164,20 @@ describe('the backup schedule card', () => {
     });
   });
 
-  it('saves a once-a-day time as HH:MM and refuses a malformed one before any request', async () => {
+  it('B7: the daily time is the Persian 24-hour picker (two selects), never a browser time input, and saves HH:MM', async () => {
     const api = stubApi(routes());
-    renderPage(<BackupScheduleCard status={STATUS} permissions={EDIT} />);
-    const input = await screen.findByLabelText('ساعت روزانه (مثلاً 04:00)');
-    fireEvent.change(input, { target: { value: '25:99' } });
-    expect(screen.getByText('ساعت را به‌صورت 24 ساعته و مثل 04:00 بنویسید.')).toBeInTheDocument();
+    const view = renderPage(<BackupScheduleCard status={STATUS} permissions={EDIT} />);
+    const group = await screen.findByRole('group', { name: 'ساعت روزانه (مثلاً 04:00)' });
+    expect(group.querySelectorAll('select')).toHaveLength(2);
+    expect(view.container.querySelector('input[type="time"]')).toBeNull();
+    expect(view.container.querySelector('#backup-daily-time')).toBeNull();
+    // Nothing chosen yet: nothing to save, and no request.
     expect(screen.getByRole('button', { name: 'ذخیره‌ی ساعت' })).toBeDisabled();
     expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
 
-    fireEvent.change(input, { target: { value: '04:00' } });
+    fireEvent.change(screen.getByLabelText('ساعت روزانه (مثلاً 04:00) — ساعت'), {
+      target: { value: '04' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره‌ی ساعت' }));
     await waitFor(() => expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(1));
     const write = api.calls.find((call) => call.method === 'POST');

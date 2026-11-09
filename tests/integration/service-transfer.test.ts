@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { withoutRtlMarks } from '../support/customer-text';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -351,7 +352,7 @@ describe('Package F — a customer transfers a service to another customer', () 
   /** The messages the stand-in received, never the bare `answerCallbackQuery` beside them. */
   const messages = () => sent.filter((one) => !one.url.includes('/answerCallbackQuery'));
   const lastSent = () => messages().at(-1)?.body ?? {};
-  const lastText = () => String(lastSent().text ?? '');
+  const lastText = () => withoutRtlMarks(String(lastSent().text ?? ''));
   const callbacksOf = (body: Record<string, unknown>): string[] => {
     const markup = body.reply_markup as { inline_keyboard?: { callback_data?: string }[][] };
     return (markup?.inline_keyboard ?? []).flat().map((button) => button.callback_data ?? '');
@@ -488,7 +489,7 @@ describe('Package F — a customer transfers a service to another customer', () 
     const toRecipient = messages().filter((one) => String(one.body.chat_id) === RECIPIENT_TG);
     expect(toRecipient).toHaveLength(1);
     const body = toRecipient[0]!.body;
-    const text = String(body.text);
+    const text = withoutRtlMarks(String(body.text));
     expect(text.startsWith(HEADING)).toBe(true);
     expect(text).toContain(service.providerUsername);
     expect(text).toContain('آلمان');

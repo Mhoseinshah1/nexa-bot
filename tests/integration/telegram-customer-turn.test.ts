@@ -13,7 +13,6 @@ import {
   paymentTrackingCode,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
-import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
 import {
   CUSTOMER_SEND_FAILED_CODE,
@@ -30,6 +29,7 @@ import {
   tenantA,
   testConfig,
 } from './harness';
+import { customerText } from '../support/customer-text';
 
 /**
  * The customer-facing Telegram turn, end to end.
@@ -222,7 +222,7 @@ describe('the customer Telegram turn', () => {
     // R6 item 3: the owner's greeting, with this customer's own first name filled in.
     expect(sent[0]?.body['text']).toContain('ZED PROXY');
     expect(sent[0]?.body['text']).toContain('عزیز، خوش آمدید.');
-    expect(sent[0]?.body['text']).not.toContain('{');
+    expect(sent[0]?.body['text']).not.toContain('{firstName}');
 
     // And a domain event exists for the registration, written inside the
     // business transaction.
@@ -267,7 +267,9 @@ describe('the customer Telegram turn', () => {
     // it grants no authority and why a tap arrives as ordinary text.
     expect(markup?.inline_keyboard, 'the menu was drawn as an inline keyboard').toBeUndefined();
     expect(markup?.resize_keyboard).toBe(true);
-    expect(markup?.is_persistent).toBe(true);
+    // B3: «منوی پایین همیشه نمایش داده شود» is OFF by default, so the menu is NOT persistent
+    // and a customer who hides it is not shown it again.
+    expect(markup?.is_persistent).toBe(false);
     // Never one-shot. Hiding the menu after a single tap is what made the bot feel
     // command-driven, which is the thing staging acceptance objected to.
     expect(markup?.one_time_keyboard).toBe(false);
@@ -278,6 +280,30 @@ describe('the customer Telegram turn', () => {
     // keyboard above is exactly the six. The ninth is the reseller request, its flag off by
     // default, so it is not drawn either.
     expect(MAIN_MENU_BUTTONS).toHaveLength(9);
+  });
+
+  it('B3: with persistent_bottom_menu ON the menu keyboard is sent is_persistent, resize and not one-shot', async () => {
+    const owner = adminActorFor(
+      await createAdmin(api.container, tenantA, { username: 'pm-owner', roleKeys: ['owner'] }),
+    );
+    const flag = (await api.container.featureFlags.list(tenantA, owner)).find(
+      (row) => row.key === 'persistent_bottom_menu',
+    );
+    expect(flag?.enabled, 'the switch is off by default').toBe(false);
+    await api.container.featureFlags.set(tenantA, owner, {
+      key: 'persistent_bottom_menu',
+      enabled: true,
+      expectedVersion: flag?.version ?? null,
+      reason: 'B3 test',
+      idempotencyKey: 'pm-flag-on',
+    });
+    await start();
+    const markup = sent[0]?.body['reply_markup'] as
+      | { is_persistent?: boolean; resize_keyboard?: boolean; one_time_keyboard?: boolean }
+      | undefined;
+    expect(markup?.is_persistent).toBe(true);
+    expect(markup?.resize_keyboard).toBe(true);
+    expect(markup?.one_time_keyboard).toBe(false);
   });
 
   it('draws the tenant’s own main menu — order, switches, flags, labels — and routes a renamed button (R1)', async () => {
@@ -334,12 +360,14 @@ describe('the customer Telegram turn', () => {
     for (const label of ['🎁 دعوت و پاداش', CATALOGUE_FA['bot.menu.referral']]) {
       sent = [];
       await start({ text: label });
-      expect(sent.at(-1)?.body['text']).toBe(CATALOGUE_FA['bot.referral.unconfigured']);
+      expect(sent.at(-1)?.body['text']).toBe(
+        customerText(CATALOGUE_FA['bot.referral.unconfigured']),
+      );
     }
     // The hidden trial button still routes: a keyboard drawn while a panel offered one.
     sent = [];
     await start({ text: CATALOGUE_FA['bot.menu.trial'] });
-    expect(sent.at(-1)?.body['text']).toBe(plain(CATALOGUE_FA['bot.trial.unavailable']));
+    expect(sent.at(-1)?.body['text']).toBe(customerText(CATALOGUE_FA['bot.trial.unavailable']));
   });
 
   it('still opens the management panel for a BLOCKED customer who is an administrator', async () => {
@@ -372,12 +400,12 @@ describe('the customer Telegram turn', () => {
 
     sent = [];
     await start({ text: '/admin' });
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.admin.panel']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.admin.panel']));
 
     // Blocking is still enforced for everything a CUSTOMER can do.
     sent = [];
     await start();
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.blocked']));
   });
 
   it('gives the installer-bootstrapped owner the admin menu on /start, and the panel on /admin', async () => {
@@ -414,7 +442,7 @@ describe('the customer Telegram turn', () => {
       text: '/admin',
       from: { id: Number(OWNER_TELEGRAM_ID), is_bot: false, first_name: 'Mamad' },
     });
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.admin.panel']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.admin.panel']));
   });
 
   it('revokes Telegram admin access on the next update once the binding is removed', async () => {
@@ -435,7 +463,7 @@ describe('the customer Telegram turn', () => {
     );
     sent = [];
     await start({ text: '/admin' });
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.admin.panel']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.admin.panel']));
 
     await api.container.adminManagement.setTelegramBinding(
       tenantA,
@@ -470,7 +498,7 @@ describe('the customer Telegram turn', () => {
     );
     sent = [];
     await start({ text: '/admin' });
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.blocked']));
   });
 
   it('draws the receipt decision buttons only for an administrator who may decide', async () => {
@@ -602,7 +630,7 @@ describe('the customer Telegram turn', () => {
 
     await start();
 
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.blocked']));
     expect(sent[0]?.body['reply_markup']).toBeUndefined();
   });
 
@@ -1157,9 +1185,14 @@ describe('the customer Telegram turn', () => {
     const response = await start({ text: 'سلام، قیمت چنده؟' });
     expect(response.statusCode).toBe(201);
     expect(await customers()).toHaveLength(1);
-    // One reply, and it is the FALLBACK rather than the welcome — named, for the
+    // The FIRST reply is the FALLBACK rather than the welcome — named, for the
     // same reason the blocked case is.
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    // B1: the unknown sentence, then the main menu with its keyboard and no extra tap.
+    expect(sent).toHaveLength(2);
+    expect(sent[0]?.body['text']).toBe(customerText(CATALOGUE_FA['bot.unknown_command']));
+    expect(String(sent[1]?.body['text'])).toContain('خوش برگشتی');
+    expect(
+      (sent[1]?.body['reply_markup'] as { keyboard?: unknown } | undefined)?.keyboard,
+    ).toBeDefined();
   });
 });

@@ -23,6 +23,7 @@ import {
   toPersianDigits,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from './catalogue.fa.js';
+import { applyRtlMarks } from './rtl.js';
 export {
   OPERATIONAL_EVENT_FAMILY_LABELS_FA,
   OPERATIONAL_EVENT_LABELS_FA,
@@ -559,7 +560,14 @@ export function renderTemplateBody(
    * leaves its separators at the end instead; they go too.
    */
   const joined = rendered.join('\n');
-  return dropped ? joined.replace(/\n{3,}/g, '\n\n').replace(/\n+$/u, '') : joined;
+  const finished = dropped ? joined.replace(/\n{3,}/g, '\n\n').replace(/\n+$/u, '') : joined;
+  // B2: Persian text only, one place, after every value is in.
+  return locale === 'fa' && options.rtlMarks === true
+    ? applyRtlMarks(
+        finished,
+        definition.format === 'TELEGRAM_HTML' ? 'TELEGRAM_HTML' : 'PLAIN_TEXT',
+      )
+    : finished;
 }
 
 /**
@@ -575,6 +583,13 @@ export function renderTemplateBody(
  */
 export interface RenderOptions {
   readonly markInstants?: boolean;
+  /**
+   * B2: put a RIGHT-TO-LEFT MARK at the start of every Persian line whose first character is
+   * not itself RTL (`applyRtlMarks`). Opt-in, and only for a WHOLE customer message: a button
+   * label must stay byte for byte what a tap sends back, and a block rendered into a bigger
+   * message is marked once, with that message.
+   */
+  readonly rtlMarks?: boolean;
 }
 
 export const INSTANT_MARK_OPEN = '\uE000';
@@ -699,3 +714,4 @@ export {
 export { AUDIT_EXPORT_HEADERS_FA, type AuditExportHeaderKey } from './audit-log.fa.js';
 export { PAYMENT_METHOD_NAMES_FA } from './payment-methods.fa.js';
 export { OPS_LOG_BODIES_FA, OPS_LOG_BUTTON_LABELS_FA, OPS_LOG_WORDS_FA } from './ops-log.fa.js';
+export { applyRtlMarks, RLM } from './rtl.js';

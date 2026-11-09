@@ -1812,6 +1812,9 @@ describe('profile metadata, normalised before it is ever stored', () => {
       // real buttons («🛒 خرید اشتراک», «🧪 سرویس تست»), which is the menu that exists — not
       // the prose "use the menu" this rule refuses. Pinned to this one key.
       'bot.start.welcome',
+      // B1: the unknown-text answer points at the menu BUTTONS and the main menu follows it at
+      // once («❌ پیام شما شناسایی نشد. لطفاً از دکمه‌های منو استفاده کنید.»): the menu exists.
+      'bot.unknown_command',
       // R10 D2: a stale or switched-off owner button points at the menu that exists: «/start»
       // redraws the persistent keyboard (and /start is answered, which the loop below checks).
       // Pinned to this one key.

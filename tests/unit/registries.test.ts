@@ -341,6 +341,7 @@ describe('the feature flag registry', () => {
       // R10 D3. Off by default; with it on the pricing engine compares each purchase and
       // renewal with the customer's personal percent (larger single discount wins), and a
       // stored percent changes no price while it is off.
+      'persistent_bottom_menu',
       'personal_discount',
       // R11 B7. Off by default; the bot's contact-share verification and every payment
       // route's verified-phone rule are reachable behind it, and with it off neither applies.

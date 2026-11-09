@@ -632,15 +632,10 @@ function parseInput(command: ClientAppInput): ClientAppInput {
   const parsed = clientAppInputSchema.safeParse({
     platform: command.platform,
     name: command.name,
-    icon: command.icon,
-    description: command.description,
     officialUrl: command.officialUrl,
     alternativeUrl: command.alternativeUrl,
     helpUrl: command.helpUrl,
     guide: command.guide,
-    deliveryKinds: command.deliveryKinds,
-    protocols: command.protocols,
-    providerTypes: command.providerTypes,
     sortOrder: command.sortOrder,
   });
   if (!parsed.success) {
@@ -686,15 +681,10 @@ function auditView(row: ClientAppRecord): Record<string, unknown> {
   return {
     platform: row.platform,
     name: row.name,
-    icon: row.icon,
-    description: row.description,
     officialUrl: row.officialUrl,
     alternativeUrl: row.alternativeUrl,
     helpUrl: row.helpUrl,
     guide: row.guide,
-    deliveryKinds: row.deliveryKinds,
-    protocols: row.protocols,
-    providerTypes: row.providerTypes,
     status: row.status,
     sortOrder: row.sortOrder,
     version: row.version,

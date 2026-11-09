@@ -30,7 +30,7 @@ export class I18nTemplateCatalogue implements TemplateCatalogue {
     values: TemplateValues,
     locale: string,
     presentation: TemplatePresentation,
-    options?: { readonly markInstants?: boolean },
+    options?: { readonly markInstants?: boolean; readonly rtlMarks?: boolean },
   ): string {
     return renderTemplateBody(definition, body, values, locale as Locale, presentation, options);
   }

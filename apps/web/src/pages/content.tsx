@@ -142,9 +142,12 @@ interface TemplateSection {
  *
  * Every card is titled with its Persian name (`template-copy.ts`) and grouped into
  * sections; the raw key stays on the card as a small technical detail. The search
- * and the filters HIDE cards rather than unmounting them: a card holds its operator's
- * unsaved draft in its own state, and a filter that unmounted it would silently throw
- * that draft away the moment somebody searched for something else.
+ * and the filters work over EVERY template (the rows the server sent), but only the
+ * page's rows are drawn, and an editor is mounted only once its row has been opened
+ * (B5: the page drew ~900 rows and ~900 editors at once and stuttered). An editor that
+ * has been opened stays mounted and is hidden rather than unmounted: it holds its
+ * operator's unsaved draft in its own state, and unmounting it when somebody opened
+ * another text or searched for something else would silently throw that draft away.
  */
 export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
   const templates = useQuery({
@@ -265,6 +268,13 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
   const ordered = useMemo(() => sections.flatMap((section) => section.templates), [sections]);
   const firstVisible = ordered.find((template) => visible.has(template.key))?.key ?? null;
   const selected = chosen !== null && visible.has(chosen) ? chosen : firstVisible;
+  /*
+   * B5: the editors that have been shown so far. Only these are mounted; opening a row adds
+   * its editor, and none is ever removed (see the note on this component). Derived during
+   * render from `selected`, so the first paint mounts exactly one editor.
+   */
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  if (selected !== null && !opened.has(selected)) setOpened(new Set([...opened, selected]));
 
   /*
    * R11 (S8): the list is paged ten at a time, as the demo draws it. Every item stays mounted
@@ -410,32 +420,38 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
               )}
 
               <div className="content-nav-list">
-                {sections.map((section) => (
-                  <section
-                    key={section.group.id}
-                    aria-labelledby={`templates-group-${section.group.id}`}
-                    hidden={!section.templates.some((template) => onPage.has(template.key))}
-                  >
-                    <h2 id={`templates-group-${section.group.id}`} className="content-nav-group">
-                      {section.group.label}
-                    </h2>
-                    <ul>
-                      {section.templates.map((template) => (
-                        <li key={template.key} hidden={!onPage.has(template.key)}>
-                          <TemplateListItem
-                            template={template}
-                            current={template.key === selected}
-                            unsaved={dirty.has(template.key)}
-                            onSelect={() => {
-                              setChosen(template.key);
-                              setSheetOpen(true);
-                            }}
-                          />
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                ))}
+                {sections.map((section) => {
+                  // B5: only the page's rows are drawn; a section with none on this page is not.
+                  const shownHere = section.templates.filter((template) =>
+                    onPage.has(template.key),
+                  );
+                  if (shownHere.length === 0) return null;
+                  return (
+                    <section
+                      key={section.group.id}
+                      aria-labelledby={`templates-group-${section.group.id}`}
+                    >
+                      <h2 id={`templates-group-${section.group.id}`} className="content-nav-group">
+                        {section.group.label}
+                      </h2>
+                      <ul>
+                        {shownHere.map((template) => (
+                          <li key={template.key}>
+                            <TemplateListItem
+                              template={template}
+                              current={template.key === selected}
+                              unsaved={dirty.has(template.key)}
+                              onSelect={() => {
+                                setChosen(template.key);
+                                setSheetOpen(true);
+                              }}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  );
+                })}
               </div>
               {!filtered && serverCount !== undefined ? (
                 <CountedPager
@@ -497,11 +513,13 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
                   </button>
                 </div>
               )}
-              {ordered.map((template) => (
-                <div key={template.key} hidden={template.key !== selected}>
-                  <TemplateCard template={template} mayEdit={mayEdit} />
-                </div>
-              ))}
+              {ordered
+                .filter((template) => opened.has(template.key))
+                .map((template) => (
+                  <div key={template.key} hidden={template.key !== selected}>
+                    <TemplateCard template={template} mayEdit={mayEdit} />
+                  </div>
+                ))}
             </div>
           </div>
         </DirtyScope>

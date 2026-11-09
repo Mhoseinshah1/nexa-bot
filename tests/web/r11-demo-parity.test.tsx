@@ -50,7 +50,9 @@ const view = (key: string) => {
 };
 
 const itemHidden = (key: string) =>
-  (document.getElementById(`template-item-${key}`) as HTMLElement).closest('[hidden]') !== null;
+  // B5: a row the filters leave out is not drawn at all, which reads as hidden just the same.
+  document.getElementById(`template-item-${key}`) === null ||
+  document.getElementById(`template-item-${key}`)?.closest('[hidden]') !== null;
 
 describe('«متن‌ها» is paged ten at a time (S8)', () => {
   const keys = TEMPLATE_KEYS.slice(0, 23);

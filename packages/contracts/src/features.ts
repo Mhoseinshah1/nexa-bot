@@ -777,6 +777,21 @@ export const FEATURE_FLAGS = [
     blastRadius: 'LOCAL',
     configuredBy: ['reseller_request.cooldown_days'],
   },
+  {
+    key: 'persistent_bottom_menu',
+    description:
+      'Small-fix round, B3: «منوی پایین همیشه نمایش داده شود». The bot’s main-menu keyboard ' +
+      '(the buttons under the chat) is sent with Telegram’s `is_persistent` flag. ON keeps that: ' +
+      'a customer who hides the keyboard to type on the letter keyboard sees it come straight ' +
+      'back. OFF (the default): the keyboard is sent non-persistent, so hiding it sticks and it ' +
+      'stays reachable from the keyboard button next to the input field. The buttons, their ' +
+      'labels and what they do are the same either way; the phone-number request keyboards are ' +
+      'not the menu and are unaffected.',
+    defaultEnabled: false,
+    // LOCAL: how one keyboard is drawn; no customer, price or message is changed by it.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

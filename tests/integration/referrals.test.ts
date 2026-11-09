@@ -46,6 +46,7 @@ import {
   testConfig,
   type TestContext,
 } from './harness';
+import { bodyWithoutRtlMarks } from '../support/customer-text';
 
 /**
  * The referral program, from the link a customer arrives through to the commission their
@@ -1703,7 +1704,8 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
         }
         sent.push({
           url: request.url ?? '',
-          body: raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>),
+          body:
+            raw.length === 0 ? {} : bodyWithoutRtlMarks(JSON.parse(raw) as Record<string, unknown>),
         });
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));

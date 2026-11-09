@@ -24,6 +24,7 @@ import {
   tenantA,
   testConfig,
 } from './harness';
+import { customerText } from '../support/customer-text';
 
 /**
  * R5C-2 B1 — the custom service over Telegram: the entry is the LAST item of the category
@@ -125,6 +126,11 @@ describe('R5C-2 B1: the custom service over Telegram', () => {
   const messages = () =>
     sent.filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'));
   const lastText = () => String(messages()[messages().length - 1]?.body['text']);
+  /** B1: the unknown sentence is followed by the main menu, so it is the second-to-last message. */
+  const unknownText = () => {
+    expect(lastText(), 'the main menu follows the unknown sentence').toContain('خوش برگشتی');
+    return String(messages()[messages().length - 2]?.body['text']);
+  };
   const lastButtons = () =>
     (
       (
@@ -247,7 +253,7 @@ describe('R5C-2 B1: the custom service over Telegram', () => {
     await send('tap', 'ik:');
     expect(lastButtons()).toEqual([`cv:${panelA}`]);
     await send('text', '10');
-    expect(lastText()).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownText()).toBe(customerText(CATALOGUE_FA['bot.unknown_command']));
 
     await send('tap', `cv:${panelA}`);
     await send('text', '10');
@@ -256,7 +262,7 @@ describe('R5C-2 B1: the custom service over Telegram', () => {
     await send('tap', 'iz:');
     expect(lastText()).toContain('خوش برگشتی');
     await send('text', '30');
-    expect(lastText()).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect(unknownText()).toBe(customerText(CATALOGUE_FA['bot.unknown_command']));
   });
 
   it('the days step answers UNAVAILABLE, not a range, when the flag was turned off after the volume step', async () => {
@@ -285,7 +291,7 @@ describe('R5C-2 B1: the custom service over Telegram', () => {
 
     // An out-of-range figure would otherwise be answered with the range prompt.
     await send('text', '3');
-    expect(lastText()).toBe(CATALOGUE_FA['bot.custom_service.unavailable']);
+    expect(lastText()).toBe(customerText(CATALOGUE_FA['bot.custom_service.unavailable']));
     expect(lastText()).not.toContain('مدت را بین');
   });
 });

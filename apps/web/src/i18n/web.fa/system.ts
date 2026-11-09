@@ -393,6 +393,7 @@ export const WEB_FA_SYSTEM = {
   'web.opsgroup_verified_done': 'دسترسی‌ها بررسی شد.',
   'web.opsgroup_reconnected_done': 'گروه دوباره متصل و بررسی شد.',
   'web.opsgroup_disconnected_done': 'اتصال گروه قطع شد.',
+  'web.opsgroup_test_queued': 'در صف',
   'web.opsgroup_test_sent': 'ارسال شد',
   'web.opsgroup_test_failed': 'ارسال نشد',
   'web.opsgroup_topics': 'تاپیک‌ها',

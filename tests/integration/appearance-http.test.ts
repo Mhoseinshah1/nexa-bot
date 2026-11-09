@@ -19,6 +19,7 @@ import {
 import { CATALOGUE_FA } from '@nexa/i18n';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
+import { customerText } from '../support/customer-text';
 import { appearanceFallbackText } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import {
   APPEARANCE_PROBE_BLOCK,
@@ -425,7 +426,7 @@ describe('the bot appearance over HTTP and the messenger (Premium UI)', () => {
     const send = messenger(tenantA);
     await send.send(BOT_A1);
     const untested = calls.filter((call) => call.method === 'sendMessage').at(-1);
-    expect(untested?.body['text']).toBe(appearanceFallbackText(CATALOGUE_FA['bot.order.settled']));
+    expect(untested?.body['text']).toBe(customerText(CATALOGUE_FA['bot.order.settled']));
     expect(untested?.body).not.toHaveProperty('entities');
 
     // An administrator with no Telegram bound has nowhere to receive the test.
@@ -488,12 +489,11 @@ describe('the bot appearance over HTTP and the messenger (Premium UI)', () => {
     await fresh.send(BOT_A2);
     const [decorated, plain] = calls.filter((call) => call.method === 'sendMessage');
     expect(decorated?.body['entities']).toEqual([
-      { type: 'custom_emoji', offset: 0, length: 1, custom_emoji_id: ID },
+      // Offset 1: the line starts with the RIGHT-TO-LEFT MARK (B2), then the emoji it decorates.
+      { type: 'custom_emoji', offset: 1, length: 1, custom_emoji_id: ID },
     ]);
-    expect(String(decorated?.body['text']).startsWith('✅')).toBe(true);
-    expect(String(decorated?.body['text'])).toBe(
-      appearanceFallbackText(CATALOGUE_FA['bot.order.settled']),
-    );
+    expect(String(decorated?.body['text']).startsWith('\u200F✅')).toBe(true);
+    expect(String(decorated?.body['text'])).toBe(customerText(CATALOGUE_FA['bot.order.settled']));
     expect(plain?.body['text']).toBe(decorated?.body['text']);
     expect(plain?.body).not.toHaveProperty('entities');
   });

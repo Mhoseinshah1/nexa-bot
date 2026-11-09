@@ -451,7 +451,8 @@ export class MiniAppAccountController {
       apps.push({
         id: detail.id,
         name: detail.title,
-        description: detail.description === '' ? null : detail.description,
+        // B6: an app has no short description any more; the mini app's field stays, empty.
+        description: null,
         officialUrl: detail.officialUrl,
         alternativeUrl: detail.alternativeUrl,
         helpUrl: detail.helpUrl,

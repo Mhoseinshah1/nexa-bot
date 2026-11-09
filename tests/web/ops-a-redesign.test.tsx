@@ -450,8 +450,8 @@ describe('dirty-state protection on the OPS-A forms', () => {
     expect(leave()).toBeNull();
     go('/client-apps');
 
-    fireEvent.change(screen.getByLabelText(t('web.client_apps_description')), {
-      target: { value: 'توضیح تازه' },
+    fireEvent.change(screen.getByLabelText(t('web.client_apps_name')), {
+      target: { value: 'نام تازه' },
     });
     expect(leave()).not.toBeNull();
   });

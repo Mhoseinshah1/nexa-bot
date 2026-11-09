@@ -501,6 +501,17 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // B3: how the bot's main-menu keyboard is drawn. Nothing is lost either way, so no confirmation.
+  persistent_bottom_menu: {
+    title: 'web.feature_persistent_bottom_menu_title',
+    summary: 'web.feature_persistent_bottom_menu_summary',
+    category: 'customer',
+    where: ['bot'],
+    offEffect: 'web.feature_persistent_bottom_menu_off',
+    related: { path: '/bot-buttons', label: 'web.nav_bot_buttons' },
+    disableEffect: null,
+    confirmEnable: null,
+  },
   services_search_button: {
     title: 'web.feature_services_search_button_title',
     summary: 'web.feature_services_search_button_summary',

@@ -1,3 +1,4 @@
+import { applyRtlMarks } from '@nexa/i18n';
 import { describe, expect, it } from 'vitest';
 import {
   plainTableText,
@@ -75,5 +76,28 @@ describe('without rich messages the table reads as plain lines', () => {
     for (const text of ['سلام', 'الف | ب', '| فقط یک خط |', '| الف | ب |\n| ج |', '']) {
       expect(plainTableText(text), text).toBe(text);
     }
+  });
+});
+
+/**
+ * B2 (Codex): the renderer marks a Persian line with U+200F before the message is converted, so
+ * the structure rules must see through it. MUTATION: reverting the `\u200F` in `PIPE_ROW`, in
+ * `plainTableText`'s row regex or in `withoutBullet` fails these.
+ */
+describe('a line the renderer has marked keeps its structure (B2)', () => {
+  const marked = applyRtlMarks(`قیمت‌ها:\n${TABLE}\n• یک\n• دو`);
+
+  it('really starts the table rows with the mark', () => {
+    expect(marked).toContain('\u200F| سرویس');
+  });
+
+  it('still converts a marked table and a marked list to blocks', () => {
+    const blocks = rich(marked);
+    expect(blocks.map((block) => block['type'])).toEqual(['paragraph', 'table', 'list']);
+  });
+
+  it('still reads a marked table as plain lines without edge pipes', () => {
+    expect(plainTableText(marked)).toContain('سرویس | حجم | قیمت\n');
+    expect(plainTableText(marked)).not.toContain('---');
   });
 });

@@ -6438,6 +6438,9 @@ export function createContainer(
     // Roadmap D4: best-effort bookkeeping around a send is logged, never thrown.
     logger,
     richMessageSupport,
+    // B3: «منوی پایین همیشه نمایش داده شود» — off by default, so the menu keyboard is not
+    // `is_persistent` and a customer who hides it is not shown it again.
+    { enabled: (scope) => featureFlagResolver.isEnabled(scope, 'persistent_bottom_menu') },
   );
   const appearance = new AppearanceService({
     repository: appearanceRepository,

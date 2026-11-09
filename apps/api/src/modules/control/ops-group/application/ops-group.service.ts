@@ -104,7 +104,22 @@ export interface OpsGroupServiceDeps {
   readonly logger: Logger;
   /** How many preserved messages one requeue moves; `OPS_GROUP_REQUEUE_LIMIT` unless a test says. */
   readonly requeueBatch?: number;
+  /**
+   * B8: how the test send waits between topics and after a 429. The real timer unless a test
+   * supplies one, so the pacing is asserted without a real second passing.
+   */
+  readonly sleep?: (ms: number) => Promise<void>;
 }
+
+/**
+ * B8: the test message goes to ONE topic at a time with a gap between them, because eleven
+ * simultaneous sends into one group is what Telegram answers with a 429.
+ */
+export const OPS_TEST_SEND_GAP_MS = 1_000;
+/** A 429 waits `retry_after` (never less than the gap, never more than this) and tries again. */
+export const OPS_TEST_RATE_LIMIT_MAX_WAIT_MS = 20_000;
+/** Attempts per topic, the first included; a topic still limited after these fails. */
+export const OPS_TEST_RATE_LIMIT_ATTEMPTS = 3;
 
 /** What the worker's or an operator's permission check found. */
 interface CheckFindings {
@@ -338,11 +353,15 @@ export class OpsGroupService {
     const token = await this.deps.bots.tokenFor(scope, group.botInstanceId);
     const results: OpsGroupTestResponse['results'][number][] = [];
     const now = this.deps.clock.now();
+    let first = true;
     for (const category of OPS_LOG_TOPIC_CATEGORIES) {
       if (token === null) {
         results.push({ category, outcome: 'FAILED', errorCode: 'telegram.no_bot_configured' });
         continue;
       }
+      // B8: one at a time, a gap between topics — never the whole set at once.
+      if (!first) await this.pause(OPS_TEST_SEND_GAP_MS);
+      first = false;
       results.push(await this.sendTestInto(scope, actor, group, category, token, now));
     }
 
@@ -1343,6 +1362,43 @@ export class OpsGroupService {
     );
   }
 
+  private pause(ms: number): Promise<void> {
+    return (
+      this.deps.sleep ??
+      ((wait: number) => new Promise<void>((resolve) => setTimeout(resolve, wait)))
+    )(ms);
+  }
+
+  /**
+   * One send, and — B8 — a 429 DELAYS it rather than failing the topic: wait Telegram's own
+   * `retry_after` (at least the gap, at most `OPS_TEST_RATE_LIMIT_MAX_WAIT_MS`) and send again,
+   * up to `OPS_TEST_RATE_LIMIT_ATTEMPTS` times. A limit that outlasts that is reported as
+   * `telegram.rate_limited`, the topic's honest result.
+   */
+  private async sendPaced(
+    token: string,
+    chatId: string,
+    threadId: number | null,
+    text: string,
+  ): ReturnType<OpsGroupTelegram['send']> {
+    let sent = await this.deps.telegram.send(token, chatId, threadId, text);
+    for (
+      let attempt = 1;
+      attempt < OPS_TEST_RATE_LIMIT_ATTEMPTS &&
+      sent.outcome !== 'OK' &&
+      sent.errorCode === 'telegram.rate_limited';
+      attempt += 1
+    ) {
+      const wait = Math.min(
+        Math.max(sent.retryAfterMs ?? OPS_TEST_SEND_GAP_MS, OPS_TEST_SEND_GAP_MS),
+        OPS_TEST_RATE_LIMIT_MAX_WAIT_MS,
+      );
+      await this.pause(wait);
+      sent = await this.deps.telegram.send(token, chatId, threadId, text);
+    }
+    return sent;
+  }
+
   /** One test message into one topic, recreating the topic once if it was deleted. */
   private async sendTestInto(
     scope: ScopeContext,
@@ -1370,7 +1426,7 @@ export class OpsGroupService {
       requestedBy: actor.label ?? actor.type,
       at: now,
     });
-    let sent = await this.deps.telegram.send(token, group.chatId, ensured.threadId, text);
+    let sent = await this.sendPaced(token, group.chatId, ensured.threadId, text);
     if (sent.outcome !== 'OK' && sent.topicMissing) {
       ensured = await this.deps.provisioner.ensure(
         scope,
@@ -1387,7 +1443,7 @@ export class OpsGroupService {
           errorCode: ensured.kind === 'BUSY' ? 'ops_group.topic_pending' : ensured.errorCode,
         };
       }
-      sent = await this.deps.telegram.send(token, group.chatId, ensured.threadId, text);
+      sent = await this.sendPaced(token, group.chatId, ensured.threadId, text);
     }
     if (sent.outcome !== 'OK') {
       if (sent.chatProblem !== null) {

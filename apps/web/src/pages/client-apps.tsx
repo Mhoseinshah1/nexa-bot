@@ -1,33 +1,24 @@
 import { useRef, useState, type FormEvent } from 'react';
-import { providerDisplayName, providerNameOf } from '../provider-labels';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  CLIENT_APP_DELIVERY_KINDS,
-  CLIENT_APP_DESCRIPTION_MAX_LENGTH,
   CLIENT_APP_GUIDE_MAX_LENGTH,
-  CLIENT_APP_ICON_MAX_LENGTH,
   CLIENT_APP_IMAGE_MAX_BYTES,
   CLIENT_APP_IMAGE_MIME_TYPES,
   CLIENT_APP_NAME_MAX_LENGTH,
   CLIENT_APP_PLATFORMS,
-  CLIENT_APP_PROTOCOLS,
   CLIENT_APP_URL_MAX_LENGTH,
-  PROVIDER_DESCRIPTORS,
   clientAppTextProblem,
   inspectClientAppImage,
   neutralizeClientAppBareLinks,
   normalizeClientAppUrl,
   renderClientAppGuide,
   templateDefinition,
-  type ClientAppDeliveryKind,
   type ClientAppImageMimeType,
   type ClientAppImageProblem,
   type ClientAppPlatform,
-  type ClientAppProtocol,
   type ClientAppResponse,
   type ClientAppStatus,
   type ClientAppTextProblem,
-  type ProviderType,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, renderTemplateBody } from '@nexa/i18n';
 import {
@@ -119,11 +110,6 @@ export const PLATFORM_LABELS: Readonly<Record<ClientAppPlatform, WebKey>> = {
   OTHER: 'web.client_apps_platform_other',
 };
 
-const DELIVERY_LABELS: Readonly<Record<ClientAppDeliveryKind, WebKey>> = {
-  SUBSCRIPTION_LINK: 'web.client_apps_delivery_link',
-  CONNECTION_FILES: 'web.client_apps_delivery_files',
-};
-
 const PROBLEM_LABELS: Readonly<Record<ClientAppTextProblem, WebKey>> = {
   CONTROL: 'web.client_apps_problem_control',
   MARKUP: 'web.client_apps_problem_markup',
@@ -134,30 +120,20 @@ const PROBLEM_LABELS: Readonly<Record<ClientAppTextProblem, WebKey>> = {
 interface FormState {
   platform: ClientAppPlatform;
   name: string;
-  icon: string;
-  description: string;
   officialUrl: string;
   alternativeUrl: string;
   helpUrl: string;
   guide: string;
-  deliveryKinds: ClientAppDeliveryKind[];
-  protocols: ClientAppProtocol[];
-  providerTypes: ProviderType[];
   sortOrder: string;
 }
 
 const EMPTY_FORM: FormState = {
   platform: 'ANDROID',
   name: '',
-  icon: '',
-  description: '',
   officialUrl: '',
   alternativeUrl: '',
   helpUrl: '',
   guide: '',
-  deliveryKinds: [],
-  protocols: [],
-  providerTypes: [],
   sortOrder: '0',
 };
 
@@ -165,15 +141,10 @@ function formOf(row: ClientAppResponse): FormState {
   return {
     platform: row.platform,
     name: row.name,
-    icon: row.icon ?? '',
-    description: row.description,
     officialUrl: row.officialUrl,
     alternativeUrl: row.alternativeUrl ?? '',
     helpUrl: row.helpUrl ?? '',
     guide: row.guide,
-    deliveryKinds: [...row.deliveryKinds],
-    protocols: [...row.protocols],
-    providerTypes: [...row.providerTypes],
     sortOrder: String(row.sortOrder),
   };
 }
@@ -206,17 +177,7 @@ export function formProblems(form: FormState): Problems {
     if (message !== undefined) problems[field] = message;
   };
   put('name', textProblem(form.name, { required: true, multiline: false }));
-  put('description', textProblem(form.description, { required: true, multiline: false }));
   put('guide', textProblem(form.guide, { required: true, multiline: true }));
-  const icon = form.icon.trim();
-  if (icon !== '') {
-    put(
-      'icon',
-      icon.length > CLIENT_APP_ICON_MAX_LENGTH || /\s/u.test(icon)
-        ? t('web.client_apps_icon_invalid')
-        : textProblem(icon, { required: false, multiline: false }),
-    );
-  }
   put('officialUrl', linkProblem(form.officialUrl, true));
   put('alternativeUrl', linkProblem(form.alternativeUrl, false));
   put('helpUrl', linkProblem(form.helpUrl, false));
@@ -229,15 +190,10 @@ function fieldsOf(form: FormState, sortOrder: number): ClientAppFields {
   return {
     platform: form.platform,
     name: form.name.trim(),
-    icon: optional(form.icon),
-    description: form.description.trim(),
     officialUrl: form.officialUrl.trim(),
     alternativeUrl: optional(form.alternativeUrl),
     helpUrl: optional(form.helpUrl),
     guide: form.guide.trim(),
-    deliveryKinds: form.deliveryKinds,
-    protocols: form.protocols,
-    providerTypes: form.providerTypes,
     sortOrder,
   };
 }
@@ -252,25 +208,6 @@ function faultOf(error: unknown): string {
 
 function isVersionConflict(error: unknown): boolean {
   return error instanceof ApiError && error.code === VERSION_CONFLICT;
-}
-
-/** Names of the provider types an entry is limited to, or "any". */
-function compatibilityOf(row: ClientAppResponse): string {
-  const parts: string[] = [];
-  if (row.deliveryKinds.length > 0) {
-    parts.push(row.deliveryKinds.map((kind) => t(DELIVERY_LABELS[kind])).join(', '));
-  }
-  if (row.protocols.length > 0) parts.push(row.protocols.join(', '));
-  if (row.providerTypes.length > 0) {
-    parts.push(row.providerTypes.map((type) => providerNameOf(type)).join(', '));
-  }
-  return parts.length === 0 ? t('web.client_apps_compat_any') : parts.join(' · ');
-}
-
-function toggled<T>(list: readonly T[], member: T, on: boolean): T[] {
-  return on
-    ? [...list.filter((one) => one !== member), member]
-    : list.filter((one) => one !== member);
 }
 
 // ---------------------------------------------------------------------------
@@ -726,17 +663,10 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
       header: t('web.client_apps_name'),
       render: (row) => (
         // A product name keeps the digits it was typed with («v2rayNG»).
-        <span className="strong ca-name">
-          {row.icon === null ? row.name : `${row.icon} ${row.name}`}
-        </span>
+        <span className="strong ca-name">{row.name}</span>
       ),
     },
     { key: 'order', header: t('web.client_apps_order'), render: (row) => String(row.sortOrder) },
-    {
-      key: 'compat',
-      header: t('web.client_apps_compat'),
-      render: (row) => compatibilityOf(row),
-    },
     {
       key: 'status',
       header: t('web.client_apps_status'),
@@ -791,20 +721,13 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
   ];
 
   const sortOrder = sortOrderOf(form.sortOrder);
+  // B6: an app applies to every service and has no icon or short description of its own, so the
+  // customer's screen is its name and guide; neutralised exactly as the bot's read does (C6).
   const preview = renderTemplateBody(
-    templateDefinition(
-      form.deliveryKinds.includes('CONNECTION_FILES') ? 'bot.apps.detail_files' : 'bot.apps.detail',
-    ),
-    CATALOGUE_FA[
-      form.deliveryKinds.includes('CONNECTION_FILES') ? 'bot.apps.detail_files' : 'bot.apps.detail'
-    ],
-    // Neutralised exactly as the bot's read neutralises them (C6), so an entry loaded from a
-    // row written around the service previews as the customer would receive it.
+    templateDefinition('bot.apps.detail'),
+    CATALOGUE_FA['bot.apps.detail'],
     {
-      app: neutralizeClientAppBareLinks(
-        form.icon.trim() === '' ? form.name.trim() : `${form.icon.trim()} ${form.name.trim()}`,
-      ),
-      description: neutralizeClientAppBareLinks(form.description.trim()),
+      app: neutralizeClientAppBareLinks(form.name.trim()),
       guide: renderClientAppGuide(form.guide),
     },
   );
@@ -891,35 +814,6 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
                       onChange={(event) => setForm({ ...form, name: event.target.value })}
                     />
                   </Field>
-                  <Field
-                    label={t('web.client_apps_icon')}
-                    htmlFor="app-icon"
-                    hint={t('web.client_apps_icon_hint')}
-                    {...(shown('icon') === undefined ? {} : { error: shown('icon') as string })}
-                  >
-                    <input
-                      id="app-icon"
-                      className="input"
-                      value={form.icon}
-                      maxLength={CLIENT_APP_ICON_MAX_LENGTH}
-                      onChange={(event) => setForm({ ...form, icon: event.target.value })}
-                    />
-                  </Field>
-                  <Field
-                    label={t('web.client_apps_description')}
-                    htmlFor="app-description"
-                    {...(shown('description') === undefined
-                      ? {}
-                      : { error: shown('description') as string })}
-                  >
-                    <input
-                      id="app-description"
-                      className="input"
-                      value={form.description}
-                      maxLength={CLIENT_APP_DESCRIPTION_MAX_LENGTH}
-                      onChange={(event) => setForm({ ...form, description: event.target.value })}
-                    />
-                  </Field>
                 </div>
               </div>
               <div className="form-section">
@@ -999,74 +893,6 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
                     onChange={(event) => setForm({ ...form, guide: event.target.value })}
                   />
                 </Field>
-              </div>
-              <div className="form-section">
-                <h3>{t('web.client_apps_section_compat')}</h3>
-                <div className="client-apps-sets">
-                  <fieldset className="field client-apps-set">
-                    <legend>{t('web.client_apps_delivery')}</legend>
-                    <span className="muted small">{t('web.client_apps_compat_hint')}</span>
-                    {CLIENT_APP_DELIVERY_KINDS.map((kind) => (
-                      <label key={kind} className="nowrap">
-                        <input
-                          type="checkbox"
-                          checked={form.deliveryKinds.includes(kind)}
-                          onChange={(event) =>
-                            setForm({
-                              ...form,
-                              deliveryKinds: toggled(
-                                form.deliveryKinds,
-                                kind,
-                                event.target.checked,
-                              ),
-                            })
-                          }
-                        />{' '}
-                        {t(DELIVERY_LABELS[kind])}
-                      </label>
-                    ))}
-                  </fieldset>
-                  <fieldset className="field client-apps-set">
-                    <legend>{t('web.client_apps_protocols')}</legend>
-                    {CLIENT_APP_PROTOCOLS.map((protocol) => (
-                      <label key={protocol} className="nowrap" dir="ltr">
-                        <input
-                          type="checkbox"
-                          checked={form.protocols.includes(protocol)}
-                          onChange={(event) =>
-                            setForm({
-                              ...form,
-                              protocols: toggled(form.protocols, protocol, event.target.checked),
-                            })
-                          }
-                        />{' '}
-                        {protocol}
-                      </label>
-                    ))}
-                  </fieldset>
-                  <fieldset className="field client-apps-set">
-                    <legend>{t('web.client_apps_providers')}</legend>
-                    {PROVIDER_DESCRIPTORS.map((descriptor) => (
-                      <label key={descriptor.key} className="nowrap" dir="ltr">
-                        <input
-                          type="checkbox"
-                          checked={form.providerTypes.includes(descriptor.key)}
-                          onChange={(event) =>
-                            setForm({
-                              ...form,
-                              providerTypes: toggled(
-                                form.providerTypes,
-                                descriptor.key,
-                                event.target.checked,
-                              ),
-                            })
-                          }
-                        />{' '}
-                        {providerDisplayName(descriptor.key, descriptor.canonicalName)}
-                      </label>
-                    ))}
-                  </fieldset>
-                </div>
               </div>
               <Disclosure
                 className="form-section"

@@ -22,6 +22,9 @@ function failure(
     retryable: outcome.outcome === 'FAILED_RETRYABLE',
     errorCode: outcome.errorCode,
     errorMessage: outcome.errorMessage,
+    ...(outcome.outcome === 'FAILED_RETRYABLE' && outcome.retryAfterMs !== undefined
+      ? { retryAfterMs: outcome.retryAfterMs }
+      : {}),
   };
 }
 
