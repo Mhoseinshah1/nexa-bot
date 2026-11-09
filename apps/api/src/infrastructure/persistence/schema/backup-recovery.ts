@@ -460,9 +460,18 @@ export const recoveryRequests = pgTable(
      * representable: a row with `confirmed_at` and no `confirmed_checksum`
      * would be a confirmation for anything.
      */
+    /*
+     * Phase 6B PR-4 (ADR-0039 § 8): a `MOVE` request is confirmed on the new server's root
+     * shell by `botctl move import` with the typed bundle password — no administrator. Its
+     * binding is the other three fields, all or none, and it never names an administrator.
+     */
     check(
       'recovery_requests_confirmation_check',
-      sql`num_nonnulls(confirmed_at, confirmed_by_admin_id, confirmed_checksum, confirmation_expires_at) IN (0, 4)`,
+      sql`CASE WHEN source = 'MOVE'
+            THEN confirmed_by_admin_id IS NULL
+             AND num_nonnulls(confirmed_at, confirmed_checksum, confirmation_expires_at) IN (0, 3)
+            ELSE num_nonnulls(confirmed_at, confirmed_by_admin_id, confirmed_checksum, confirmation_expires_at) IN (0, 4)
+          END`,
     ),
     /**
      * ONE destructive recovery at a time, enforced by PostgreSQL.
