@@ -102,6 +102,7 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleLegacyNxpkgImportRepository.page',
   'DrizzleLegacyNxpkgImportRepository.patch',
   'DrizzleLegacyNxpkgImportRepository.reclaimStale',
+  'DrizzleLegacyNxpkgImportRepository.recordMemoryPeak',
   'DrizzleLegacyNxpkgImportRepository.release',
   'DrizzleLegacyNxpkgImportRepository.supersedeBefore',
   'DrizzleLegacyNxpkgImportRepository.transition',
