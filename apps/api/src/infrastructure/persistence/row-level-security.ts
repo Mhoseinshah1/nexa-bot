@@ -94,6 +94,13 @@ BEGIN
     REVOKE ALL ON FUNCTION nexa_installation_nxpkg_import(text[]) FROM PUBLIC;
     GRANT EXECUTE ON FUNCTION nexa_installation_nxpkg_import(text[]) TO ${APP_ROLE}, ${SYSTEM_ROLE};
   END IF;
+  -- Phase 6B (ADR-0039 § 10): the tenant rewrite allowance's lookup is the SYSTEM path's
+  -- alone; nexa_app is never granted it.
+  IF to_regprocedure('nexa_tenant_rewrite_allowed(uuid)') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION nexa_tenant_rewrite_allowed(uuid) FROM PUBLIC;
+    REVOKE ALL ON FUNCTION nexa_tenant_rewrite_allowed(uuid) FROM ${APP_ROLE};
+    GRANT EXECUTE ON FUNCTION nexa_tenant_rewrite_allowed(uuid) TO ${SYSTEM_ROLE};
+  END IF;
 END
 $grants$`;
 

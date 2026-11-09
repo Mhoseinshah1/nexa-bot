@@ -119,6 +119,29 @@ export class HostedBackupController {
       .send(createReadStream(artifact.path));
   }
 
+  /**
+   * «بازیابی روی همین سرور»: one of the bot's own verified archives, dry-run as a REPLACE of
+   * the same bot (fresh code). Answers the VERIFIED restore request, confirmed like an upload's.
+   */
+  @Post(HOSTED_BACKUP_ROUTES.restoreHere)
+  @HttpCode(200)
+  async restoreHere(
+    @Req() request: FastifyRequest,
+    @Param('tenantId') tenantId: string,
+    @Param('runId') runId: string,
+    @Body() body: unknown,
+  ): Promise<TenantRestoreView> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.tenantRestoreAdmin.restoreHere(
+      scope,
+      actor,
+      this.token(request),
+      tenantId,
+      runId,
+      body,
+    );
+  }
+
   @Get(HOSTED_BACKUP_ROUTES.own)
   async own(@Req() request: FastifyRequest): Promise<HostedOwnBackupResponse> {
     const { scope, actor } = await authenticateAdmin(this.container, request);

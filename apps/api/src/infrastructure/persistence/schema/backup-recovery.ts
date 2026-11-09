@@ -714,6 +714,14 @@ export const tenantRestores = pgTable(
     confirmRequestedAt: timestamptz('confirm_requested_at'),
     /** REPLACE only: the verified PRE_REPLACE tenant archive of the rows being replaced. */
     preReplaceRunId: uuid('pre_replace_run_id').references(() => backupRuns.id),
+    /**
+     * REPLACE only (ADR-0039 § 4, § 10): the id of the ONE transaction that may delete this
+     * tenant's append-only rows — the apply's own, written by it as it starts
+     * (`pg_current_xact_id()`). `nexa_tenant_rewrite_allowed` answers true only inside that
+     * transaction, for that tenant, while the row is APPLYING; once it ends the id never
+     * recurs, so the authority dies with it.
+     */
+    rewriteXactId: bigint('rewrite_xact_id', { mode: 'bigint' }),
     failureCode: text('failure_code'),
     failureMessage: text('failure_message'),
     /**

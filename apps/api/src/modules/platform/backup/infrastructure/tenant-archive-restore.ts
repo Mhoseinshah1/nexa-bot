@@ -351,11 +351,13 @@ async function digestTable(
   columns: readonly string[],
   tenantId: string,
   transform?: (row: (string | null)[]) => (string | null)[],
+  lockRows = false,
 ): Promise<LineDigest> {
   const digest = new LineDigest();
+  const select = selectTenantRows(shape, columns, tenantId);
   await readByCursor(
     executor,
-    selectTenantRows(shape, columns, tenantId),
+    lockRows ? sql`${select} FOR UPDATE` : select,
     columns.length,
     async (rows) => {
       for (const row of rows)
@@ -439,6 +441,19 @@ export async function canonicalDigests(
   tables: readonly string[],
   tenantId: string,
   cipher: SecretCipher,
+  options: {
+    /**
+     * Phase 6B replace: compare the outbox without the relay's bookkeeping (publication,
+     * attempts, errors, retries) — a held bot's messages may still be relayed, which is not a
+     * change of its data.
+     */
+    readonly ignoreRelayMarks?: boolean;
+    /**
+     * Phase 6B replace: every row read is locked `FOR UPDATE` until the transaction ends, so
+     * nothing compared can change before it is deleted.
+     */
+    readonly lockRows?: boolean;
+  } = {},
 ): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const table of tables) {
@@ -446,6 +461,9 @@ export async function canonicalDigests(
     if (shape === undefined) continue;
     const columns = shape.columns.map((column) => column.name);
     const slots = secretSlots(table, columns);
+    const relay = ['published_at', 'attempts', 'last_error', 'next_attempt_at', 'exhausted_at']
+      .map((c) => columns.indexOf(c))
+      .filter((at) => at >= 0);
     // A shared aggregate's outbox sequence is the target's own after a restore (renumbered):
     // the canonical form compares the message, not the number the installation gave it.
     const type = columns.indexOf('aggregate_type');
@@ -461,10 +479,16 @@ export async function canonicalDigests(
       const out = [...row];
       if (SHARED_AGGREGATE_TYPES.includes(row[type] ?? '')) out[sequence] = null;
       if (row[published] === null) for (const at of delivery) out[at] = null;
+      if (options.ignoreRelayMarks === true) for (const at of relay) out[at] = null;
       return out;
     };
-    const digest = await digestTable(executor, shape, columns, tenantId, (row) =>
-      masked(canonicalRow(row, slots, cipher)),
+    const digest = await digestTable(
+      executor,
+      shape,
+      columns,
+      tenantId,
+      (row) => masked(canonicalRow(row, slots, cipher)),
+      options.lockRows === true,
     );
     out[table] = `${String(digest.rows)}:${digest.hex()}`;
   }

@@ -272,7 +272,12 @@ describe('«بازیابی ربات از فایل»: the recovery role’s pass'
     restoreFails?: Error,
     withdrawResult = true,
   ) {
-    const restored: { confirmRequestId?: string; password: string; slug?: string }[] = [];
+    const restored: {
+      confirmRequestId?: string;
+      password: string;
+      slug?: string;
+      mode: string;
+    }[] = [];
     const withdrawn: {
       id: string;
       failureCode: string;
@@ -333,6 +338,7 @@ describe('«بازیابی ربات از فایل»: the recovery role’s pass'
           })),
       },
       cipher,
+      hostedArchive: async () => null,
       idempotency: {} as never,
       audit: {} as never,
       clock: { now: () => new Date('2026-11-09T00:00:00Z') },
@@ -346,6 +352,8 @@ describe('«بازیابی ربات از فایل»: the recovery role’s pass'
   const record = (over: Partial<TenantRestoreRecord> & { id: string }): TenantRestoreRecord =>
     ({
       hostedTenantId: BOT_A,
+      mode: 'NEW',
+      preReplaceRunId: null,
       state: 'VERIFIED',
       stage: 'DONE',
       dryRun: {},
@@ -382,6 +390,27 @@ describe('«بازیابی ربات از فایل»: the recovery role’s pass'
     const message = t.withdrawn[0]?.failureMessage ?? '';
     expect(message).not.toContain('params:');
     expect(message).not.toContain(marker);
+  });
+
+  it('applies a confirmed REPLACE as a replace, and a NEW one as new (the row decides)', async () => {
+    const replace = '01900000-0000-7000-8000-0000000000c6';
+    const fresh = '01900000-0000-7000-8000-0000000000c7';
+    const at = new Date('2026-11-08T23:30:00Z');
+    const t = admin(
+      [
+        record({ id: replace, mode: 'REPLACE', confirmRequestedAt: at }),
+        record({ id: fresh, confirmRequestedAt: at }),
+      ],
+      {
+        [replace]: JSON.stringify({ ciphertext: 'sealed:pw', keyId: 'k1' }),
+        [fresh]: JSON.stringify({ ciphertext: 'sealed:pw', keyId: 'k1' }),
+      },
+    );
+    await t.service.tick();
+    expect(t.restored).toEqual([
+      expect.objectContaining({ confirmRequestId: replace, mode: 'REPLACE' }),
+      expect.objectContaining({ confirmRequestId: fresh, mode: 'NEW' }),
+    ]);
   });
 
   it('applies the slug the owner chose at the dry run', async () => {

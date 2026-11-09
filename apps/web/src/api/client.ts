@@ -6220,6 +6220,22 @@ export async function downloadHostedArchive(
   return response.blob();
 }
 
+/**
+ * «بازیابی روی همین سرور»: one of the bot's own archives, dry-run as a REPLACE of the same bot.
+ * Answers the VERIFIED restore request; it is confirmed in «بازیابی ربات از فایل».
+ */
+export function restoreHostedArchiveHere(
+  tenantId: string,
+  runId: string,
+  body: { proof: HostingProof; password: string },
+): Promise<TenantRestoreView> {
+  return post(
+    hostedBackupPath(HOSTED_BACKUP_ROUTES.restoreHere, tenantId, runId),
+    body,
+    hostingShape<TenantRestoreView>(),
+  );
+}
+
 /** The hosted bot's own Web Admin: «managed by the host» and the last backup's time. */
 export function fetchOwnHostedBackup(): Promise<HostedOwnBackupResponse> {
   return authedGet(HOSTED_BACKUP_ROUTES.own, hostingShape<HostedOwnBackupResponse>());
@@ -6243,7 +6259,7 @@ export async function uploadTenantRestore(file: File): Promise<TenantRestoreUplo
 
 export function dryRunTenantRestore(
   restoreId: string,
-  body: { proof: HostingProof; password: string; slug?: string },
+  body: { proof: HostingProof; password: string; slug?: string; mode?: 'NEW' | 'REPLACE' },
 ): Promise<TenantRestoreView> {
   return post(
     restorePath(HOSTED_BACKUP_ROUTES.dryRun, restoreId),

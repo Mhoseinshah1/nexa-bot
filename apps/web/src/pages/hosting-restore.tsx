@@ -25,6 +25,7 @@ import {
   Ltr,
   SecretInput,
   StateSwitch,
+  Switch,
   useToast,
 } from '../ui/kit';
 import { CodePromptDialog, HOSTING_BOTS_KEY } from './hosting-parts';
@@ -36,7 +37,7 @@ import { CodePromptDialog, HOSTING_BOTS_KEY } from './hosting-parts';
  * the row's state while one is in progress.
  */
 
-const RESTORES_KEY = ['hosting', 'restores'] as const;
+export const RESTORES_KEY = ['hosting', 'restores'] as const;
 
 /** A failure code stored on the row, in words (an unknown one reads as the generic error). */
 function failureText(code: string): string {
@@ -70,6 +71,7 @@ export function HostedRestoreSection() {
   const [file, setFile] = useState<File | null>(null);
   const [password, setPassword] = useState('');
   const [slug, setSlug] = useState('');
+  const [replace, setReplace] = useState(false);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const restores = useQuery({
     queryKey: RESTORES_KEY,
@@ -96,6 +98,7 @@ export function HostedRestoreSection() {
   const refresh = (): void => {
     setDialog(null);
     setPassword('');
+    setReplace(false);
     void queryClient.invalidateQueries({ queryKey: RESTORES_KEY });
     void queryClient.invalidateQueries({ queryKey: HOSTING_BOTS_KEY });
   };
@@ -153,6 +156,22 @@ export function HostedRestoreSection() {
                         {t(state.label)}
                       </Badge>,
                     ],
+                    [
+                      t('web.hosted_restore_mode'),
+                      t(
+                        row.mode === 'REPLACE'
+                          ? 'web.hosted_restore_mode_replace'
+                          : 'web.hosted_restore_mode_new',
+                      ),
+                    ],
+                    ...(row.preReplaceRunId === null
+                      ? []
+                      : ([
+                          [
+                            t('web.hosted_restore_pre_replace'),
+                            <Ltr key="pre">{row.preReplaceRunId.slice(0, 8)}</Ltr>,
+                          ],
+                        ] as [string, ReactNode][])),
                     ...(row.slug === null
                       ? []
                       : ([[t('web.hosting_field_slug'), <Ltr key="slug">{row.slug}</Ltr>]] as [
@@ -186,7 +205,11 @@ export function HostedRestoreSection() {
                       variant="primary"
                       onClick={() => setDialog({ kind: 'confirm', restore: row })}
                     >
-                      {t('web.hosted_restore_confirm')}
+                      {t(
+                        row.mode === 'REPLACE'
+                          ? 'web.hosted_restore_replace_confirm'
+                          : 'web.hosted_restore_confirm',
+                      )}
                     </Button>
                     <Button size="sm" onClick={() => setDialog({ kind: 'cancel', restore: row })}>
                       {t('web.hosted_restore_cancel')}
@@ -204,12 +227,13 @@ export function HostedRestoreSection() {
           title={t('web.hosted_restore_dry_run_title')}
           hint={t('web.hosted_restore_dry_run_hint')}
           confirmLabel={t('web.hosted_restore_dry_run')}
-          valid={password !== '' && slugValid}
+          valid={password !== '' && (replace || slugValid)}
           run={({ proof }) =>
             dryRunTenantRestore(dialog.restoreId, {
               proof,
               password,
-              ...(slug.trim() === '' ? {} : { slug: slug.trim() }),
+              mode: replace ? 'REPLACE' : 'NEW',
+              ...(replace || slug.trim() === '' ? {} : { slug: slug.trim() }),
             })
           }
           onClose={() => setDialog(null)}
@@ -222,22 +246,44 @@ export function HostedRestoreSection() {
               onChange={(event) => setPassword(event.target.value)}
             />
           </Field>
-          <Field label={t('web.hosted_restore_slug')} htmlFor={slugId}>
-            <input
-              id={slugId}
-              className="input"
-              dir="ltr"
-              value={slug}
-              onChange={(event) => setSlug(event.target.value)}
-            />
-          </Field>
+          <Switch
+            checked={replace}
+            onChange={setReplace}
+            label={t('web.hosted_restore_replace_switch')}
+          />
+          {replace ? (
+            <p className="muted small">{t('web.hosted_restore_replace_hint')}</p>
+          ) : (
+            <Field label={t('web.hosted_restore_slug')} htmlFor={slugId}>
+              <input
+                id={slugId}
+                className="input"
+                dir="ltr"
+                value={slug}
+                onChange={(event) => setSlug(event.target.value)}
+              />
+            </Field>
+          )}
         </CodePromptDialog>
       )}
       {dialog?.kind === 'confirm' && (
         <CodePromptDialog
-          title={t('web.hosted_restore_confirm_title')}
-          hint={t('web.hosted_restore_confirm_hint')}
-          confirmLabel={t('web.hosted_restore_confirm')}
+          title={t(
+            dialog.restore.mode === 'REPLACE'
+              ? 'web.hosted_restore_replace_confirm_title'
+              : 'web.hosted_restore_confirm_title',
+          )}
+          hint={t(
+            dialog.restore.mode === 'REPLACE'
+              ? 'web.hosted_restore_replace_confirm_hint'
+              : 'web.hosted_restore_confirm_hint',
+          )}
+          confirmLabel={t(
+            dialog.restore.mode === 'REPLACE'
+              ? 'web.hosted_restore_replace_confirm'
+              : 'web.hosted_restore_confirm',
+          )}
+          {...(dialog.restore.mode === 'REPLACE' ? { danger: true } : {})}
           run={({ proof, idempotencyKey }) =>
             confirmTenantRestore(dialog.restore.id, { idempotencyKey, proof })
           }
