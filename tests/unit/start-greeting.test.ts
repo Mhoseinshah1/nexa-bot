@@ -70,7 +70,7 @@ describe('the /start greeting is filled from the receiving customer', () => {
     const text = render(WELCOME, WELCOME_BODY, facts());
     expect(text.split('\n')[0]).toBe('ZED PROXY');
     expect(text).toContain('علی عزیز، خوش آمدید.');
-    expect(text).toContain('«🛒 خرید اشتراک» یا «🧪 سرویس تست»');
+    expect(text).toContain('«🔐 خرید اشتراک» یا «اشتراک رایگان {تست}»');
   });
 
   it('the rendered greeting is never stored: only the raw template is read, for any customer', async () => {

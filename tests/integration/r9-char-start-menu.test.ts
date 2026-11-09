@@ -172,14 +172,30 @@ function expectedViews(): Record<string, View> {
     'unknown.text': {
       intent: 'USERNAME_TEXT',
       key: 'bot.unknown_command',
-      text: 'این دستور شناخته نشد. برای دیدن فهرست دستورها /help را بفرستید.',
-      buttons: [[['🏠 بازگشت به منوی اصلی', 'mm:']]],
+      // B1: the last message drawn is the main menu that follows the unknown sentence.
+      text: '\u200F👋 سلام x، خوش برگشتی\n\n\u200F📱 ۰ سرویس فعال داری\n\nاگه سرویست داره تموم می\u200cشه، از «📱 سرویس\u200cهای من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
+      buttons: [],
+      replyKeyboard: [
+        ['🔐 خرید اشتراک'],
+        ['🏦 کیف پول + شارژ', '🛍 سرویس های من'],
+        ['📚 آموزش'],
+        ['☎️ پشتیبانی'],
+        ['🎫 پشتیبانی / تیکت\u200cها'],
+      ],
     },
     'unknown.command': {
       intent: 'USERNAME_TEXT',
       key: 'bot.unknown_command',
-      text: 'این دستور شناخته نشد. برای دیدن فهرست دستورها /help را بفرستید.',
-      buttons: [[['🏠 بازگشت به منوی اصلی', 'mm:']]],
+      // B1: the last message drawn is the main menu that follows the unknown sentence.
+      text: '\u200F👋 سلام x، خوش برگشتی\n\n\u200F📱 ۰ سرویس فعال داری\n\nاگه سرویست داره تموم می\u200cشه، از «📱 سرویس\u200cهای من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
+      buttons: [],
+      replyKeyboard: [
+        ['🔐 خرید اشتراک'],
+        ['🏦 کیف پول + شارژ', '🛍 سرویس های من'],
+        ['📚 آموزش'],
+        ['☎️ پشتیبانی'],
+        ['🎫 پشتیبانی / تیکت\u200cها'],
+      ],
     },
     'unknown.callback': {
       intent: 'UNSUPPORTED',
