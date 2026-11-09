@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { PROVIDER_TYPES } from './provider.js';
 
 /**
  * WP-A10 — app downloads and connection guides.
@@ -486,46 +485,22 @@ export function neutralizeClientAppBareLinks(text: string): string {
 
 // --- The entry ------------------------------------------------------------------------------
 
-function distinctSubset<T extends string>(values: readonly [T, ...T[]]) {
-  return z
-    .array(z.enum(values))
-    .max(values.length)
-    .refine((list) => new Set(list).size === list.length, { message: 'no repeats' })
-    .default([]);
-}
-
 /**
- * What an operator writes. Empty compatibility lists mean "any": an entry that names no
- * provider type is offered whatever panel a customer's service is on.
+ * What an operator writes: the app's name, its OS (platform), its download link, an
+ * alternative link, a video or help link, the guide, and the order.
+ *
+ * B6: an app applies to EVERY service, so it carries no icon, no short description and no
+ * compatibility (delivery kinds, protocols, provider types). A client that still sends
+ * those keys has them ignored (the object is not strict). The columns stay in the table with
+ * their permissive defaults and nothing reads or writes them.
  */
 export const clientAppInputSchema = z.object({
   platform: clientAppPlatformSchema,
   name: safeText(CLIENT_APP_NAME_MAX_LENGTH, { multiline: false }),
-  icon: z
-    .union([z.string(), z.null()])
-    .optional()
-    .transform((value, ctx) => {
-      const trimmed = value?.trim() ?? '';
-      if (trimmed === '') return null;
-      if (trimmed.length > CLIENT_APP_ICON_MAX_LENGTH || /\s/u.test(trimmed)) {
-        ctx.addIssue({ code: 'custom', message: 'a short mark with no spaces' });
-        return z.NEVER;
-      }
-      const problem = clientAppTextProblem(trimmed);
-      if (problem !== null) {
-        ctx.addIssue({ code: 'custom', message: PROBLEM_MESSAGES[problem] });
-        return z.NEVER;
-      }
-      return trimmed;
-    }),
-  description: safeText(CLIENT_APP_DESCRIPTION_MAX_LENGTH, { multiline: false }),
   officialUrl: clientAppUrlSchema,
   alternativeUrl: optionalClientAppUrlSchema,
   helpUrl: optionalClientAppUrlSchema,
   guide: safeText(CLIENT_APP_GUIDE_MAX_LENGTH, { multiline: true }),
-  deliveryKinds: distinctSubset(CLIENT_APP_DELIVERY_KINDS),
-  protocols: distinctSubset(CLIENT_APP_PROTOCOLS),
-  providerTypes: distinctSubset(PROVIDER_TYPES),
   sortOrder: z.number().int().min(CLIENT_APP_SORT_MIN).max(CLIENT_APP_SORT_MAX),
 });
 export type ClientAppInput = z.output<typeof clientAppInputSchema>;
@@ -550,15 +525,10 @@ export const clientAppSchema = z.object({
   id: z.string(),
   platform: clientAppPlatformSchema,
   name: z.string(),
-  icon: z.string().nullable(),
-  description: z.string(),
   officialUrl: z.string(),
   alternativeUrl: z.string().nullable(),
   helpUrl: z.string().nullable(),
   guide: z.string(),
-  deliveryKinds: z.array(z.enum(CLIENT_APP_DELIVERY_KINDS)),
-  protocols: z.array(z.enum(CLIENT_APP_PROTOCOLS)),
-  providerTypes: z.array(z.enum(PROVIDER_TYPES)),
   status: clientAppStatusSchema,
   sortOrder: z.number().int(),
   version: z.number().int(),

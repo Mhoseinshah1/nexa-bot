@@ -8812,21 +8812,22 @@ export const TEMPLATES = [
   {
     key: 'bot.apps.detail',
     description:
-      'One app: its name, the operator’s short description and connection guide, rendered as plain text. The download links are the buttons below it.',
+      'One app: its name and connection guide, rendered as plain text. The download links are the buttons below it.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
         token: 'app',
         type: 'STRING',
-        description: 'The app’s name, with its icon when the operator set one.',
+        description: 'The app’s name.',
         required: true,
         repeatable: false,
       },
       {
         token: 'description',
         type: 'STRING',
-        description: 'The operator’s one-line description of the app.',
-        required: true,
+        description:
+          'Retired: an app no longer has a short description, so this is never filled. Kept declared so a saved text that still names it renders nothing for it instead of a literal token.',
+        required: false,
         repeatable: false,
       },
       {
@@ -8848,15 +8849,16 @@ export const TEMPLATES = [
       {
         token: 'app',
         type: 'STRING',
-        description: 'The app’s name, with its icon when the operator set one.',
+        description: 'The app’s name.',
         required: true,
         repeatable: false,
       },
       {
         token: 'description',
         type: 'STRING',
-        description: 'The operator’s one-line description of the app.',
-        required: true,
+        description:
+          'Retired: an app no longer has a short description, so this is never filled. Kept declared so a saved text that still names it renders nothing for it instead of a literal token.',
+        required: false,
         repeatable: false,
       },
       {
