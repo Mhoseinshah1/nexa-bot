@@ -9,6 +9,7 @@ import { COVERAGE } from './fixtures/coverage.ts';
 import { COVERAGE_B } from './fixtures/coverage-b.ts';
 import { COVERAGE_C } from './fixtures/coverage-c.ts';
 import { DEMO_PARITY, DEMO_PARITY_EMPTY } from './fixtures/demo-parity/index.ts';
+import { PRINT_DRY_RUN_REPORT } from './fixtures/print/dry-run-report.ts';
 
 /** Every fixture the screenshot server answers from, one file per page family. */
 export const FIXTURES: readonly ShotFixture[] = [
@@ -32,6 +33,8 @@ export { SHOT_NOW } from './fixture.ts';
 export const FIXTURE_SETS: Readonly<Record<string, readonly ShotFixture[]>> = {
   'demo-parity': DEMO_PARITY,
   'demo-parity-empty': DEMO_PARITY_EMPTY,
+  // SFR A4: a Mirza dry-run report on /recovery, for `pnpm web:print-shots`.
+  'print-dry-run-report': PRINT_DRY_RUN_REPORT,
 };
 
 const sameAnswer = (a: ShotFixture, b: ShotFixture) =>
