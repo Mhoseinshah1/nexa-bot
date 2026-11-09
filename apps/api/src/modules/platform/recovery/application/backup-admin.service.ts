@@ -23,6 +23,7 @@ import type {
 import type { BackupService } from '../../backup/application/backup.service.js';
 import type { EffectiveBackupSchedule } from '../../backup/application/backup-schedule.js';
 import type { RecoveryRequestRepository } from './ports.js';
+import { requireInstallationScope } from '../../access/application/installation-scope.js';
 
 /**
  * The Web Admin's view of the backup pipeline.
@@ -67,6 +68,11 @@ export interface BackupAdminServiceDeps {
   readonly schedule: () => Promise<EffectiveBackupSchedule>;
   /** The backup volume against what the next run needs (Round 8, B3). Null: no directory yet. */
   readonly disk?: () => Promise<BackupDiskView | null>;
+  /**
+   * ADR-0039 F1: the installation tenant. Every method answers its scope only — a hosted or
+   * reseller bot's owner holds `backup.*` in their own tenant, and this is the whole database.
+   */
+  readonly installationTenantId: () => string | null;
 }
 
 export interface BackupDiskView {
@@ -399,7 +405,9 @@ export class BackupAdminService {
       throw errors.notFound(PLATFORM_ERROR_CODES.BACKUP_RUN_MISSING, 'No such backup run.');
     }
     const run = await this.deps.runs.byId(id);
-    if (run === null) {
+    // A hosted bot's TENANT archive is not one of the installation's: it lives under
+    // `hosted/<tenantId>/` and is the creator panel's to list and hand out (ADR-0039 § 7).
+    if (run === null || (run.subjectTenantId ?? null) !== null) {
       throw errors.notFound(PLATFORM_ERROR_CODES.BACKUP_RUN_MISSING, 'No such backup run.');
     }
     return run;
@@ -411,6 +419,7 @@ export class BackupAdminService {
     permission: PermissionKey,
     denial: { action: string; entityType: string; entityId: string | null },
   ): Promise<void> {
+    requireInstallationScope(scope, this.deps.installationTenantId);
     try {
       await this.deps.guard.check(scope, actor, permission);
     } catch (denied) {

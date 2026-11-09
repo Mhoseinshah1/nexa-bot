@@ -1,5 +1,7 @@
 import {
   errors,
+  INSTALLATION_ONLY_PERMISSIONS,
+  isSystemContext,
   PLATFORM_ERROR_CODES,
   SYSTEM_JOB_PERMISSIONS,
   type ActorContext,
@@ -84,9 +86,18 @@ export function denialEventRecorded(error: unknown): boolean {
 }
 
 export class PermissionGuard {
+  /**
+   * `installationTenantId` (ADR-0039 F1): the installation tenant this process serves. The
+   * keys in `INSTALLATION_ONLY_PERMISSIONS` act on the whole installation, and the seeded
+   * `owner` role holds them in EVERY tenant — a hosted or reseller bot's owner included — so
+   * they are dropped from every scope that is not the installation tenant's. Absent (a unit
+   * test's guard) or answering null (no installation resolved yet), nobody holds them: deny
+   * by default.
+   */
   constructor(
     private readonly resolver: PermissionResolver,
     private readonly opsLog: OperationalEventRecorder,
+    private readonly installationTenantId?: () => string | null,
   ) {}
 
   async check(
@@ -198,7 +209,10 @@ export class PermissionGuard {
     adminId: AdminId,
     tx?: unknown,
   ): Promise<ReadonlySet<PermissionKey>> {
-    return this.resolver.permissionsIfActive(scope, adminId, tx);
+    return this.withoutForeignInstallationKeys(
+      scope,
+      await this.resolver.permissionsIfActive(scope, adminId, tx),
+    );
   }
 
   private async effective(
@@ -209,6 +223,27 @@ export class PermissionGuard {
     if (actor.type === 'SYSTEM_JOB') {
       return new Set<PermissionKey>(SYSTEM_JOB_PERMISSIONS);
     }
-    return this.resolver.resolve(scope, actor, tx);
+    return this.withoutForeignInstallationKeys(
+      scope,
+      await this.resolver.resolve(scope, actor, tx),
+    );
+  }
+
+  /** ADR-0039 F1: the installation-only keys, kept only in the installation tenant's scope. */
+  private withoutForeignInstallationKeys(
+    scope: ScopeContext,
+    held: ReadonlySet<PermissionKey>,
+  ): ReadonlySet<PermissionKey> {
+    const installation = this.installationTenantId?.() ?? null;
+    if (
+      installation !== null &&
+      !isSystemContext(scope) &&
+      scope.tenantId.toLowerCase() === installation.toLowerCase()
+    ) {
+      return held;
+    }
+    const kept = new Set(held);
+    for (const key of INSTALLATION_ONLY_PERMISSIONS) kept.delete(key);
+    return kept;
   }
 }

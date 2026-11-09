@@ -23,6 +23,7 @@ import {
   type ScopeContext,
   type TenantContext,
 } from '@nexa/contracts';
+import { requireInstallationScope } from '../../access/application/installation-scope.js';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import { recordMutationDenial } from '../../access/application/authorized-mutation.js';
 import type { BackupArchiver, BackupManifest } from '../../backup/application/ports.js';
@@ -119,6 +120,11 @@ export interface RecoveryServiceDeps {
    * never both commit.
    */
   readonly exclusive: <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>;
+  /**
+   * ADR-0039 F1: the installation tenant. A recovery restores the WHOLE database, so every
+   * method answers this scope only (not-found elsewhere), whatever the caller's role holds.
+   */
+  readonly installationTenantId: () => string | null;
   readonly logger: {
     info(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
@@ -1162,6 +1168,7 @@ export class RecoveryService {
     permission: PermissionKey,
     denial: { action: string; entityType: string; entityId: string | null },
   ): Promise<void> {
+    requireInstallationScope(scope, this.deps.installationTenantId);
     try {
       await this.deps.guard.check(scope, actor, permission);
     } catch (denied) {
