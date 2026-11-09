@@ -858,7 +858,9 @@ describe('tenant archive (Phase 6B PR-1) — export, verify, restore, as nexa_ap
     expect(
       compareArchiveHead({ ...head(expected.length), lastHash: 'f'.repeat(64) }, expected),
     ).toBe('DIVERGED');
-    expect(last.tag).toMatch(/tenant_archive/);
+    // The first head that writes this format is still shipped (later migrations follow it).
+    expect(expected.map((migration) => migration.tag)).toContain('0329_tenant_archive');
+    expect(last.tag >= '0329_tenant_archive').toBe(true);
   });
 
   describe('across releases', () => {

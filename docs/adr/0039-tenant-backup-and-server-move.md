@@ -704,6 +704,44 @@ Changes to the design above, each decided in PR-1 and binding on later PRs:
 - **The older-head test** restores an archive taken at head N−2 (`0327`) onto N (`0329`, the
   first head that writes this format), migrating the scratch across both.
 
+## As built in PR-2 (`feat/6b-hosted-backups`)
+
+Changes to the design above, each decided in PR-2 and binding on later PRs:
+
+- **F1 is closed, and was real.** `tests/integration/installation-only-scope.test.ts` was red on
+  `main` in all four cases (a non-installation owner got the installation archive's path, wrote a
+  backup password, started a whole-installation recovery upload, and held `recovery.restore`).
+  Shipped first as its own PR (`fix/6b-installation-only-backup-perms`): the guard drops
+  `INSTALLATION_ONLY_PERMISSIONS` outside the installation tenant (and everywhere while none is
+  resolved), and `BackupAdminService`, `RecoveryService` and `BackupPasswordService` answer any
+  other scope `backup.installation_only` (not-found) before reading. `BackupAdminService` also
+  never answers a TENANT run by id.
+- **«بکاپ الان» is a request, not a run (§ 7).** The press (fresh code) stamps
+  `hosted_bot_backup_policies.run_requested_at`; the worker's `HostedBackupLoop` takes it, like a
+  scheduled one, through the heavy-job queue. No archive is ever taken in an HTTP request.
+- **Due rule.** A bot with a password is due when «بکاپ الان» is pending, or its schedule is on
+  and its last FINISHED attempt started before today's slot (`latestDailySlot`, Asia/Tehran) —
+  one attempt per slot, failures included; a queue that does not admit ends the pass.
+- **The download is a POST** (it spends a fresh code); the answer's body is the archive.
+- **Delivery (§ 7)** is `HostedGroupArchiveDelivery`, asked in the HOSTED tenant's scope only;
+  it keeps the archive on the server (`NOT_ATTEMPTED`) with no group, an unusable group, the
+  BACKUP_FILE log switched off, or a file above Telegram's bot ceiling (no split parts for
+  hosted archives in 6B).
+- **Restore from file (§ 4).** The upload lives in `RECOVERY_WORK_DIR/tenant-restores/<id>/`.
+  The DRY RUN runs in the API request, through the heavy-job queue, exactly as the installation
+  recovery's verification does: it writes nothing but its `tenant_restores` row. The APPLY runs
+  only in the recovery role: the confirmation (fresh code) stamps
+  `tenant_restores.confirm_requested_at`, and the role applies it with the password the dry run
+  sealed into the upload directory under this server's active key (purpose
+  `hosting.archive_password`, entity = the restore id). «لغو» and a 24-hour expiry withdraw an
+  unconfirmed VERIFIED row (`tenant_archive.restore_cancelled` / `.dry_run_expired`), closing
+  PR-1's open item; uploads are removed once their request finishes, orphans after a day (A3).
+- **«بازیابی روی همین سرور» is NOT built.** On the same server the bot's tenant id is present, so
+  only REPLACE could restore it, and REPLACE is not built (PR-1). The button is drawn disabled
+  with that reason.
+- **Password change** replaces the stored ciphertext; earlier archives open with the password
+  they were sealed with (the owner is told so).
+
 ## Open
 
 - Off-site (S3) copies of hosted archives: the destination and its credentials are the owner's;
