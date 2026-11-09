@@ -648,6 +648,56 @@ section`, `audit: host owner acting in a hosted tenant`, `data export: bind the 
 - **Replace** depends on the rewrite allowance and is recorded not done if PR-1 cannot prove every
   guard (§ 4).
 
+## As built in PR-1 (`feat/6b-tenant-archive`)
+
+Changes to the design above, each decided in PR-1 and binding on later PRs:
+
+- **Aggregate counters (§ 1).** `AGGREGATE_OWNERSHIP` (contract, `events.ts`) marks each
+  aggregate type `TENANT_ROW` or `SHARED_KEY`. Setting, Template, FeatureFlag and System are
+  keyed by a key every tenant uses, and Tenant by a tenant id the installation also writes about,
+  so their `aggregate_sequences` row is the INSTALLATION's: it is never exported, and a restore
+  gives the archive's outbox messages of such an aggregate the next numbers of the TARGET's
+  counter (locked for the transaction), in their order. The outbox's global key is checked for
+  `TENANT_ROW` aggregates only, and the canonical digest compares a shared message without its
+  sequence. Found when a second hosted bot of one source could not be restored beside the first.
+- **The row format (§ 2).** Parts are COPY text format, produced from a `col::text` SELECT
+  (escaped as `COPY … TO` escapes) and loaded by batched, typed `INSERT`s, in scratch as in the
+  live database: the driver has no COPY stream and no dependency was added for one. The archive
+  key's id is `archive-<archiveId>` (`:` is not used in envelope key ids).
+- **The scratch (§ 3, § 5)** is migrated in process by the drizzle migrator over a copy of the
+  folder whose journal is truncated at the archive's head; its online indexes and row-level
+  security are not applied (an owner scratch needs neither).
+- **An archive is untrusted input (§ 4)** — anyone with its password can write one (security
+  review of PR-1):
+  - the register takes NO expiry and NO capacity limits from the archive: the restored bot has
+    no expiry and the installation's default limits until the owner sets them; the manifest's
+    values are informational;
+  - the owner admin the host facts name must be an admin of the archived tenant, or the dry run
+    refuses; an activation bot the tenant does not hold is dropped;
+  - the tenant row must be exactly one, with the manifest's id, and lands `HOSTED` whatever
+    kind it carries;
+  - identity sequences are shared by every tenant: a restored value more than 10,000,000
+    above the live sequence, or past half the column type's range, refuses the restore;
+  - the parts a manifest declares are capped before extraction by a limit that is not the
+    archive's (32 GiB by default) and by the work volume's free space less 1 GiB; a
+    self-referencing table is buffered within fixed bounds (200,000 rows, 256 MiB).
+- **The dry run and the confirmation (§ 4).** A dry run leaves its `tenant_restores` row
+  `VERIFIED` (it holds the installation's one restore slot); the confirmation names that row,
+  is bound to the uploaded file's SHA-256, repeats the whole verification and applies. A
+  `VERIFIED` row nobody confirms holds the slot: PR-2's restore page must offer «لغو» and
+  expire it (open).
+- **Replace — NOT DONE in PR-1.** `mode: 'REPLACE'` is refused
+  (`tenant_archive.replace_unavailable`). The rewrite allowance of § 10 needs a DELETE branch
+  and a refusing/accepting test in each of the 41 append-only guard functions; that was not
+  built and proven in this PR, so a new-tenant restore is the only mode.
+- **Not wired yet.** PR-1 builds the engine, the services, the request row and the queue rule;
+  the recovery-role worker, the HTTP routes, the hosted password and schedule, delivery to the
+  hosted group and retention under `hosted/<tenantId>/` are PR-2. The system-path reason
+  `tenant archive: bind a hosted tenant for restore` is not used: the restore binds the
+  restored tenant with `withTenantScopeIn` inside its one system-path transaction.
+- **The older-head test** restores an archive taken at head N−2 (`0327`) onto N (`0329`, the
+  first head that writes this format), migrating the scratch across both.
+
 ## Open
 
 - Off-site (S3) copies of hosted archives: the destination and its credentials are the owner's;
