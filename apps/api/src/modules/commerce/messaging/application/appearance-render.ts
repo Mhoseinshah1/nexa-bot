@@ -2,6 +2,7 @@ import {
   APPEARANCE_MARKER_EXPRESSION_SOURCE,
   APPEARANCE_SLOT_FALLBACKS,
   isAppearanceSlot,
+  parseCustomEmojiMarkerBody,
   type AppearanceSlot,
   type TemplateFormat,
 } from '@nexa/contracts';
@@ -101,8 +102,35 @@ export function decorateAppearance(
     text += rendered.slice(last, match.index);
     last = match.index + match[0].length;
     if (!isAppearanceSlot(slot)) {
-      // Not a slot this release knows: literal, exactly as the renderer left it.
-      text += match[0];
+      /*
+       * A custom emoji an administrator typed into a text (a product description captured from
+       * Telegram): `{icon:<id>:<fallback>}`. Drawn as the SAME entity or tag a slot's custom
+       * emoji is — for a bot that may carry custom emoji — and as the covered fallback emoji
+       * for every other bot, so «ایموجی پریمیوم» off, an ineligible bot and a plain fallback
+       * all read the emoji the administrator saw. Anything else is literal.
+       */
+      const typed = parseCustomEmojiMarkerBody(slot);
+      if (typed === null) {
+        // Not a slot this release knows: literal, exactly as the renderer left it.
+        text += match[0];
+        continue;
+      }
+      if (!mayCarryCustomEmoji(decoration)) {
+        text += typed.fallback;
+        continue;
+      }
+      decorated += 1;
+      if (format === 'TELEGRAM_HTML') {
+        text += `<tg-emoji emoji-id="${typed.id}">${typed.fallback}</tg-emoji>`;
+        continue;
+      }
+      entities.push({
+        type: 'custom_emoji',
+        offset: text.length,
+        length: typed.fallback.length,
+        custom_emoji_id: typed.id,
+      });
+      text += typed.fallback;
       continue;
     }
     const fallback = APPEARANCE_SLOT_FALLBACKS[slot];

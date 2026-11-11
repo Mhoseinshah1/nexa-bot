@@ -93,6 +93,7 @@ import * as adminResellerRequestFlow from './runtime/admin-reseller-request-flow
 import * as trialFlow from './runtime/trial-flow.js';
 import * as referralFlow from './runtime/referral-flow.js';
 import * as tutorialFlow from './runtime/tutorial-flow.js';
+import * as descriptionCaptureFlow from './runtime/admin-description-capture-flow.js';
 import * as adminFlow from './runtime/admin-flow.js';
 import * as adminReviewFlow from './runtime/admin-review-flow.js';
 import { hasAnyPanelSection } from './runtime/admin-common.js';
@@ -619,29 +620,41 @@ export class BotRuntime {
         : {};
     let answered: PendingReply;
     try {
+      /*
+       * «ارسال توضیح از تلگرام»: an administrator's text or caption, while the product page's
+       * request for it is open, is the description and nothing else — asked before the
+       * ordinary routing, and a message that is nobody's description comes back null and
+       * routes exactly as it did. A blocked customer who is an administrator is still one.
+       */
+      const descriptionCaptured =
+        repeatedReview || staleWizard
+          ? null
+          : await descriptionCaptureFlow.descriptionCaptureTurn(this, scope, actor, command, input);
       answered =
         repeatedReview || staleWizard
           ? { key: null, values: {}, buttons: [], orderId: null, ...repeatToast }
-          : arrival === 'BLOCKED'
-            ? (blockedAdminText ??
-              (ADMIN_INTENTS.has(command.intent)
-                ? await adminFlow.adminTurn(this, scope, actor, command, input)
-                : null) ??
-              // Round N close (§D): a blocked customer's /stop is still their preference.
-              // Blocking stops what they can BUY; it does not make a promotion welcome, and
-              // a MARKETING send to an audience that admits blocked customers reads this row.
-              (command.intent === 'MARKETING_OPT_OUT' || command.intent === 'MARKETING_OPT_IN'
-                ? await startMenuFlow.marketingPreference(
-                    this,
-                    scope,
-                    actor,
-                    customer,
-                    command.intent === 'MARKETING_OPT_OUT',
-                    input.idempotencyKey,
-                  )
-                : null) ??
-              blocked)
-            : await this.guardedAct(scope, actor, command, customer, arrival, input);
+          : descriptionCaptured !== null
+            ? descriptionCaptured
+            : arrival === 'BLOCKED'
+              ? (blockedAdminText ??
+                (ADMIN_INTENTS.has(command.intent)
+                  ? await adminFlow.adminTurn(this, scope, actor, command, input)
+                  : null) ??
+                // Round N close (§D): a blocked customer's /stop is still their preference.
+                // Blocking stops what they can BUY; it does not make a promotion welcome, and
+                // a MARKETING send to an audience that admits blocked customers reads this row.
+                (command.intent === 'MARKETING_OPT_OUT' || command.intent === 'MARKETING_OPT_IN'
+                  ? await startMenuFlow.marketingPreference(
+                      this,
+                      scope,
+                      actor,
+                      customer,
+                      command.intent === 'MARKETING_OPT_OUT',
+                      input.idempotencyKey,
+                    )
+                  : null) ??
+                blocked)
+              : await this.guardedAct(scope, actor, command, customer, arrival, input);
     } catch (error) {
       // A turn that failed gives its claim back rather than freezing the message for its lease.
       if (state !== undefined && claim !== null) {

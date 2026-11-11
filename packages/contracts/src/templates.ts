@@ -4954,6 +4954,42 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.admin.description_capture_done',
+    description:
+      '«ارسال توضیح از تلگرام»: the administrator’s message was captured as the product’s description and is waiting in the Web Admin page, where they still press Save.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'product',
+        type: 'STRING',
+        description: 'The product’s title.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.description_capture_expired',
+    description:
+      '«ارسال توضیح از تلگرام»: the administrator sent a message after the ten-minute request ran out. Nothing was captured.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.description_capture_denied',
+    description:
+      '«ارسال توضیح از تلگرام»: the sender no longer holds the permission to edit products. Nothing was captured and the request stays as it was.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.description_capture_rejected',
+    description:
+      '«ارسال توضیح از تلگرام»: the message cannot be a description (empty once trimmed, or longer than a description may be). The request stays open for another message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.admin.apps_back_button',
     description: 'Spec §7: back to the client apps section.',
     format: 'PLAIN_TEXT',

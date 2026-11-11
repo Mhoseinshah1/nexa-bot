@@ -459,7 +459,7 @@ describe('navigation', () => {
   });
 });
 
-describe('PR-3: the state is a row of quick-filter chips', () => {
+describe('demo parity: the state is a filter of the panel', () => {
   it('sends the chosen state to the server from a chip, and keeps the intro in a fold', async () => {
     const api = stubApi([
       { url: '/support-knowledge/articles', method: 'GET', body: { articles: [article()] } },
@@ -467,8 +467,12 @@ describe('PR-3: the state is a row of quick-filter chips', () => {
     renderPage(<SupportKnowledgePage denied={false} mayReview />);
     await screen.findByText('چطور لینک را وارد کنم؟');
     expect(screen.getByText(t('web.sk_about_fold'))).toBeInTheDocument();
-    const chips = screen.getByRole('group', { name: t('web.sk_col_state') });
-    fireEvent.click(within(chips).getByRole('button', { name: t('web.sk_state_retired') }));
+    // Demo parity: no chip row; the state is a select in the «فیلترها» panel.
+    expect(screen.queryByRole('group', { name: t('web.sk_col_state') })).toBeNull();
+    fireEvent.change(
+      within(openFilterPanel()).getByRole('combobox', { name: t('web.sk_col_state') }),
+      { target: { value: 'RETIRED' } },
+    );
     await waitFor(() => expect(calls(api, 'GET', 'state=RETIRED')).toHaveLength(1));
   });
 });

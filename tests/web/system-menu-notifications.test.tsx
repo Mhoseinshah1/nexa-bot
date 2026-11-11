@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { PERMISSION_KEYS, type PermissionKey } from '@nexa/contracts';
 import { resolve } from '../../apps/web/src/app';
 import { navPermitted, NAV } from '../../apps/web/src/nav';
+import { openFilterPanel } from './ui-helpers';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import type { AlertEvent } from '../../apps/web/src/pages/alerts';
 import { RedirectPage } from '../../apps/web/src/pages/redirect';
@@ -42,11 +43,17 @@ const inboxRow = (id: string, firstSeenAt = AT) => ({
 const alertRow = (id: string, firstSeenAt = AT, extra: Record<string, unknown> = {}): AlertEvent =>
   event({ id, firstSeenAt, lastSeenAt: firstSeenAt, ...extra }) as unknown as AlertEvent;
 
-/** A chip of the unified page, found inside its own filter strip (not by a loose name). */
-const chip = (label: Parameters<typeof t>[0]) =>
-  within(screen.getByRole('group', { name: t('web.nc_filters_label') })).getByRole('button', {
-    name: new RegExp(t(label), 'u'),
-  });
+/**
+ * A chip of the unified page, found inside its own filter strip in the «فیلترها» panel (demo
+ * parity: no chip row above the list); the panel is opened first when it is not open yet.
+ */
+const chip = (label: Parameters<typeof t>[0]) => {
+  const panel = screen.queryByRole('dialog', { name: t('web.filters') }) ?? openFilterPanel();
+  return within(within(panel).getByRole('group', { name: t('web.nc_filters_label') })).getByRole(
+    'button',
+    { name: new RegExp(t(label), 'u') },
+  );
+};
 
 const routeFor = (path: string, permissions: readonly PermissionKey[], query = ''): ReactElement =>
   resolve({ path, query: new URLSearchParams(query) }, permissions).element as ReactElement;
@@ -176,7 +183,7 @@ describe('one item that is both an inbox entry and an alert shows once', () => {
       },
     ]);
     renderPage(<NotificationCenterPage permissions={[...PERMISSION_KEYS]} />);
-    await screen.findByRole('group', { name: t('web.nc_filters_label') });
+    await screen.findByRole('button', { name: new RegExp(t('web.filters'), 'u') });
     fireEvent.click(chip('web.nc_filter_all'));
     const items = await screen.findAllByRole('listitem');
     await waitFor(() => {
@@ -203,15 +210,16 @@ describe('the unified page', () => {
       { url: '/ops-log', body: { events: [alertRow(ID_ALERT_ONLY)], nextCursor: null } },
     ]);
     const { container } = renderPage(<NotificationCenterPage permissions={[...PERMISSION_KEYS]} />);
+    // Demo parity: no chip row above the list; the four are in the filters panel.
+    await screen.findByRole('button', { name: new RegExp(t('web.filters'), 'u') });
+    expect(screen.queryByRole('group', { name: t('web.nc_filters_label') })).toBeNull();
     for (const label of [
       'web.nc_filter_unread',
       'web.nc_filter_all',
       'web.nc_filter_open_alerts',
       'web.nc_filter_recorded_alerts',
     ] as const) {
-      expect(
-        (await screen.findByRole('group', { name: t('web.nc_filters_label') })) && chip(label),
-      ).toBeInTheDocument();
+      expect(chip(label)).toBeInTheDocument();
     }
     await waitFor(() => expect(container.querySelector('.attention-strip.danger')).not.toBeNull());
   });
@@ -240,7 +248,7 @@ describe('the unified page', () => {
       { url: '/ops-log', body: { events: [alertRow(ID_ALERT_ONLY)], nextCursor: null } },
     ]);
     renderPage(<NotificationCenterPage permissions={[...PERMISSION_KEYS]} />);
-    await screen.findByRole('group', { name: t('web.nc_filters_label') });
+    await screen.findByRole('button', { name: new RegExp(t('web.filters'), 'u') });
     fireEvent.click(chip('web.nc_filter_recorded_alerts'));
     expect(await screen.findByText(t('web.event_recorded'))).toBeInTheDocument();
     expect(screen.getByText(t('web.err_technical'))).toBeInTheDocument();

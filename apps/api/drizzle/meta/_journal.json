@@ -2378,8 +2378,22 @@
     {
       "idx": 339,
       "version": "7",
-      "when": 1794401210789,
-      "tag": "0339_legacy_cleanup_revision",
+      "when": 1794403758423,
+      "tag": "0339_panel_singbox_profile_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 340,
+      "version": "7",
+      "when": 1794405030031,
+      "tag": "0340_product_description_captures",
+      "breakpoints": true
+    },
+    {
+      "idx": 341,
+      "version": "7",
+      "when": 1794416455546,
+      "tag": "0341_legacy_cleanup_revision",
       "breakpoints": true
     }
   ]

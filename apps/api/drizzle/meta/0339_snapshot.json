@@ -1,5 +1,5 @@
 {
-  "id": "5370bd42-0a74-4e59-9c8b-f2daa1bcd96b",
+  "id": "b9bd008e-cf5e-4d62-9960-890991385bf6",
   "prevId": "1cbd2101-8bf1-4196-8f7b-3338eb3f3dd5",
   "version": "7",
   "dialect": "postgresql",
@@ -7127,6 +7127,19 @@
           "notNull": true,
           "default": 360
         },
+        "singbox_name_mode": {
+          "name": "singbox_name_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'DEFAULT'"
+        },
+        "singbox_name_custom": {
+          "name": "singbox_name_custom",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -7218,6 +7231,14 @@
         "panels_qr_kind_check": {
           "name": "panels_qr_kind_check",
           "value": "qr_kind IN ('SUB_LINK', 'SINGBOX', 'BOTH')"
+        },
+        "panels_singbox_name_mode_check": {
+          "name": "panels_singbox_name_mode_check",
+          "value": "singbox_name_mode IN ('DEFAULT', 'USERNAME', 'CUSTOM')"
+        },
+        "panels_singbox_name_custom_check": {
+          "name": "panels_singbox_name_custom_check",
+          "value": "\"panels\".\"singbox_name_custom\" IS NULL OR (char_length(\"panels\".\"singbox_name_custom\") BETWEEN 1 AND 64 AND \"panels\".\"singbox_name_custom\" !~ '[[:cntrl:]]')"
         },
         "panels_singbox_interval_check": {
           "name": "panels_singbox_interval_check",
@@ -43531,26 +43552,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'INITIAL'"
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "vacuumed_at": {
-          "name": "vacuumed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -43628,17 +43629,9 @@
           "name": "legacy_compaction_runs_state_check",
           "value": "state IN ('REQUESTED', 'ARCHIVING', 'MEASURING', 'DROPPING', 'DEDUPING', 'STRIPPING', 'CLEARING', 'VACUUMING', 'COMPLETED', 'FAILED')"
         },
-        "legacy_compaction_runs_reason_check": {
-          "name": "legacy_compaction_runs_reason_check",
-          "value": "reason IN ('INITIAL', 'SUPPLEMENTARY')"
-        },
-        "legacy_compaction_runs_vacuum_proven_check": {
-          "name": "legacy_compaction_runs_vacuum_proven_check",
-          "value": "state <> 'COMPLETED' OR revision < 2 OR vacuumed_at IS NOT NULL"
-        },
         "legacy_compaction_runs_failure_code_check": {
           "name": "legacy_compaction_runs_failure_code_check",
-          "value": "failure_code IN ('legacy_compaction.archive_failed', 'legacy_compaction.archive_not_delivered', 'legacy_compaction.archive_out_of_memory', 'legacy_compaction.import_not_completed', 'legacy_compaction.step_failed', 'legacy_compaction.reconciliation_not_clean', 'legacy_compaction.vacuum_failed')"
+          "value": "failure_code IN ('legacy_compaction.archive_failed', 'legacy_compaction.archive_not_delivered', 'legacy_compaction.archive_out_of_memory', 'legacy_compaction.import_not_completed', 'legacy_compaction.step_failed', 'legacy_compaction.reconciliation_not_clean')"
         },
         "legacy_compaction_runs_finished_check": {
           "name": "legacy_compaction_runs_finished_check",

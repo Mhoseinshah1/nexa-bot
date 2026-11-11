@@ -353,6 +353,7 @@ export const WEB_FA_PAYMENTS_1 = {
   'web.payment_ops_range_30d': '30 روز اخیر',
   'web.payment_ops_range_month': 'این ماه',
   'web.payment_ops_counts_error': 'شمار صف‌ها خوانده نشد.',
+  'web.payment_ops_situation': 'وضعیت عملیاتی',
   'web.payment_ops_signal': 'آخرین پاسخ درگاه',
   'web.payment_ops_signal_inquiry_error': 'خطای استعلام',
   'web.payment_ops_signal_create': 'ساخت فاکتور',

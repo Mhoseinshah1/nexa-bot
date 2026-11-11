@@ -18,6 +18,7 @@ import {
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import { recordMutationDenial } from '../../access/application/authorized-mutation.js';
+import { enteredExportTrace } from '../../identity/application/impersonation.js';
 import {
   AUDIT_EXPORT_PERMISSION,
   AUDIT_VIEW_PERMISSION,
@@ -170,12 +171,19 @@ export class AuditLogService {
     }
     const bytes = this.deps.writer.csv(rows.map(exportRowOf));
     const now = this.deps.clock.now();
+    // Before the file is returned; a row that cannot be written throws and no file leaves.
+    // From an entered session the row is the owner's and names the hosted bot (PR-N N3).
     await this.deps.audit.record(scope, actor, {
       action: 'audit.export',
       entityType: 'AuditLog',
       entityId: null,
       before: null,
-      after: { format: 'csv', rows: rows.length, filter: filterRecord(query) },
+      after: {
+        format: 'csv',
+        rows: rows.length,
+        filter: filterRecord(query),
+        ...enteredExportTrace(scope, actor),
+      },
       result: 'SUCCESS',
     });
     await this.deps.ownerAlerts?.dataExported(scope, actor, {

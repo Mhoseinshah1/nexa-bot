@@ -2,6 +2,10 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PANEL_QR_KINDS,
+  SINGBOX_NAME_CUSTOM_MAX,
+  SINGBOX_NAME_MODES,
+  normalizeSingboxCustomName,
+  resolveSingboxProfileName,
   SINGBOX_INTERVAL_MAX_MINUTES,
   SINGBOX_INTERVAL_MIN_MINUTES,
   isSingboxInterval,
@@ -12,6 +16,7 @@ import {
   type PanelAdvancedResponse,
   type PanelQrKind,
   type PanelSummaryResponse,
+  type SingboxNameMode,
 } from '@nexa/contracts';
 import { fetchPanelAdvanced, updatePanel, updatePanelPolicy } from '../api/client';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -31,6 +36,14 @@ import {
 import { ErrorRef } from '../ui/technical-details';
 import { advancedKey } from './panel-advanced';
 import { messageFor } from './settings';
+
+const NAME_MODE_LABELS: Readonly<Record<SingboxNameMode, WebKey>> = {
+  DEFAULT: 'web.singbox_name_default',
+  USERNAME: 'web.singbox_name_username',
+  CUSTOM: 'web.singbox_name_custom',
+};
+/** A made-up account name for the one-line preview; never a real customer's. */
+const NAME_PREVIEW_SAMPLE = 'nx7k2m9q';
 
 const QR_KIND_LABELS: Readonly<Record<PanelQrKind, WebKey>> = {
   SUB_LINK: 'web.qr_kind_sub_link',
@@ -73,7 +86,7 @@ export function PanelDeliveryOptionsCard({
   }
   return (
     <Options
-      key={`${panel.id}:${String(panel.filesOnlyDelivery)}:${panel.qrKind}:${String(panel.singboxIntervalMinutes)}`}
+      key={`${panel.id}:${String(panel.filesOnlyDelivery)}:${panel.qrKind}:${String(panel.singboxIntervalMinutes)}:${panel.singboxNameMode}:${panel.singboxNameCustom ?? ''}`}
       panel={panel}
       mayEdit={mayEdit}
       offersFilesOnly={offersFilesOnly}
@@ -102,6 +115,16 @@ function Options({
   const minutes = Number(interval);
   const intervalOk = isSingboxInterval(minutes);
   const usesSingbox = kind === 'SINGBOX' || kind === 'BOTH';
+  const [nameMode, setNameMode] = useState<SingboxNameMode>(panel.singboxNameMode);
+  const [nameCustom, setNameCustom] = useState(panel.singboxNameCustom ?? '');
+  const customNormalized = normalizeSingboxCustomName(nameCustom);
+  const nameInvalid = nameMode === 'CUSTOM' && customNormalized === undefined;
+  const nameStored = customNormalized ?? null;
+  const previewName = resolveSingboxProfileName({
+    mode: nameMode,
+    custom: nameMode === 'CUSTOM' && customNormalized !== undefined ? customNormalized : null,
+    username: NAME_PREVIEW_SAMPLE,
+  });
 
   const body = {
     id: panel.id,
@@ -112,9 +135,13 @@ function Options({
     ...(offersQrKind && intervalOk && minutes !== panel.singboxIntervalMinutes
       ? { singboxIntervalMinutes: minutes }
       : {}),
+    ...(offersQrKind && nameMode !== panel.singboxNameMode ? { singboxNameMode: nameMode } : {}),
+    ...(offersQrKind && !nameInvalid && nameStored !== panel.singboxNameCustom
+      ? { singboxNameCustom: nameStored }
+      : {}),
   };
   const dirty = Object.keys(body).length > 1;
-  const invalid = offersQrKind && usesSingbox && !intervalOk;
+  const invalid = offersQrKind && usesSingbox && (!intervalOk || nameInvalid);
 
   const save = useMutation({
     mutationFn: () => updatePanel({ ...body, idempotencyKey: submission.current(body) }),
@@ -178,6 +205,58 @@ function Options({
                   onChange={(event) => setIntervalText(event.target.value)}
                 />
               </Field>
+            )}
+            {usesSingbox && (
+              <Field
+                label={t('web.singbox_name_label')}
+                hint={t('web.singbox_name_hint')}
+                htmlFor="panel-singbox-name-mode"
+              >
+                <Select
+                  id="panel-singbox-name-mode"
+                  value={nameMode}
+                  disabled={!editable}
+                  onChange={(event) => setNameMode(event.target.value as SingboxNameMode)}
+                >
+                  {SINGBOX_NAME_MODES.map((one) => (
+                    <option key={one} value={one}>
+                      {t(NAME_MODE_LABELS[one])}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
+            {usesSingbox && nameMode === 'CUSTOM' && (
+              <Field
+                label={t('web.singbox_name_custom_label')}
+                hint={t('web.singbox_name_custom_hint').replace(
+                  '{max}',
+                  String(SINGBOX_NAME_CUSTOM_MAX),
+                )}
+                htmlFor="panel-singbox-name-custom"
+                {...(nameInvalid
+                  ? {
+                      error: t('web.singbox_name_invalid').replace(
+                        '{max}',
+                        String(SINGBOX_NAME_CUSTOM_MAX),
+                      ),
+                    }
+                  : {})}
+              >
+                <Input
+                  id="panel-singbox-name-custom"
+                  value={nameCustom}
+                  disabled={!editable}
+                  onChange={(event) => setNameCustom(event.target.value)}
+                />
+              </Field>
+            )}
+            {usesSingbox && !nameInvalid && (
+              <p className="muted small" data-testid="singbox-name-preview">
+                {t('web.singbox_name_preview')
+                  .replace('{sample}', NAME_PREVIEW_SAMPLE)
+                  .replace('{name}', previewName ?? t('web.singbox_name_preview_default'))}
+              </p>
             )}
             {filesOnly && offersFilesOnly && (
               <p className="muted small">{t('web.qr_kind_files_only_note')}</p>

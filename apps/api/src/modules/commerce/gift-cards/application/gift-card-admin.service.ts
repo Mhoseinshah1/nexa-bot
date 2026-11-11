@@ -19,7 +19,10 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
-import { refuseImpersonatedSecretWrite } from '../../../platform/identity/application/impersonation.js';
+import {
+  enteredExportTrace,
+  refuseImpersonatedSecretWrite,
+} from '../../../platform/identity/application/impersonation.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -367,6 +370,9 @@ export class GiftCardAdminService {
           );
         }
         const codes = this.deps.sealer.open(scope, batch.id, batch.sealedExport);
+        // In THIS transaction, before a code leaves: from an entered session the row is the
+        // owner's, naming the hosted bot (PR-N N3), and a row that cannot be written rolls
+        // the export back — fail-closed, no codes without the trace.
         await this.deps.audit.record(
           scope,
           actor,
@@ -375,7 +381,11 @@ export class GiftCardAdminService {
             entityType: 'GiftCardBatch',
             entityId: batch.id,
             before: null,
-            after: { count: codes.length, state: batch.state },
+            after: {
+              count: codes.length,
+              state: batch.state,
+              ...enteredExportTrace(scope, actor),
+            },
             result: 'SUCCESS',
           },
           tx,

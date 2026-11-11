@@ -269,6 +269,26 @@ export const MAX_DEVICE_LIMIT = 1000;
 export const PRODUCT_TITLE_MAX_LENGTH = 120;
 export const PRODUCT_DESCRIPTION_MAX_LENGTH = 2000;
 
+/**
+ * «ارسال توضیح از تلگرام»: a capture request the Web Admin opens for ONE administrator, tenant
+ * and product. It lives ten minutes and reads ONE message — the next text or caption that
+ * administrator sends or forwards to the tenant's bot — and closes with the reason below.
+ */
+export const PRODUCT_DESCRIPTION_CAPTURE_TTL_MS = 10 * 60 * 1000;
+export const PRODUCT_DESCRIPTION_CAPTURE_CLOSE_REASONS = [
+  'CAPTURED',
+  'EXPIRED',
+  'SUPERSEDED',
+] as const;
+export type ProductDescriptionCaptureCloseReason =
+  (typeof PRODUCT_DESCRIPTION_CAPTURE_CLOSE_REASONS)[number];
+/** What the page sees: open, or the reason it closed. An open one past its deadline is EXPIRED. */
+export const PRODUCT_DESCRIPTION_CAPTURE_STATES = [
+  'OPEN',
+  ...PRODUCT_DESCRIPTION_CAPTURE_CLOSE_REASONS,
+] as const;
+export type ProductDescriptionCaptureState = (typeof PRODUCT_DESCRIPTION_CAPTURE_STATES)[number];
+
 export const productSpecificationSchema = z.object({
   durationDays: z.number().int().min(0).max(MAX_DURATION_DAYS),
   trafficBytes: z.coerce.bigint().min(0n).max(MAX_TRAFFIC_BYTES),
