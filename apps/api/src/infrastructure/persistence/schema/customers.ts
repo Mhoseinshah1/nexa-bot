@@ -25,7 +25,9 @@ import {
   CUSTOMER_TAG_COLORS,
   CUSTOMER_TAG_LABEL_MAX_LENGTH,
   CUSTOMER_STATUSES,
+  START_CAPTCHA_IMAGE_REFRESH_MAX,
   START_CAPTCHA_OPTION_COUNT,
+  START_CAPTCHA_QUESTION_KINDS,
   START_CAPTCHA_STATES,
   SERVICE_LOCATION_COOLDOWN_HOURS_MAX,
   SERVICE_LOCATION_MAX_CHANGES_MAX,
@@ -685,11 +687,28 @@ export const customerCaptchas = pgTable(
     state: text('state').notNull().default('PENDING'),
     /** The current question's id; a new question gets a new one. */
     challengeId: uuid('challenge_id').notNull(),
+    /**
+     * `captcha.kind`: the kind THIS question was asked with. A pending question keeps it
+     * whatever the setting becomes. `MATH` for every row written before the kinds existed.
+     */
+    kind: text('kind').notNull().default('MATH'),
+    /** `MATH` only (0 for the other kinds): the two numbers of the sum. */
     operandA: integer('operand_a').notNull(),
     operandB: integer('operand_b').notNull(),
-    /** The four offered answers, in button order. */
-    options: jsonb('options').$type<number[]>().notNull(),
+    /**
+     * The four offered answers, in button order: numbers for `MATH` and `WORD_NUMBER`, emoji
+     * for `EMOJI`; empty for `IMAGE_NUMBER`, whose answer is TYPED.
+     */
+    options: jsonb('options').$type<Array<number | string>>().notNull(),
     answerIndex: integer('answer_index').notNull(),
+    /**
+     * `IMAGE_NUMBER` only: the digits on the picture, which the typed answer is compared to
+     * and the picture is drawn from (nothing else is stored: not the image, never a file).
+     * Never in callback data. Null for every other kind.
+     */
+    answerText: text('answer_text'),
+    /** `IMAGE_NUMBER`: how many times this question was swapped for a new picture. */
+    refreshes: integer('refreshes').notNull().default(0),
     /** Wrong answers since the last cooldown. */
     attempts: integer('attempts').notNull().default(0),
     issuedAt: timestamptz('issued_at').notNull(),
@@ -711,9 +730,18 @@ export const customerCaptchas = pgTable(
       'customer_captchas_answer_index_check',
       sql`answer_index BETWEEN 0 AND ${sql.raw(String(START_CAPTCHA_OPTION_COUNT - 1))}`,
     ),
+    check('customer_captchas_kind_check', enumCheck('kind', START_CAPTCHA_QUESTION_KINDS)),
     check(
       'customer_captchas_options_check',
-      sql`jsonb_typeof(options) = 'array' AND jsonb_array_length(options) = ${sql.raw(String(START_CAPTCHA_OPTION_COUNT))}`,
+      sql`jsonb_typeof(options) = 'array' AND jsonb_array_length(options) = CASE WHEN kind = 'IMAGE_NUMBER' THEN 0 ELSE ${sql.raw(String(START_CAPTCHA_OPTION_COUNT))} END`,
+    ),
+    check(
+      'customer_captchas_answer_text_check',
+      sql`(kind = 'IMAGE_NUMBER') = (answer_text IS NOT NULL) AND (answer_text IS NULL OR answer_text ~ '^[0-9]{4}$')`,
+    ),
+    check(
+      'customer_captchas_refreshes_check',
+      sql`refreshes BETWEEN 0 AND ${sql.raw(String(START_CAPTCHA_IMAGE_REFRESH_MAX))}`,
     ),
     check('customer_captchas_attempts_check', sql`attempts >= 0`),
     check('customer_captchas_passed_check', sql`(state = 'PASSED') = (passed_at IS NOT NULL)`),
