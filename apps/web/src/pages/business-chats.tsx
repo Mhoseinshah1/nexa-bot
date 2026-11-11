@@ -34,7 +34,9 @@ import {
 import { formatDate, formatNumber, formatTimeOfDay, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
-import { setQuery, useLinkHandler, type Route } from '../router';
+import { useLinkHandler, type Route } from '../router';
+import { ListFilterBar } from '../ui/filter-bar';
+import { queryChipFilter } from './money-filters';
 import { HandoffContextView } from './handoff-context';
 import { HANDOFF_LABELS } from './handoff-labels';
 import { useSubmissionKey } from '../submission-key';
@@ -68,14 +70,7 @@ import { AssistCard } from './support-assist';
 import { ProposeKnowledgeButton } from './support-knowledge';
 import { FailureDiagnosticView } from './support-ai-failure';
 import { LIST_SEARCH_DEBOUNCE_MS, ListFreshness } from '../ui/list-search';
-import {
-  AttentionStrip,
-  CardRows,
-  KpiRow,
-  QuickAction,
-  QuickActionBar,
-  QuickFilters,
-} from '../ui/redesign';
+import { AttentionStrip, CardRows, KpiRow, QuickAction, QuickActionBar } from '../ui/redesign';
 import {
   THREAD_FILTERS,
   THREAD_FILTER_SENDER,
@@ -519,24 +514,26 @@ export function BusinessChatsPage({
       render: (row) => <WaitAge since={row.unansweredSince} />,
     },
     {
-      /* One cell: the preview, and when it was said under it (was two columns). */
+      // Demo parity: «آخرین پیام» (the preview) and «زمان آخرین پیام» are two columns.
+      key: 'preview',
+      header: t('web.bchat_last_preview'),
+      wrap: true,
+      render: (row) =>
+        row.preview === null ? (
+          <span className="muted small">{t('web.bchat_text_gone')}</span>
+        ) : (
+          <span className="bchat-preview">{row.preview}</span>
+        ),
+    },
+    {
       key: 'last',
       header: t('web.bchat_last_message'),
-      wrap: true,
-      render: (row) => (
-        <span className="bchat-last-cell">
-          {row.preview === null ? (
-            <span className="muted small">{t('web.bchat_text_gone')}</span>
-          ) : (
-            <span className="bchat-preview">{row.preview}</span>
-          )}
-          {row.lastMessageAt === null ? (
-            <Dash />
-          ) : (
-            <span className="nowrap muted small">{formatTimestamp(row.lastMessageAt)}</span>
-          )}
-        </span>
-      ),
+      render: (row) =>
+        row.lastMessageAt === null ? (
+          <Dash />
+        ) : (
+          <span className="nowrap">{formatTimestamp(row.lastMessageAt)}</span>
+        ),
     },
   ];
 
@@ -556,22 +553,25 @@ export function BusinessChatsPage({
 
       <Card>
         {requestable && (
-          /* Quick-filter chips replace the filter panel's state row. No counts: the inbox has no
-             server total per state, and a client count would be a lie. */
-          <div className="bchat-quick">
-            <QuickFilters
-              label={t('web.status')}
-              value={state ?? 'ALL'}
-              onChange={(next) => setQuery(route, 'state', next === 'ALL' ? null : next)}
-              items={[
-                { key: 'ALL' as const, label: t('web.bchat_filter_all') },
-                ...BUSINESS_CONVERSATION_STATES.map((value) => ({
-                  key: value,
+          /* Demo parity: the state filter lives in the filters panel, not a chip row above the
+             table. No counts: the inbox has no server total per state. */
+          <ListFilterBar
+            label={t('web.bchats_title')}
+            filters={[
+              queryChipFilter({
+                route,
+                param: 'state',
+                label: t('web.status'),
+                value: state,
+                allLabel: t('web.bchat_filter_all'),
+                resetKeys: [],
+                items: BUSINESS_CONVERSATION_STATES.map((value) => ({
+                  id: value,
                   label: t(BUSINESS_STATE_LABELS[value]),
                 })),
-              ]}
-            />
-          </div>
+              }),
+            ]}
+          />
         )}
 
         <StateSwitch
@@ -765,15 +765,13 @@ function ConversationView({
       <DetailHead
         level={1}
         back={{ href: '/business-chats', label: t('web.bchats_title') }}
-        title={customerName(conversation)}
-        badge={
-          <>
-            <StateBadge value={conversation.state} mode={data.aiMode} />
-            <HoldKindBadge conversation={conversation} />
-          </>
-        }
+        // Demo parity: «گفتگوی بیزینس، <name>», with the state as the title's badge; the hold
+        // kind is a fact of the line below.
+        title={t('web.bchat_detail_title').replace('{name}', customerName(conversation))}
+        badge={<StateBadge value={conversation.state} mode={data.aiMode} />}
         meta={
           <>
+            <HoldKindBadge conversation={conversation} />
             {conversation.customer?.username != null &&
               conversation.customer.firstName !== null && (
                 <span className="ca-meta">
@@ -1244,15 +1242,23 @@ function TranscriptCard({
                 restart();
               }}
             />
-            <QuickFilters
-              label={t('web.bchat_thread_filters')}
+            {/* Demo parity: the demo has no chip row inside a conversation; the same four
+                sender filters are one select, so none is lost. */}
+            <select
+              className="input sm bchat-filter"
+              aria-label={t('web.bchat_thread_filters')}
               value={filter}
-              onChange={(next) => {
-                setFilter(next);
+              onChange={(event) => {
+                setFilter(event.target.value as ThreadFilter);
                 restart();
               }}
-              items={THREAD_FILTERS.map((key) => ({ key, label: t(THREAD_FILTER_LABELS[key]) }))}
-            />
+            >
+              {THREAD_FILTERS.map((key) => (
+                <option key={key} value={key}>
+                  {t(THREAD_FILTER_LABELS[key])}
+                </option>
+              ))}
+            </select>
             {searched !== null &&
               !searchFailed &&
               (settled ? (

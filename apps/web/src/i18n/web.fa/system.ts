@@ -522,6 +522,7 @@ export const WEB_FA_SYSTEM = {
   'web.nc_bell': 'اعلان‌ها',
   'web.nc_bell_unread': 'اعلان خوانده‌نشده',
   'web.nc_filter_all': 'همه',
+  'web.nc_reread': 'خواندن دوباره',
   'web.nc_filter_unread': 'خوانده‌نشده',
   'web.nc_filter_open_alerts': 'هشدارهای باز',
   'web.nc_filter_recorded_alerts': 'هشدارهای ثبت‌شده',

@@ -222,26 +222,74 @@ describe('the calendar', () => {
 });
 
 describe('date and time', () => {
-  it('waits for «تأیید»: a day alone changes nothing, the time is typed or stepped', () => {
+  it('applies a tapped day at once with the current time rounded up to 5 minutes', () => {
     const seen: string[] = [];
     render(<Harness mode="datetime" onValue={(value) => seen.push(value)} />);
     fireEvent.click(field());
-    const ok = within(popover()).getByRole('button', { name: t('web.date_confirm') });
-    expect(ok).toBeDisabled();
     fireEvent.click(day(25));
-    expect(seen).toEqual([]);
+    // 14:32 → 14:35; the field already shows it and the popover is still open.
+    expect(seen).toEqual(['2026-10-17T14:35']);
+    expect(field()).toHaveTextContent(plainDigits('14:35'));
+    expect(field()).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('a tapped day keeps the value’s own time when there is one', () => {
+    const seen: string[] = [];
+    render(
+      <Harness mode="datetime" initial="2026-10-16T09:10" onValue={(value) => seen.push(value)} />,
+    );
+    fireEvent.click(field());
+    fireEvent.click(day(25));
+    expect(seen).toEqual(['2026-10-17T09:10']);
+  });
+
+  it('changing the time after a day applies at once; «تأیید» only closes', () => {
+    const seen: string[] = [];
+    render(<Harness mode="datetime" onValue={(value) => seen.push(value)} />);
+    fireEvent.click(field());
+    fireEvent.click(day(25));
     fireEvent.change(within(popover()).getByLabelText(t('web.date_hour')), {
       target: { value: plainDigits('08') },
     });
-    fireEvent.change(within(popover()).getByLabelText(t('web.date_minute')), {
-      target: { value: '05' },
-    });
     fireEvent.click(within(popover()).getByRole('button', { name: t('web.date_hour_down') }));
+    // A day tapped again keeps the time the user set.
+    fireEvent.click(day(26));
+    expect(seen).toEqual([
+      '2026-10-17T14:35',
+      '2026-10-17T08:35',
+      '2026-10-17T07:35',
+      '2026-10-18T07:35',
+    ]);
     fireEvent.click(within(popover()).getByRole('button', { name: t('web.date_confirm') }));
-    expect(seen).toEqual(['2026-10-17T07:05']);
+    expect(seen).toHaveLength(4);
+    expect(field()).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it('offers now, an hour later and tomorrow at ten', () => {
+  it('a time changed before any day applies nothing, then rides on the day tapped', () => {
+    const seen: string[] = [];
+    render(<Harness mode="datetime" onValue={(value) => seen.push(value)} />);
+    fireEvent.click(field());
+    fireEvent.click(within(popover()).getByRole('button', { name: t('web.date_hour_up') }));
+    expect(seen).toEqual([]);
+    fireEvent.click(day(25));
+    expect(seen).toEqual(['2026-10-17T15:35']);
+  });
+
+  it('Escape and a tap outside keep what was applied', () => {
+    render(<Harness mode="datetime" />);
+    fireEvent.click(field());
+    fireEvent.click(day(25));
+    fireEvent.keyDown(popover(), { key: 'Escape' });
+    expect(field()).toHaveAttribute('aria-expanded', 'false');
+    expect(field()).toHaveTextContent(plainDigits('14:35'));
+    fireEvent.click(field());
+    fireEvent.click(day(26));
+    fireEvent.mouseDown(document.body);
+    expect(field()).toHaveAttribute('aria-expanded', 'false');
+    expect(field()).toHaveTextContent(plainDigits('14:35'));
+  });
+
+  it('offers now, an hour later and tomorrow at ten, each applied at once', () => {
     const seen: string[] = [];
     render(<Harness mode="datetime" onValue={(value) => seen.push(value)} />);
     for (const key of ['web.date_now', 'web.date_in_one_hour', 'web.date_tomorrow_10'] as const) {
@@ -250,6 +298,24 @@ describe('date and time', () => {
       fireEvent.click(within(popover()).getByRole('button', { name: t('web.date_confirm') }));
     }
     expect(seen).toEqual(['2026-10-16T14:32', '2026-10-16T15:32', '2026-10-17T10:00']);
+  });
+
+  it('a chip applies without «تأیید»', () => {
+    const seen: string[] = [];
+    render(<Harness mode="datetime" onValue={(value) => seen.push(value)} />);
+    fireEvent.click(field());
+    fireEvent.click(within(popover()).getByRole('button', { name: t('web.date_tomorrow_10') }));
+    expect(seen).toEqual(['2026-10-17T10:00']);
+  });
+
+  it('does not apply a day that min/max refuses', () => {
+    const seen: string[] = [];
+    render(
+      <Harness mode="datetime" min="2026-10-17T00:00" onValue={(value) => seen.push(value)} />,
+    );
+    fireEvent.click(field());
+    fireEvent.click(day(16));
+    expect(seen).toEqual([]);
   });
 
   it('refuses a moment outside min/max', () => {
@@ -294,7 +360,9 @@ describe('setDateField, the one way page tests set a date', () => {
       </>,
     );
     setDateField(field(), '2027-01-05T06:45');
-    expect(seen).toEqual(['2027-01-05T06:45']);
+    // The day and each time edit apply at once; the last value is the one asked for.
+    expect(seen.at(-1)).toBe('2027-01-05T06:45');
+    expect(field()).toHaveTextContent(plainDigits('06:45'));
   });
 
   it('fails loudly on a day the field refuses', () => {

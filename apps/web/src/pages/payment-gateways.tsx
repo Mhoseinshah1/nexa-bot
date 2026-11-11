@@ -818,13 +818,9 @@ export function PaymentGatewaysPage({
        */
       render: (row) => (
         <span className="gateways-lines gateways-name-cell">
-          {provider === undefined ? (
-            <a className="strong" href={paymentMethodPath(row.provider)} onClick={onLink}>
-              {nameOf(row)}
-            </a>
-          ) : (
-            <span className="strong">{nameOf(row)}</span>
-          )}
+          {/* Demo parity: the name is text; the route's page is the manage button of the
+              actions column (list view only). */}
+          <span className="strong">{nameOf(row)}</span>
           {row.displayName === null && (
             <span>
               <Badge tone="neutral" outline>
@@ -1069,6 +1065,24 @@ export function PaymentGatewaysPage({
     },
   ];
 
+  /*
+   * Demo parity: the list's last column, «عملیات» → «مدیریت» per row — the same link to the
+   * route's own page the name used to be (`paymentMethodPath`), now drawn as the demo's button.
+   * A provider's own view keeps the plain column set: it IS that page.
+   */
+  const listColumns: readonly Column<PaymentGatewayView>[] = [
+    ...columns,
+    {
+      key: 'manage',
+      header: t('web.payment_gateway_col_actions'),
+      render: (row) => (
+        <a className="btn sm" href={paymentMethodPath(row.provider)} onClick={onLink}>
+          {t('web.payment_method_open')}
+        </a>
+      ),
+    },
+  ];
+
   /** The one route this view is about, when it is a provider's own view. */
   const only = provider === undefined ? undefined : rows.find((row) => row.provider === provider);
   const ready = queryState(gateways) === 'ready';
@@ -1110,7 +1124,7 @@ export function PaymentGatewaysPage({
               <p className="muted small">{t('web.payment_gateways_subtitle')}</p>
               <DataTable
                 stack
-                columns={columns}
+                columns={listColumns}
                 rows={rows}
                 rowKey={(row) => row.provider}
                 caption={t('web.payment_gateways_title')}

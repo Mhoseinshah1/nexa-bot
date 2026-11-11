@@ -172,7 +172,9 @@ describe('the inbox', () => {
     );
     expect(api.calls.find((call) => call.url.endsWith('/read'))?.body).toEqual({ read: true });
 
-    fireEvent.click(screen.getByRole('button', { name: 'همه را خوانده‌شده کن' }));
+    // Demo parity: «علامت‌گذاری همه» sits in the page head's «بیشتر» menu.
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_more_menu') }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'همه را خوانده‌شده کن' }));
     await screen.findByText('اعلان‌ها خوانده‌شده علامت خوردند.');
     expect(api.calls.find((call) => call.url.endsWith('/read-all'))?.method).toBe('POST');
   });
