@@ -17,7 +17,7 @@ to the older demo and says so; commit the owner's file as
 | [#459](https://github.com/Mhoseinshah1/nexa-bot/pull/459) PR-1 | shared kit (framed boxes, CSV, «بیشتر»), customers, orders, services                 | `8027e641`   |
 | [#460](https://github.com/Mhoseinshah1/nexa-bot/pull/460) PR-2 | payments, gateways, tickets, business chats, support, notification centre            | `02afb05a`   |
 | [#462](https://github.com/Mhoseinshah1/nexa-bot/pull/462) PR-3 | catalogue and marketing pages                                                        | `a6c53916`   |
-| [#464](https://github.com/Mhoseinshah1/nexa-bot/pull/464) PR-4 | resellers, bots, settings tabs, features list, panels, audit tab                     | PR4_MERGE    |
+| [#464](https://github.com/Mhoseinshah1/nexa-bot/pull/464) PR-4 | resellers, bots, settings tabs, features list, panels, audit tab                     | `dcf30a6a`   |
 | [#461](https://github.com/Mhoseinshah1/nexa-bot/pull/461) PR-L | legacy cleanup: proven VACUUM, archive twin dedupe, wheel dropped, «پاک‌سازی تکمیلی» | `dc6ae2d3`   |
 | [#463](https://github.com/Mhoseinshah1/nexa-bot/pull/463) PR-N | sing-box profile name, premium-emoji description capture, entered-export trace       | `4b68f133`   |
 | PR-5 (this)                                                    | final sweep (`final-report.md`, 68 side-by-sides at 1440 light), this report         | —            |
