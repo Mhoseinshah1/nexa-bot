@@ -1,9 +1,7 @@
 import { randomInt } from 'node:crypto';
 import {
   COMMERCE_ERROR_CODES,
-  START_CAPTCHA_OPERAND_MAX,
-  START_CAPTCHA_OPERAND_MIN,
-  START_CAPTCHA_OPTION_COUNT,
+  START_CAPTCHA_IMAGE_REFRESH_MAX,
   errors,
   type ActorContext,
   type AuditWriter,
@@ -12,6 +10,8 @@ import {
   type IdempotencyStore,
   type OperationalEventRecorder,
   type PermissionKey,
+  type StartCaptchaKind,
+  type StartCaptchaQuestionKind,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
@@ -22,7 +22,16 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  captchaEmojiName,
+  newChallengeOfKind,
+  newMathChallenge,
+  normaliseCaptchaDigits,
+  persianWords,
+  resolveQuestionKind,
+} from './start-captcha-questions.js';
 import type {
+  CaptchaImageRenderer,
   CaptchaRandom,
   StartCaptchaChallenge,
   StartCaptchaRecord,
@@ -44,12 +53,22 @@ const NAMESPACE = 'TELEGRAM';
 /** The platform CSPRNG; `randomInt` rejects rather than biases. */
 export const CRYPTO_CAPTCHA_RANDOM: CaptchaRandom = { randomInt: (max) => randomInt(max) };
 
-/** What the customer is shown: the two numbers and the four answers. Never the index. */
+/**
+ * What the customer is shown, whatever the kind. Never the answer, nor its index: `options`
+ * are the buttons (all four, the right one among them), `name` the emoji to tap (`EMOJI`),
+ * `words` the number in words (`WORD_NUMBER`), `first`/`second` the sum (`MATH`, else 0).
+ * `IMAGE_NUMBER` has no buttons: the picture is drawn from the row by `renderImage`, and
+ * `refreshesLeft` says whether «🔄 تصویر جدید» still shows.
+ */
 export interface CaptchaQuestion {
   readonly challengeId: string;
+  readonly kind: StartCaptchaQuestionKind;
   readonly first: number;
   readonly second: number;
-  readonly options: readonly number[];
+  readonly options: readonly (number | string)[];
+  readonly name: string | null;
+  readonly words: string | null;
+  readonly refreshesLeft: number;
 }
 
 /**
@@ -59,7 +78,8 @@ export interface CaptchaQuestion {
  * - `ASK`: held; answer `question`. `reason` says why this question is shown: `CURRENT` (the
  *   one already asked, nothing written), `WRONG` (a wrong answer counted, a new question),
  *   `EXPIRED` (an answer to a question whose time ran out — not counted, a new question),
- *   `RENEWED` (the old question had expired or a cooldown ended — a new question).
+ *   `RENEWED` (the old question had expired or a cooldown ended — a new question),
+ *   `REFRESHED` (a new picture on request: a new question that spent no attempt).
  * - `LOCKED`: the answers ran out; a new question comes after `minutes`.
  * - `PASSED`: THIS answer was right.
  */
@@ -67,7 +87,7 @@ export type StartCaptchaOutcome =
   | { readonly kind: 'FREE' }
   | {
       readonly kind: 'ASK';
-      readonly reason: 'CURRENT' | 'WRONG' | 'EXPIRED' | 'RENEWED';
+      readonly reason: 'CURRENT' | 'WRONG' | 'EXPIRED' | 'RENEWED' | 'REFRESHED';
       readonly question: CaptchaQuestion;
       /** Wrong answers still allowed before the cooldown. */
       readonly remaining: number;
@@ -95,54 +115,47 @@ export interface StartCaptchaServiceDeps {
   readonly clock: Clock;
   readonly ids: Pick<IdGenerator, 'uuid'>;
   readonly random?: CaptchaRandom;
+  /** Draws the `IMAGE_NUMBER` picture. Absent, that kind is never asked (MATH is). */
+  readonly images?: CaptchaImageRenderer;
 }
 
-/**
- * A new question: `a + b` with `a`, `b` in 1..9, the right sum and three different wrong
- * ones (all in 2..18, the range of every possible sum, so no option gives itself away by
- * being impossible), in a random order. Pure over `random`.
- */
-export function newCaptchaChallenge(
-  random: CaptchaRandom,
-  challengeId: string,
-): StartCaptchaChallenge {
-  const span = START_CAPTCHA_OPERAND_MAX - START_CAPTCHA_OPERAND_MIN + 1;
-  const operandA = START_CAPTCHA_OPERAND_MIN + random.randomInt(span);
-  const operandB = START_CAPTCHA_OPERAND_MIN + random.randomInt(span);
-  const answer = operandA + operandB;
-  const lowest = START_CAPTCHA_OPERAND_MIN * 2;
-  const highest = START_CAPTCHA_OPERAND_MAX * 2;
-  const wrong: number[] = [];
-  for (let value = lowest; value <= highest; value += 1) if (value !== answer) wrong.push(value);
-  // A partial Fisher–Yates: the first three of a uniform shuffle of the wrong sums.
-  for (let i = 0; i < START_CAPTCHA_OPTION_COUNT - 1; i += 1) {
-    const j = i + random.randomInt(wrong.length - i);
-    [wrong[i], wrong[j]] = [wrong[j] as number, wrong[i] as number];
-  }
-  const answerIndex = random.randomInt(START_CAPTCHA_OPTION_COUNT);
-  const options = wrong.slice(0, START_CAPTCHA_OPTION_COUNT - 1);
-  options.splice(answerIndex, 0, answer);
-  return { challengeId, operandA, operandB, options, answerIndex };
-}
+/** The original sum question; kept under its first name for its callers. */
+export const newCaptchaChallenge = newMathChallenge;
 
 /** Whole minutes until `until`, rounded up, never below one. */
 export function captchaMinutesLeft(until: Date, now: Date): number {
   return Math.max(1, Math.ceil((until.getTime() - now.getTime()) / 60_000));
 }
 
-function questionOf(challenge: StartCaptchaChallenge): CaptchaQuestion {
+function questionOf(challenge: StartCaptchaChallenge, refreshes: number): CaptchaQuestion {
+  const right = challenge.options[challenge.answerIndex];
   return {
     challengeId: challenge.challengeId,
+    kind: challenge.kind,
     first: challenge.operandA,
     second: challenge.operandB,
     options: challenge.options,
+    name: challenge.kind === 'EMOJI' && typeof right === 'string' ? captchaEmojiName(right) : null,
+    words:
+      challenge.kind === 'WORD_NUMBER' && typeof right === 'number' ? persianWords(right) : null,
+    refreshesLeft:
+      challenge.kind === 'IMAGE_NUMBER'
+        ? Math.max(0, START_CAPTCHA_IMAGE_REFRESH_MAX - refreshes)
+        : 0,
   };
 }
+
+/** What one turn did to the question: a tap on a button, a typed answer, or «🔄 تصویر جدید». */
+type CaptchaTap =
+  | { readonly kind: 'CHOICE'; readonly challengeId: string; readonly choice: number }
+  | { readonly kind: 'TEXT'; readonly text: string }
+  | { readonly kind: 'REFRESH'; readonly challengeId: string };
 
 interface CaptchaTerms {
   readonly expirySeconds: number;
   readonly maxAttempts: number;
   readonly cooldownSeconds: number;
+  readonly kind: StartCaptchaKind;
 }
 
 /**
@@ -197,7 +210,7 @@ export class StartCaptchaService {
       scope,
       {
         customerId: input.customerId,
-        challenge: newCaptchaChallenge(this.random, this.deps.ids.uuid()),
+        challenge: this.newChallenge(terms.kind),
         issuedAt: input.now,
         expiresAt: new Date(input.now.getTime() + terms.expirySeconds * 1000),
       },
@@ -241,13 +254,115 @@ export class StartCaptchaService {
       return {
         kind: 'ASK',
         reason: 'CURRENT',
-        question: questionOf(row),
+        question: questionOf(row, row.refreshes),
         remaining: Math.max(1, terms.maxAttempts - row.attempts),
       };
     }
     return this.decide(scope, actor, customerId, {
       idempotencyKey: input.idempotencyKey,
       tap: null,
+    });
+  }
+
+  /**
+   * What a read-only look at the customer's question shows, for the mini app's gate: null when
+   * the gate does not hold them (no row, PASSED, or `start_captcha` off), else the question
+   * as it stands and whether it is `CURRENT`, has `EXPIRED` (the next `refresh` or `present`
+   * renews it) or is `LOCKED` by a cooldown. Writes nothing.
+   */
+  async peek(
+    scope: TenantContext,
+    customerId: string,
+  ): Promise<{
+    readonly question: CaptchaQuestion;
+    readonly state: 'CURRENT' | 'EXPIRED' | 'LOCKED';
+  } | null> {
+    const row = await this.deps.captchas.find(scope, customerId);
+    if (row === null || row.state !== 'PENDING') return null;
+    if (!(await this.deps.features.isEnabled(scope, START_CAPTCHA_FEATURE))) return null;
+    const now = this.deps.clock.now();
+    const state =
+      row.lockedUntil !== null && row.lockedUntil.getTime() > now.getTime()
+        ? 'LOCKED'
+        : row.lockedUntil === null && row.expiresAt.getTime() > now.getTime()
+          ? 'CURRENT'
+          : 'EXPIRED';
+    return { question: questionOf(row, row.refreshes), state };
+  }
+
+  /**
+   * The picture of the customer's pending `IMAGE_NUMBER` question, drawn again from the stored
+   * answer and the question's id (the same bytes every time; nothing is stored or written to
+   * disk). Null when there is none to show: not held, another kind, locked or expired, no
+   * renderer, or `challengeId` is not the question the row shows now.
+   */
+  async renderImage(
+    scope: TenantContext,
+    customerId: string,
+    challengeId?: string,
+  ): Promise<{ readonly challengeId: string; readonly png: Uint8Array } | null> {
+    const images = this.deps.images;
+    if (images === undefined) return null;
+    const row = await this.deps.captchas.find(scope, customerId);
+    if (row === null || row.state !== 'PENDING') return null;
+    if (row.kind !== 'IMAGE_NUMBER' || row.answerText === null) return null;
+    if (challengeId !== undefined && challengeId !== row.challengeId) return null;
+    const now = this.deps.clock.now();
+    if (row.lockedUntil !== null || row.expiresAt.getTime() <= now.getTime()) return null;
+    if (!(await this.deps.features.isEnabled(scope, START_CAPTCHA_FEATURE))) return null;
+    return { challengeId: row.challengeId, png: images.render(row.answerText, row.challengeId) };
+  }
+
+  /**
+   * A SAMPLE picture for the Web Admin's preview: a random 4-digit number drawn with a random
+   * seed. Belongs to no customer or question and stores nothing. Null with no renderer wired.
+   */
+  sampleImage(): Uint8Array | null {
+    const images = this.deps.images;
+    if (images === undefined) return null;
+    const { answerText } = newChallengeOfKind('IMAGE_NUMBER', this.random, this.deps.ids.uuid());
+    return images.render(answerText ?? '0000', this.deps.ids.uuid());
+  }
+
+  /**
+   * A TYPED answer, from a customer the gate may hold. Under a picture question it is judged;
+   * under any other kind (or for a customer not held) it is an ordinary turn, shown the
+   * question by `present`.
+   */
+  async answerText(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: string,
+    input: { readonly idempotencyKey: string; readonly text: string },
+  ): Promise<StartCaptchaOutcome> {
+    const row = await this.deps.captchas.find(scope, customerId);
+    if (row === null || row.state !== 'PENDING') return { kind: 'FREE' };
+    if (row.kind !== 'IMAGE_NUMBER') {
+      return this.present(scope, actor, customerId, { idempotencyKey: input.idempotencyKey });
+    }
+    if (!(await this.deps.features.isEnabled(scope, START_CAPTCHA_FEATURE))) {
+      return { kind: 'FREE' };
+    }
+    return this.decide(scope, actor, customerId, {
+      idempotencyKey: input.idempotencyKey,
+      tap: { kind: 'TEXT', text: input.text },
+    });
+  }
+
+  /**
+   * «🔄 تصویر جدید» on question `challengeId`: a new picture. A NEW question, not a spent
+   * attempt, and at most `START_CAPTCHA_IMAGE_REFRESH_MAX` times per question; past that, or
+   * on another kind or a stale question, nothing changes and the current question is shown.
+   */
+  async refresh(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: string,
+    input: { readonly idempotencyKey: string; readonly challengeId: string },
+  ): Promise<StartCaptchaOutcome> {
+    return this.decide(scope, actor, customerId, {
+      idempotencyKey: input.idempotencyKey,
+      tap: { kind: 'REFRESH', challengeId: input.challengeId },
     });
   }
 
@@ -264,7 +379,7 @@ export class StartCaptchaService {
   ): Promise<StartCaptchaOutcome> {
     return this.decide(scope, actor, customerId, {
       idempotencyKey: input.idempotencyKey,
-      tap: { challengeId: input.challengeId, choice: input.choice },
+      tap: { kind: 'CHOICE', challengeId: input.challengeId, choice: input.choice },
     });
   }
 
@@ -274,7 +389,7 @@ export class StartCaptchaService {
     customerId: string,
     input: {
       readonly idempotencyKey: string;
-      readonly tap: { readonly challengeId: string; readonly choice: number } | null;
+      readonly tap: CaptchaTap | null;
     },
   ): Promise<StartCaptchaOutcome> {
     const requestHash = hashRequest({
@@ -340,7 +455,7 @@ export class StartCaptchaService {
     scope: TenantContext,
     actor: ActorContext,
     row: StartCaptchaRecord,
-    tap: { readonly challengeId: string; readonly choice: number } | null,
+    tap: CaptchaTap | null,
     terms: CaptchaTerms,
     now: Date,
     tx: TransactionScope,
@@ -348,7 +463,7 @@ export class StartCaptchaService {
     const current: StartCaptchaOutcome = {
       kind: 'ASK',
       reason: 'CURRENT',
-      question: questionOf(row),
+      question: questionOf(row, row.refreshes),
       remaining: Math.max(1, terms.maxAttempts - row.attempts),
     };
 
@@ -369,9 +484,7 @@ export class StartCaptchaService {
       const next = await this.reissue(
         scope,
         row,
-        row.challengeId,
-        row.attempts,
-        null,
+        { from: row.challengeId, attempts: row.attempts, lockedUntil: null, refreshes: 0 },
         terms,
         now,
         tx,
@@ -381,7 +494,7 @@ export class StartCaptchaService {
         result: {
           kind: 'ASK',
           reason: tap !== null && !cooldownOver ? 'EXPIRED' : 'RENEWED',
-          question: questionOf(next),
+          question: questionOf(next, 0),
           remaining: Math.max(1, terms.maxAttempts - row.attempts),
         },
         wrote: true,
@@ -390,10 +503,68 @@ export class StartCaptchaService {
 
     if (tap === null) return { result: current, wrote: false };
 
-    if (tap.choice === row.answerIndex) {
-      // Conditional on the TAPPED question: a stale tap whose index happens to match the
+    if (tap.kind === 'REFRESH') {
+      // Only a picture question, only the one shown now, only while swaps remain. A new
+      // picture is a new question: the attempts stand as they were, spent or not.
+      if (
+        row.kind !== 'IMAGE_NUMBER' ||
+        tap.challengeId !== row.challengeId ||
+        row.refreshes >= START_CAPTCHA_IMAGE_REFRESH_MAX
+      ) {
+        return { result: current, wrote: false };
+      }
+      const next = await this.reissue(
+        scope,
+        row,
+        {
+          from: row.challengeId,
+          attempts: row.attempts,
+          lockedUntil: null,
+          refreshes: row.refreshes + 1,
+          kind: 'IMAGE_NUMBER',
+        },
+        terms,
+        now,
+        tx,
+      );
+      if (next === null) return { result: current, wrote: false };
+      return {
+        result: {
+          kind: 'ASK',
+          reason: 'REFRESHED',
+          question: questionOf(next, row.refreshes + 1),
+          remaining: current.kind === 'ASK' ? current.remaining : 1,
+        },
+        wrote: true,
+      };
+    }
+
+    /*
+     * Judge the answer. A button answers a button question and a typed text a picture
+     * question; the other pairing is no answer at all and costs nothing. Typed text that is
+     * not four digits once normalised is not an answer either (a "hello", a sticker's name):
+     * the question is shown again, no attempt spent. Four digits that are the wrong four are.
+     */
+    let judged: string;
+    let right: boolean;
+    if (tap.kind === 'CHOICE') {
+      if (row.kind === 'IMAGE_NUMBER') return { result: current, wrote: false };
+      judged = tap.challengeId;
+      right = tap.choice === row.answerIndex;
+    } else {
+      if (row.kind !== 'IMAGE_NUMBER' || row.answerText === null) {
+        return { result: current, wrote: false };
+      }
+      const typed = normaliseCaptchaDigits(tap.text);
+      if (!/^[0-9]{4}$/u.test(typed)) return { result: current, wrote: false };
+      judged = row.challengeId;
+      right = typed === row.answerText;
+    }
+
+    if (right) {
+      // Conditional on the JUDGED question: a stale tap whose index happens to match the
       // current question's answer passes nothing.
-      if (!(await this.deps.captchas.pass(scope, row.customerId, tap.challengeId, now, tx))) {
+      if (!(await this.deps.captchas.pass(scope, row.customerId, judged, now, tx))) {
         return { result: current, wrote: false };
       }
       await this.deps.audit.record(
@@ -415,7 +586,14 @@ export class StartCaptchaService {
     const attempts = row.attempts + 1;
     if (attempts >= terms.maxAttempts) {
       const lockedUntil = new Date(now.getTime() + terms.cooldownSeconds * 1000);
-      const next = await this.reissue(scope, row, tap.challengeId, 0, lockedUntil, terms, now, tx);
+      const next = await this.reissue(
+        scope,
+        row,
+        { from: judged, attempts: 0, lockedUntil, refreshes: 0 },
+        terms,
+        now,
+        tx,
+      );
       if (next === null) return { result: current, wrote: false };
       await this.deps.audit.record(
         scope,
@@ -435,41 +613,66 @@ export class StartCaptchaService {
         wrote: true,
       };
     }
-    const next = await this.reissue(scope, row, tap.challengeId, attempts, null, terms, now, tx);
+    const next = await this.reissue(
+      scope,
+      row,
+      { from: judged, attempts, lockedUntil: null, refreshes: 0 },
+      terms,
+      now,
+      tx,
+    );
     if (next === null) return { result: current, wrote: false };
     return {
       result: {
         kind: 'ASK',
         reason: 'WRONG',
-        question: questionOf(next),
+        question: questionOf(next, 0),
         remaining: terms.maxAttempts - attempts,
       },
       wrote: true,
     };
   }
 
+  /**
+   * A new question of the kind the setting says (or `kind`, when a swap forces the picture),
+   * with its own id. `IMAGE_NUMBER` with no renderer wired is asked as `MATH`.
+   */
+  private newChallenge(
+    setting: StartCaptchaKind,
+    forced?: StartCaptchaQuestionKind,
+  ): StartCaptchaChallenge {
+    let kind = forced ?? resolveQuestionKind(setting, this.random);
+    if (kind === 'IMAGE_NUMBER' && this.deps.images === undefined) kind = 'MATH';
+    return newChallengeOfKind(kind, this.random, this.deps.ids.uuid());
+  }
+
   /** A new question in place of `from`, or null when the row no longer shows `from`. */
   private async reissue(
     scope: TenantContext,
     row: StartCaptchaRecord,
-    from: string,
-    attempts: number,
-    lockedUntil: Date | null,
+    change: {
+      readonly from: string;
+      readonly attempts: number;
+      readonly lockedUntil: Date | null;
+      readonly refreshes: number;
+      readonly kind?: StartCaptchaQuestionKind;
+    },
     terms: CaptchaTerms,
     now: Date,
     tx: TransactionScope,
   ): Promise<StartCaptchaChallenge | null> {
-    const challenge = newCaptchaChallenge(this.random, this.deps.ids.uuid());
+    const challenge = this.newChallenge(terms.kind, change.kind);
     const moved = await this.deps.captchas.reissue(
       scope,
       row.customerId,
-      from,
+      change.from,
       {
         challenge,
-        attempts,
+        attempts: change.attempts,
+        refreshes: change.refreshes,
         issuedAt: now,
         expiresAt: new Date(now.getTime() + terms.expirySeconds * 1000),
-        lockedUntil,
+        lockedUntil: change.lockedUntil,
         now,
       },
       tx,
@@ -478,11 +681,12 @@ export class StartCaptchaService {
   }
 
   private async terms(scope: TenantContext, tx?: unknown): Promise<CaptchaTerms> {
-    const [expirySeconds, maxAttempts, cooldownSeconds] = await Promise.all([
+    const [expirySeconds, maxAttempts, cooldownSeconds, kind] = await Promise.all([
       this.deps.settings.valueOf<number>(scope, 'captcha.expiry_seconds', tx),
       this.deps.settings.valueOf<number>(scope, 'captcha.max_attempts', tx),
       this.deps.settings.valueOf<number>(scope, 'captcha.cooldown_seconds', tx),
+      this.deps.settings.valueOf<StartCaptchaKind>(scope, 'captcha.kind', tx),
     ]);
-    return { expirySeconds, maxAttempts, cooldownSeconds };
+    return { expirySeconds, maxAttempts, cooldownSeconds, kind };
   }
 }
