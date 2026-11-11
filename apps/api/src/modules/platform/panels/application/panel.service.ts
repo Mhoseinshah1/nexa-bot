@@ -32,6 +32,9 @@ import {
   providerDeliversConnectionFiles,
   panelSupportsQrKind,
   DEFAULT_PANEL_QR_KIND,
+  DEFAULT_SINGBOX_NAME_MODE,
+  normalizeSingboxCustomName,
+  type SingboxNameMode,
   deriveCapabilityRegistry,
   validateUsernamePolicy as decideUsernamePolicy,
 } from '@nexa/contracts';
@@ -158,6 +161,10 @@ export interface UpdatePanelCommand {
   /** R11 A4: «نوع بارکد» — RickPanel only; absent leaves it. */
   readonly qrKind?: PanelQrKind | undefined;
   readonly singboxIntervalMinutes?: number | undefined;
+  /** «نام پروفایل در sing-box» — RickPanel only; absent leaves it. */
+  readonly singboxNameMode?: SingboxNameMode | undefined;
+  /** Trimmed server-side; empty or null clears it. */
+  readonly singboxNameCustom?: string | null | undefined;
   /** Absent leaves the whole policy; present replaces the whole policy. */
   readonly usernamePolicy?: PanelUsernamePolicy | undefined;
   readonly idempotencyKey: string;
@@ -1180,6 +1187,12 @@ export class PanelService {
       ...(command.singboxIntervalMinutes === undefined
         ? {}
         : { singboxIntervalMinutes: command.singboxIntervalMinutes }),
+      ...(command.singboxNameMode === undefined
+        ? {}
+        : { singboxNameMode: command.singboxNameMode }),
+      ...(command.singboxNameCustom === undefined
+        ? {}
+        : { singboxNameCustom: command.singboxNameCustom }),
     });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
@@ -1233,6 +1246,8 @@ export class PanelService {
           filesOnlyDelivery?: boolean;
           qrKind?: PanelQrKind;
           singboxIntervalMinutes?: number;
+          singboxNameMode?: SingboxNameMode;
+          singboxNameCustom?: string | null;
         } = {};
         // Phase C3: a label, or null to leave the group. It decides which of the operator's
         // own panels a NEW account may land on, never anything about an existing service.
@@ -1280,6 +1295,42 @@ export class PanelService {
           if (intervalChanges) {
             changes.singboxIntervalMinutes = command.singboxIntervalMinutes as number;
           }
+        }
+        /*
+         * «نام پروفایل در sing-box». Same rule as «نوع بارکد»: only a RickPanel names sing-box
+         * profiles, decided against the STORED provider type; putting the panel back on the
+         * default (mode DEFAULT, no custom text) is always allowed, and asking for what it
+         * already holds changes nothing. The schema has already refused a custom text with a
+         * line break or over 64 characters; it is trimmed here, and empty is stored as null.
+         */
+        if (command.singboxNameMode !== undefined || command.singboxNameCustom !== undefined) {
+          const nextCustom =
+            command.singboxNameCustom === undefined
+              ? undefined
+              : command.singboxNameCustom === null
+                ? null
+                : (normalizeSingboxCustomName(command.singboxNameCustom) ?? null);
+          const modeChanges =
+            command.singboxNameMode !== undefined &&
+            command.singboxNameMode !== before.panel.singboxNameMode;
+          const customChanges =
+            nextCustom !== undefined && nextCustom !== before.panel.singboxNameCustom;
+          const finalMode = command.singboxNameMode ?? before.panel.singboxNameMode;
+          const finalCustom =
+            nextCustom === undefined ? before.panel.singboxNameCustom : nextCustom;
+          if (
+            (modeChanges || customChanges) &&
+            !panelSupportsQrKind(before.panel.providerType) &&
+            !(finalMode === DEFAULT_SINGBOX_NAME_MODE && finalCustom === null)
+          ) {
+            throw errors.validation(
+              PANEL_ERROR_CODES.PANEL_QR_KIND_UNSUPPORTED,
+              'Only a RickPanel panel can name the sing-box profile its customers import.',
+              { providerType: before.panel.providerType },
+            );
+          }
+          if (modeChanges) changes.singboxNameMode = finalMode;
+          if (customChanges) changes.singboxNameCustom = nextCustom as string | null;
         }
         /*
          * Accepted WHATEVER the panel's current usage is, deliberately.
@@ -1421,6 +1472,8 @@ export class PanelService {
               filesOnlyDelivery: before.panel.filesOnlyDelivery,
               qrKind: before.panel.qrKind,
               singboxIntervalMinutes: before.panel.singboxIntervalMinutes,
+              singboxNameMode: before.panel.singboxNameMode,
+              singboxNameCustom: before.panel.singboxNameCustom,
             },
             after: {
               name: updated.name,
@@ -1432,6 +1485,8 @@ export class PanelService {
               filesOnlyDelivery: updated.filesOnlyDelivery,
               qrKind: updated.qrKind,
               singboxIntervalMinutes: updated.singboxIntervalMinutes,
+              singboxNameMode: updated.singboxNameMode,
+              singboxNameCustom: updated.singboxNameCustom,
             },
             result: 'SUCCESS',
           },

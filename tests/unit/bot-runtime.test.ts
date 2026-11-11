@@ -1576,6 +1576,10 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.customers_more_button',
       'bot.admin.customers_none',
       'bot.admin.customers_section',
+      'bot.admin.description_capture_denied',
+      'bot.admin.description_capture_done',
+      'bot.admin.description_capture_expired',
+      'bot.admin.description_capture_rejected',
       'bot.admin.linked',
       'bot.admin.panel',
       /*

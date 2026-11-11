@@ -208,6 +208,19 @@ export const WEB_FA_PRODUCTS = {
   'web.product_description': 'توضیح',
   'web.product_description_hint':
     'همین متن در پیش‌فاکتور به مشتری نشان داده می‌شود؛ توضیح محصول برای مشتری را اینجا بنویسید. خالی بماند، در پیش‌فاکتور چیزی نمایش داده نمی‌شود.',
+  'web.product_problem_description':
+    'توضیح، همراه با ایموجی‌های پریمیوم، از حد مجاز طولانی‌تر است.',
+  'web.product_capture_button': 'ارسال توضیح از تلگرام',
+  'web.product_capture_opening': 'در حال آماده‌سازی…',
+  'web.product_capture_waiting_title': 'منتظر پیام شما در ربات هستیم',
+  'web.product_capture_instruction':
+    'پیام توضیح را در ربات بفرستید یا فوروارد کنید. ایموجی‌های پریمیوم همراه آن می‌آیند.',
+  'web.product_capture_expires': 'این درخواست ده دقیقه معتبر است و فقط یک پیام را می‌گیرد.',
+  'web.product_capture_done':
+    'توضیح از تلگرام دریافت و در کادر بالا گذاشته شد. برای ثبت، «ذخیره» را بزنید.',
+  'web.product_capture_expired': 'درخواست منقضی شد. دوباره «ارسال توضیح از تلگرام» را بزنید.',
+  'web.product_capture_emoji_note':
+    'هر ⟦ایموجی #عدد⟧ یک ایموجی پریمیوم است؛ متن اطرافش را آزادانه ویرایش کنید و ⟦…⟧ را دست نزنید (حذفش ایموجی را برمی‌دارد).',
   'web.product_detail': 'جزئیات محصول',
   'web.product_identity_title': 'مشخصات محصول',
   'web.product_status_active': 'فعال',

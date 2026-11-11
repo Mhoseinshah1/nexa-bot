@@ -442,6 +442,10 @@ export const ERROR_TEXT = {
   'control.client_app_video_bot_unavailable': 'web.err_control_client_app_video_bot_unavailable',
   'control.client_app_video_session_not_found':
     'web.err_control_client_app_video_session_not_found',
+  'commerce.product_description_capture_telegram_unlinked':
+    'web.err_product_description_capture_telegram_unlinked',
+  'commerce.product_description_capture_no_bot': 'web.err_product_description_capture_no_bot',
+  'commerce.product_description_capture_not_found': 'web.err_product_description_capture_not_found',
   'control.client_app_video_telegram_unlinked':
     'web.err_control_client_app_video_telegram_unlinked',
   'control.destination_not_configured': 'web.destination_missing',

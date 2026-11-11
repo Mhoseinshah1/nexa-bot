@@ -1,4 +1,6 @@
 import {
+  DEFAULT_SINGBOX_NAME_MODE,
+  type SingboxNameMode,
   DEFAULT_PANEL_QR_KIND,
   SINGBOX_INTERVAL_DEFAULT_MINUTES,
   type PanelQrKind,
@@ -42,7 +44,13 @@ export interface PanelQrOptionsGate {
     scope: TenantContext,
     panelId: string,
     tx?: unknown,
-  ): Promise<{ readonly kind: PanelQrKind; readonly intervalMinutes: number }>;
+  ): Promise<{
+    readonly kind: PanelQrKind;
+    readonly intervalMinutes: number;
+    /** «نام پروفایل در sing-box»: how the profile name of a service is resolved. */
+    readonly nameMode: SingboxNameMode;
+    readonly nameCustom: string | null;
+  }>;
 }
 
 export class PanelQrOptionsReader implements PanelQrOptionsGate {
@@ -52,7 +60,17 @@ export class PanelQrOptionsReader implements PanelQrOptionsGate {
   async qrOptionsOf(scope: TenantContext, panelId: string, tx?: unknown) {
     const view = await this.panels.find(scope, panelId, tx as TransactionScope | undefined);
     return view === null
-      ? { kind: DEFAULT_PANEL_QR_KIND, intervalMinutes: SINGBOX_INTERVAL_DEFAULT_MINUTES }
-      : { kind: view.panel.qrKind, intervalMinutes: view.panel.singboxIntervalMinutes };
+      ? {
+          kind: DEFAULT_PANEL_QR_KIND,
+          intervalMinutes: SINGBOX_INTERVAL_DEFAULT_MINUTES,
+          nameMode: DEFAULT_SINGBOX_NAME_MODE,
+          nameCustom: null,
+        }
+      : {
+          kind: view.panel.qrKind,
+          intervalMinutes: view.panel.singboxIntervalMinutes,
+          nameMode: view.panel.singboxNameMode,
+          nameCustom: view.panel.singboxNameCustom,
+        };
   }
 }

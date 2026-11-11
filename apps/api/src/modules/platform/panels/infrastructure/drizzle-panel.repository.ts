@@ -10,6 +10,7 @@ import type {
   MonitorDeferralReason,
   PanelHealthState,
   PanelQrKind,
+  SingboxNameMode,
   PanelStatus,
   ProviderAnnounceableCapability,
   ProviderFailureKind,
@@ -439,6 +440,11 @@ export class DrizzlePanelRepository implements PanelRepository {
     if (input.qrKind !== undefined) changes['qrKind'] = input.qrKind;
     if (input.singboxIntervalMinutes !== undefined) {
       changes['singboxIntervalMinutes'] = input.singboxIntervalMinutes;
+    }
+    if (input.singboxNameMode !== undefined) changes['singboxNameMode'] = input.singboxNameMode;
+    // A VALUE: `null` clears the text.
+    if (input.singboxNameCustom !== undefined) {
+      changes['singboxNameCustom'] = input.singboxNameCustom;
     }
     /*
      * All three columns, or none. `null` on the template is a VALUE — it selects the
@@ -1403,6 +1409,9 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
     // Narrowed from `text`: `panels_qr_kind_check` is what makes the cast safe.
     qrKind: row.qrKind as PanelQrKind,
     singboxIntervalMinutes: row.singboxIntervalMinutes,
+    // Narrowed from `text`: `panels_singbox_name_mode_check` is what makes the cast safe.
+    singboxNameMode: row.singboxNameMode as SingboxNameMode,
+    singboxNameCustom: row.singboxNameCustom,
     drain:
       row.drainedAt === null || row.drainReason === null
         ? null

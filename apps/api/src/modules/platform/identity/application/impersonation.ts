@@ -3,6 +3,7 @@ import {
   IDENTITY_ERROR_CODES,
   type ActorContext,
   type SecretPurpose,
+  type TenantContext,
 } from '@nexa/contracts';
 
 /**
@@ -51,4 +52,19 @@ export function refuseImpersonatedHostAction(actor: ActorContext, action: string
     'An entered session cannot use this action; it is the host’s, behind a fresh code.',
     { action },
   );
+}
+
+/**
+ * PR-N N3: what an export's audit row adds when an ENTERED session takes it. The owner keeps
+ * the exports (`gift_cards.export`, plaintext codes; `audit.export`) inside «ورود به پنل», and
+ * the audit writer already puts their row in HIS log with the hosted tenant as
+ * `acted_in_tenant_id` (nothing in the hosted tenant's). His audit page and its CSV do not show
+ * that column, so the row also names the hosted bot here, in `after`. Ids only. A session that
+ * is not entered gets nothing: its row stays exactly what it was.
+ */
+export function enteredExportTrace(
+  scope: TenantContext,
+  actor: ActorContext,
+): { readonly hostedTenantId?: string } {
+  return actor.impersonation === undefined ? {} : { hostedTenantId: scope.tenantId };
 }

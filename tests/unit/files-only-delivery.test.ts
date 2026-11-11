@@ -3,6 +3,9 @@ import {
   resolvePanelPolicy,
   singboxImportUrl,
   qrPayloads,
+  resolveSingboxProfileName,
+  normalizeSingboxCustomName,
+  type SingboxNameMode,
   type PanelQrKind,
   type BotInstanceId,
   type TenantContext,
@@ -67,7 +70,12 @@ function service(overrides: Partial<ServiceRecord> = {}): ServiceRecord {
 function harness(
   filesOnly: boolean,
   facts: boolean = true,
-  qrOptions: { kind: PanelQrKind; intervalMinutes: number } = {
+  qrOptions: {
+    kind: PanelQrKind;
+    intervalMinutes: number;
+    nameMode?: SingboxNameMode;
+    nameCustom?: string | null;
+  } = {
     kind: 'SUB_LINK',
     intervalMinutes: 360,
   },
@@ -132,7 +140,9 @@ function harness(
       forPanel: async () => resolvePanelPolicy({ delivery: { mode: 'CARD_WITH_QR' }, actions: {} }),
     },
     filesOnly: { isFilesOnly: async () => filesOnly },
-    qrOptions: { qrOptionsOf: async () => qrOptions },
+    qrOptions: {
+      qrOptionsOf: async () => ({ nameMode: 'DEFAULT' as const, nameCustom: null, ...qrOptions }),
+    },
     ...(withLinkClaims ? { linkQr: { claim: async () => true } } : {}),
   };
   return {
@@ -330,5 +340,114 @@ describe('«نوع بارکد»: what the delivery draws', () => {
       'bot.service.qr_caption_sublink',
       'bot.service.qr_caption_singbox',
     ]);
+  });
+});
+
+describe('«نام پروفایل در sing-box»: the import URL fragment', () => {
+  const base = 'https://h.test/s';
+  const fragmentOf = (url: string) => url.slice(url.indexOf('#'));
+
+  it('appends #<encoded name>, encoding Persian text, spaces, # and &', () => {
+    const name = 'سرویس من #۱ & دوستان';
+    const url = singboxImportUrl(base, 360, name);
+    expect(url.endsWith('#' + encodeURIComponent(name))).toBe(true);
+    // Only ONE fragment separator survives: the name's own # is percent-encoded.
+    expect(url.split('#')).toHaveLength(2);
+    expect(url).not.toMatch(/#.*[ &]/u);
+    expect(decodeURIComponent(fragmentOf(url).slice(1))).toBe(name);
+  });
+
+  it('has no fragment for no name, a null name and an empty one', () => {
+    for (const name of [undefined, null, '']) {
+      expect(singboxImportUrl(base, 360, name)).not.toContain('#');
+    }
+  });
+
+  it('only the SINGBOX payload carries the name; the plain link never changes', () => {
+    const input = {
+      intervalMinutes: 360,
+      subscriptionUrl: SUB,
+      filesOnly: false,
+      profileName: 'نام',
+    };
+    const both = qrPayloads({ ...input, kind: 'BOTH' });
+    expect(both[0]).toEqual({ kind: 'SUB_LINK', text: SUB });
+    expect(both[1]?.text).toBe(singboxImportUrl(SUB, 360, 'نام'));
+    expect(qrPayloads({ ...input, kind: 'SUB_LINK' })).toEqual([{ kind: 'SUB_LINK', text: SUB }]);
+  });
+
+  it('resolves: default none, USERNAME the account, CUSTOM with {username}, empty custom none', () => {
+    const user = 'nx7k2m9q';
+    const r = (mode: SingboxNameMode, custom: string | null) =>
+      resolveSingboxProfileName({ mode, custom, username: user });
+    expect(r('DEFAULT', 'ignored')).toBeNull();
+    expect(r('USERNAME', null)).toBe(user);
+    expect(r('CUSTOM', '  اشتراک {username}  ')).toBe(`اشتراک ${user}`);
+    expect(r('CUSTOM', 'ثابت')).toBe('ثابت');
+    expect(r('CUSTOM', '   ')).toBeNull();
+    expect(r('CUSTOM', null)).toBeNull();
+    expect(r('CUSTOM', '{username}-{username}')).toBe(`${user}-${user}`);
+  });
+
+  it('refuses a line break or more than 64 characters, trims, and stores empty as null', () => {
+    expect(normalizeSingboxCustomName('  سلام  ')).toBe('سلام');
+    expect(normalizeSingboxCustomName('   ')).toBeNull();
+    expect(normalizeSingboxCustomName('a\nb')).toBeUndefined();
+    expect(normalizeSingboxCustomName('a\u2028b')).toBeUndefined();
+    expect(normalizeSingboxCustomName('x'.repeat(64))).toBe('x'.repeat(64));
+    expect(normalizeSingboxCustomName('x'.repeat(65))).toBeUndefined();
+    // 64 Persian letters with an emoji (a surrogate pair) count by character, not code unit.
+    expect(normalizeSingboxCustomName('ب'.repeat(63) + '😀')).not.toBeUndefined();
+  });
+});
+
+describe('«نام پروفایل در sing-box»: every place that draws the sing-box QR', () => {
+  const opts = (
+    kind: PanelQrKind,
+    nameMode: SingboxNameMode,
+    nameCustom: string | null = null,
+  ) => ({ kind, intervalMinutes: 360, nameMode, nameCustom });
+  const named = singboxImportUrl(URL, 360, 'nx7k2m9q');
+
+  it('the delivery card draws the account name; the plain link QR stays unchanged', async () => {
+    const h = harness(false, true, opts('BOTH', 'USERNAME'));
+    await h.delivery.deliver(scope, service(), '5150', BOT);
+    expect(h.encoded).toEqual([URL, named]);
+  });
+
+  it('the link change and the link view draw the same name', async () => {
+    const changed = harness(false, true, opts('SINGBOX', 'CUSTOM', 'vpn {username}'));
+    await changed.delivery.deliver(scope, service(), '5150', BOT, { rotated: true });
+    expect(changed.encoded).toEqual([singboxImportUrl(URL, 360, 'vpn nx7k2m9q')]);
+    const viewed = harness(false, true, opts('SINGBOX', 'CUSTOM', 'vpn {username}'), true);
+    const card = { chatId: '5150', messageId: 9, botInstanceId: BOT };
+    await viewed.delivery.deliver(scope, service(), '5150', BOT, { card, linkQrKey: 'tap-9' });
+    expect(viewed.encoded).toEqual([singboxImportUrl(URL, 360, 'vpn nx7k2m9q')]);
+    // The link text is the link itself, never the sing-box string or its name.
+    expect(JSON.stringify(viewed.files[0])).toContain(URL);
+  });
+
+  it('the mini app sheet (qrPayloadsFor) resolves the same name', async () => {
+    const h = harness(false, true, opts('BOTH', 'CUSTOM', 'vpn {username}'));
+    expect(await h.delivery.qrPayloadsFor(scope, service())).toEqual([
+      { kind: 'SUB_LINK', text: URL },
+      { kind: 'SINGBOX', text: singboxImportUrl(URL, 360, 'vpn nx7k2m9q') },
+    ]);
+  });
+
+  it('the default and an empty custom text draw no fragment — today, for every panel', async () => {
+    for (const o of [opts('SINGBOX', 'DEFAULT'), opts('SINGBOX', 'CUSTOM', null)]) {
+      const h = harness(false, true, o);
+      await h.delivery.deliver(scope, service(), '5150', BOT);
+      expect(h.encoded).toEqual([singboxImportUrl(URL, 360)]);
+      expect(h.encoded[0]).not.toContain('#sub');
+      expect(h.encoded[0]?.includes('#')).toBe(false);
+    }
+  });
+
+  it('files-only still wins: no name, no QR', async () => {
+    const h = harness(true, true, opts('SINGBOX', 'USERNAME'));
+    await h.delivery.deliver(scope, service(), '5150', BOT);
+    expect(h.encoded).toEqual([]);
   });
 });
