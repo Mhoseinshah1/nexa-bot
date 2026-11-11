@@ -104,6 +104,8 @@ export * from './miniapp.js';
 // PR-4: the reseller web panel (`/r/…`, `/api/reseller/v1`).
 export * from './reseller-panel.js';
 export * from './reseller-panel-templates.js';
+// PR-5: buying, the clients book, auto-renew, reseller trials and tier progress.
+export * from './reseller-panel-selling.js';
 // Round N, C1: campaigns composing the pricing rules, the audience and the mass actions.
 export * from './campaigns.js';
 export * from './payment-receipts.js';

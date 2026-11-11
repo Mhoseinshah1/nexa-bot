@@ -340,6 +340,8 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   cooldownHours: 'فاصلهٔ مجاز (ساعت)',
   correlationId: 'شناسهٔ پیگیری',
   count: 'تعداد',
+  // PR-5: the reseller's daily digest, one line per service.
+  list: 'فهرست',
   creditedAmount: 'مبلغ واریزشده به کیف پول',
   current: 'مقدار فعلی',
   currentLimit: 'تعداد کاربر / دستگاه مجاز فعلی',
@@ -1070,6 +1072,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.reseller_web.unavailable': [
     'پنل وب در دسترس نیست',
     'وقتی پنل وب خاموش است، نماینده فعال نیست یا نشانی وب ربات تنظیم نشده است.',
+  ],
+  'bot.reseller_web.expiring_digest': [
+    'گزارش روزانهٔ سرویس‌های رو به اتمام نماینده',
+    'روزی یک بار، فهرست سرویس‌های خود نماینده که ۷ روز یا ۱۰٪ حجم یا کمتر مانده است (اگر «سرویس رو به اتمام» در پنل روشن باشد).',
+  ],
+  'bot.reseller_web.daily_sales': [
+    'گزارش روزانهٔ فروش نماینده',
+    'روزی یک بار، تعداد و جمع فروش دیروز نماینده (اگر «گزارش روزانهٔ فروش» در پنل روشن باشد).',
   ],
   'bot.reseller_web.new_device': [
     'اعلان ورود از دستگاه جدید',

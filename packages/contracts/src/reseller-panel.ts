@@ -129,6 +129,10 @@ export const RESELLER_WEB_ACTIVITY_ACTIONS = [
   'service.auto_renew_off',
   'service.auto_renew_run',
   'service.customer_note',
+  // PR-5: purchases of several services, a client's «تمدید همه», and reseller trials.
+  'reseller_web.purchase_confirmed',
+  'reseller_web.client_renew_all',
+  'reseller_web.trial_issued',
 ] as const;
 
 /** The routes, relative to `RESELLER_API_PREFIX`. Literal paths only. */
@@ -310,14 +314,18 @@ export const resellerServicesQuerySchema = z.object({
   filter: z.enum(RESELLER_SERVICE_FILTERS).default('ALL'),
   q: z.string().trim().max(64).optional(),
   page: z.coerce.number().int().min(0).max(10_000).default(0),
+  /** PR-5: only the services of this client of the reseller's clients book. */
+  clientId: z.string().uuid().optional(),
 });
 
 export const resellerServiceRowSchema = z.object({
   id: z.string(),
   code: z.string().nullable(),
   username: z.string(),
-  /** PR-5 fills this from the clients book; always null until then. */
+  /** PR-5: the name of the clients-book client the service is assigned to; null when none. */
   client: z.string().nullable(),
+  /** PR-5: that client's id (optional on the wire so PR-4 fixtures keep parsing). */
+  clientId: z.string().nullable().optional(),
   note: z.string().nullable(),
   product: z.string().nullable(),
   location: z.string().nullable(),

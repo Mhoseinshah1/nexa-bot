@@ -66,6 +66,14 @@ export const AUTO_RENEW_REFUSALS = ['PRICE_ROSE', 'CONSENT_WITHDRAWN', 'NOT_RENE
 export type AutoRenewRefusal = (typeof AUTO_RENEW_REFUSALS)[number];
 export const autoRenewRefusalSchema = z.enum(AUTO_RENEW_REFUSALS);
 
-/** Where a customer's consent was last changed from. */
-export const AUTO_RENEW_PREFERENCE_SOURCES = ['TELEGRAM', 'MINI_APP', 'TRANSFER'] as const;
+/**
+ * Where a customer's consent was last changed from. PR-5: `RESELLER_WEB` is the reseller web
+ * panel's per-service switch.
+ */
+export const AUTO_RENEW_PREFERENCE_SOURCES = [
+  'TELEGRAM',
+  'MINI_APP',
+  'TRANSFER',
+  'RESELLER_WEB',
+] as const;
 export type AutoRenewPreferenceSource = (typeof AUTO_RENEW_PREFERENCE_SOURCES)[number];

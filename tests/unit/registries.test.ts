@@ -368,6 +368,8 @@ describe('the feature flag registry', () => {
       // PR-2. Off by default; the main-menu button and the request flow it switches on are
       // reachable, and a request already sent stays decidable when it is turned off.
       'reseller_requests',
+      // PR-5 §5.8: the reseller panel's «پیشرفت تا سطح بعد» card. Display only, off by default.
+      'reseller_tier_progress',
       // PR-4. Off by default; the bot's «ورود به پنل وب», the one-time link and every
       // /api/reseller route are reachable behind it.
       'reseller_web_panel',

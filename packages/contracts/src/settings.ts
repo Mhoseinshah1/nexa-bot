@@ -319,6 +319,9 @@ export interface SettingDefinition<TSchema extends z.ZodType = z.ZodType> {
   readonly scope?: SettingScope;
 }
 
+/** PR-5: `reseller.trial_daily_quota` is 0–20 (the reseller panel's «سرویس تست» per day). */
+export const RESELLER_TRIAL_DAILY_QUOTA_MAX = 20;
+
 const telegramChatIdSchema = z
   .string()
   // Empty means "not configured". A group id is negative and long; a channel or
@@ -1797,6 +1800,40 @@ export const SETTINGS = [
     schema: z.number().int().min(EXPIRY_EARLY_REMINDER_DAYS_MIN).max(EXPIRY_REMINDER_DAYS_MAX),
     defaultValue: 7,
     configures: 'service_expiry_reminders',
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * PR-5 §5.7: reseller trials from the web panel. The quota is per reseller per tenant-local
+   * day; the trial is one of the tenant's trial configurations (since R1 a trial is a panel's
+   * trial configuration, so the value names that PANEL), issued by the trial service.
+   */
+  {
+    key: 'reseller.trial_daily_quota',
+    description:
+      'PR-5: how many free test services («سرویس تست») each active reseller may make from the ' +
+      'reseller web panel per day (the tenant\u2019s calendar day). Zero, the default, is off. ' +
+      'A reseller trial is the trial named by reseller.trial_product, owned by the reseller, ' +
+      'costs nothing and earns no sales credit, referral or cashback. At most twenty.',
+    schema: z.number().int().min(0).max(RESELLER_TRIAL_DAILY_QUOTA_MAX),
+    defaultValue: 0,
+    configures: null,
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'reseller.trial_product',
+    description:
+      'PR-5: which of the tenant\u2019s trials a reseller\u2019s «سرویس تست» is \u2014 the panel whose ' +
+      'trial configuration (enabled, traffic, hours) is issued. Empty, the default, means no ' +
+      'reseller trial is offered whatever the daily quota says.',
+    schema: z.string().uuid().nullable(),
+    defaultValue: null,
+    configures: null,
     zeroMeaning: 'DISABLES',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

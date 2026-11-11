@@ -1795,6 +1795,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.reseller_web.link_rate_limited':
     '{icon:time} در یک ساعت گذشته چند لینک ورود گرفته‌اید. کمی بعد دوباره امتحان کنید.',
   'bot.reseller_web.unavailable': 'پنل وب نماینده در حال حاضر در دسترس نیست.',
+  'bot.reseller_web.expiring_digest':
+    '⏳ سرویس‌های رو به اتمام شما ({count} سرویس)\n\n{list}\n\nبرای تمدید، پنل نماینده یا بخش «سرویس‌های من» را باز کنید.',
+  'bot.reseller_web.daily_sales': '📊 گزارش فروش {date}\n\nتعداد فروش: {count}\nمجموع: {amount}',
   'bot.reseller_web.new_device':
     '🔔 ورود تازه به پنل نماینده از یک دستگاه یا مرورگر جدید انجام شد.\nاگر این ورود کار شما نبود، از بخش «امنیت» پنل یا با پشتیبانی همهٔ ورودها را ببندید.',
   'bot.reseller_request.already_reseller': 'شما هم‌اکنون نماینده هستید و نیازی به درخواست نیست.',
