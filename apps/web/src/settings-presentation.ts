@@ -14,6 +14,7 @@ import {
   type FxSource,
   type OperationalSeverity,
   type PanelBalancingStrategy,
+  type StartCaptchaKind,
   type PhoneAllowedNumbers,
   type ReferralCommissionScope,
   type ReferralGiftUnlockMode,
@@ -224,6 +225,15 @@ export const LATE_PAYMENT_POLICY_LABELS: Readonly<Record<LatePaymentPolicy, WebK
 const BALANCING_STRATEGY_OPTIONS: Readonly<Record<PanelBalancingStrategy, WebKey>> = {
   LEAST_USED: 'web.balancing_strategy_least_used',
   LOWEST_UTILISATION: 'web.balancing_strategy_lowest_utilisation',
+};
+
+/** `captcha.kind`: the five questions a new customer may be asked. */
+const CAPTCHA_KIND_OPTIONS: Readonly<Record<StartCaptchaKind, WebKey>> = {
+  MATH: 'web.captcha_kind_math',
+  IMAGE_NUMBER: 'web.captcha_kind_image_number',
+  EMOJI: 'web.captcha_kind_emoji',
+  WORD_NUMBER: 'web.captcha_kind_word_number',
+  RANDOM: 'web.captcha_kind_random',
 };
 
 const FX_SOURCE_OPTIONS: Readonly<Record<FxSource, WebKey>> = {
@@ -882,6 +892,12 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     control: { kind: 'integer', unit: 'web.unit_minutes' },
   },
   // R10 D5 (a): the /start captcha for new customers.
+  'captcha.kind': {
+    title: 'web.setting_captcha_kind',
+    description: 'web.setting_captcha_kind_desc',
+    group: 'sales',
+    control: { kind: 'select', options: options(CAPTCHA_KIND_OPTIONS) },
+  },
   'captcha.expiry_seconds': {
     title: 'web.setting_captcha_expiry_seconds',
     description: 'web.setting_captcha_expiry_seconds_desc',

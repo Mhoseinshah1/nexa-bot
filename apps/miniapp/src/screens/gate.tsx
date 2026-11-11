@@ -10,6 +10,7 @@ import {
 } from '../telegram.js';
 import { PHONE_POLL_ATTEMPTS, PHONE_POLL_INTERVAL_MS, phoneNotAcceptedText } from '../phone.js';
 import { Button, Card, Ltr, Message, errorText } from '../ui.js';
+import { CaptchaImageGate } from './captcha-gate.js';
 
 /**
  * The bot's four gates, shown where the bot would answer with them: blocked, the `/start`
@@ -40,6 +41,11 @@ export function Gate({ gate }: { gate: NonNullable<MiniAppMeResponse['gate']> })
   };
 
   if (gate.kind === 'BLOCKED') return <Message text={t('miniapp.gate_blocked')} />;
+
+  // The picture question is answered here; every other kind in the chat.
+  if (gate.kind === 'CAPTCHA' && gate.question?.kind === 'IMAGE_NUMBER') {
+    return <CaptchaImageGate question={gate.question} />;
+  }
 
   if (gate.kind === 'CAPTCHA') {
     return (
