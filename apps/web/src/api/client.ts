@@ -30,6 +30,7 @@ import {
   type IncidentNoticeResponse,
   type IncidentResponse,
   type PanelQrKind,
+  type SingboxNameMode,
   type UpdateIncidentRequest,
 } from '@nexa/contracts';
 import {
@@ -2833,6 +2834,9 @@ export function updatePanel(input: {
   filesOnlyDelivery?: boolean;
   qrKind?: PanelQrKind;
   singboxIntervalMinutes?: number;
+  /** «نام پروفایل در sing-box» (RickPanel only); absent leaves them. */
+  singboxNameMode?: SingboxNameMode;
+  singboxNameCustom?: string | null;
   idempotencyKey: string;
 }): Promise<PanelResponse> {
   const { id, ...body } = input;

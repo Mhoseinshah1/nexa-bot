@@ -382,7 +382,14 @@ function sweep(options: { rotated?: boolean; card?: CustomerSendResult } = {}) {
       forPanel: async () => resolvePanelPolicy({ delivery: { mode: 'CARD_TEXT' }, actions: {} }),
     },
     filesOnly: { isFilesOnly: async () => false },
-    qrOptions: { qrOptionsOf: async () => ({ kind: 'SUB_LINK' as const, intervalMinutes: 360 }) },
+    qrOptions: {
+      qrOptionsOf: async () => ({
+        kind: 'SUB_LINK' as const,
+        intervalMinutes: 360,
+        nameMode: 'DEFAULT' as const,
+        nameCustom: null,
+      }),
+    },
     files: {
       afterDelivery: async () => {
         calls.push('files');

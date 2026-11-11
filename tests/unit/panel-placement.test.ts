@@ -185,6 +185,8 @@ describe('PanelPlacementService.place', () => {
         filesOnlyDelivery: false,
         qrKind: 'SUB_LINK',
         singboxIntervalMinutes: 360,
+        singboxNameMode: 'DEFAULT',
+        singboxNameCustom: null,
         createdAt: NOW,
         updatedAt: NOW,
       },

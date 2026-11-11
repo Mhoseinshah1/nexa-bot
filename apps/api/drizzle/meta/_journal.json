@@ -2374,6 +2374,13 @@
       "when": 1794261567989,
       "tag": "0338_recovery_move_source",
       "breakpoints": true
+    },
+    {
+      "idx": 339,
+      "version": "7",
+      "when": 1794403758423,
+      "tag": "0339_panel_singbox_profile_name",
+      "breakpoints": true
     }
   ]
 }
