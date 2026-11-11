@@ -71,6 +71,7 @@ import type { TicketService } from '../../../modules/commerce/tickets/applicatio
 import type { TicketCategoryService } from '../../../modules/commerce/tickets/application/ticket-category.service.js';
 import type { TicketScreenComposer } from '../../../modules/commerce/tickets/application/ticket-screens.js';
 import type { ClientAppCatalog } from '../../../modules/control/client-apps/application/client-app-catalog.js';
+import type { ProductDescriptionCaptureService } from '../../../modules/commerce/catalog/application/product-description-capture.service.js';
 import type { ClientAppVideoService } from '../../../modules/control/client-apps/application/client-app-video.service.js';
 import type { CustomMenuTap } from '../../../modules/control/bot-menu-builder/application/custom-menu-button-runtime.js';
 import type { MainMenuRoutes } from './intent-of.js';
@@ -212,6 +213,14 @@ export interface BotRuntimeDeps {
    * Spec §7: the tutorial video — the management panel's «تنظیم ویدیو» wizard, and the
    * video an app's screen sends first. Absent: no section, and app screens as before.
    */
+  /**
+   * «ارسال توضیح از تلگرام»: an administrator's next text or caption, offered to the product
+   * description request the Web Admin opened for them. Absent: every message is ordinary.
+   */
+  readonly productDescriptionCapture?: Pick<
+    ProductDescriptionCaptureService,
+    'pendingFor' | 'receive'
+  >;
   readonly clientAppVideos?: Pick<
     ClientAppVideoService,
     | 'listForAdmin'

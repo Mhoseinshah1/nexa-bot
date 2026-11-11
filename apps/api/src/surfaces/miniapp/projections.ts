@@ -22,6 +22,7 @@ import type {
   ManualTransferInstruction,
 } from '../../modules/commerce/payments/application/payment.service.js';
 import type { GatewayAttemptView } from '../../modules/commerce/payments/application/gateway-payment.service.js';
+import { appearanceFallbackText } from '../../modules/commerce/messaging/application/appearance-render.js';
 import { paysInChat } from '../../modules/commerce/checkout/application/checkout.service.js';
 import { amountToTransfer } from '../../modules/commerce/payments/domain/amount-to-transfer.js';
 import { cardNumberToCopy } from '../../modules/commerce/payments/domain/card-number.js';
@@ -113,7 +114,10 @@ export function orderWire(
     usernameModes: [...extra.usernameModes],
     locations: [...(extra.display?.displayLocations ?? [])],
     features: [...(extra.display?.displayFeatures ?? [])],
-    description: extra.display?.description ?? null,
+    // A premium emoji typed into the description is drawn as its fallback emoji here: the
+    // mini app draws no decoration, and must never show the stored marker.
+    description:
+      extra.display?.description == null ? null : appearanceFallbackText(extra.display.description),
   };
 }
 

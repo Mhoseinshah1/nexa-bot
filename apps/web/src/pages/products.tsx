@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import { ListFreshness } from '../ui/list-search';
@@ -20,11 +20,16 @@ import {
   PRODUCT_TITLE_MAX_LENGTH,
   UNLIMITED_DURATION_DAYS,
   UNLIMITED_TRAFFIC_BYTES,
+  descriptionPlainText,
+  descriptionToEditable,
+  editableToDescription,
   formatTrafficGb,
   parseTrafficGb,
+  type EditableEmoji,
   type CurrencyCode,
   type ProductAudience,
   type ProductCategoryListingResponse,
+  type ProductDescriptionCaptureResponse,
   type ProductListView,
   type ProductStatus,
   type ProductSummaryResponse,
@@ -37,7 +42,9 @@ import {
   fetchProductCategories,
   fetchPanels,
   fetchProduct,
+  fetchProductDescriptionCapture,
   fetchProducts,
+  openProductDescriptionCapture,
   updateProduct,
   type ProductWriteInput,
 } from '../api/client';
@@ -48,6 +55,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { CodeText, CopyCodeButton, TechnicalIds, productLabel } from '../ui/record-ref';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
+import { pollUnlessFinalWhile } from '../polling';
 import {
   LIST_PAGE_SIZE,
   Badge,
@@ -763,7 +771,13 @@ function audienceFromQuery(raw: string | null): ProductAudience | null {
 
 interface FormState {
   title: string;
+  /**
+   * The description as it is EDITED: each premium emoji captured from Telegram is a readable
+   * token, `⟦😀 #1⟧`, and its id lives in `descriptionEmojis` — never in the text — so typing
+   * around a token cannot touch an id. `bodyFrom` puts the stored form back together.
+   */
   description: string;
+  descriptionEmojis: readonly EditableEmoji[];
   audience: ProductAudience;
   sortOrder: string;
   panelId: string;
@@ -793,6 +807,7 @@ interface FormState {
 const BLANK: FormState = {
   title: '',
   description: '',
+  descriptionEmojis: [],
   audience: 'EVERYONE',
   sortOrder: '0',
   panelId: '',
@@ -809,9 +824,11 @@ const BLANK: FormState = {
 };
 
 function stateOf(row: ProductSummaryResponse): FormState {
+  const description = descriptionToEditable(row.description ?? '');
   return {
     title: row.title,
-    description: row.description ?? '',
+    description: description.text,
+    descriptionEmojis: description.emojis,
     audience: row.audience,
     sortOrder: String(row.sortOrder),
     panelId: row.panelId ?? '',
@@ -912,6 +929,15 @@ export function bodyFrom(
     return { problem: 'web.product_problem_price' };
   }
 
+  // The stored form: each readable emoji token becomes its marker again.
+  const storedDescription = editableToDescription(
+    state.description,
+    state.descriptionEmojis,
+  ).trim();
+  if (storedDescription.length > PRODUCT_DESCRIPTION_MAX_LENGTH) {
+    return { problem: 'web.product_problem_description' };
+  }
+
   const displayLocations = displayListOf(
     state.displayLocations,
     PRODUCT_DISPLAY_LOCATION_MAX_LENGTH,
@@ -927,7 +953,7 @@ export function bodyFrom(
   return {
     body: {
       title,
-      description: state.description.trim() === '' ? null : state.description.trim(),
+      description: storedDescription === '' ? null : storedDescription,
       audience: state.audience,
       sortOrder,
       panelId: state.panelId.trim() === '' ? null : state.panelId.trim(),
@@ -958,6 +984,7 @@ export function bodyFrom(
 
 type ProblemField =
   | 'title'
+  | 'description'
   | 'sort'
   | 'duration'
   | 'traffic'
@@ -971,6 +998,7 @@ type ProblemField =
 const PROBLEM_FIELDS: Partial<Record<WebKey, ProblemField>> = {
   'web.product_problem_title': 'title',
   'web.product_problem_sort': 'sort',
+  'web.product_problem_description': 'description',
   'web.product_problem_duration': 'duration',
   'web.product_problem_traffic': 'traffic',
   'web.product_problem_devices': 'devices',
@@ -992,7 +1020,7 @@ const PRODUCT_TABS: readonly (readonly [ProductTab, WebKey])[] = [
 
 /** Which tab holds each field, for the tab's unsaved dot. */
 const TAB_FIELDS: Readonly<Record<ProductTab, readonly (keyof FormState)[]>> = {
-  basic: ['title', 'audience', 'description', 'sortOrder'],
+  basic: ['title', 'audience', 'description', 'descriptionEmojis', 'sortOrder'],
   pricing: ['priceAmount', 'priceCurrency'],
   volume: ['durationDays', 'deviceLimit', 'trafficGb', 'trafficUnlimited'],
   placement: ['panelId', 'categoryId'],
@@ -1002,6 +1030,7 @@ const TAB_FIELDS: Readonly<Record<ProductTab, readonly (keyof FormState)[]>> = {
 /** Which tab holds each problem's field, for the tab's problem dot. */
 const PROBLEM_TABS: Readonly<Record<ProblemField, ProductTab>> = {
   title: 'basic',
+  description: 'basic',
   sort: 'basic',
   price: 'pricing',
   duration: 'volume',
@@ -1026,6 +1055,122 @@ export function productTabMarks(
       problemTab === tab ? 'problem' : changed(tab) ? 'dirty' : null,
     ]),
   ) as Record<ProductTab, TabMark>;
+}
+
+/** How often the page asks whether the description has arrived, while the request is open. */
+export const DESCRIPTION_CAPTURE_POLL_MS = 3_000;
+
+/**
+ * «ارسال توضیح از تلگرام» — under the description field. Opens a ten-minute, single-use
+ * request for THIS product; the administrator sends or forwards the description to the bot, and
+ * this fills the field when it arrives (polling, and again when the tab regains focus). Nothing
+ * is saved: the ordinary Save is still the only thing that writes the product.
+ *
+ * The request id and its polling live in `useDescriptionCapture`, called by the always-mounted
+ * `ProductForm`: this component is drawn only on the basic tab, and leaving that tab must not
+ * drop the open request (the description still fills, even while another tab is shown).
+ */
+function useDescriptionCapture(
+  productId: string | undefined,
+  onCaptured: (stored: string) => void,
+) {
+  const submission = useSubmissionKey();
+  const [captureId, setCaptureId] = useState<string | null>(null);
+  const applied = useRef<string | null>(null);
+
+  const capture = useQuery({
+    queryKey: ['product-description-capture', productId, captureId],
+    queryFn: () => fetchProductDescriptionCapture(productId as string, captureId as string),
+    enabled: productId !== undefined && captureId !== null,
+    refetchOnWindowFocus: true,
+    refetchInterval: pollUnlessFinalWhile<ProductDescriptionCaptureResponse>(
+      DESCRIPTION_CAPTURE_POLL_MS,
+      (data) => data.state === 'OPEN',
+    ),
+  });
+  const open = useMutation({
+    mutationFn: () =>
+      openProductDescriptionCapture({
+        id: productId as string,
+        idempotencyKey: submission.current({ descriptionCapture: productId, at: captureId }),
+      }),
+    onSuccess: (opened) => {
+      submission.settle();
+      setCaptureId(opened.captureId);
+    },
+    onError: (error) => submission.settleOn(error),
+  });
+
+  const data = capture.data;
+  useEffect(() => {
+    if (
+      data?.state === 'CAPTURED' &&
+      data.description !== null &&
+      applied.current !== data.captureId
+    ) {
+      applied.current = data.captureId;
+      onCaptured(data.description);
+    }
+  }, [data, onCaptured]);
+  return { open, capture, data };
+}
+
+function DescriptionFromTelegram({
+  hasEmoji,
+  request,
+}: {
+  hasEmoji: boolean;
+  request: ReturnType<typeof useDescriptionCapture>;
+}) {
+  const { open, capture, data } = request;
+  const waiting = data?.state === 'OPEN';
+  const failure = open.error ?? capture.error;
+  return (
+    <div className="stack-sm" data-testid="description-from-telegram">
+      <div>
+        <button
+          type="button"
+          className="btn sm"
+          disabled={open.isPending || waiting}
+          onClick={() => open.mutate()}
+        >
+          {open.isPending ? t('web.product_capture_opening') : t('web.product_capture_button')}
+        </button>
+      </div>
+      {hasEmoji && <p className="muted small">{t('web.product_capture_emoji_note')}</p>}
+      {waiting && (
+        <Banner tone="info" role="status" title={t('web.product_capture_waiting_title')}>
+          <p>{t('web.product_capture_instruction')}</p>
+          <ul>
+            {data.bots.map((bot) => (
+              <li key={bot.username}>
+                <a href={bot.chatUrl} target="_blank" rel="noreferrer">
+                  <bdi dir="ltr">{`@${bot.username}`}</bdi>
+                </a>
+              </li>
+            ))}
+          </ul>
+          <p className="muted small">{t('web.product_capture_expires')}</p>
+        </Banner>
+      )}
+      {data?.state === 'CAPTURED' && (
+        <Banner tone="ok" role="status">
+          {t('web.product_capture_done')}
+        </Banner>
+      )}
+      {(data?.state === 'EXPIRED' || data?.state === 'SUPERSEDED') && (
+        <Banner tone="warn" role="status">
+          {t('web.product_capture_expired')}
+        </Banner>
+      )}
+      {failure !== null && failure !== undefined && (
+        <Banner tone="danger" role="alert">
+          {messageFor(failure)}
+          <ErrorRef error={failure} />
+        </Banner>
+      )}
+    </div>
+  );
 }
 
 function ProductForm({
@@ -1062,6 +1207,17 @@ function ProductForm({
   const [state, setState] = useState<FormState>(product === undefined ? BLANK : stateOf(product));
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setState((current) => ({ ...current, [key]: value }));
+  const descriptionCapture = useDescriptionCapture(
+    mode === 'edit' ? product?.id : undefined,
+    useCallback((stored: string) => {
+      const captured = descriptionToEditable(stored);
+      setState((current) => ({
+        ...current,
+        description: captured.text,
+        descriptionEmojis: captured.emojis,
+      }));
+    }, []),
+  );
 
   /*
    * The panel list, for a select rather than a typed uuid.
@@ -1257,6 +1413,12 @@ function ProductForm({
                   onChange={(event) => set('description', event.target.value)}
                 />
               </Field>
+              {mode === 'edit' && product !== undefined && (
+                <DescriptionFromTelegram
+                  hasEmoji={state.descriptionEmojis.length > 0}
+                  request={descriptionCapture}
+                />
+              )}
             </div>
 
             <Field
@@ -1848,7 +2010,15 @@ export function ProductDetailPage({
                         items={[
                           [t('web.record_code'), <CodeText key="code" code={row.code} />],
                           [t('web.product_title'), row.title],
-                          [t('web.product_description'), row.description ?? <Dash key="d" />],
+                          [
+                            t('web.product_description'),
+                            row.description === null ? (
+                              <Dash key="d" />
+                            ) : (
+                              // A premium emoji reads as its emoji, never as its stored marker.
+                              descriptionPlainText(row.description)
+                            ),
+                          ],
                           [
                             t('web.product_catalogue'),
                             <CatalogueBadge key="c" row={row} category={facts} />,

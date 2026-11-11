@@ -13,6 +13,7 @@ import {
   type TemplateValues,
   deliveryModeOf,
   qrPayloads,
+  resolveSingboxProfileName,
 } from '@nexa/contracts';
 import type { PanelPolicyGate } from '../../../platform/panels/application/panel-policy.js';
 import type {
@@ -647,7 +648,7 @@ export class DeliveryService {
    */
   async qrPayloadsFor(
     scope: TenantContext,
-    service: Pick<ServiceRecord, 'panelId' | 'subscriptionUrl'>,
+    service: Pick<ServiceRecord, 'panelId' | 'subscriptionUrl' | 'providerUsername'>,
   ): Promise<QrPlan> {
     if (service.subscriptionUrl === null) return [];
     return this.qrPlan(
@@ -675,6 +676,13 @@ export class DeliveryService {
       intervalMinutes: options.intervalMinutes,
       subscriptionUrl: sentUrl,
       filesOnly,
+      // «نام پروفایل در sing-box»: ONE resolution for the card, the link change, the link view
+      // and the mini app's sheet; only the SINGBOX payload carries it.
+      profileName: resolveSingboxProfileName({
+        mode: options.nameMode,
+        custom: options.nameCustom,
+        username: service.providerUsername,
+      }),
     });
   }
 

@@ -1,3 +1,4 @@
+import { getInitialFragment } from './initial-fragment';
 import { App } from './app';
 import { HostedActivatePage, isActivationPath, readActivationToken } from './pages/hosted-activate';
 import { HostedEnterPage, isEnterPath } from './pages/hosted-enter';
@@ -18,10 +19,11 @@ export function Root() {
 
 function ActivationRoot() {
   // Read before the first render and erased from the address bar, in one place.
-  const token = takeToken();
+  const { token, alreadyOpened } = takeToken();
   return (
     <HostedActivatePage
       initialToken={token}
+      linkAlreadyOpened={alreadyOpened}
       onSignIn={() => {
         window.location.assign('/');
       }}
@@ -30,10 +32,11 @@ function ActivationRoot() {
 }
 
 function EnterRoot() {
-  const token = takeToken();
+  const { token, alreadyOpened } = takeToken();
   return (
     <HostedEnterPage
       initialToken={token}
+      linkAlreadyOpened={alreadyOpened}
       onEntered={() => {
         window.location.assign('/');
       }}
@@ -41,12 +44,40 @@ function EnterRoot() {
   );
 }
 
-let taken: { readonly token: string | null } | null = null;
+interface TakenToken {
+  readonly token: string | null;
+  /** No fragment now, but this entry's fragment was already read: a refresh of an opened link. */
+  readonly alreadyOpened: boolean;
+}
 
-function takeToken(): string | null {
+let taken: TakenToken | null = null;
+
+const FRAGMENT_TAKEN = 'nexaFragmentTaken';
+
+function hasTakenMarker(state: unknown): boolean {
+  return (
+    typeof state === 'object' &&
+    state !== null &&
+    (state as Record<string, unknown>)[FRAGMENT_TAKEN] === true
+  );
+}
+
+/**
+ * Reads the link's token from the fragment captured at start-up, then removes the fragment from the
+ * address bar. The token lives in memory for the page's life only; history.state gets a non-secret
+ * marker (merged, so the router's `nexaIndex` survives) so a refresh can tell "opened" from "broken".
+ */
+export function takeToken(): TakenToken {
   if (taken === null) {
-    taken = { token: readActivationToken(window.location.hash) };
-    window.history.replaceState(null, '', window.location.pathname);
+    const token = readActivationToken(getInitialFragment());
+    const state: unknown = window.history.state;
+    taken = { token, alreadyOpened: token === null && hasTakenMarker(state) };
+    const base = typeof state === 'object' && state !== null ? state : {};
+    window.history.replaceState(
+      { ...base, ...(token === null ? {} : { [FRAGMENT_TAKEN]: true }) },
+      '',
+      `${window.location.pathname}${window.location.search}`,
+    );
   }
-  return taken.token;
+  return taken;
 }

@@ -712,6 +712,18 @@ export const WEB_FA_PANELS = {
   'web.singbox_interval_label': 'فاصلهٔ به‌روزرسانی خودکار sing-box (دقیقه)',
   'web.singbox_interval_hint': 'عدد صحیح بین {min} و {max}. پیش‌فرض 360 دقیقه.',
   'web.singbox_interval_invalid': 'فاصله باید عددی صحیح در بازهٔ مجاز باشد.',
+  'web.singbox_name_label': 'نام پروفایل در sing-box',
+  'web.singbox_name_hint':
+    'نامی که sing-box برای پروفایل واردشده نشان می‌دهد. فقط روی QR مخصوص sing-box اثر دارد؛ لینک اشتراک همان می‌ماند.',
+  'web.singbox_name_default': 'پیش‌فرض (نام دامنه)',
+  'web.singbox_name_username': 'نام کاربری اکانت',
+  'web.singbox_name_custom': 'متن دلخواه',
+  'web.singbox_name_custom_label': 'متن نام پروفایل',
+  'web.singbox_name_custom_hint':
+    'تا {max} نویسه، بدون خط جدید. {username} با نام کاربری اکانت جایگزین می‌شود. خالی یعنی پیش‌فرض.',
+  'web.singbox_name_invalid': 'متن باید حداکثر {max} نویسه و بدون خط جدید باشد.',
+  'web.singbox_name_preview': 'پیش‌نمایش برای اکانت «{sample}»: {name}',
+  'web.singbox_name_preview_default': 'بدون نام؛ sing-box نام دامنه را نشان می‌دهد',
   'web.qr_kind_files_only_note':
     'تا وقتی «فقط فایل، بدون لینک ساب» روشن است هیچ QR نشان داده نمی‌شود.',
   'web.panel_inbound_tags_note':

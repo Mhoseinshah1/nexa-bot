@@ -21,6 +21,8 @@ import {
 import { sql, type SQL } from 'drizzle-orm';
 import {
   CURRENCY_CODES,
+  PRODUCT_DESCRIPTION_CAPTURE_CLOSE_REASONS,
+  PRODUCT_DESCRIPTION_MAX_LENGTH,
   PRODUCT_SORT_MAX,
   PRODUCT_SORT_MIN,
   PRODUCT_CATEGORY_EMOJI_MAX_CODE_POINTS,
@@ -747,5 +749,63 @@ export const clientAppVideos = pgTable(
           AND (file_size IS NULL OR file_size > 0)`,
     ),
     check('client_app_videos_version_check', sql`version >= 1`),
+  ],
+);
+
+/**
+ * «ارسال توضیح از تلگرام»: a capture request the Web Admin opens for ONE administrator, tenant
+ * and product, and the bot completes with that administrator's next text or caption message.
+ *
+ * Single use and short lived: it closes `CAPTURED` on the first message it reads (the converted
+ * text is stored in `captured_text`, for the page to fill into the description field — nothing
+ * is saved to the product), `EXPIRED` once its ten minutes are over and something writes to it,
+ * or `SUPERSEDED` when the same administrator opens another. One open request per administrator
+ * is a partial unique index, so two messages arriving together read one request, once.
+ */
+export const productDescriptionCaptures = pgTable(
+  'product_description_captures',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id').notNull(),
+    productId: uuid('product_id').notNull(),
+    openedAt: timestamptz('opened_at').notNull().defaultNow(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    closedAt: timestamptz('closed_at'),
+    closeReason: text('close_reason'),
+    /** The captured message in its stored form (`descriptionFromTelegramText`), once read. */
+    capturedText: text('captured_text'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'product_description_captures_admin_fk',
+    }),
+    // A withdrawn product is never deleted; deleting one deletes its open request with it.
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'product_description_captures_product_fk',
+    }).onDelete('cascade'),
+    uniqueIndex('product_description_captures_open_key')
+      .on(table.tenantId, table.adminId)
+      .where(sql`closed_at IS NULL`),
+    check(
+      'product_description_captures_close_reason_check',
+      nullableEnumCheck('close_reason', PRODUCT_DESCRIPTION_CAPTURE_CLOSE_REASONS),
+    ),
+    check(
+      'product_description_captures_closed_check',
+      sql`(closed_at IS NULL) = (close_reason IS NULL)`,
+    ),
+    check('product_description_captures_expiry_check', sql`expires_at > opened_at`),
+    check(
+      'product_description_captures_captured_check',
+      sql`(close_reason = 'CAPTURED') = (captured_text IS NOT NULL)
+          AND (captured_text IS NULL OR char_length(captured_text) BETWEEN 1 AND ${sql.raw(String(PRODUCT_DESCRIPTION_MAX_LENGTH))})`,
+    ),
   ],
 );

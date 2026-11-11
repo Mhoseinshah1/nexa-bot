@@ -36,6 +36,7 @@ import {
   PANEL_TRIAL_TRAFFIC_MAX_BYTES,
   PANEL_SETTING_KEYS,
   PANEL_QR_KINDS,
+  SINGBOX_NAME_MODES,
 } from '@nexa/contracts';
 import { enumArrayCheck, enumCheck, nullableEnumCheck, timestamptz } from './_shared.js';
 import { tenants } from './tenancy.js';
@@ -196,6 +197,13 @@ export const panels = pgTable(
     qrKind: text('qr_kind').notNull().default('SUB_LINK'),
     /** The refresh interval written into a sing-box import QR, in minutes. */
     singboxIntervalMinutes: integer('singbox_interval_minutes').notNull().default(360),
+    /**
+     * «نام پروفایل در sing-box»: DEFAULT draws no fragment (today's behaviour for every
+     * existing panel), USERNAME the service's account name, CUSTOM the owner's own text in
+     * `singbox_name_custom` (trimmed, at most 64 characters, `{username}` substituted).
+     */
+    singboxNameMode: text('singbox_name_mode').notNull().default('DEFAULT'),
+    singboxNameCustom: text('singbox_name_custom'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -203,6 +211,11 @@ export const panels = pgTable(
     index('panels_tenant_status_idx').on(table.tenantId, table.status),
     /** A drain and its reason, or neither — the same biconditional shape as the username policy. */
     check('panels_qr_kind_check', enumCheck('qr_kind', PANEL_QR_KINDS)),
+    check('panels_singbox_name_mode_check', enumCheck('singbox_name_mode', SINGBOX_NAME_MODES)),
+    check(
+      'panels_singbox_name_custom_check',
+      sql`${table.singboxNameCustom} IS NULL OR (char_length(${table.singboxNameCustom}) BETWEEN 1 AND 64 AND ${table.singboxNameCustom} !~ '[[:cntrl:]]')`,
+    ),
     check(
       'panels_singbox_interval_check',
       sql`${table.singboxIntervalMinutes} BETWEEN 1 AND 10080`,

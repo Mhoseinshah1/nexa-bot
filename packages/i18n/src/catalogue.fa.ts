@@ -671,6 +671,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.app_video_cancelled': 'ارسال ویدیو لغو شد؛ چیزی ذخیره نشد.',
   'bot.admin.app_video_stale':
     '⌛️ این درخواست ارسال ویدیو دیگر باز نیست و چیزی ذخیره نشد. برای تنظیم ویدیو، برنامه را دوباره انتخاب کنید و «تنظیم ویدیو» را بزنید.',
+  'bot.admin.description_capture_done':
+    '✅ توضیح محصول «{product}» دریافت شد. به صفحهٔ محصول در پنل وب برگردید و «ذخیره» را بزنید.',
+  'bot.admin.description_capture_expired':
+    '⌛️ درخواست ارسال توضیح دیگر باز نیست و چیزی دریافت نشد. از صفحهٔ محصول دوباره «ارسال توضیح از تلگرام» را بزنید.',
+  'bot.admin.description_capture_denied': '⛔️ اجازهٔ ویرایش محصول را ندارید؛ توضیحی دریافت نشد.',
+  'bot.admin.description_capture_rejected':
+    '⚠️ این پیام به‌عنوان توضیح محصول پذیرفته نشد (خالی است یا از حد مجاز طولانی‌تر است). پیام کوتاه‌تری بفرستید؛ درخواست هنوز باز است.',
   'bot.admin.apps_back_button': '🔙 بازگشت به برنامه‌ها',
   'bot.admin.app_back_button': '🔙 بازگشت',
   'bot.admin.app_not_found': 'این برنامه پیدا نشد؛ ممکن است حذف شده باشد.',

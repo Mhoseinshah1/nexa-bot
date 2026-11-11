@@ -163,6 +163,8 @@ export const WEB_FA_HOSTING = {
   'web.activate_submit': 'فعال‌سازی',
   'web.activate_submitting': 'در حال فعال‌سازی…',
   'web.activate_no_token': 'این لینک ناقص است. لینک کامل فعال‌سازی را از مدیر سرور بگیرید.',
+  'web.activate_link_used':
+    'این لینک قبلاً باز شده است. اگر فعال‌سازی را تمام نکرده‌اید، از مدیر سرور لینک تازه بگیرید.',
   'web.activate_done_title': 'پنل شما فعال شد',
   'web.activate_done_body': 'حالا با نام کاربری و گذرواژه‌ای که انتخاب کردید وارد شوید.',
   'web.activate_go_sign_in': 'ورود به پنل',
