@@ -102,6 +102,11 @@ export const SECRET_PURPOSES = [
   'gift_card.batch_export',
   'hosting.totp_secret',
   'hosting.archive_password',
+  // Reseller-phase PR-6: a reseller's dedicated-bot token, held on their request until the
+  // owner hands it to the hosted bot's activation; and the one-time activation link the owner
+  // issued for it, held only so the notification lane can send it to the reseller.
+  'hosting.reseller_bot_token',
+  'hosting.reseller_activation_link',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 

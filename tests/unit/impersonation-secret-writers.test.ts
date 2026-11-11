@@ -51,6 +51,10 @@ const WRITERS: Readonly<Record<SecretPurpose, string>> = {
   'gift_card.batch_export': 'modules/commerce/gift-cards/application/gift-card-admin.service.ts',
   'hosting.totp_secret': 'modules/platform/hosting/application/hosting-section.service.ts',
   'hosting.archive_password': 'modules/platform/hosting/application/hosted-backup.service.ts',
+  'hosting.reseller_bot_token':
+    'modules/commerce/reseller-bots/application/reseller-bot-request.service.ts',
+  'hosting.reseller_activation_link':
+    'modules/commerce/reseller-bots/application/reseller-bot-request.service.ts',
 };
 
 /**

@@ -16,6 +16,7 @@ import {
 // END phase 6A PR-2
 // BEGIN phase 6A PR-3: the creator panel
 import { HOSTING_BOT_EXPIRED_CODE } from './hosting.js';
+import { RESELLER_BOT_OPS_PREFIX } from './reseller-hosted-bot-keys.js';
 // END phase 6A PR-3
 import {
   CUSTOMER_NOTICES_PAUSED_CODE,
@@ -690,6 +691,9 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
 
   // --- BEGIN phase 6A PR-3: the creator panel (owner only; recorded on the installation tenant)
   fact(HOSTING_BOT_EXPIRED_CODE, 'SYSTEM', 'PER_SUBJECT'),
+  // Reseller-phase PR-6: a reseller's dedicated bot — approved, each fee debit, a short
+  // wallet, a stop after the grace days and a resume. One family, Persian at the source.
+  fact(RESELLER_BOT_OPS_PREFIX, 'SYSTEM', 'PER_OCCURRENCE', { prefix: true }),
   // --- END phase 6A PR-3
   // PR #411: a cached tenant that vanished and was not the installation's PRIMARY (owner only).
   failure(INSTALLATION_TENANT_VANISHED_CODE, 'SYSTEM', 'CONDITION'),

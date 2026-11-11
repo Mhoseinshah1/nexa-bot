@@ -433,6 +433,21 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * `bot.reseller_request.rejected`, or `bot.reseller_request.approved` when the row says so.
    */
   'RESELLER_REQUEST_DECISION',
+  /*
+   * Reseller-phase PR-6: the reseller's dedicated bot is ready and the owner issued its one-time
+   * activation link. `hosted_bot_activation_links.id` is the subject — one sentence per issued
+   * link, so a newer link is told again. The address is read at send time from the request row
+   * (sealed under `hosting.reseller_activation_link`); a link used, revoked or expired by then
+   * sends nothing. A reader, not a payload (ADR 0030 §1).
+   */
+  'HOSTED_BOT_ACTIVATION_LINK',
+  /*
+   * PR-6: the wallet does not hold the dedicated bot's monthly fee during the grace days.
+   * `reseller_bot_fee_notices.id` is the subject — one row per (request, period, day), so one
+   * sentence a day. The fee, the shortfall and the deadline are read at send time; a period paid
+   * by then sends nothing.
+   */
+  'HOSTED_BOT_FEE_SHORT',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -520,6 +535,9 @@ export const CUSTOMER_NOTIFICATION_AUTOMATED: Readonly<Record<CustomerNotificati
     // PR-2: an operator wrote, or decided, on purpose.
     RESELLER_REQUEST_MESSAGE: false,
     RESELLER_REQUEST_DECISION: false,
+    // PR-6: the owner issued the link on purpose; the fee notice is the renewal job's.
+    HOSTED_BOT_ACTIVATION_LINK: false,
+    HOSTED_BOT_FEE_SHORT: true,
   };
 
 /**
@@ -747,6 +765,12 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
   // PR-2: an operator's own message, and the answer to the customer's own request.
   RESELLER_REQUEST_MESSAGE: false,
   RESELLER_REQUEST_DECISION: false,
+  /*
+   * PR-6: both `false` here, and both re-judged by their facts reader instead: a link no longer
+   * open, or a period paid by send time, answers null and nothing is sent.
+   */
+  HOSTED_BOT_ACTIVATION_LINK: false,
+  HOSTED_BOT_FEE_SHORT: false,
 };
 
 /**
@@ -847,6 +871,12 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   // PR-2: an operator wrote, or decided, now; the applicant is told now.
   RESELLER_REQUEST_MESSAGE: false,
   RESELLER_REQUEST_DECISION: false,
+  /*
+   * PR-6: not held. The link is the owner's act, now; the fee notice is once a day during a
+   * grace window only days long, and holding it until morning would eat into it.
+   */
+  HOSTED_BOT_ACTIVATION_LINK: false,
+  HOSTED_BOT_FEE_SHORT: false,
 };
 
 /**
@@ -951,6 +981,9 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   // PR-2: values read at send time from the message row / the request row.
   RESELLER_REQUEST_MESSAGE: 'bot.reseller_request.message_from_owner',
   RESELLER_REQUEST_DECISION: 'bot.reseller_request.rejected',
+  // PR-6: values read at send time from the request row / the notice row.
+  HOSTED_BOT_ACTIVATION_LINK: 'bot.hosted_bot.activation_link',
+  HOSTED_BOT_FEE_SHORT: 'bot.hosted_bot.fee_short',
 };
 
 /**

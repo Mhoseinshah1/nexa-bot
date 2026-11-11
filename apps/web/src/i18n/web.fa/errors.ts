@@ -374,6 +374,23 @@ export const WEB_FA_ERRORS = {
   'web.err_hosting_expiry_passed':
     'تاریخ انقضای این ربات گذشته است. اول تاریخ تازه بگذارید یا آن را خالی کنید.',
   'web.err_hosting_slug_taken': 'این شناسه قبلاً استفاده شده است.',
+  'web.err_reseller_bot_not_offered': 'ربات اختصاصی در حال حاضر ارائه نمی‌شود.',
+  'web.err_reseller_bot_not_reseller': 'این حساب نمایندهٔ فعال نیست.',
+  'web.err_reseller_bot_request_not_found': 'این درخواست پیدا نشد.',
+  'web.err_reseller_bot_request_open': 'یک درخواست ربات اختصاصی در انتظار بررسی دارید.',
+  'web.err_reseller_bot_state_conflict': 'وضعیت این درخواست اجازهٔ این کار را نمی‌دهد.',
+  'web.err_reseller_bot_token_malformed': 'این توکن ربات تلگرام نیست.',
+  'web.err_reseller_bot_token_rejected': 'تلگرام این توکن را نپذیرفت.',
+  'web.err_reseller_bot_token_unreachable':
+    'اکنون نمی‌توان از تلگرام پرسید. کمی بعد دوباره تلاش کنید.',
+  'web.err_reseller_bot_token_in_use': 'این ربات در درخواست دیگری ثبت شده است.',
+  'web.err_reseller_bot_domain_invalid':
+    'دامنه معتبر نیست؛ فقط نام دامنه مانند bot.example.com را بنویسید.',
+  'web.err_reseller_bot_insufficient_funds':
+    'موجودی کیف پول نماینده برای هزینهٔ ماهانه کافی نیست؛ چیزی کسر نشد.',
+  'web.err_reseller_bot_not_linked': 'هنوز ربات میزبانی‌شده‌ای برای این درخواست ساخته نشده است.',
+  'web.err_reseller_bot_already_linked': 'برای این درخواست قبلاً ربات ساخته شده است.',
+  'web.err_reseller_bot_nothing_due': 'هزینهٔ دورهٔ فعلی پرداخت شده است.',
   'web.err_hosting_create_disabled': 'ساختن ربات میزبانی‌شده روی این نصب فعلاً بسته است.',
   'web.err_hosting_purge_confirmation_mismatch': 'برای پاک‌سازی، شناسهٔ ربات را دقیقاً وارد کنید.',
   'web.err_hosting_enter_domain_required':

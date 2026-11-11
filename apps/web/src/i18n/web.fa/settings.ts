@@ -642,6 +642,13 @@ export const WEB_FA_SETTINGS = {
   // WP-A9: the names of the reminder keys and switches this package added.
   'web.setting_reminders_expiry_early_days': 'یادآور هفتگی پیش از انقضا',
   'web.setting_reseller_request_cooldown_days': 'فاصلهٔ درخواست مجدد نمایندگی پس از رد',
+  // Reseller-phase PR-6: the dedicated bot for resellers.
+  'web.setting_reseller_bot_monthly_fee': 'هزینهٔ ماهانهٔ ربات اختصاصی نماینده',
+  'web.setting_reseller_bot_monthly_fee_desc':
+    'مبلغی که هر ماه از کیف پول نماینده برای ربات اختصاصی کم می‌شود. صفر یعنی ربات اختصاصی ارائه نمی‌شود. هر درخواست مبلغ زمان ثبت را نگه می‌دارد.',
+  'web.setting_reseller_bot_grace_days': 'مهلت پرداخت ربات اختصاصی',
+  'web.setting_reseller_bot_grace_days_desc':
+    'اگر موجودی نماینده برای هزینهٔ ماه بعد کافی نباشد، ربات تا این تعداد روز کار می‌کند و روزی یک بار به او گفته می‌شود؛ سپس ربات متوقف می‌شود (داده‌ها حفظ می‌شود).',
   'web.setting_reseller_request_cooldown_days_desc':
     'مشتری‌ای که درخواست نمایندگی‌اش رد شده، تا این تعداد روز نمی‌تواند درخواست تازه بدهد. صفر یعنی بدون انتظار.',
   'web.feature_reseller_requests_title': 'درخواست نمایندگی از ربات',

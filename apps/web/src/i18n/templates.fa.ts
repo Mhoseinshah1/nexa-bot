@@ -160,6 +160,12 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
     label: 'درخواست نمایندگی',
     prefixes: ['bot.reseller_request.', 'ops.reseller_request.'],
   },
+  // Reseller-phase PR-6: the reseller's dedicated bot.
+  {
+    id: 'hosted_bot',
+    label: 'ربات اختصاصی نماینده',
+    prefixes: ['bot.hosted_bot.'],
+  },
   {
     id: 'admin',
     label: 'مدیریت در تلگرام — عمومی',
@@ -364,6 +370,10 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   evidence: 'مبنای تأیید',
   expired: 'وضعیت اعلان پایان اعتبار',
   expiresAt: 'زمان انقضا',
+  // PR-6: the dedicated bot's activation link and fee notice.
+  bot: 'نام کاربری ربات',
+  url: 'لینک',
+  deadline: 'مهلت',
   // NEXA-OWNER-BATCH-1 PR-3: the automatic deletion.
   deleteAt: 'زمان حذف خودکار',
   deleteCause: 'علت حذف خودکار',
@@ -717,6 +727,17 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.order.preinvoice': { description: 'توضیح محصول برای مشتری' },
   // R10 D4: on the batch-created log, `expiry` is when the batch's codes stop being redeemable.
   'ops.log.gift_card_batch_created': { expiry: 'زمان انقضای کدهای دسته' },
+  // PR-6: the dedicated bot's fee notice and activation link.
+  'bot.hosted_bot.fee_short': {
+    bot: 'نام کاربری ربات اختصاصی',
+    fee: 'هزینهٔ ماهانهٔ ربات اختصاصی',
+    deadline: 'زمان توقف ربات در صورت پرداخت‌نشدن',
+  },
+  'bot.hosted_bot.activation_link': {
+    bot: 'نام کاربری ربات اختصاصی',
+    url: 'لینک یک‌بارمصرف فعال‌سازی',
+    expiresAt: 'زمان انقضای لینک',
+  },
   // R6 item 4: on the card-to-card invoice the total is what must be TRANSFERRED.
   'bot.payment.transfer_instructions': { total: 'مبلغ قابل پرداخت (اصل + کارمزد)' },
   // R10 B6: on the overpaid screens the rial figure is the amount TonPays returns.
@@ -1079,6 +1100,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.reseller_request.approved': [
     'پیام تأیید درخواست نمایندگی',
     'به مشتری گفته می‌شود نماینده شده است، با نام سطح.',
+  ],
+  'bot.hosted_bot.activation_link': [
+    'لینک فعال‌سازی ربات اختصاصی نماینده',
+    'پس از ساخت ربات اختصاصی نماینده و صدور لینک یک‌بارمصرف در «میزبانی‌ها»، برای نماینده در تلگرام فرستاده می‌شود.',
+  ],
+  'bot.hosted_bot.fee_short': [
+    'کمبود موجودی برای هزینهٔ ربات اختصاصی',
+    'در روزهای مهلت، روزی یک بار به نماینده گفته می‌شود که موجودی کیف پول برای هزینهٔ ماهانهٔ ربات اختصاصی کافی نیست.',
   ],
   'bot.reseller_request.rejected': [
     'پیام رد درخواست نمایندگی',

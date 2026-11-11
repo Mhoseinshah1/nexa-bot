@@ -19,6 +19,8 @@ export const SECRET_PURPOSE_LABELS: Readonly<Record<SecretPurpose, WebKey>> = {
   'gift_card.batch_export': 'web.secret_purpose_gift_card_export',
   'hosting.totp_secret': 'web.secret_purpose_hosting_totp',
   'hosting.archive_password': 'web.secret_purpose_hosted_archive_password',
+  'hosting.reseller_bot_token': 'web.secret_purpose_reseller_bot_token',
+  'hosting.reseller_activation_link': 'web.secret_purpose_reseller_activation_link',
 };
 
 /** The one purpose a restore can never clear (the API refuses it): a refund's sealed card. */

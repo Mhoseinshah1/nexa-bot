@@ -217,6 +217,11 @@ export const hostedBotCreateRequestSchema = z.object({
   adminPassword: adminPasswordSchema,
   /** `null` = no expiry. */
   expiresAt: isoInstant.nullable(),
+  /**
+   * Reseller-phase PR-6: the APPROVED reseller request this bot is created for. The new bot is
+   * linked to it in the same transaction; a request already linked, or not approved, refuses.
+   */
+  resellerBotRequestId: z.uuid().optional(),
 });
 export type HostedBotCreateRequest = z.infer<typeof hostedBotCreateRequestSchema>;
 

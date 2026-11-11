@@ -165,6 +165,8 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES: Readonly<Record<CustomerNotificat
     SERVICE_AUTO_DELETE_WARNING: 'web.pay_notice_service_auto_delete_warning',
     RESELLER_REQUEST_MESSAGE: 'web.pay_notice_reseller_request_message',
     RESELLER_REQUEST_DECISION: 'web.pay_notice_reseller_request_decision',
+    HOSTED_BOT_ACTIVATION_LINK: 'web.pay_notice_hosted_bot_activation_link',
+    HOSTED_BOT_FEE_SHORT: 'web.pay_notice_hosted_bot_fee_short',
   };
 
 /**
