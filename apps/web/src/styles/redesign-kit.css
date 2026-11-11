@@ -420,3 +420,25 @@
   justify-content: flex-start;
   gap: 8px;
 }
+
+/* --- List export row (demo parity, PR-1) ----------------------------------------- */
+.list-export-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 6px 2px;
+}
+
+/* The attention card's «nothing waits» line (demo parity): a tick and one sentence, not a tall empty state. */
+.attn-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ok);
+  font-weight: 600;
+}
+.attn-empty span {
+  color: var(--fg);
+}

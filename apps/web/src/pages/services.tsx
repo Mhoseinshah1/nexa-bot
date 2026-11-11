@@ -46,14 +46,8 @@ import {
   recordHref,
 } from '../ui/record-ref';
 import { ChipGroup, useListClearAll } from './commerce-parts';
-import {
-  QuickAction,
-  QuickActionBar,
-  QuickFilters,
-  AttentionStrip,
-  KpiRow,
-  CardRows,
-} from '../ui/redesign';
+import { ActionPanel } from '../ui/action-panel';
+import { QuickAction, AttentionStrip, KpiRow, CardRows } from '../ui/redesign';
 import {
   Badge,
   Card,
@@ -61,13 +55,14 @@ import {
   Copyable,
   CursorPager,
   DataTable,
-  Disclosure,
   Empty,
   KV,
   LIST_PAGE_SIZE,
   Ltr,
   Money,
   Num,
+  TabPanel,
+  Tabs,
   PageHead,
   Progress,
   progressRatio,
@@ -305,6 +300,9 @@ const LIFECYCLE_TABS = [
   { id: 'ALL', label: 'web.services_tab_all', empty: 'web.services_empty' },
 ] as const satisfies readonly { id: ServiceListLifecycle; label: WebKey; empty: WebKey }[];
 
+/** The lifecycle tabs' one panel (a `Tabs` strip names it by id). */
+const LIFECYCLE_PANEL_ID = 'services-lifecycle-panel';
+
 export const SERVICE_PRESETS: readonly ViewPreset[] = [
   {
     id: 'expiring-3d',
@@ -401,34 +399,36 @@ export function ServicesPage({
   );
 
   /*
-   * Redesign PR-1: five columns, so the table fits at 1440px without sideways scroll. Every
-   * field the nine columns carried is still drawn — the code under the username, the
-   * location under the panel, the delivery under the state, the original purchase under
-   * the expiry.
+   * Demo parity: one column per field — «نام کاربری روی پنل», «کد», the customer, the state,
+   * «تحویل به مشتری», «پنل», «لوکیشن», «انقضا» and «تاریخ خرید» — instead of the two-line
+   * cells the redesign merged them into. The phone keeps the labelled card stack of `DataTable`.
    */
   const columns: readonly Column<ServiceSummaryResponse>[] = [
     {
       key: 'username',
-      header: t('web.services_col_service'),
+      header: t('web.service_username'),
       render: (row) => (
-        <div className="cell-stack">
-          <span>
-            <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-              <Ltr>{row.providerUsername}</Ltr>
-            </a>
-            {/* R1: a free trial, as the database marks it (`services.is_trial`). */}
-            {row.isTrial && (
-              <>
-                {' '}
-                <Badge tone="info">{t('web.service_trial_badge')}</Badge>
-              </>
-            )}
-          </span>
-          {/* PR-C: the service's short public code, never its uuid. */}
-          <span className="muted small">
-            <RecordLink href={recordHref.service(row.id)} id={row.id} code={row.code} />
-          </span>
-        </div>
+        <span>
+          <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+            <Ltr>{row.providerUsername}</Ltr>
+          </a>
+          {/* R1: a free trial, as the database marks it (`services.is_trial`). */}
+          {row.isTrial && (
+            <>
+              {' '}
+              <Badge tone="info">{t('web.service_trial_badge')}</Badge>
+            </>
+          )}
+        </span>
+      ),
+    },
+    {
+      // PR-C: the service's short public code, never its uuid.
+      key: 'code',
+      header: t('web.record_code'),
+      // No copy button here: nine columns have to fit 1440px; the detail page has it.
+      render: (row) => (
+        <RecordLink href={recordHref.service(row.id)} id={row.id} code={row.code} copy={false} />
       ),
     },
     {
@@ -445,52 +445,53 @@ export function ServicesPage({
       ),
     },
     {
-      key: 'panel',
-      header: t('web.services_col_panel'),
+      key: 'state',
+      header: t('web.service_state'),
       render: (row) => (
-        <div className="cell-stack">
-          {/* PR-C: the panel by its name. */}
-          <PanelLink id={row.panelId} name={row.panelName} />
-          {/* Program §13: where it is, as the panel's location configuration names it. */}
-          <span className="muted small">
-            {row.locationLabel === null ? <Dash /> : row.locationLabel}
-          </span>
-        </div>
+        <span>
+          <StateBadge value={row.state} /> <MissingOnPanelBadge at={row.missingOnPanelAt} />
+        </span>
       ),
     },
     {
-      key: 'state',
-      header: t('web.services_col_state'),
+      key: 'delivery',
+      header: t('web.service_delivery'),
+      render: (row) => <DeliveryBadge value={row.deliveryState} />,
+    },
+    {
+      key: 'panel',
+      header: t('web.service_panel'),
+      // PR-C: the panel by its name.
+      render: (row) => <PanelLink id={row.panelId} name={row.panelName} />,
+    },
+    {
+      key: 'location',
+      header: t('web.services_col_location'),
+      // Program §13: where it is, as the panel's location configuration names it.
+      render: (row) => (row.locationLabel === null ? <Dash /> : row.locationLabel),
+    },
+    {
+      key: 'expires',
+      header: t('web.service_expires_at'),
       render: (row) => (
-        <div className="cell-stack">
-          <span>
-            <StateBadge value={row.state} /> <MissingOnPanelBadge at={row.missingOnPanelAt} />
-          </span>
-          <span>
-            <DeliveryBadge value={row.deliveryState} />
-          </span>
-        </div>
+        <span className="nowrap">
+          {row.expiresAt === null ? <Dash /> : formatTimestampNumeric(row.expiresAt)}
+        </span>
       ),
     },
     {
       /*
-       * The expiry, and under it the ORIGINAL purchase (Track 3 §3), which is what the list is
-       * ordered by: for an imported service the previous bot's date, never the import. A
-       * response from the release before carries none, and then the creation is the honest
-       * fallback — it is the same instant for every service this installation made.
+       * The ORIGINAL purchase (Track 3 §3), which is what the list is ordered by: for an
+       * imported service the previous bot's date, never the import. A response from the release
+       * before carries none, and then the creation is the honest fallback — it is the same
+       * instant for every service this installation made.
        */
-      key: 'expires',
-      header: t('web.services_col_dates'),
+      key: 'started',
+      header: t('web.service_started_at'),
       render: (row) => (
-        <div className="cell-stack">
-          <span className="nowrap">
-            {row.expiresAt === null ? <Dash /> : formatTimestampNumeric(row.expiresAt)}
-          </span>
-          <span className="muted small nowrap">
-            {t('web.service_started_at')}{' '}
-            {formatTimestampNumeric(row.originalStartedAt ?? row.createdAt)}
-          </span>
-        </div>
+        <span className="nowrap">
+          {formatTimestampNumeric(row.originalStartedAt ?? row.createdAt)}
+        </span>
       ),
     },
   ];
@@ -608,13 +609,14 @@ export function ServicesPage({
 
       <Card className="ca-list">
         {/* Track 3 §3: the lifecycle is in the URL, and the server filters and orders by it.
-            Chips replace the tabs (redesign PR-1); no count, because the list has no total. */}
+            Demo parity: real tabs again (live / ended / all), not chips. */}
         {!denied && (
-          <QuickFilters
-            label={t('web.services_title')}
+          <Tabs
             value={lifecycle}
             onChange={selectLifecycle}
-            items={LIFECYCLE_TABS.map((tab) => ({ key: tab.id, label: t(tab.label) }))}
+            items={LIFECYCLE_TABS.map((tab) => ({ id: tab.id, label: t(tab.label) }))}
+            panelId={LIFECYCLE_PANEL_ID}
+            label={t('web.services_title')}
           />
         )}
         <div hidden={toolbarHidden}>
@@ -650,27 +652,30 @@ export function ServicesPage({
           />
         </div>
 
-        <div className="list-body">
-          <StateSwitch query={services} denied={denied}>
-            {services.data === undefined ? null : services.data.services.length === 0 ? (
-              <Empty
-                title={t(emptyKey)}
-                hint={t(
-                  lifecycle === 'LIVE' ? 'web.services_empty_live_hint' : 'web.services_empty_hint',
-                )}
-              />
-            ) : (
-              <>
-                <DataTable
-                  stack="labelled"
-                  caption={t('web.services_title')}
-                  columns={columns}
-                  rows={services.data.services}
-                  rowKey={(row) => row.id}
-                  dense
-                  sticky
+        <TabPanel id={LIFECYCLE_PANEL_ID} labelledBy={`${LIFECYCLE_PANEL_ID}-tab-${lifecycle}`}>
+          <div className="list-body">
+            <StateSwitch query={services} denied={denied}>
+              {services.data === undefined ? null : services.data.services.length === 0 ? (
+                <Empty
+                  title={t(emptyKey)}
+                  hint={t(
+                    lifecycle === 'LIVE'
+                      ? 'web.services_empty_live_hint'
+                      : 'web.services_empty_hint',
+                  )}
                 />
-                {/*
+              ) : (
+                <>
+                  <DataTable
+                    stack="labelled"
+                    caption={t('web.services_title')}
+                    columns={columns}
+                    rows={services.data.services}
+                    rowKey={(row) => row.id}
+                    dense
+                    sticky
+                  />
+                  {/*
                 `newest-first`, and that is the difference from `/users`, `/orders` and
                 `/products`: `GET /services` pages a DESCENDING keyset, newest ORIGINAL
                 purchase first (owner revision 13, Track 3 §3), so "next" here really is the
@@ -678,18 +683,19 @@ export function ServicesPage({
 
                 The cursor lives in the URL, so Previous returns to the first page.
               */}
-                <CursorPager
-                  order="newest-first"
-                  shown={services.data.services.length}
-                  hasPrevious={cursor !== null}
-                  hasNext={services.data.nextCursor !== null}
-                  onPrevious={() => setQuery(route, 'cursor', null)}
-                  onNext={() => setQuery(route, 'cursor', services.data?.nextCursor ?? null)}
-                />
-              </>
-            )}
-          </StateSwitch>
-        </div>
+                  <CursorPager
+                    order="newest-first"
+                    shown={services.data.services.length}
+                    hasPrevious={cursor !== null}
+                    hasNext={services.data.nextCursor !== null}
+                    onPrevious={() => setQuery(route, 'cursor', null)}
+                    onNext={() => setQuery(route, 'cursor', services.data?.nextCursor ?? null)}
+                  />
+                </>
+              )}
+            </StateSwitch>
+          </div>
+        </TabPanel>
       </Card>
     </>
   );
@@ -952,19 +958,19 @@ function ServiceActionPanel({
       : undefined;
   return (
     <>
-      <QuickActionBar
-        label={t('web.service_action_panel_title')}
+      <ActionPanel
+        title={t('web.service_action_panel_title')}
         groups={[
           ...SERVICE_ACTION_GROUPS.map((group) => ({
             key: group.key,
-            label: t(group.title),
+            title: t(group.title),
             actions: group.actions.map((action) => (
               <ActionButton key={action} entry={byAction.get(action)} mayEdit={mayEdit} act={act} />
             )),
           })),
           {
             key: 'gift',
-            label: t('web.service_group_gift'),
+            title: t('web.service_group_gift'),
             actions: [
               <ServiceGrantButton
                 key="traffic"
@@ -994,40 +1000,25 @@ function ServiceActionPanel({
               />,
             ],
           },
-          {
-            // The only action that deletes an account on somebody's panel: red, ends in «…»,
-            // and opens the modal with the typed phrase / the refund choice — unchanged.
-            key: 'danger',
-            label: t('web.action_panel_sensitive'),
-            actions: [
-              terminate !== undefined && mayTerminate ? (
-                <QuickAction
-                  key="terminate"
-                  danger
-                  icon="trash"
-                  label={t('web.service_delete_open')}
-                  disabled={terminateBlocked}
-                  {...(terminateReason === undefined ? {} : { disabledReason: terminateReason })}
-                  onClick={() => setDeleting(true)}
-                />
-              ) : null,
-            ],
-          },
         ]}
+        // The only action that deletes an account on somebody's panel: red, ends in «…», in the
+        // red «عملیات حساس» box, and it opens the modal with the typed phrase / the refund
+        // choice — unchanged.
+        sensitive={[
+          terminate !== undefined && mayTerminate ? (
+            <QuickAction
+              key="terminate"
+              danger
+              icon="trash"
+              label={t('web.service_delete_open')}
+              disabled={terminateBlocked}
+              {...(terminateReason === undefined ? {} : { disabledReason: terminateReason })}
+              onClick={() => setDeleting(true)}
+            />
+          ) : null,
+        ]}
+        disabledReasons={reasons}
       />
-      {reasons.length > 0 && (
-        <Disclosure
-          size="sm"
-          className="action-panel-why service-why"
-          summary={t('web.action_panel_why_unavailable')}
-        >
-          <ul>
-            {reasons.map((reason, index) => (
-              <li key={index}>{reason}</li>
-            ))}
-          </ul>
-        </Disclosure>
-      )}
       {terminate !== undefined && mayTerminate && !terminateBlocked && (
         <ServiceDeleteModal
           open={deleting}
@@ -1213,9 +1204,10 @@ export function ServiceDetailPage({
               />
             )}
 
-            {refundRequests}
-
+            {/* Demo parity: the KPI cards come BEFORE the refund-request table. */}
             <ServiceStats row={row} />
+
+            {refundRequests}
 
             {/* The identity card and the delivery card share one height; the history is its own row. */}
             <CardRows

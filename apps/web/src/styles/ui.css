@@ -862,6 +862,32 @@
   border-radius: var(--radius-pill);
   white-space: nowrap;
 }
+/*
+ * A page's own `QuickAction`s drawn inside a framed group (demo parity, PR-1): the same pill the
+ * `.btn`s above are, with the red text of a dangerous action kept.
+ */
+.action-group-buttons .qa-wrap {
+  display: flex;
+  flex: 1 1 auto;
+}
+.action-group-buttons .qa {
+  flex: 1;
+  justify-content: center;
+  gap: 6px;
+  height: 40px;
+  min-height: 40px;
+  padding-inline: 16px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  white-space: nowrap;
+}
+.action-group-buttons .qa.danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+}
+.action-group.danger .action-group-buttons .qa-wrap {
+  flex: 0 1 220px;
+}
 /* the sensitive group: a red full-width strip at the bottom */
 .action-group.danger {
   flex-direction: row;
@@ -935,6 +961,15 @@
   .action-group.danger .action-group-title {
     padding: 0 2px;
     border: 0;
+  }
+  .action-group.danger .action-group-buttons .qa-wrap {
+    flex: 1 1 100%;
+  }
+  .action-group.danger .action-group-buttons .qa {
+    height: auto;
+    min-height: 40px;
+    padding-block: 8px;
+    white-space: normal;
   }
   /* Each sensitive button is a full-width line and its label wraps, never clipped. */
   .action-group.danger .action-group-buttons .btn {
@@ -1663,7 +1698,8 @@
  * (32px), and the panel's «چرا … غیرفعال است؟» line, are 44px targets where the pointer cannot hover (tokens.css, `pnpm web:responsive`).
  */
 @media (pointer: coarse) and (hover: none) {
-  .action-group-buttons .btn {
+  .action-group-buttons .btn,
+  .action-group-buttons .qa {
     height: var(--ctl-h);
     min-height: var(--ctl-h);
   }

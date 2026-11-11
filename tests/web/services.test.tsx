@@ -703,7 +703,7 @@ describe('the service detail', () => {
       <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit={false} mayTerminate={false} />,
     );
     await screen.findAllByText('nx-7f3a91');
-    const bar = screen.getByRole('toolbar', { name: t('web.service_action_panel_title') });
+    const bar = screen.getByRole('region', { name: t('web.service_action_panel_title') });
     const disabled = [...bar.querySelectorAll('button:disabled')] as HTMLElement[];
     expect(disabled.length).toBeGreaterThan(0);
     for (const button of disabled) {
@@ -973,11 +973,11 @@ describe('the service action panel', () => {
     expect([...grouped].sort()).toEqual([...ordinary].sort());
   });
 
-  it('draws each button inside its group, and terminate in the sensitive strip', async () => {
+  it('draws each button inside its group, and terminate in the red sensitive box', async () => {
     stubApi(detail({ actions: actionsWith({ SUSPEND: 'AVAILABLE', TERMINATE: 'AVAILABLE' }) }));
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate mayGrant />);
     await screen.findAllByText('nx-7f3a91');
-    const panel = screen.getByRole('toolbar', { name: t('web.service_action_panel_title') });
+    const panel = screen.getByRole('region', { name: t('web.service_action_panel_title') });
     const group = (key: WebKey) => within(panel).getByRole('group', { name: t(key) });
     expect(
       within(group('web.service_group_panel')).getByRole('button', {
@@ -1126,8 +1126,9 @@ describe('rows imported from Mirza', () => {
  * mass action selects.
  */
 describe('the lifecycle tabs', () => {
-  const lifecycleChips = () => screen.getByRole('group', { name: t('web.services_title') });
-  const chipNamed = (name: string) => within(lifecycleChips()).getByRole('button', { name });
+  // Demo parity: real tabs again (the redesign had made them chips).
+  const lifecycleChips = () => screen.getByRole('tablist', { name: t('web.services_title') });
+  const chipNamed = (name: string) => within(lifecycleChips()).getByRole('tab', { name });
 
   const listParams = (calls: readonly { url: string; method: string }[]) =>
     calls
@@ -1140,10 +1141,9 @@ describe('the lifecycle tabs', () => {
     await screen.findAllByText('nx-7f3a91');
 
     expect(listParams(api.calls).map((params) => params.get('lifecycle'))).toEqual(['LIVE']);
-    // Redesign PR-1: the tabs became quick-filter chips (no counts: the list has no totals).
-    const chips = within(lifecycleChips()).getAllByRole('button');
+    const chips = within(lifecycleChips()).getAllByRole('tab');
     expect(chips.map((chip) => chip.textContent)).toEqual(['فعال', 'پایان‌یافته', 'همه']);
-    expect(chipNamed('فعال').getAttribute('aria-pressed')).toBe('true');
+    expect(chipNamed('فعال').getAttribute('aria-selected')).toBe('true');
   });
 
   /*
@@ -1176,7 +1176,7 @@ describe('the lifecycle tabs', () => {
       ).toEqual([tab]);
       expect(
         within(lifecycleChips())
-          .getAllByRole('button', { pressed: true })
+          .getAllByRole('tab', { selected: true })
           .map((chip) => chip.textContent),
       ).toEqual([{ LIVE: 'فعال', ENDED: 'پایان‌یافته', ALL: 'همه' }[tab]]);
       unmount();
@@ -1275,8 +1275,8 @@ describe('the lifecycle tabs', () => {
     expect(bodyRows.findIndex((text) => text.includes('nx-first'))).toBeLessThan(
       bodyRows.findIndex((text) => text.includes('nx-second')),
     );
-    // Five merged columns: the original purchase sits under the expiry in the dates column.
-    expect(screen.getByRole('columnheader', { name: t('web.services_col_dates') })).toBeTruthy();
+    // Demo parity: «تاریخ خرید» is a column of its own again.
+    expect(screen.getByRole('columnheader', { name: t('web.service_started_at') })).toBeTruthy();
     const first = bodyRows.find((text) => text.includes('nx-first')) ?? '';
     expect(first).toContain(formatTimestampNumeric('2025-01-01T09:00:00.000Z'));
     expect(first).not.toContain(formatTimestampNumeric('2026-10-18T09:00:00.000Z'));

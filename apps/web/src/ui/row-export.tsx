@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { t } from '../i18n/web.fa';
 import { formatNumber } from '../format';
-import { Button, type Column } from './kit';
+import { Button, Checkbox, type Column } from './kit';
 import { SelectionBar } from './redesign';
 
 /**
@@ -153,6 +153,57 @@ export function RowExportBar<T>({
           {t('web.export_cap')} {formatNumber(CSV_EXPORT_MAX_ROWS)}
         </span>
       </SelectionBar>
+    </div>
+  );
+}
+
+/**
+ * The demo's export row (demo parity, PR-1): ALWAYS drawn above a list with rows — the
+ * select-the-page tick, «انتخاب‌شده: N», «خروجی CSV» and the cap — not only once rows are
+ * ticked. There is no export endpoint, so the file is built in the browser from rows the list
+ * already loaded under its current filters: the ticked rows when any are ticked, otherwise the
+ * rows of the page on screen (still capped). Permission-checked by construction, as above.
+ */
+export function ListExportBar<T>({
+  selection,
+  columns,
+  filename,
+  allowed,
+  selectAllLabel,
+}: {
+  selection: RowSelection<T>;
+  columns: readonly ExportColumn<T>[];
+  /** The file's name without its extension. */
+  filename: string;
+  /** The list's own view permission, held. */
+  allowed: boolean;
+  /** Overrides the default select-the-page label. */
+  selectAllLabel?: string;
+}) {
+  if (!allowed || selection.rows.length === 0) return null;
+  const count = selection.chosen.length;
+  const exported = count > 0 ? selection.chosen : selection.rows.slice(0, CSV_EXPORT_MAX_ROWS);
+  return (
+    <div className="list-export-bar" role="group" aria-label={t('web.export_bar')}>
+      <Checkbox
+        checked={count > 0 && count === Math.min(selection.rows.length, CSV_EXPORT_MAX_ROWS)}
+        onChange={() => selection.toggleAll()}
+        label={selectAllLabel ?? t('web.export_select_all')}
+      />
+      <span className="muted small num" aria-live="polite">
+        {t('web.export_selected').replace('{n}', formatNumber(count))}
+      </span>
+      <Button size="sm" onClick={() => downloadCsv(`${filename}.csv`, toCsv(exported, columns))}>
+        {t('web.export_csv')}
+      </Button>
+      <span className="muted small">
+        {t('web.export_cap')} {formatNumber(CSV_EXPORT_MAX_ROWS)}
+      </span>
+      {count > 0 && (
+        <Button variant="ghost" size="sm" onClick={selection.clear}>
+          {t('web.kit_selection_clear')}
+        </Button>
+      )}
     </div>
   );
 }

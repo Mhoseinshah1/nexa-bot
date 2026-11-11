@@ -7,6 +7,7 @@ import { customer, order, renderPage, stubApi } from './harness';
 import { openC360Tab, openWalletDialog, submitWalletDialog } from './c360-helpers';
 import { sourceFilterAbsent, rowHasBadge } from './source-helpers';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * The Users surface, rendered against the shapes the server actually returns.
@@ -251,18 +252,22 @@ describe('the customer list', () => {
     });
   });
 
-  it('draws the selection bar only while rows are ticked, and clears it', async () => {
+  it('draws the export row always, and the selection count and clear only while rows are ticked', async () => {
     stubApi(list([customer({ firstName: 'علی', lastName: 'رضایی' })]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByRole('link', { name: 'علی رضایی' });
-    expect(screen.queryByRole('region', { name: 'عملیات روی موارد انتخاب‌شده' })).toBeNull();
+    // Demo parity: the row is there from the start — the demo's «انتخاب همهٔ ردیف‌های این صفحه».
+    const bar = screen.getByRole('group', { name: t('web.export_bar') });
+    expect(
+      within(bar).getByRole('checkbox', { name: 'انتخاب همهٔ ردیف‌های این صفحه' }),
+    ).toBeInTheDocument();
+    expect(within(bar).getByRole('button', { name: t('web.export_csv') })).toBeEnabled();
+    expect(within(bar).queryByRole('button', { name: 'لغو انتخاب' })).toBeNull();
 
     fireEvent.click(screen.getByRole('checkbox', { name: t('web.export_select_row') }));
-    const bar = screen.getByRole('region', { name: 'عملیات روی موارد انتخاب‌شده' });
-    expect(within(bar).getByRole('button', { name: t('web.export_csv') })).toBeEnabled();
-
+    expect(within(bar).getByText('انتخاب‌شده: 1')).toBeInTheDocument();
     fireEvent.click(within(bar).getByRole('button', { name: 'لغو انتخاب' }));
-    expect(screen.queryByRole('region', { name: 'عملیات روی موارد انتخاب‌شده' })).toBeNull();
+    expect(within(bar).queryByRole('button', { name: 'لغو انتخاب' })).toBeNull();
   });
 
   it('shows a blocked customer as blocked rather than hiding them', async () => {
@@ -327,8 +332,10 @@ describe('the customer list', () => {
     stubApi(list([customer()]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch={false} denied={false} />);
     await screen.findByText('5551234567');
-    // The status filter is a row of quick-filter chips on the page itself, not behind a panel.
-    const chips = screen.getByRole('group', { name: 'فیلتر وضعیت' });
+    // Demo parity: no chip row on the page; the status filter is in the «فیلترها» panel.
+    expect(screen.queryByRole('group', { name: 'فیلتر وضعیت' })).toBeNull();
+    const panel = openFilterPanel();
+    const chips = within(panel).getByRole('group', { name: 'وضعیت' });
     expect(within(chips).getByRole('button', { name: 'مسدود' })).toBeInTheDocument();
     expect(within(chips).getByRole('button', { name: 'فعال' })).toBeInTheDocument();
     expect(within(chips).getByRole('button', { name: 'همه' })).toHaveAttribute(

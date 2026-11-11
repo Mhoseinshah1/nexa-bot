@@ -32,7 +32,7 @@ import {
 import { formatTimestamp, formatTimestampNumeric } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
-import { useLinkHandler } from '../router';
+import { navigate, useLinkHandler } from '../router';
 import { messageFor } from './settings';
 import { FormDialog } from './form-dialog';
 /*
@@ -63,7 +63,8 @@ import {
   useCustomerOverview,
   useFinancialSummary,
 } from './customer-360-sections';
-import { AttentionStrip, CardRows, KpiRow, QuickAction, QuickActionBar } from '../ui/redesign';
+import { CardRows, KpiRow, QuickAction } from '../ui/redesign';
+import { ActionPanel } from '../ui/action-panel';
 import { useScrollHold } from '../ui/scroll-hold';
 // Phase A2: «ارسال پیام» — the compose modal and the history, in their own file.
 import { DirectMessageComposeModal, DirectMessagesCard } from './customer-direct-messages';
@@ -289,7 +290,6 @@ export function UserDetailPage({
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const onLink = useLinkHandler();
   const submission = useSubmissionKey();
   /*
    * The CRM tab's note key lives on the page: only the chosen tab is drawn, so a key kept
@@ -466,142 +466,132 @@ export function UserDetailPage({
               exempt={controls !== undefined && controls.channelMembershipExemptAt !== null}
               overview={controls}
               isReseller={isReseller === true}
-              actions={
-                <QuickActionBar
-                  label={t('web.c360_action_panel_title')}
-                  groups={[
-                    {
-                      key: 'wallet',
-                      label: t('web.c360_group_wallet'),
-                      actions: [
-                        mayCredit && mayViewWallet && (
-                          <QuickAction
-                            key="credit"
-                            icon="plus"
-                            label={t('web.c360_increase_balance')}
-                            onClick={() => setWalletDialog('CREDIT')}
-                          />
-                        ),
-                        mayDebit && mayViewWallet && (
-                          <QuickAction
-                            key="debit"
-                            label={t('web.c360_decrease_balance')}
-                            onClick={() => setWalletDialog('DEBIT')}
-                          />
-                        ),
-                      ],
-                    },
-                    {
-                      key: 'orders',
-                      label: t('web.c360_group_orders'),
-                      actions: [
-                        /* A manual order spends the wallet: the server also charges users.wallet.debit. */
-                        mayManualOrder && mayDebit && (
-                          <QuickAction
-                            key="manual"
-                            icon="plus"
-                            label={t('web.c360_manual_order')}
-                            onClick={() => setManualOrderOpen(true)}
-                          />
-                        ),
-                        mayViewOrders && (
-                          <a
-                            key="orders"
-                            className="qa"
-                            href={`/orders?q=${encodeURIComponent(id)}`}
-                            onClick={onLink}
-                          >
-                            {t('web.c360_view_orders')}
-                          </a>
-                        ),
-                      ],
-                    },
-                    {
-                      key: 'services',
-                      label: t('web.c360_group_services'),
-                      actions: [
-                        danger.open.resume !== null && (
-                          <QuickAction
-                            key="resume"
-                            label={t('web.c360_services_enable')}
-                            onClick={danger.open.resume}
-                          />
-                        ),
-                        danger.open.suspend !== null && (
-                          <QuickAction
-                            key="suspend"
-                            danger
-                            label={t('web.c360_services_disable')}
-                            onClick={danger.open.suspend}
-                          />
-                        ),
-                      ],
-                    },
-                    {
-                      key: 'contact',
-                      label: t('web.c360_group_contact'),
-                      actions: [
-                        mayMessage && (
-                          <QuickAction
-                            key="message"
-                            icon="send"
-                            label={t('web.dm_send')}
-                            onClick={() => setMessageOpen(true)}
-                          />
-                        ),
-                      ],
-                    },
-                    {
-                      key: 'account',
-                      label: t('web.c360_group_account'),
-                      actions: [
-                        danger.open.transfer !== null && (
-                          <QuickAction
-                            key="transfer"
-                            danger
-                            label={t('web.c360_transfer')}
-                            onClick={danger.open.transfer}
-                          />
-                        ),
-                        mayBlock &&
-                          (row.status === 'ACTIVE' ? (
-                            <QuickAction
-                              key="block"
-                              danger
-                              icon="lock"
-                              label={t('web.user_block')}
-                              disabled={mutate.isPending}
-                              disabledReason={t('web.c360_action_busy')}
-                              onClick={() => setPending('BLOCK')}
-                            />
-                          ) : (
-                            <QuickAction
-                              key="unblock"
-                              icon="check"
-                              label={t('web.user_unblock')}
-                              disabled={mutate.isPending}
-                              disabledReason={t('web.c360_action_busy')}
-                              onClick={() => setPending('UNBLOCK')}
-                            />
-                          )),
-                      ],
-                    },
-                  ]}
-                />
-              }
+            />
+
+            {/* W1.5, restored (demo parity): every action on this customer in ONE titled panel under the head. */}
+            <ActionPanel
+              title={t('web.c360_action_panel_title')}
+              groups={[
+                {
+                  key: 'wallet',
+                  title: t('web.c360_group_wallet'),
+                  actions: [
+                    mayCredit && mayViewWallet && (
+                      <QuickAction
+                        key="credit"
+                        icon="plus"
+                        label={t('web.c360_increase_balance')}
+                        onClick={() => setWalletDialog('CREDIT')}
+                      />
+                    ),
+                    mayDebit && mayViewWallet && (
+                      <QuickAction
+                        key="debit"
+                        label={t('web.c360_decrease_balance')}
+                        onClick={() => setWalletDialog('DEBIT')}
+                      />
+                    ),
+                  ],
+                },
+                {
+                  key: 'orders',
+                  title: t('web.c360_group_orders'),
+                  actions: [
+                    /* A manual order spends the wallet: the server also charges users.wallet.debit. */
+                    mayManualOrder && mayDebit && (
+                      <QuickAction
+                        key="manual"
+                        icon="plus"
+                        label={t('web.c360_manual_order')}
+                        onClick={() => setManualOrderOpen(true)}
+                      />
+                    ),
+                    mayViewOrders && (
+                      <QuickAction
+                        key="orders"
+                        label={t('web.c360_view_orders')}
+                        onClick={() => navigate(`/orders?q=${encodeURIComponent(id)}`)}
+                      />
+                    ),
+                  ],
+                },
+                {
+                  key: 'contact',
+                  title: t('web.c360_group_contact'),
+                  actions: [
+                    mayMessage && (
+                      <QuickAction
+                        key="message"
+                        icon="send"
+                        label={t('web.dm_send')}
+                        onClick={() => setMessageOpen(true)}
+                      />
+                    ),
+                    mayBlock &&
+                      (row.status === 'ACTIVE' ? (
+                        <QuickAction
+                          key="block"
+                          danger
+                          icon="lock"
+                          label={t('web.user_block')}
+                          disabled={mutate.isPending}
+                          disabledReason={t('web.c360_action_busy')}
+                          onClick={() => setPending('BLOCK')}
+                        />
+                      ) : (
+                        <QuickAction
+                          key="unblock"
+                          icon="check"
+                          label={t('web.user_unblock')}
+                          disabled={mutate.isPending}
+                          disabledReason={t('web.c360_action_busy')}
+                          onClick={() => setPending('UNBLOCK')}
+                        />
+                      )),
+                  ],
+                },
+              ]}
+              sensitive={[
+                danger.open.resume !== null && (
+                  <QuickAction
+                    key="resume"
+                    label={t('web.c360_services_enable')}
+                    onClick={danger.open.resume}
+                  />
+                ),
+                danger.open.suspend !== null && (
+                  <QuickAction
+                    key="suspend"
+                    danger
+                    ellipsis={false}
+                    label={t('web.c360_services_disable')}
+                    onClick={danger.open.suspend}
+                  />
+                ),
+                danger.open.transfer !== null && (
+                  <QuickAction
+                    key="transfer"
+                    danger
+                    ellipsis={false}
+                    label={t('web.c360_transfer')}
+                    onClick={danger.open.transfer}
+                  />
+                ),
+              ]}
             />
 
             {danger.modals}
 
+            <CustomerStatStrip row={row} mayViewWallet={mayViewWallet} />
+
+            {/* Demo parity: the blocked customer's card — an outlined red callout (role=alert). */}
             {row.status === 'BLOCKED' && (
-              <AttentionStrip tone="danger" title={t('web.user_blocked_banner_title')}>
-                <span className="small">{t('web.user_blocked_banner_body')}</span>
-              </AttentionStrip>
+              <Banner tone="danger" title={t('web.user_blocked_banner_title')}>
+                {t('web.user_blocked_banner_body')}
+              </Banner>
             )}
 
             <CustomerAttentionStrip customerId={id} />
-
-            <CustomerStatStrip row={row} mayViewWallet={mayViewWallet} />
 
             {/*
               Step two of a block or an unblock, never one click (WP10G, closing
@@ -900,14 +890,11 @@ function UserHead({
   exempt,
   overview,
   isReseller,
-  actions,
 }: {
   row: CustomerSummaryResponse;
   exempt: boolean;
   overview: CustomerOverviewResponse | undefined;
   isReseller: boolean;
-  /** The grouped quick-action bar, drawn inside the head card. */
-  actions: ReactNode;
 }) {
   const name = displayName(row);
   return (
@@ -954,7 +941,6 @@ function UserHead({
           </span>
         </>
       }
-      actions={actions}
     />
   );
 }
