@@ -71,7 +71,8 @@
   z-index: 150;
   inset: 0;
   height: fit-content;
-  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+  max-width: calc(100vw - 16px);
   margin: auto;
   overflow: auto;
   width: 300px;
@@ -335,6 +336,113 @@
     position-try-fallbacks: flip-block, flip-inline;
   }
 }
+/* It must always fit the viewport, so none of the time row or «تأیید» is cut off in a modal
+   near the bottom of a short screen (a Windows laptop at 100%). The popover is placed by an
+   anchor AREA — below the field, or above it, whichever side has more room, and from the field's
+   start edge or its end edge — and `max-height: 100%` is then the room of that area: the
+   calendar scrolls inside and the footer stays in view. Pure CSS, no inline style. */
+@supports (position-area: block-end) {
+  .date-pop {
+    position-area: block-end span-inline-end;
+    position-try-order: most-height;
+    position-try-fallbacks:
+      flip-block,
+      flip-inline,
+      flip-block flip-inline;
+    margin: 6px 0;
+    max-height: calc(100% - 12px);
+    max-width: calc(100% - 12px);
+  }
+}
+.date-pop {
+  display: flex;
+  flex-direction: column;
+}
+.date-pop > * {
+  flex: none;
+}
+.date-pop-foot {
+  position: sticky;
+  inset-block-end: 0;
+  z-index: 1;
+  padding-block: 8px 2px;
+  background: var(--sheet-bg);
+}
+/* A short screen (a laptop at 100% with a toolbar: ≤ 760px of height): smaller days, and the
+   time and quick picks BESIDE the calendar so nothing needs the page to scroll. */
+@media (max-height: 760px) {
+  .date-pop {
+    padding: 8px;
+  }
+  .date-pop-d {
+    height: 28px;
+    font-size: var(--fs-xs);
+  }
+  .date-pop-head {
+    margin-block-end: 4px;
+  }
+  .date-pop-wd span {
+    padding-block: 2px;
+  }
+  .date-pop-wd,
+  .date-pop-grid {
+    gap: 2px;
+  }
+  .date-pop-time {
+    margin-block-start: 6px;
+    padding-block-start: 6px;
+  }
+  .date-pop-ts {
+    height: 18px;
+  }
+  .date-pop-tin {
+    height: 34px;
+  }
+  .date-pop-m {
+    height: 36px;
+  }
+}
+@media (max-height: 760px) and (min-width: 761px) {
+  .date-pop.with-time {
+    display: grid;
+    grid-template-columns: 260px 190px;
+    grid-template-rows: auto auto 1fr auto;
+    column-gap: 12px;
+    width: auto;
+  }
+  .date-pop.with-time > .date-pop-head {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .date-pop.with-time > .date-pop-wd {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .date-pop.with-time > .date-pop-grid,
+  .date-pop.with-time > .date-pop-months {
+    grid-column: 1;
+    grid-row: 3;
+    align-self: start;
+  }
+  .date-pop.with-time > .date-pop-time {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    flex-wrap: wrap;
+    margin-block-start: 0;
+    padding-block-start: 0;
+    border-block-start: 0;
+  }
+  .date-pop.with-time > .date-pop-quick {
+    grid-column: 2;
+    grid-row: 3;
+    align-self: start;
+    flex-direction: column;
+  }
+  .date-pop.with-time > .date-pop-foot {
+    grid-column: 1 / -1;
+    grid-row: 4;
+  }
+}
 /* The phone sheet's backdrop and × (PR #285 review, A3): drawn at ≤760px only. */
 .date-pop-backdrop,
 .date-pop-sheet {
@@ -362,8 +470,12 @@
   .date-pop {
     position: fixed;
     inset: auto 0 0 0;
+    position-area: none;
+    position-try-fallbacks: none;
     margin: 0;
     width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - 24px);
     border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   }

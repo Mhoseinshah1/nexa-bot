@@ -42,9 +42,22 @@ import {
  * `<label htmlFor={id}>` names. It opens a calendar popover in a portal (so no Drawer, Modal or
  * scrolling card clips it), placed under the trigger by CSS anchor positioning — under
  * `style-src 'self'` nothing may be positioned by a computed coordinate — and centred on the
- * screen where a browser has no anchor positioning; a bottom sheet on a phone. The popover is a focus trap (`useFocusTrap`): Escape closes it and focus returns to
+ * screen where a browser has no anchor positioning; a bottom sheet on a phone. The popover
+ * always fits the viewport (`ui.css`): it opens on the side of the field with more room, scrolls
+ * inside when it must, keeps its footer («تأیید») in view and goes compact on a short screen.
+ * The popover is a focus trap (`useFocusTrap`): Escape closes it and focus returns to
  * the trigger. Days move with the arrow keys as they read in RTL (← is the next day), Enter
  * picks.
+ *
+ * DATE-TIME APPLIES AT ONCE. In `datetime` mode tapping a day writes the value to the field
+ * immediately (`onChange`), so a popover closed by Escape or a tap outside keeps what was
+ * chosen; the popover stays open so the time can still be changed, and changing the time while
+ * a day is chosen applies at once too. The quick chips apply at once. «تأیید» only closes.
+ * THE TIME RULE (one rule): a tapped day takes the time already chosen — the value's own time,
+ * or the steppers' current time once the user has touched them; with neither, the current time
+ * rounded UP to the 5-minute step (14:32 → 14:35; 23:58 → 00:00). A moment outside `min`/`max`
+ * is not applied (and «تأیید» stays disabled). `date` and `time` modes still commit on pick /
+ * «تأیید».
  *
  * Tests drive it ONLY through `setDateField` in `tests/web/ui-helpers.ts`.
  */
@@ -147,10 +160,13 @@ export function DateField({
     if (disabled) setOpen(false);
   }, [disabled]);
 
-  const commit = (next: string) => {
-    onChange(next);
+  const finish = () => {
     setOpen(false);
     trigger.current?.focus();
+  };
+  const commit = (next: string) => {
+    onChange(next);
+    finish();
   };
 
   const described = [valueId, describedBy].filter((part) => part !== undefined).join(' ');
@@ -220,6 +236,8 @@ export function DateField({
                 min={min}
                 max={max}
                 onCommit={commit}
+                onApply={onChange}
+                onFinish={finish}
                 onClose={() => setOpen(false)}
               />
             </div>
@@ -232,6 +250,13 @@ export function DateField({
 
 const TIME_MINUTE_STEP = 5;
 
+/** The current time rounded UP to the step: 14:32 → 14:35, 14:35 → 14:35, 23:58 → 00:00. */
+function roundedUpNow(now: Date): { h: number; m: number } {
+  const total =
+    Math.ceil((now.getHours() * 60 + now.getMinutes()) / TIME_MINUTE_STEP) * TIME_MINUTE_STEP;
+  return { h: Math.floor(total / 60) % 24, m: total % 60 };
+}
+
 function DatePopover({
   id,
   mode,
@@ -239,6 +264,8 @@ function DatePopover({
   min,
   max,
   onCommit,
+  onApply,
+  onFinish,
   onClose,
 }: {
   id: string;
@@ -247,6 +274,10 @@ function DatePopover({
   min: string | undefined;
   max: string | undefined;
   onCommit: (value: string) => void;
+  /** Writes the value without closing (date-time applies at once). */
+  onApply: (value: string) => void;
+  /** Closes and returns focus to the trigger. */
+  onFinish: () => void;
   onClose: () => void;
 }) {
   const now = useMemo(() => new Date(), []);
@@ -262,7 +293,7 @@ function DatePopover({
   const [months, setMonths] = useState(false);
   const [focusDay, setFocusDay] = useState(startDay);
   const [selected, setSelected] = useState<number | null>(parts.day);
-  const [time, setTime] = useState(parts.time ?? { h: now.getHours(), m: now.getMinutes() });
+  const [time, setTime] = useState(parts.time ?? roundedUpNow(now));
   const [hourText, setHourText] = useState<string | null>(null);
   const [minuteText, setMinuteText] = useState<string | null>(null);
 
@@ -292,11 +323,23 @@ function DatePopover({
     return true;
   };
 
+  /** Date-time: write a day and time to the field now, unless `min`/`max` refuses it. */
+  const applyNow = (day: number, at: { h: number; m: number }) => {
+    if (mode !== 'datetime') return;
+    const next = `${formatIsoDay(dayNumberToGregorian(day))}T${formatTime(at)}`;
+    if (candidateAllowed(next) && next !== value) onApply(next);
+  };
+  const changeTime = (at: { h: number; m: number }) => {
+    setTime(at);
+    if (selected !== null) applyNow(selected, at);
+  };
+
   const pick = (day: number) => {
     if (outOfRange(day)) return;
     if (timed) {
       setSelected(day);
       setFocusDay(day);
+      applyNow(day, time);
       return;
     }
     onCommit(formatIsoDay(dayNumberToGregorian(day)));
@@ -354,7 +397,13 @@ function DatePopover({
 
   const confirm = () => {
     const next = candidate();
-    if (candidateAllowed(next) && next !== null) onCommit(next);
+    if (!candidateAllowed(next) || next === null) return;
+    if (mode === 'datetime') {
+      if (next !== value) onApply(next);
+      onFinish();
+      return;
+    }
+    onCommit(next);
   };
 
   const timeQuick: readonly { key: string; label: string; apply: () => void }[] =
@@ -374,9 +423,11 @@ function DatePopover({
             key: 'now',
             label: t('web.date_now'),
             apply: () => {
-              setTime({ h: now.getHours(), m: now.getMinutes() });
+              const at = { h: now.getHours(), m: now.getMinutes() };
+              setTime(at);
               setSelected(today);
               moveView(today);
+              applyNow(today, at);
             },
           },
           {
@@ -385,18 +436,22 @@ function DatePopover({
             apply: () => {
               const later = new Date(now.getTime() + 3_600_000);
               const day = dayNumberOfDate(later);
-              setTime({ h: later.getHours(), m: later.getMinutes() });
+              const at = { h: later.getHours(), m: later.getMinutes() };
+              setTime(at);
               setSelected(day);
               moveView(day);
+              applyNow(day, at);
             },
           },
           {
             key: 'tm10',
             label: t('web.date_tomorrow_10'),
             apply: () => {
-              setTime({ h: 10, m: 0 });
+              const at = { h: 10, m: 0 };
+              setTime(at);
               setSelected(today + 1);
               moveView(today + 1);
+              applyNow(today + 1, at);
             },
           },
         ];
@@ -421,12 +476,12 @@ function DatePopover({
           onText={(text) => {
             setHourText(text);
             const n = readTyped(text, 23);
-            if (n !== null) setTime((current) => ({ ...current, h: n }));
+            if (n !== null) changeTime({ ...time, h: n });
           }}
           onBlur={() => setHourText(null)}
           onStep={(delta) => {
             setHourText(null);
-            setTime((current) => ({ ...current, h: (current.h + delta + 24) % 24 }));
+            changeTime({ ...time, h: (time.h + delta + 24) % 24 });
           }}
           onEnter={confirm}
           refFor={mode === 'time' ? initial : undefined}
@@ -442,15 +497,12 @@ function DatePopover({
           onText={(text) => {
             setMinuteText(text);
             const n = readTyped(text, 59);
-            if (n !== null) setTime((current) => ({ ...current, m: n }));
+            if (n !== null) changeTime({ ...time, m: n });
           }}
           onBlur={() => setMinuteText(null)}
           onStep={(delta) => {
             setMinuteText(null);
-            setTime((current) => ({
-              ...current,
-              m: (current.m + delta * TIME_MINUTE_STEP + 60) % 60,
-            }));
+            changeTime({ ...time, m: (time.m + delta * TIME_MINUTE_STEP + 60) % 60 });
           }}
           onEnter={confirm}
           refFor={undefined}
@@ -556,7 +608,7 @@ function DatePopover({
     <div
       ref={ref}
       id={id}
-      className="date-pop"
+      className={`date-pop${timed ? ' with-time' : ''}`}
       role="dialog"
       aria-label={timed ? t('web.date_pick_datetime') : t('web.date_pick')}
       data-view-year={view.jy}
