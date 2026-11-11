@@ -987,6 +987,20 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
 };
 
 /**
+ * Reseller-phase PR-6: the kinds whose words are NEVER stored after delivery.
+ *
+ * Round 11 B1 keeps a delivered message's rendered text on its row (`rendered_text`) for the
+ * mini app's notification centre. A kind whose values carry a live credential cannot be kept
+ * that way: `HOSTED_BOT_ACTIVATION_LINK` renders a one-time activation token into its link,
+ * and a plaintext copy in the database is that token at rest — the activation keeps only its
+ * hash on purpose. Such a message exists only in the Telegram message itself; its row records
+ * the delivery with no text, and the centre does not list it.
+ */
+export const CUSTOMER_NOTIFICATION_TEXT_NOT_STORED: readonly CustomerNotificationKind[] = [
+  'HOSTED_BOT_ACTIVATION_LINK',
+];
+
+/**
  * Where a queued message gets to.
  *
  * `SERVICE_DELIVERY_STATES` is the parent of this list and the first four mean exactly
