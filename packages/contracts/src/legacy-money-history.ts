@@ -8,7 +8,7 @@ import { moneySchema } from './money.js';
  * READ ONLY, and never a balance. The wallet's opening figure is Mirza's `user.Balance`
  * snapshot and nothing else: one `MIGRATION_OPENING_BALANCE` ledger CREDIT for a positive
  * balance, one legacy debt (held for review, never collected) for a negative one. The
- * archived history — payments, wallet transactions, wheel prizes, referrals, discounts,
+ * archived history — payments, wallet transactions, referrals, discounts,
  * service operations — is EVIDENCE about how that snapshot came about. Nothing on this
  * surface writes, and no figure here is added to, netted against or compared into a balance
  * by any money path. Charged on `users.view`, then `legacy.history.view` (the history card's
@@ -119,10 +119,6 @@ export const legacyMoneyHistoryResponseSchema = z.object({
     moneyOut: legacyMoneyTotalSchema,
     noChange: z.number().int().nonnegative(),
     unparsedAmounts: z.number().int().nonnegative(),
-  }),
-  wheel: z.object({
-    spins: z.number().int().nonnegative(),
-    prizesWon: legacyMoneyTotalSchema,
   }),
   referrals: z.object({
     /** Records where this customer was the one referred. */
