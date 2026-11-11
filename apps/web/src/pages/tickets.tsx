@@ -915,6 +915,8 @@ function TicketCategoriesCard({
             inputMode="numeric"
             aria-label={`${t('web.ticket_category_order')} — ${row.title}`}
             value={orders[row.id] ?? String(row.sortOrder)}
+            /* Locked while a save runs: its success clears every draft, so an edit made now would be lost. */
+            disabled={saveOrder.isPending}
             onChange={(event) =>
               setOrders((current) => ({ ...current, [row.id]: event.target.value }))
             }
