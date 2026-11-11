@@ -128,6 +128,7 @@ import {
   PRODUCT_CATEGORY_STATUSES,
   PRODUCT_CATEGORY_VISIBILITIES,
   PRODUCT_DESCRIPTION_MAX_LENGTH,
+  PRODUCT_DESCRIPTION_CAPTURE_STATES,
   PRODUCT_LIST_VIEWS,
   PRODUCT_SORT_MAX,
   PRODUCT_SORT_MIN,
@@ -2592,7 +2593,33 @@ export const PRODUCT_ROUTES = {
   update: (id: string) => `/products/${encodeURIComponent(id)}`,
   activate: (id: string) => `/products/${encodeURIComponent(id)}/activate`,
   deactivate: (id: string) => `/products/${encodeURIComponent(id)}/deactivate`,
+  /** «ارسال توضیح از تلگرام»: open a capture request / read one. */
+  descriptionCaptures: (id: string) => `/products/${encodeURIComponent(id)}/description-captures`,
+  descriptionCapture: (id: string, captureId: string) =>
+    `/products/${encodeURIComponent(id)}/description-captures/${encodeURIComponent(captureId)}`,
 } as const;
+
+export const openProductDescriptionCaptureRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type OpenProductDescriptionCaptureRequest = z.infer<
+  typeof openProductDescriptionCaptureRequestSchema
+>;
+
+/**
+ * One capture request as the page polls it. `description` is the STORED form of the captured
+ * text (`descriptionFromTelegramText`) once `state` is CAPTURED, else null; the page puts it in
+ * the description field and the administrator still presses Save.
+ */
+export const productDescriptionCaptureSchema = z.object({
+  captureId: z.string(),
+  state: z.enum(PRODUCT_DESCRIPTION_CAPTURE_STATES),
+  expiresAt: z.iso.datetime(),
+  /** The tenant's active bots, each a link that opens its chat. */
+  bots: z.array(z.object({ username: z.string(), chatUrl: z.string() })),
+  description: z.string().nullable(),
+});
+export type ProductDescriptionCaptureResponse = z.infer<typeof productDescriptionCaptureSchema>;
 
 // --- Product categories ------------------------------------------------------
 
