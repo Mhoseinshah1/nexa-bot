@@ -798,6 +798,8 @@ import { ResellerWebServicesService } from './modules/commerce/reseller-panel/ap
 import { ResellerWebDashboardService } from './modules/commerce/reseller-panel/application/reseller-web-dashboard.service.js';
 import { ResellerWebLoginRateLimiter } from './modules/commerce/reseller-panel/application/reseller-web-rate-limiter.js';
 import { DrizzleResellerWebRepository } from './modules/commerce/reseller-panel/infrastructure/drizzle-reseller-web.repository.js';
+import { DrizzleResellerSellingRepository } from './modules/commerce/reseller-panel/infrastructure/drizzle-reseller-selling.repository.js';
+import { ResellerWebPurchaseService } from './modules/commerce/reseller-panel/application/reseller-web-purchase.service.js';
 import { DrizzleAuditHistoryReader } from './modules/platform/audit/infrastructure/drizzle-audit-history.reader.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
 // Round N, C1: campaigns.
@@ -1715,6 +1717,8 @@ export interface Container {
     readonly services: ResellerWebServicesService;
     readonly dashboard: ResellerWebDashboardService;
     readonly loginLimiter: ResellerWebLoginRateLimiter;
+    /** PR-5: «خرید» — N ordinary orders, one wallet pre-check. */
+    readonly purchases: ResellerWebPurchaseService;
   };
   /** WP20: counts every Telegram interaction, including the `/ping` the runtime never sees. */
   readonly antiSpam: Pick<AntiSpamService, 'observe'>;
@@ -9607,8 +9611,29 @@ export function createContainer(
     clock,
     ids,
   });
+  // PR-5: the selling half.
+  const resellerSellingRepository = new DrizzleResellerSellingRepository(database.db);
+  const resellerWebPurchases = new ResellerWebPurchaseService({
+    orders: orderService,
+    custom: customServiceFlowService,
+    checkout: checkoutService,
+    wallet: walletRepository,
+    listPriceOf: async (scope, productId) =>
+      (await productRepository.findById(scope, productId as never))?.price ?? null,
+    services: serviceRepository,
+    provisioning: provisioningService,
+    delivery: deliveryService,
+    files: subscriptionFileService,
+    repository: resellerSellingRepository,
+    audit,
+    uow,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
   const resellerWeb = {
     access: resellerWebAccess,
+    purchases: resellerWebPurchases,
     loginLimiter: new ResellerWebLoginRateLimiter({
       // The mini app's store under its own subject key: no second Redis connection to close.
       counter: miniAppCounter,
