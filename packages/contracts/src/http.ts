@@ -22,6 +22,7 @@ import { paymentAccountInputSchema } from './payment-accounts.js';
 import {
   PANEL_QR_KINDS,
   SINGBOX_INTERVAL_MAX_MINUTES,
+  SINGBOX_NAME_MODES,
   SINGBOX_INTERVAL_MIN_MINUTES,
 } from './panel-qr.js';
 import { REFUND_REFUSAL_REASONS, refundChannelSchema, refundStateSchema } from './refunds.js';
@@ -1680,6 +1681,9 @@ export const panelSummarySchema = z.object({
    */
   qrKind: z.enum(PANEL_QR_KINDS),
   singboxIntervalMinutes: z.number().int(),
+  /** «نام پروفایل در sing-box»: DEFAULT, USERNAME or CUSTOM, and the owner's text for CUSTOM. */
+  singboxNameMode: z.enum(SINGBOX_NAME_MODES),
+  singboxNameCustom: z.string().nullable(),
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
 });
@@ -1977,6 +1981,13 @@ export const updatePanelRequestSchema = z.object({
     .min(SINGBOX_INTERVAL_MIN_MINUTES)
     .max(SINGBOX_INTERVAL_MAX_MINUTES)
     .optional(),
+  /**
+   * «نام پروفایل در sing-box». Same permission and RickPanel-only rule as `qrKind`. The custom
+   * text is trimmed server-side; at most `SINGBOX_NAME_CUSTOM_MAX` characters, no line breaks,
+   * empty clears it (the default behaviour).
+   */
+  singboxNameMode: z.enum(SINGBOX_NAME_MODES).optional(),
+  singboxNameCustom: z.string().max(400).nullable().optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type UpdatePanelRequest = z.infer<typeof updatePanelRequestSchema>;
