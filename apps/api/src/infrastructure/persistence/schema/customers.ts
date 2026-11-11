@@ -707,6 +707,13 @@ export const customerCaptchas = pgTable(
      * Never in callback data. Null for every other kind.
      */
     answerText: text('answer_text'),
+    /**
+     * `IMAGE_NUMBER` only: a per-question random seed (CSPRNG) the picture's layout is drawn
+     * from. Server-side only: never in a URL, callback or response, and NOT derived from
+     * `challenge_id` (which the client sees), so nobody can re-draw candidate pictures and
+     * match bytes against the served one.
+     */
+    renderSeed: text('render_seed'),
     /** `IMAGE_NUMBER`: how many times this question was swapped for a new picture. */
     refreshes: integer('refreshes').notNull().default(0),
     /** Wrong answers since the last cooldown. */

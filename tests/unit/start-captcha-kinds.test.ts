@@ -207,9 +207,9 @@ describe('the picture', () => {
     return { width: view.getUint32(16), height: view.getUint32(20) };
   };
 
-  it('is a PNG of about 320 x 120, and the same bytes for the same digits and seed', () => {
-    const first = renderCaptchaPng('4096', 'fixed-seed');
-    const again = renderCaptchaPng('4096', 'fixed-seed');
+  it('is a PNG of about 320 x 120, and the same bytes for the same digits, seed and injected noise seed', () => {
+    const first = renderCaptchaPng('4096', 'fixed-seed', 'fixed-noise');
+    const again = renderCaptchaPng('4096', 'fixed-seed', 'fixed-noise');
     expect([...first.slice(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     // A snapshot of the size and dimensions only: the pixels belong to the font.
     expect(dimensions(first)).toEqual({ width: 320, height: 120 });
@@ -221,9 +221,31 @@ describe('the picture', () => {
   });
 
   it('differs with the seed and with the digits', () => {
-    const base = Buffer.from(renderCaptchaPng('4096', 'seed-a'));
-    expect(base.equals(Buffer.from(renderCaptchaPng('4096', 'seed-b')))).toBe(false);
-    expect(base.equals(Buffer.from(renderCaptchaPng('4097', 'seed-a')))).toBe(false);
+    const base = Buffer.from(renderCaptchaPng('4096', 'seed-a', 'n'));
+    expect(base.equals(Buffer.from(renderCaptchaPng('4096', 'seed-b', 'n')))).toBe(false);
+    expect(base.equals(Buffer.from(renderCaptchaPng('4097', 'seed-a', 'n')))).toBe(false);
+  });
+
+  it('adds fresh unseeded noise to every render, so two renders of one question differ', () => {
+    const one = Buffer.from(renderCaptchaPng('4096', 'one-seed'));
+    const two = Buffer.from(renderCaptchaPng('4096', 'one-seed'));
+    expect(one.equals(two)).toBe(false);
+  });
+
+  it('is not reproduced by drawing candidates with the client-visible question id as the seed', () => {
+    const challengeId = '01900000-0000-7000-8000-0000000000c1';
+    const served = Buffer.from(renderCaptchaPng('4096', 'a-secret-server-side-seed'));
+    // The attacker knows the id and tries every number with it, under any noise seed they like.
+    for (const digits of ['4096', '4097', '1000']) {
+      expect(served.equals(Buffer.from(renderCaptchaPng(digits, challengeId)))).toBe(false);
+      expect(served.equals(Buffer.from(renderCaptchaPng(digits, challengeId, 'x')))).toBe(false);
+    }
+    const challenge = newImageChallenge({ randomInt: () => 1 }, challengeId);
+    expect(challenge.renderSeed).toMatch(/^[0-9a-f]{32}$/u);
+    expect(challenge.renderSeed).not.toBe(challengeId);
+    expect(newImageChallenge({ randomInt: () => 1 }, challengeId).renderSeed).not.toBe(
+      challenge.renderSeed,
+    );
   });
 
   it('draws every digit, and the renderer never touches the disk', () => {

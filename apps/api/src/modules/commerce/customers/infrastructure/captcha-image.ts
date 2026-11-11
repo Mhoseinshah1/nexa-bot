@@ -1,13 +1,13 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { PNG } from 'pngjs';
 import type { CaptchaImageRenderer } from '../application/start-captcha-ports.js';
 
 /**
  * The `IMAGE_NUMBER` captcha's picture, drawn in pure JavaScript: our own stroke font and
  * rasteriser into an RGBA buffer, encoded by `pngjs` (no native module: production is
- * aarch64). Nothing here touches the disk or the network, and the same `(digits, seed)`
- * always draws the same bytes, so the picture a customer sees can be drawn again from the
- * stored answer and the question's id and is never itself stored.
+ * aarch64). Nothing here touches the disk or the network. The layout follows the row's
+ * secret seed, so the picture can be drawn again from the stored answer and seed and is never
+ * itself stored; the pixel noise is fresh on every render.
  *
  * Made hard for OCR and easy for a person: every digit rotated up to ±20° and varied in size
  * and offset, each in its own dark colour, three curved lines and a scatter of light dots
@@ -186,11 +186,31 @@ function bezier(p0: Point, p1: Point, p2: Point, p3: Point, steps: number): Poin
   return points;
 }
 
+/** Shifts every colour channel by -3..+3, from the CSPRNG unless `noiseSeed` is given. */
+function addNoise(data: Buffer, noiseSeed: string | undefined): void {
+  const pixels = data.length / 4;
+  let bytes: Uint8Array;
+  if (noiseSeed === undefined) {
+    bytes = randomBytes(pixels * 3);
+  } else {
+    const next = seededRandom(`noise:${noiseSeed}`);
+    bytes = Uint8Array.from({ length: pixels * 3 }, () => Math.floor(next() * 256));
+  }
+  for (let p = 0; p < pixels; p += 1) {
+    for (let c = 0; c < 3; c += 1) {
+      const at = p * 4 + c;
+      const shifted = (data[at] as number) + ((bytes[p * 3 + c] as number) % 7) - 3;
+      data[at] = Math.max(0, Math.min(255, shifted));
+    }
+  }
+}
+
 /**
  * Draws `digits` (the characters 0-9) as a PNG of `CAPTCHA_IMAGE_WIDTH` x
- * `CAPTCHA_IMAGE_HEIGHT`. Pure over its arguments.
+ * `CAPTCHA_IMAGE_HEIGHT`. The layout is pure over `(digits, seed)`; the pixel noise is
+ * fresh each call unless `noiseSeed` is injected.
  */
-export function renderCaptchaPng(digits: string, seed: string): Uint8Array {
+export function renderCaptchaPng(digits: string, seed: string, noiseSeed?: string): Uint8Array {
   const random = seededRandom(seed);
   const between = (low: number, high: number): number => low + random() * (high - low);
   const canvas = new Canvas(CAPTCHA_IMAGE_WIDTH, CAPTCHA_IMAGE_HEIGHT);
@@ -257,10 +277,17 @@ export function renderCaptchaPng(digits: string, seed: string): Uint8Array {
     );
   }
 
+  // Unseeded per-render noise over every pixel: two renders of one question never share bytes,
+  // so a picture cannot be matched byte for byte against candidates drawn offline. Only an
+  // explicitly injected `noiseSeed` (a test) makes it repeatable.
+  addNoise(canvas.data, noiseSeed);
+
   const png = new PNG({ width: CAPTCHA_IMAGE_WIDTH, height: CAPTCHA_IMAGE_HEIGHT });
   canvas.data.copy(png.data);
   return new Uint8Array(PNG.sync.write(png));
 }
 
 /** The port's implementation. */
-export const PNG_CAPTCHA_IMAGE_RENDERER: CaptchaImageRenderer = { render: renderCaptchaPng };
+export const PNG_CAPTCHA_IMAGE_RENDERER: CaptchaImageRenderer = {
+  render: (digits, seed) => renderCaptchaPng(digits, seed),
+};

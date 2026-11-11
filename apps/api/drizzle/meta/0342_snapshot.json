@@ -1,5 +1,5 @@
 {
-  "id": "177f73a2-54d5-4232-acf6-3bef64002ea2",
+  "id": "ba53dddd-d94a-485b-8ae8-84912e8295e0",
   "prevId": "a9880c33-6296-4fc3-aa45-11008ae6e82d",
   "version": "7",
   "dialect": "postgresql",
@@ -8736,6 +8736,12 @@
         },
         "answer_text": {
           "name": "answer_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "render_seed": {
+          "name": "render_seed",
           "type": "text",
           "primaryKey": false,
           "notNull": false

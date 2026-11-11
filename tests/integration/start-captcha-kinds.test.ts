@@ -11,6 +11,7 @@ import {
   type BotInstanceId,
 } from '@nexa/contracts';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
+import { renderCaptchaPng } from '../../apps/api/src/modules/commerce/customers/infrastructure/captcha-image';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   createApiApp,
@@ -118,6 +119,7 @@ interface CaptchaRow {
   readonly options: (number | string)[];
   readonly answer_index: number;
   readonly answer_text: string | null;
+  readonly render_seed: string | null;
   readonly refreshes: number;
   readonly attempts: number;
   readonly locked_until: string | null;
@@ -287,7 +289,7 @@ describe('the /start captcha kinds (captcha.kind)', () => {
   async function captchaOf(telegramUserId: number): Promise<CaptchaRow | null> {
     const [row] = await rows<CaptchaRow>(
       sql`SELECT c.customer_id, c.state, c.challenge_id, c.kind, c.operand_a, c.operand_b, c.options,
-                 c.answer_index, c.answer_text, c.refreshes, c.attempts, c.locked_until
+                 c.answer_index, c.answer_text, c.render_seed, c.refreshes, c.attempts, c.locked_until
             FROM customer_captchas c
             JOIN customers u ON u.tenant_id = c.tenant_id AND u.id = c.customer_id
            WHERE c.tenant_id = ${tenantA.tenantId}
@@ -475,10 +477,12 @@ describe('the /start captcha kinds (captcha.kind)', () => {
       });
       expect(turn.photos, text).toHaveLength(1);
     }
-    // The picture is drawn again from the row: the same one every time.
+    // The picture is drawn again from the row (same question, same layout) with fresh noise,
+    // so the bytes are never the same twice.
     const again = (await say(customer, 'hello')).photos[0] as Photo;
     const first = (await say(customer, 'hello')).photos[0] as Photo;
-    expect(again.bytes.equals(first.bytes)).toBe(true);
+    expect(again.bytes.equals(first.bytes)).toBe(false);
+    expect(await captcha(customer)).toMatchObject({ challenge_id: row.challenge_id });
   });
 
   it('asks anew on a typed answer to an EXPIRED question, without counting it', async () => {
@@ -711,6 +715,12 @@ describe('the /start captcha kinds (captcha.kind)', () => {
       expect(image.headers['content-type']).toBe('image/png');
       expect(String(image.headers['cache-control'])).toContain('no-store');
       expect(image.rawPayload.subarray(0, 8).equals(PNG_SIGNATURE)).toBe(true);
+      // The seed is the row's secret one, and the picture is not what the question's visible id
+      // would draw: an attacker re-rendering with `challenge_id` cannot match the served bytes.
+      expect(row.render_seed).toMatch(/^[0-9a-f]{32}$/u);
+      expect(row.render_seed).not.toBe(row.challenge_id);
+      const guess = Buffer.from(renderCaptchaPng(row.answer_text as string, row.challenge_id));
+      expect(image.rawPayload.equals(guess)).toBe(false);
       // The same picture the bot sent, drawn again from the row, and one customer's only.
       const sent = await asked('IMAGE_NUMBER');
       expect(sent.row.challenge_id).not.toBe(row.challenge_id);
@@ -769,6 +779,30 @@ describe('the /start captcha kinds (captcha.kind)', () => {
       expect(passed.result).toBe('PASSED');
       expect(passed.me.gate).toBeNull();
       expect((await captcha(customer)).state).toBe('PASSED');
+    });
+
+    it('replays a retried refresh under one idempotency key instead of clashing or swapping twice', async () => {
+      const { customer } = await asked('IMAGE_NUMBER');
+      const token = await sessionFor(customer);
+      const retry = () =>
+        inject({
+          method: 'POST',
+          url: route('captchaRefresh'),
+          headers: { ...authed(token), 'idempotency-key': 'one-refresh-key-0001' },
+          payload: {},
+        });
+      const first = await retry();
+      expect(JSON.parse(first.body)).toMatchObject({ result: 'REFRESHED' });
+      const swapped = await captcha(customer);
+      expect(swapped.refreshes).toBe(1);
+
+      const again = await retry();
+      expect(again.statusCode).toBe(201);
+      expect(JSON.parse(again.body)).toMatchObject({ result: 'REFRESHED' });
+      expect(await captcha(customer)).toMatchObject({
+        challenge_id: swapped.challenge_id,
+        refreshes: 1,
+      });
     });
 
     it('renews an expired picture on a refresh, and refuses a malformed body', async () => {

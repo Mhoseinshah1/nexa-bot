@@ -38,6 +38,12 @@ type MiniAppCaptchaQuestion = NonNullable<
  * routes the bot also lets a held customer reach (support, help, the check, the accept
  * button) and they are therefore not gated; everything else is.
  */
+/**
+ * The refresh request's identity: the same whichever question a retry finds (a swapped picture
+ * has a new id), so one idempotency key replays the first outcome instead of clashing.
+ */
+const REFRESH_IDENTITY = 'MINIAPP_CAPTCHA_REFRESH';
+
 @Controller(MINIAPP_API_PREFIX)
 export class MiniAppSessionController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
@@ -152,10 +158,12 @@ export class MiniAppSessionController {
           ? await startCaptcha.refresh(call.context.scope, call.actor, call.context.customer.id, {
               idempotencyKey: key,
               challengeId: shown.question.challengeId,
+              requestIdentity: REFRESH_IDENTITY,
             })
           : // Expired or in a cooldown: `present` renews or reports it, as the bot's turn does.
             await startCaptcha.present(call.context.scope, call.actor, call.context.customer.id, {
               idempotencyKey: key,
+              requestIdentity: REFRESH_IDENTITY,
             });
     return this.captchaResult(call, outcome);
   }

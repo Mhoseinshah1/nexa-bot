@@ -58,6 +58,9 @@ export function CaptchaImageGate({ question }: { question: Question }) {
     };
   }, [api, current, version]);
 
+  const refreshAfterCooldown = () =>
+    api.post(MINIAPP_ROUTES.captchaRefresh, {}, miniAppCaptchaResultSchema);
+
   const run = async (call: () => Promise<MiniAppCaptchaResult>) => {
     setBusy(true);
     setNotice(null);
@@ -76,7 +79,20 @@ export function CaptchaImageGate({ question }: { question: Question }) {
     }
   };
 
-  if (question.state === 'LOCKED') return <Message text={t('miniapp.gate_captcha_locked')} />;
+  // A cooldown ends by itself: the person asks the server again (the gate is read anew; a
+  // question that has expired meanwhile is renewed) instead of leaving the mini app.
+  if (question.state === 'LOCKED') {
+    return (
+      <Message
+        text={t('miniapp.gate_captcha_locked')}
+        action={
+          <Button disabled={busy} onClick={() => void run(() => refreshAfterCooldown())}>
+            {t('miniapp.retry')}
+          </Button>
+        }
+      />
+    );
+  }
 
   return (
     <main className="page">

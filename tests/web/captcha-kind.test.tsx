@@ -227,6 +227,21 @@ describe('the mini app gate', () => {
     expect(screen.getByText(fa('miniapp.gate_captcha_locked'))).toBeTruthy();
   });
 
+  it('lets the person resume after a cooldown, by asking the server again', async () => {
+    const stub = mount({ kind: 'IMAGE_NUMBER', state: 'LOCKED', refreshesLeft: 0 });
+    render(
+      <Gate
+        gate={{
+          kind: 'CAPTCHA',
+          question: { kind: 'IMAGE_NUMBER', state: 'LOCKED', refreshesLeft: 0 },
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: fa('miniapp.retry') }));
+    await waitFor(() => expect(stub.refreshMe).toHaveBeenCalled());
+    expect(stub.calls.some((call) => call.path === '/captcha/refresh')).toBe(true);
+  });
+
   it('leaves every other kind to the chat, as before', () => {
     mount({ kind: 'IMAGE_NUMBER', state: 'CURRENT', refreshesLeft: 3 });
     render(<Gate gate={{ kind: 'CAPTCHA' }} />);

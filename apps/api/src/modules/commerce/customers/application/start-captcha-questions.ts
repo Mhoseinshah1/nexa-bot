@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import {
   START_CAPTCHA_IMAGE_DIGITS,
   START_CAPTCHA_OPERAND_MAX,
@@ -67,6 +68,7 @@ export function newMathChallenge(
     options,
     answerIndex,
     answerText: null,
+    renderSeed: null,
   };
 }
 
@@ -123,6 +125,7 @@ export function newEmojiChallenge(
     options,
     answerIndex,
     answerText: null,
+    renderSeed: null,
   };
 }
 
@@ -188,6 +191,7 @@ export function newWordNumberChallenge(
     options,
     answerIndex,
     answerText: null,
+    renderSeed: null,
   };
 }
 
@@ -206,6 +210,8 @@ export function newImageChallenge(
     options: [],
     answerIndex: 0,
     answerText: digits,
+    // A CSPRNG seed kept only on the row: the picture is never drawn from the (client-visible) id.
+    renderSeed: randomBytes(16).toString('hex'),
   };
 }
 

@@ -1,4 +1,4 @@
-import { randomInt } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import {
   COMMERCE_ERROR_CODES,
   START_CAPTCHA_IMAGE_REFRESH_MAX,
@@ -238,7 +238,7 @@ export class StartCaptchaService {
     scope: TenantContext,
     actor: ActorContext,
     customerId: string,
-    input: { readonly idempotencyKey: string },
+    input: { readonly idempotencyKey: string; readonly requestIdentity?: string },
   ): Promise<StartCaptchaOutcome> {
     const row = await this.deps.captchas.find(scope, customerId);
     if (row === null || row.state !== 'PENDING') return { kind: 'FREE' };
@@ -261,6 +261,7 @@ export class StartCaptchaService {
     return this.decide(scope, actor, customerId, {
       idempotencyKey: input.idempotencyKey,
       tap: null,
+      requestIdentity: input.requestIdentity,
     });
   }
 
@@ -292,7 +293,7 @@ export class StartCaptchaService {
 
   /**
    * The picture of the customer's pending `IMAGE_NUMBER` question, drawn again from the stored
-   * answer and the question's id (the same bytes every time; nothing is stored or written to
+   * answer and the row's secret seed (with fresh noise each time; nothing is stored or written to
    * disk). Null when there is none to show: not held, another kind, locked or expired, no
    * renderer, or `challengeId` is not the question the row shows now.
    */
@@ -305,12 +306,14 @@ export class StartCaptchaService {
     if (images === undefined) return null;
     const row = await this.deps.captchas.find(scope, customerId);
     if (row === null || row.state !== 'PENDING') return null;
-    if (row.kind !== 'IMAGE_NUMBER' || row.answerText === null) return null;
+    if (row.kind !== 'IMAGE_NUMBER' || row.answerText === null || row.renderSeed === null) {
+      return null;
+    }
     if (challengeId !== undefined && challengeId !== row.challengeId) return null;
     const now = this.deps.clock.now();
     if (row.lockedUntil !== null || row.expiresAt.getTime() <= now.getTime()) return null;
     if (!(await this.deps.features.isEnabled(scope, START_CAPTCHA_FEATURE))) return null;
-    return { challengeId: row.challengeId, png: images.render(row.answerText, row.challengeId) };
+    return { challengeId: row.challengeId, png: images.render(row.answerText, row.renderSeed) };
   }
 
   /**
@@ -321,7 +324,7 @@ export class StartCaptchaService {
     const images = this.deps.images;
     if (images === undefined) return null;
     const { answerText } = newChallengeOfKind('IMAGE_NUMBER', this.random, this.deps.ids.uuid());
-    return images.render(answerText ?? '0000', this.deps.ids.uuid());
+    return images.render(answerText ?? '0000', randomBytes(16).toString('hex'));
   }
 
   /**
@@ -358,11 +361,16 @@ export class StartCaptchaService {
     scope: TenantContext,
     actor: ActorContext,
     customerId: string,
-    input: { readonly idempotencyKey: string; readonly challengeId: string },
+    input: {
+      readonly idempotencyKey: string;
+      readonly challengeId: string;
+      readonly requestIdentity?: string;
+    },
   ): Promise<StartCaptchaOutcome> {
     return this.decide(scope, actor, customerId, {
       idempotencyKey: input.idempotencyKey,
       tap: { kind: 'REFRESH', challengeId: input.challengeId },
+      requestIdentity: input.requestIdentity,
     });
   }
 
@@ -390,12 +398,20 @@ export class StartCaptchaService {
     input: {
       readonly idempotencyKey: string;
       readonly tap: CaptchaTap | null;
+      /**
+       * Names the request independently of the question it found: a caller whose retry may
+       * find a different current question (a swapped picture) gives one stable identity, so
+       * its idempotency key still replays instead of clashing on a changed `challengeId`.
+       */
+      readonly requestIdentity?: string | undefined;
     },
   ): Promise<StartCaptchaOutcome> {
     const requestHash = hashRequest({
       customerId,
       purpose: 'START_CAPTCHA',
-      tap: input.tap,
+      ...(input.requestIdentity === undefined
+        ? { tap: input.tap }
+        : { identity: input.requestIdentity }),
     });
     await this.deps.guard.check(scope, actor, START_CAPTCHA_PERMISSION);
     const replay = await this.deps.idempotency.find<StartCaptchaOutcome>(

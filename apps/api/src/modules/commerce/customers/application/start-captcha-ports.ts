@@ -22,6 +22,8 @@ export interface StartCaptchaChallenge {
   readonly answerIndex: number;
   /** `IMAGE_NUMBER` only: the digits on the picture. Never leaves the server. */
   readonly answerText: string | null;
+  /** `IMAGE_NUMBER` only: the picture's secret CSPRNG seed. Never leaves the server. */
+  readonly renderSeed: string | null;
 }
 
 export interface StartCaptchaRecord extends StartCaptchaChallenge {
@@ -99,9 +101,11 @@ export interface CaptchaRandom {
 }
 
 /**
- * Draws the `IMAGE_NUMBER` picture: a PNG of `digits`. Pure over its arguments — the same
- * `(digits, seed)` gives the same bytes — so the picture is drawn again from the stored
- * answer and the question's id whenever it is needed and is never itself stored.
+ * Draws the `IMAGE_NUMBER` picture: a PNG of `digits`. The layout is a function of
+ * `(digits, seed)`, the seed being the row's secret `renderSeed` (never the question's
+ * id, which the client sees); every render also adds fresh unseeded noise, so two renders
+ * of one question differ in bytes. The picture is drawn again whenever it is needed and is
+ * never itself stored.
  */
 export interface CaptchaImageRenderer {
   render(digits: string, seed: string): Uint8Array;
