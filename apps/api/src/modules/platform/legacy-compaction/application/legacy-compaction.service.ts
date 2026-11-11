@@ -24,6 +24,7 @@ import type { ScopeActivityReader } from '../../system/application/record-ping.s
 import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import type { LegacyCompactionRepository, LegacyCompactionRow } from './ports.js';
 import { compactionDropTypes } from './read-map.js';
+import { LEGACY_CLEANUP_REVISION } from './cleanup-rules.js';
 
 /**
  * «فشرده‌سازی داده‌های ربات قبلی» (Round 4 PR-E, E1).
@@ -132,6 +133,8 @@ export class LegacyCompactionService {
             now,
             adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
             label: actor.label,
+            reason: 'INITIAL',
+            revision: LEGACY_CLEANUP_REVISION,
           },
           tx.tx,
         );
@@ -206,9 +209,25 @@ export class LegacyCompactionService {
         if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
         const readiness = await this.deps.repository.importReadiness(scope.tenantId, tx.tx);
         if (!readiness.completed || readiness.inFlight || !readiness.reconciled) return false;
-        if (await this.deps.repository.completedExists(scope.tenantId, tx.tx)) return false;
+        // PR-L: done only when a run of THESE rules completed; an older one makes this run a
+        // SUPPLEMENTARY one («پاک‌سازی تکمیلی»), a new row beside it, the archive first again.
+        const minRevision = LEGACY_CLEANUP_REVISION;
+        if (await this.deps.repository.completedExists(scope.tenantId, tx.tx, { minRevision })) {
+          return false;
+        }
+        const reason = (await this.deps.repository.completedExists(scope.tenantId, tx.tx))
+          ? 'SUPPLEMENTARY'
+          : 'INITIAL';
         const inserted = await this.deps.repository.create(
-          { id, tenantId: scope.tenantId, now, adminId: null, label: actor.label },
+          {
+            id,
+            tenantId: scope.tenantId,
+            now,
+            adminId: null,
+            label: actor.label,
+            reason,
+            revision: LEGACY_CLEANUP_REVISION,
+          },
           tx.tx,
         );
         if (!inserted) return false;
@@ -223,12 +242,16 @@ export class LegacyCompactionService {
             after: {
               state: 'REQUESTED',
               automatic: true,
+              reason,
+              revision: LEGACY_CLEANUP_REVISION,
               importId: command.importId,
               dropTypes: [...compactionDropTypes()],
               clearedTables: [...LEGACY_CLEANUP_CLEARED_TABLES],
             },
             reason:
-              'The import finished with a clean balance reconciliation; its working data is cleaned up automatically.',
+              reason === 'SUPPLEMENTARY'
+                ? 'The import was cleaned up under older rules; the newer steps run once more (supplementary cleanup).'
+                : 'The import finished with a clean balance reconciliation; its working data is cleaned up automatically.',
             result: 'SUCCESS',
           },
           tx,

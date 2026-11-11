@@ -325,7 +325,10 @@ import { LegacyCompactionService } from './modules/platform/legacy-compaction/ap
 import { LegacyCompactionExecutor } from './modules/platform/legacy-compaction/application/legacy-compaction.executor.js';
 import { readNexaCutoverState } from './modules/platform/legacy-cutover/infrastructure/pg-cutover-reconciliation.reader.js';
 import { LegacyCleanupScheduler } from './modules/platform/legacy-compaction/application/legacy-cleanup.scheduler.js';
-import { DrizzleLegacyCompactionRepository } from './modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository.js';
+import {
+  DrizzleLegacyCompactionRepository,
+  ownerMaintenanceConnector,
+} from './modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
 import { S3OffsiteUploader } from './modules/platform/backup/infrastructure/s3-offsite-uploader.js';
@@ -8784,9 +8787,17 @@ export function createContainer(
     verifyStepUp: (scope, actor, stepUp, context, action) =>
       adminManagement.verifyStepUp(scope, actor, stepUp, context, action),
   });
+  /*
+   * PR-L: the cleanup's VACUUM FULL runs as the tables' OWNER (`DATABASE_URL`), on a session
+   * of its own opened for it alone. On the application pool (`nexa_app`, which owns no table)
+   * PostgreSQL skipped every table with a WARNING and the run COMPLETED having vacuumed
+   * nothing. The worker already holds this credential for the backup's dumps.
+   */
   const legacyCompactionRepository = new DrizzleLegacyCompactionRepository(
     database.db,
-    database.pool,
+    ownerMaintenanceConnector(config.DATABASE_URL, {
+      lockTimeoutMs: config.DATABASE_LOCK_TIMEOUT_MS,
+    }),
   );
   const legacyCompaction = new LegacyCompactionService({
     repository: legacyCompactionRepository,

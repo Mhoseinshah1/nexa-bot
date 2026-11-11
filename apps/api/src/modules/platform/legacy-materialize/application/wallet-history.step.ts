@@ -34,13 +34,13 @@ import type {
 
 /**
  * Mirza wallet history into `wallet_history_imports` (plan §3, §5-3): the `wallet_transaction`
- * movement log and the wheel results.
+ * movement log. PR-L (owner decision): Nexa has no lucky wheel, so the wheel results are no
+ * longer carried (rows an earlier import wrote stay, origin `WHEEL_SPIN`).
  *
  * The table is a SISTER of the ledger and is never summed into a balance. The customer's
  * balance is `user.Balance`, already written as the one opening entry; these rows are what
  * Mirza logged on the way to it, and carrying them into `wallet_entries` would either change
- * that balance or need a compensating row — touching the money twice. A wheel prize is
- * already inside `user.Balance` (`prize_already_in_legacy_balance`), so it is history only.
+ * that balance or need a compensating row — touching the money twice.
  *
  * `direction` is read from Mirza's own arithmetic (balance after minus before); where that
  * does not decide it (no change, inconsistent, unreadable) it is null rather than guessed.
@@ -50,7 +50,6 @@ import type {
 
 export const WALLET_HISTORY_STEP = 'wallet-history';
 export const WALLET_TX_SOURCE_REF_PREFIX = 'wallet-tx';
-export const WHEEL_SOURCE_REF_PREFIX = 'wheel';
 
 export interface WalletHistoryWrite extends PlannedWrite {
   readonly customerId: string;
@@ -125,40 +124,9 @@ export function planWalletTransaction(
   });
 }
 
-export function planWheelSpin(
-  record: HistoryRecord,
-  customers: ReadonlyMap<string, string>,
-): Planned<WalletHistoryWrite> {
-  const value = parseMinor(at(record.payload, 'prize', 'amount_minor'));
-  const sum = value === null ? 0n : abs(value);
-  const id = mirzaIdOf(record);
-  const sourceRef = id === null ? null : sourceRefOf(WHEEL_SOURCE_REF_PREFIX, id);
-  if (sourceRef === null) return gap('SOURCE_ID_UNUSABLE', sum);
-  const customerId = customerOf(record, customers);
-  if (customerId === null) return gap('CUSTOMER_NOT_IMPORTED', sum);
-  if (value === null) return gap('UNPARSEABLE_AMOUNT', 0n);
-  const currency = text(at(record.payload, 'prize', 'currency'));
-  if (currency === null || !(CURRENCY_CODES as readonly string[]).includes(currency)) {
-    return gap('UNSUPPORTED_CURRENCY', sum);
-  }
-  const occurredAt = mirzaInstant(record.payload['spun_at']);
-  if (occurredAt === null) return gap('UNPARSEABLE_TIME', sum);
-  return build(sourceRef, {
-    customerId,
-    origin: 'WHEEL_SPIN',
-    occurredAt,
-    direction: value > 0n ? 'CREDIT' : null,
-    signedAmountMinor: value,
-    currency,
-    rawKind: 'wheel',
-    note: bounded(String(record.payload['dice_value_raw'] ?? ''), NOTE_MAX),
-  });
-}
-
 export class WalletHistoryStep implements MaterializeStep {
   readonly name = WALLET_HISTORY_STEP;
   private readonly transactions: PlannedStep<WalletHistoryWrite>;
-  private readonly wheel: PlannedStep<WalletHistoryWrite>;
 
   constructor(
     private readonly deps: MaterializeDeps,
@@ -184,27 +152,16 @@ export class WalletHistoryStep implements MaterializeStep {
       repository,
       plan: planner(planWalletTransaction),
     };
-    this.wheel = {
-      name: WALLET_HISTORY_STEP,
-      recordType: 'wheel_result',
-      repository,
-      plan: planner(planWheelSpin),
-    };
   }
 
   async apply(ctx: MaterializeContext): Promise<MaterializeStepOutcome> {
-    const first = await applyPlanned(this.deps, this.transactions, ctx);
-    const second = await applyPlanned(this.deps, this.wheel, ctx);
-    const skipped: Record<string, number> = { ...first.skipped };
-    for (const [reason, n] of Object.entries(second.skipped)) {
-      skipped[reason] = (skipped[reason] ?? 0) + n;
-    }
+    const done = await applyPlanned(this.deps, this.transactions, ctx);
     return {
       step: WALLET_HISTORY_STEP,
-      written: first.written + second.written,
-      alreadyPresent: first.alreadyPresent + second.alreadyPresent,
-      diverged: first.diverged + second.diverged,
-      skipped,
+      written: done.written,
+      alreadyPresent: done.alreadyPresent,
+      diverged: done.diverged,
+      skipped: { ...done.skipped },
     };
   }
 
@@ -215,12 +172,6 @@ export class WalletHistoryStep implements MaterializeStep {
         nexaTable: 'wallet_history_imports',
         hasAmount: true,
         nexaFilter: 'WALLET_TRANSACTION',
-      }),
-      await matchPlanned(this.deps, this.wheel, ctx, {
-        mirzaTable: 'wheel_list',
-        nexaTable: 'wallet_history_imports',
-        hasAmount: true,
-        nexaFilter: 'WHEEL_SPIN',
       }),
     ];
   }

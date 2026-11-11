@@ -21,3 +21,13 @@ export function balanceReconciliationClean(recorded: unknown): boolean {
   if (!parsed.success) return false;
   return LEGACY_CLEANUP_BLOCKING_DIFFERENCES.every((kind) => parsed.data.differences[kind] === 0);
 }
+
+/**
+ * PR-L: the revision of the cleanup's rules a new run applies. 1 is every run before PR-L:
+ * its vacuum was never proven (on an installation connecting as `nexa_app` it was skipped
+ * outright), and it neither deduped the archive twins nor dropped the wheel. A tenant whose
+ * latest finished import has a COMPLETED run, but none of THIS revision, is cleaned up once
+ * more by a new SUPPLEMENTARY run («پاک‌سازی تکمیلی») — never by editing the old one.
+ * Raise it only with a rule that an already-cleaned install must have applied too.
+ */
+export const LEGACY_CLEANUP_REVISION = 2;

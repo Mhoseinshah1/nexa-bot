@@ -12,8 +12,8 @@ import {
  * Global totals and counts only — never a customer, an id or a value of one person:
  * the opening credits and legacy debts the migration wrote (and whether they equal the
  * import's own stated totals), customers per reconciliation status and per wallet-history
- * verdict, the archived payments by outcome and purpose, wallet transactions in/out, wheel
- * prizes, referrals, discount uses and service operations, and the ledger's entries by reason.
+ * verdict, the archived payments by outcome and purpose, wallet transactions in/out,
+ * referrals, discount uses and service operations, and the ledger's entries by reason.
  *
  * A CLI, not a route: the aggregate scans the whole archive (minutes on a large one), longer
  * than a request may hold a connection. Whoever runs it holds the database credentials. Every
@@ -114,9 +114,7 @@ export function reportText(report: TenantMoneyReport): string {
   lines.push(
     `wallet transactions no change: ${String(w.noChange)}, unparsed: ${String(w.unparsedAmounts)}`,
   );
-  lines.push(
-    `wheel: ${String(report.wheel.spins)} spins; prizes won: ${money(report.wheel.prizesWon)}`,
-  );
+  lines.push();
   lines.push(
     `referrals: ${String(report.referrals.records)}; referrer gift paid: ${String(report.referrals.referrerGiftsPaid)}`,
   );
