@@ -632,7 +632,11 @@ Built (ten PRs, `docs/round-reports/phase-6b.md`; decisions in
 - **Open export.** ZIP of CSVs (BOM) with `README.fa.md`, heavy queue, 24 h link, 4 GiB cap
   (`data_export.too_large`). `data.export` is denied to «ورود به پنل» sessions.
 - **«ورود به پنل».** 15-minute single-use token bound to the hosted domain; HOST admin only;
-  no row in the hosted tenant's audit log, one in the owner's.
+  no row in the hosted tenant's audit log, one in the owner's. An export taken inside it —
+  gift-card codes (`gift_card.batch.export`, the batch and count) or the audit log
+  (`audit.export`) — is in the owner's log naming the hosted bot (`after.hostedTenantId`),
+  written before the file leaves and fail-closed; business reports are refused there (the HOST
+  principal holds no `owner` role), so no report leaves unrecorded (PR-N N3).
 - **Server move.** `botctl move export|import|verify|abort`; freeze marker `/etc/nexa/move-frozen`
   blocks `restart`/`update`/`rollback` until `move abort`; the import checks head and freshness and
   compares each hosted member to its live tenant by canonical digest.
