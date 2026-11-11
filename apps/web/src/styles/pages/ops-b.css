@@ -1703,7 +1703,7 @@ form.set-row > * + * {
   min-width: 0;
   padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-ctl);
   background: var(--panel-row);
 }
 .captcha-preview-card[data-selected='true'] {
@@ -1713,7 +1713,7 @@ form.set-row > * + * {
   display: block;
   max-width: 100%;
   height: auto;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .captcha-sample-picture {
   display: flex;
@@ -1729,7 +1729,7 @@ form.set-row > * + * {
 .captcha-chip {
   padding: 4px 12px;
   border: 1px solid var(--line-2);
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   background: var(--bg-3);
   font-size: var(--fs-ui);
 }
