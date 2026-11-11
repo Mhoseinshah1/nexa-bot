@@ -1,16 +1,19 @@
-import { Body, Controller, Get, Inject, Param, Post, Req } from '@nestjs/common';
-import type { FastifyRequest } from 'fastify';
+import { Body, Controller, Get, Inject, Param, Post, Req, Res } from '@nestjs/common';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   MINIAPP_API_PREFIX,
   MINIAPP_ROUTES,
+  miniAppCaptchaAnswerRequestSchema,
   miniAppSessionRequestSchema,
   miniAppTermsAcceptRequestSchema,
   money,
   telegramChannelJoinUrl,
+  type MiniAppCaptchaResult,
   type MiniAppMeResponse,
   type MiniAppSessionResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import type { StartCaptchaOutcome } from '../../modules/commerce/customers/application/start-captcha.service.js';
 import type {
   MiniAppContext,
   MiniAppGateState,
@@ -18,11 +21,16 @@ import type {
 import {
   miniAppCall,
   miniAppKey,
+  notFound,
   parseWith,
   sessionCorrelation,
   sessionRateLimit,
 } from './miniapp-request.js';
 import { wire } from './projections.js';
+
+type MiniAppCaptchaQuestion = NonNullable<
+  Extract<NonNullable<MiniAppMeResponse['gate']>, { kind: 'CAPTCHA' }>['question']
+>;
 
 /**
  * The mini app's session and identity routes (Round 9, C5): the launch exchange, `/me`, the
@@ -89,6 +97,91 @@ export class MiniAppSessionController {
     return this.meOf(call.context, gate, call);
   }
 
+  /**
+   * `captcha.kind` IMAGE_NUMBER: the PNG of the session's pending question, drawn again from
+   * the row (never stored, never on disk) and never cached. The session is authenticated
+   * first, so without one nothing is drawn; a customer with no picture question to answer —
+   * not held, another kind, expired or in a cooldown — gets the one not-found answer.
+   */
+  @Get(MINIAPP_ROUTES.captchaImage)
+  async captchaImage(@Req() request: FastifyRequest, @Res() reply: FastifyReply): Promise<void> {
+    const call = await miniAppCall(this.container, request, { gated: false });
+    const drawn = await this.container.startCaptcha.renderImage(
+      call.context.scope,
+      call.context.customer.id,
+    );
+    if (drawn === null) throw notFound();
+    await reply
+      .header('Content-Type', 'image/png')
+      .header('Cache-Control', 'no-store, no-cache, max-age=0')
+      .header('Pragma', 'no-cache')
+      .send(Buffer.from(drawn.png));
+  }
+
+  /** The digits typed under the picture, judged exactly as the bot judges a typed answer. */
+  @Post(MINIAPP_ROUTES.captchaAnswer)
+  async captchaAnswer(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<MiniAppCaptchaResult> {
+    const call = await miniAppCall(this.container, request, { gated: false });
+    const input = parseWith(miniAppCaptchaAnswerRequestSchema, body);
+    const outcome = await this.container.startCaptcha.answerText(
+      call.context.scope,
+      call.actor,
+      call.context.customer.id,
+      { idempotencyKey: miniAppKey(request, call, 'captcha'), text: input.text },
+    );
+    return this.captchaResult(call, outcome);
+  }
+
+  /**
+   * «🔄 تصویر جدید»: a new picture, not a spent attempt. It also renews a question that has
+   * expired, so the mini app never has to leave for the bot to be asked again.
+   */
+  @Post(MINIAPP_ROUTES.captchaRefresh)
+  async captchaRefresh(@Req() request: FastifyRequest): Promise<MiniAppCaptchaResult> {
+    const call = await miniAppCall(this.container, request, { gated: false });
+    const { startCaptcha } = this.container;
+    const key = miniAppKey(request, call, 'captcha');
+    const shown = await startCaptcha.peek(call.context.scope, call.context.customer.id);
+    const outcome: StartCaptchaOutcome =
+      shown === null
+        ? { kind: 'FREE' }
+        : shown.state === 'CURRENT'
+          ? await startCaptcha.refresh(call.context.scope, call.actor, call.context.customer.id, {
+              idempotencyKey: key,
+              challengeId: shown.question.challengeId,
+            })
+          : // Expired or in a cooldown: `present` renews or reports it, as the bot's turn does.
+            await startCaptcha.present(call.context.scope, call.actor, call.context.customer.id, {
+              idempotencyKey: key,
+            });
+    return this.captchaResult(call, outcome);
+  }
+
+  private async captchaResult(
+    call: Awaited<ReturnType<typeof miniAppCall>>,
+    outcome: StartCaptchaOutcome,
+  ): Promise<MiniAppCaptchaResult> {
+    const gate = await this.container.miniApp.sessions.gateFor(call.context, call.correlationId);
+    return {
+      result:
+        outcome.kind === 'ASK'
+          ? outcome.reason === 'WRONG'
+            ? 'WRONG'
+            : outcome.reason === 'REFRESHED'
+              ? 'REFRESHED'
+              : outcome.reason === 'CURRENT'
+                ? 'CURRENT'
+                : 'RENEWED'
+          : outcome.kind,
+      remaining: outcome.kind === 'ASK' ? outcome.remaining : null,
+      minutes: outcome.kind === 'LOCKED' ? outcome.minutes : null,
+      me: await this.meOf(call.context, gate, call),
+    };
+  }
+
   /** The FAQ and the support account, as the bot's support screen has them. Not gated, as there. */
   @Get(MINIAPP_ROUTES.support)
   async support(@Req() request: FastifyRequest) {
@@ -97,6 +190,22 @@ export class MiniAppSessionController {
     return {
       faqs: screen.faqs.map((faq) => ({ question: faq.question, answer: faq.answer })),
       supportUrl: screen.supportUrl,
+    };
+  }
+
+  /** The captcha gate with the question the customer is held at (read-only). */
+  private async captchaGate(
+    context: MiniAppContext,
+  ): Promise<{ kind: 'CAPTCHA'; question?: MiniAppCaptchaQuestion }> {
+    const shown = await this.container.startCaptcha.peek(context.scope, context.customer.id);
+    if (shown === null) return { kind: 'CAPTCHA' };
+    return {
+      kind: 'CAPTCHA',
+      question: {
+        kind: shown.question.kind,
+        state: shown.state,
+        refreshesLeft: shown.question.refreshesLeft,
+      },
     };
   }
 
@@ -122,27 +231,26 @@ export class MiniAppSessionController {
         phoneVerified,
         phoneNotAccepted,
         gate:
-          gate.kind === 'BLOCKED' ||
-          gate.kind === 'CAPTCHA' ||
-          gate.kind === 'PHONE' ||
-          gate.kind === 'PHONE_NOT_ACCEPTED'
-            ? { kind: gate.kind }
-            : gate.kind === 'CHANNELS'
-              ? {
-                  kind: 'CHANNELS',
-                  channels: gate.channels.flatMap((channel) => {
-                    const joinUrl = telegramChannelJoinUrl(channel);
-                    return joinUrl === null ? [] : [{ handle: channel.handle ?? null, joinUrl }];
-                  }),
-                }
-              : {
-                  kind: 'TERMS',
-                  terms: {
-                    versionId: gate.terms.id,
-                    title: gate.terms.title,
-                    body: gate.terms.body,
+          gate.kind === 'CAPTCHA'
+            ? await this.captchaGate(context)
+            : gate.kind === 'BLOCKED' || gate.kind === 'PHONE' || gate.kind === 'PHONE_NOT_ACCEPTED'
+              ? { kind: gate.kind }
+              : gate.kind === 'CHANNELS'
+                ? {
+                    kind: 'CHANNELS',
+                    channels: gate.channels.flatMap((channel) => {
+                      const joinUrl = telegramChannelJoinUrl(channel);
+                      return joinUrl === null ? [] : [{ handle: channel.handle ?? null, joinUrl }];
+                    }),
+                  }
+                : {
+                    kind: 'TERMS',
+                    terms: {
+                      versionId: gate.terms.id,
+                      title: gate.terms.title,
+                      body: gate.terms.body,
+                    },
                   },
-                },
         wallet: null,
         reseller: null,
         // Nothing behind a gate is read for a customer held at one; no bell either.
