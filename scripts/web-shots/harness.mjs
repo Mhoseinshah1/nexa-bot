@@ -28,8 +28,11 @@ export function findChromium() {
     .filter((name) => /^chromium-\d+$/.test(name))
     .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]));
   for (const dir of dirs) {
-    const candidate = join(base, dir, 'chrome-linux', 'chrome');
-    if (existsSync(candidate)) return candidate;
+    // Playwright names the folder `chrome-linux` up to 1200 and `chrome-linux64` after.
+    for (const folder of ['chrome-linux', 'chrome-linux64']) {
+      const candidate = join(base, dir, folder, 'chrome');
+      if (existsSync(candidate)) return candidate;
+    }
   }
   throw new Error(`No chromium-*/chrome-linux/chrome under ${base} (set NEXA_CHROMIUM).`);
 }
@@ -65,10 +68,16 @@ export function buildWeb() {
  * Serves `apps/web/dist` with the SPA fallback and the production CSP, and answers the API
  * from the fixture registry. `unfixtured()` returns (and `resetUnfixtured()` clears) the
  * requests no fixture answered, by name.
+ *
+ * `transformIndex(html)` rewrites the served `index.html` and `scriptHashes` (`'sha256-…'`
+ * sources) are added to the CSP's `script-src`; both exist for `demo-diff.mjs`, which injects
+ * the demo's inline fetch shim and must not widen the CSP for any other driver.
  */
 export async function startServer({
   signedOut = false,
   fixtureSet = process.env.NEXA_SHOT_FIXTURES,
+  transformIndex = undefined,
+  scriptHashes = [],
 } = {}) {
   const dist = join(ROOT, 'apps/web/dist');
   if (!existsSync(join(dist, 'index.html')))
@@ -79,7 +88,12 @@ export async function startServer({
   );
   // A named set (`--fixtures demo-parity`, or NEXA_SHOT_FIXTURES) layers its overrides.
   const FIXTURES = fixturesFor(fixtureSet);
-  const csp = productionCsp();
+  let csp = productionCsp();
+  if (scriptHashes.length > 0) {
+    if (!csp.includes("script-src 'self'"))
+      throw new Error("The production CSP has no script-src 'self' to add a hash to.");
+    csp = csp.replace("script-src 'self'", `script-src 'self' ${scriptHashes.join(' ')}`);
+  }
   let unfixtured = [];
 
   const server = createServer(async (request, response) => {
@@ -125,7 +139,9 @@ export async function startServer({
     if (!file.startsWith(dist) || !existsSync(file) || url.pathname.endsWith('/'))
       file = join(dist, 'index.html');
     try {
-      const body = await readFile(file);
+      let body = await readFile(file);
+      if (transformIndex !== undefined && file === join(dist, 'index.html'))
+        body = Buffer.from(transformIndex(body.toString('utf8')), 'utf8');
       const headers = { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' };
       if (extname(file) === '.html') headers['content-security-policy'] = csp;
       response.writeHead(200, headers);
