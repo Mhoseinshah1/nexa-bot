@@ -44,6 +44,7 @@ import { Icon } from '../../ui/icons';
 import { ErrorReport } from '../settings';
 import { useReportDirty } from '../ops-b-layout';
 import { TelegramPhone } from '../telegram-phone';
+import { MenuPreview } from './menu-preview';
 import {
   fill,
   labelOf,
@@ -713,6 +714,7 @@ export function MenuBuilder({
               <MenuDndCanvas context={context} />
               <p className="muted small">{t('web.bb_mode_edit_note')}</p>
               <p className="muted small">{t('web.bb_pool_hint')}</p>
+              <MenuPreview title={phoneTitle} rows={customerRows} />
             </>
           )}
           {mode !== 'edit' && (

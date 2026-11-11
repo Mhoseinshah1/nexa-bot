@@ -415,6 +415,12 @@
   color: var(--fg-3);
   font-size: var(--fs-sm);
 }
+.dnd-free-title {
+  margin: 12px 0 0;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--fg-2);
+}
 .dnd-free {
   flex-wrap: wrap;
   justify-content: flex-start;

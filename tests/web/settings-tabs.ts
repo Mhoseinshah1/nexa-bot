@@ -7,12 +7,21 @@ import {
 } from '../../apps/web/src/settings-presentation';
 
 /**
- * PR-7: the settings page is a list of collapsible sections, one per group (the first starts
- * open). A test that reaches a row outside the first group opens that row's section first,
+ * The settings page shows one category at a time (a tab strip with counts), each a collapsible
+ * section. A test that reaches a row outside the first group picks that category's tab first,
  * exactly as an operator does.
  */
 export async function openSettingsGroupOf(key: SettingKey): Promise<void> {
   const title = t(SETTING_GROUP_TITLES[SETTING_PRESENTATION[key].group]);
+  // Demo parity: one category is shown at a time; pick the key's category tab first.
+  const tab = await waitFor(() => {
+    const found = screen
+      .getAllByRole('tab')
+      .find((one) => (one.textContent ?? '').startsWith(title));
+    if (found === undefined) throw new Error(`no settings category tab for ${key}`);
+    return found;
+  });
+  if (tab.getAttribute('aria-selected') !== 'true') fireEvent.click(tab);
   const head = await waitFor(() => {
     const found = [
       ...document.querySelectorAll<HTMLButtonElement>('.settings-section-head button'),

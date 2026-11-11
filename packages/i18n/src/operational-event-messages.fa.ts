@@ -215,7 +215,7 @@ const REENTRY_PLACE_BY_PURPOSE_FA: Readonly<Partial<Record<SecretPurpose, string
   'payment_gateway.refund_card': 'بازپرداخت‌ها (فقط با کیت بازیابی سرور قبلی)',
   'admin.totp_secret': 'حساب کاربری (ورود دومرحله‌ای را دوباره فعال کنید)',
   'hosting.totp_secret': 'میزبانی ربات‌ها (ورود دومرحله‌ای را دوباره فعال کنید)',
-  'legacy_migration.package_key': 'انتقال از میرزا (بسته را دوباره بارگذاری کنید)',
+  'legacy_migration.package_key': 'انتقال از ربات قبلی (بسته را دوباره بارگذاری کنید)',
   'gift_card.batch_export': 'کارت‌های هدیه (خروجی را دوباره بسازید)',
 };
 
@@ -228,7 +228,7 @@ const KIND_LABEL_BY_PURPOSE_FA: Readonly<Partial<Record<SecretPurpose, string>>>
   'payment_gateway.refund_card': 'کارت مقصد بازپرداخت',
   'admin.totp_secret': 'کلید ورود دومرحله‌ای',
   'hosting.totp_secret': 'کلید ورود دومرحله‌ای میزبانی',
-  'legacy_migration.package_key': 'کلید بستهٔ میرزا',
+  'legacy_migration.package_key': 'کلید بستهٔ ربات قبلی',
   'gift_card.batch_export': 'خروجی کارت‌های هدیه',
 };
 

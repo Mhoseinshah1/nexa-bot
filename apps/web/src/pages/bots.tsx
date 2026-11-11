@@ -206,11 +206,7 @@ export function BotsPage({
 
   return (
     <>
-      <PageHead
-        title={t('web.nav_bots')}
-        {...(bots.data === undefined ? {} : { count: rows.length })}
-        actions={<ListFreshness query={bots} />}
-      />
+      <PageHead title={t('web.nav_bots')} actions={<ListFreshness query={bots} />} />
 
       <StateSwitch
         query={bots}

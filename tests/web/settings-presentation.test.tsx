@@ -230,14 +230,18 @@ describe('the settings page', () => {
   it('groups the settings under Persian headings', async () => {
     stubApi(ROUTES);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    // One collapsible section per group, each headed by its Persian title; a closed one opens.
-    const heads = await settingsTabs();
+    // Demo parity: a category tab (with its count) per group; ONE category's section is
+    // shown at a time, headed by its Persian title.
+    await settingsTabs();
+    const tabs = screen.getAllByRole('tab');
     for (const title of Object.values(SETTING_GROUP_TITLES)) {
-      const head = heads.find((one) => (one.textContent ?? '').startsWith(t(title)));
-      expect(head, t(title)).toBeDefined();
-      if (head!.getAttribute('aria-expanded') !== 'true') fireEvent.click(head!);
-      expect(head).toHaveAttribute('aria-expanded', 'true');
+      const tab = tabs.find((one) => (one.textContent ?? '').startsWith(t(title)));
+      expect(tab, t(title)).toBeDefined();
+      fireEvent.click(tab!);
+      expect(tab).toHaveAttribute('aria-selected', 'true');
       expect(screen.getByRole('heading', { name: t(title) })).toBeInTheDocument();
+      // Only the chosen category's heading is reachable.
+      expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(1);
     }
   });
 

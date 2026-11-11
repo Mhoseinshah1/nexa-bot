@@ -51,6 +51,7 @@ import {
   useUnsavedChanges,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { PageMoreMenu } from '../ui/page-more-menu';
 import { fill } from './bot-buttons/canvas';
 import { useNarrowScreen } from './editor-layout';
 import { useFocusTrap } from '../ui/overlays';
@@ -321,7 +322,33 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
 
   return (
     <>
-      <PageHead title={t('web.templates_title')} badge={<UnsavedCount count={dirty.size} />} />
+      <PageHead
+        title={t('web.templates_title')}
+        badge={<UnsavedCount count={dirty.size} />}
+        actions={
+          // Demo parity: the page head's more-menu — what the page already does (clear its filters, re-read).
+          !denied ? (
+            <PageMoreMenu
+              items={[
+                {
+                  key: 'clear',
+                  label: t('web.filters_clear_all'),
+                  disabled: !filtered,
+                  onSelect: clearFilters,
+                },
+                {
+                  key: 'reread',
+                  label: t('web.nc_reread'),
+                  icon: 'refresh' as const,
+                  onSelect: () => {
+                    void templates.refetch();
+                  },
+                },
+              ]}
+            />
+          ) : undefined
+        }
+      />
       <Disclosure size="sm" summary={t('web.templates_about_fold')}>
         <p className="muted small">{t('web.templates_intro')}</p>
       </Disclosure>

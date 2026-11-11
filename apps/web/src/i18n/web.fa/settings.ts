@@ -6,6 +6,7 @@
 export const WEB_FA_SETTINGS = {
   // Settings
   'web.settings_title': 'تنظیمات',
+  'web.settings_categories_label': 'دسته‌بندی تنظیمات',
   'web.settings_about_fold': 'دربارهٔ این صفحه',
   'web.settings_intro': 'تنظیمات موردنظر را تغییر دهید و ذخیره کنید.',
   'web.restart_required': 'نیازمند راه‌اندازی مجدد',
@@ -292,16 +293,7 @@ export const WEB_FA_SETTINGS = {
    * seen and what switching it off does. `_off` keys are the plain-language effect for flags that
    * do NOT ask for confirmation; a flag that asks keeps its `_off_effect` key, which is both.
    */
-  'web.features_search_label': 'جستجوی قابلیت',
-  'web.features_search_placeholder': 'جستجو در نام و توضیح قابلیت‌ها…',
-  'web.features_filter_label': 'فیلتر وضعیت',
-  'web.features_filter_all': 'همه',
-  'web.features_filter_on': 'روشن',
-  'web.features_filter_off': 'خاموش',
-  'web.features_categories_label': 'دسته‌ها',
-  'web.features_no_match': 'قابلیتی با این جستجو و فیلتر پیدا نشد.',
-  'web.features_cat_empty': 'در این دسته قابلیتی با این فیلتر نیست.',
-  'web.features_results_label': 'نتیجهٔ جستجو',
+  'web.features_show_rest': 'نمایش بقیهٔ قابلیت‌ها ({n})',
   'web.feature_cat_reminders': 'اعلان‌ها و یادآوری‌ها',
   'web.feature_cat_sales': 'فروش و پرداخت',
   'web.feature_cat_customer': 'مشتری و حساب',

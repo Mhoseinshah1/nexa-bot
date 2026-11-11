@@ -20,6 +20,18 @@
   scroll-margin-top: 16px;
   margin-block-end: 12px;
 }
+/* Demo parity: the category strip is a wrapped row of boxes above the one open group. */
+.settings-categories {
+  margin-block-end: 12px;
+}
+.settings-categories .tabs.boxed {
+  display: flex;
+  flex-wrap: wrap;
+}
+.settings-categories .tabs.boxed button {
+  inline-size: auto;
+  gap: 8px;
+}
 /* PR-7: the setting folds run edge to edge inside their collapsible section. */
 .settings-group .settings-section-body > .settings-rows,
 .settings-group .settings-section-body > .set-fold {

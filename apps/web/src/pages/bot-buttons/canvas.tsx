@@ -182,6 +182,7 @@ export function MenuDndCanvas({ context }: { context: ChipContext }) {
       <LayoutDnd
         className="bb-dnd-layout"
         label={t('web.bb_canvas_label')}
+        freeTitle={t('web.kit_dnd_free')}
         layout={{ rows, free }}
         disabled={!editable}
         rtl={typeof document === 'undefined' || document.documentElement.dir !== 'ltr'}

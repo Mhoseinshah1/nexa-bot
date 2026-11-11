@@ -1,14 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { FEATURE_FLAGS, featureFlagSchema } from '@nexa/contracts';
-import { FeaturesPage } from '../../apps/web/src/pages/features';
+import { FEATURES_FIRST_SHOWN, FeaturesPage } from '../../apps/web/src/pages/features';
 import {
   FEATURE_CATEGORIES,
-  FEATURE_CATEGORY_TITLE,
   FEATURE_PRESENTATION,
   FEATURE_WHERE_LABEL,
 } from '../../apps/web/src/pages/features-catalogue';
 import { NAV } from '../../apps/web/src/nav';
+import { formatNumber } from '../../apps/web/src/format';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 
@@ -34,9 +34,6 @@ const flag = (key: string, enabled = false, version = 1) =>
 
 const all = (enabled: (key: string) => boolean = () => false) =>
   FEATURE_FLAGS.map((definition) => flag(definition.key, enabled(definition.key)));
-
-const tabFor = (category: (typeof FEATURE_CATEGORIES)[number]) =>
-  screen.getByRole('tab', { name: new RegExp(t(FEATURE_CATEGORY_TITLE[category])) });
 
 describe('the feature registry on the Features page', () => {
   it('puts every flag in exactly one known category and gives it all its texts', () => {
@@ -74,51 +71,33 @@ describe('the feature registry on the Features page', () => {
 });
 
 describe('the Features page', () => {
-  it('lists the categories with on/total counts from the complete list, on one page', async () => {
-    const on = new Set(['ops_notifications', 'service_expiry_reminders']);
-    stubApi([{ url: '/features', body: { flags: all((key) => on.has(key)), total: 42 } }]);
+  it('is ONE list under «همهٔ قابلیت‌ها»: ten whole rows, the rest behind «نمایش بقیهٔ قابلیت‌ها (N)»', async () => {
+    stubApi([{ url: '/features', body: { flags: all(), total: 42 } }]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
-    await screen.findByRole('tablist');
-    const reminders = FEATURE_FLAGS.filter(
-      (f) => FEATURE_PRESENTATION[f.key].category === 'reminders',
-    ).length;
-    expect(tabFor('reminders').textContent).toContain(`2/${reminders}`);
-    expect(tabFor('panel').textContent).toContain(
-      `0/${FEATURE_FLAGS.filter((f) => FEATURE_PRESENTATION[f.key].category === 'panel').length}`,
-    );
-    // The first category is selected and shows every flag it has.
-    expect(tabFor('reminders')).toHaveAttribute('aria-selected', 'true');
-    expect(document.querySelectorAll('.feature-row')).toHaveLength(reminders);
-    expect(screen.getByRole('tabpanel')).toBeInTheDocument();
-  });
-
-  it('selects a category with a click and moves between them with the arrow keys', async () => {
-    stubApi([{ url: '/features', body: { flags: all() } }]);
-    renderPage(<FeaturesPage mayEdit denied={false} />);
-    await screen.findByRole('tablist');
-    fireEvent.click(tabFor('miniapp'));
-    expect(tabFor('miniapp')).toHaveAttribute('aria-selected', 'true');
+    await screen.findByRole('heading', { name: t('web.features_list_title') });
+    // Demo parity: no category tabs, no on/off chips, no search.
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('searchbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(همه|روشن|خاموش)/u })).toBeNull();
+    expect(document.querySelectorAll('.feature-row')).toHaveLength(FEATURES_FIRST_SHOWN);
+    const rest = FEATURE_FLAGS.length - FEATURES_FIRST_SHOWN;
+    const more = screen.getByRole('button', {
+      name: t('web.features_show_rest').replace('{n}', formatNumber(rest)),
+    });
+    fireEvent.click(more);
+    expect(document.querySelectorAll('.feature-row')).toHaveLength(FEATURE_FLAGS.length);
+    expect(screen.queryByRole('button', { name: /نمایش بقیهٔ قابلیت‌ها/u })).toBeNull();
+    // The bottom-menu flag (the last round's) is still listed, with its switch.
     expect(
-      screen.getByRole('switch', { name: t('web.feature_mini_app_title') }),
+      screen.getByRole('switch', { name: t('web.feature_persistent_bottom_menu_title') }),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByRole('switch', { name: t('web.feature_ops_notifications_title') }),
-    ).toBeNull();
-    fireEvent.keyDown(tabFor('miniapp'), { key: 'ArrowRight' });
-    await waitFor(() => expect(tabFor('referral')).toHaveAttribute('aria-selected', 'true'));
   });
 
-  it('keeps the list in its own scroll panel and shows a new category from its top', async () => {
-    stubApi([{ url: '/features', body: { flags: all() } }]);
+  it('draws no «show the rest» button when ten or fewer flags exist', async () => {
+    stubApi([{ url: '/features', body: { flags: [flag('ops_notifications', true)] } }]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
-    await screen.findByRole('tablist');
-    const pane = document.querySelector('.feature-pane-body') as HTMLElement;
-    const scrollTo = vi.fn();
-    pane.scrollTo = scrollTo;
-    // The categories sit in a column beside the pane, not inside what scrolls.
-    expect(pane.contains(screen.getByRole('tablist'))).toBe(false);
-    fireEvent.click(tabFor('miniapp'));
-    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 0 }));
+    await screen.findByRole('switch');
+    expect(screen.queryByRole('button', { name: /نمایش بقیهٔ قابلیت‌ها/u })).toBeNull();
   });
 
   it('shows where, what switching off does and a real link on a row', async () => {
@@ -156,9 +135,6 @@ describe('the Features page', () => {
       },
     ]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
-    fireEvent.click(
-      await screen.findByRole('tab', { name: new RegExp(t(FEATURE_CATEGORY_TITLE.customer)) }),
-    );
     const labelRow = (
       await screen.findByText(t(FEATURE_PRESENTATION.services_search_label_button.title))
     ).closest('.feature-row') as HTMLElement;
@@ -172,91 +148,10 @@ describe('the Features page', () => {
     expect(within(searchRow).getByRole('switch')).not.toBeChecked();
   });
 
-  it('searches names and descriptions across all categories, grouped by category', async () => {
-    stubApi([{ url: '/features', body: { flags: all() } }]);
-    renderPage(<FeaturesPage mayEdit denied={false} />);
-    const box = await screen.findByRole('searchbox', { name: t('web.features_search_label') });
-    // «یادآوری» appears in the reminders category and elsewhere (e.g. the quiet-hours / reseller ones).
-    fireEvent.change(box, { target: { value: 'مینی‌اپ' } });
-    const region = screen.getByRole('region', { name: t('web.features_results_label') });
-    const headings = within(region)
-      .getAllByRole('heading', { level: 2 })
-      .map((h) => h.textContent);
-    expect(headings.length).toBeGreaterThan(1);
-    expect(new Set(headings).size).toBe(headings.length);
-    expect(headings).toContain(t('web.feature_cat_miniapp'));
-    expect(
-      within(region).getByRole('switch', { name: t('web.feature_mini_app_title') }),
-    ).toBeInTheDocument();
-    fireEvent.change(box, { target: { value: 'zzzz-nothing' } });
-    expect(screen.getByText(t('web.features_no_match'))).toBeInTheDocument();
-  });
-
-  it('filters on and off, and the filter works together with search', async () => {
-    const on = new Set(['mini_app', 'gift_cards']);
-    stubApi([{ url: '/features', body: { flags: all((key) => on.has(key)) } }]);
-    renderPage(<FeaturesPage mayEdit denied={false} />);
-    await screen.findByRole('tablist');
-    fireEvent.click(
-      screen.getByRole('button', { name: new RegExp(`^${t('web.features_filter_on')}`) }),
-    );
-    fireEvent.change(screen.getByRole('searchbox'), { target: { value: '' } });
-    // The reminders category has no flag on, so the pane says so.
-    expect(screen.getByText(t('web.features_cat_empty'))).toBeInTheDocument();
-    fireEvent.click(tabFor('miniapp'));
-    expect(screen.getAllByRole('switch')).toHaveLength(1);
-    fireEvent.click(
-      screen.getByRole('button', { name: new RegExp(`^${t('web.features_filter_off')}`) }),
-    );
-    expect(screen.queryByRole('switch', { name: t('web.feature_mini_app_title') })).toBeNull();
-    expect(screen.getAllByRole('switch').length).toBeGreaterThan(1);
-  });
-
-  it('updates a category count after a toggle', async () => {
-    let enabled = false;
-    const json = (body: unknown, status = 200) =>
-      new Response(JSON.stringify(body), {
-        status,
-        headers: { 'content-type': 'application/json' },
-      });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((input: unknown, init?: RequestInit) => {
-        if (init?.method === 'POST') {
-          enabled = true;
-          return Promise.resolve(
-            json({ flag: flag('wallet_low_balance_reminders', true, 2), changed: true }, 201),
-          );
-        }
-        expect(String(input)).toContain('/features');
-        return Promise.resolve(
-          json({
-            flags: FEATURE_FLAGS.map((d) =>
-              flag(d.key, d.key === 'wallet_low_balance_reminders' && enabled, enabled ? 2 : 1),
-            ),
-          }),
-        );
-      }),
-    );
-    renderPage(<FeaturesPage mayEdit denied={false} />);
-    await screen.findByRole('tablist');
-    const total = FEATURE_FLAGS.filter(
-      (f) => FEATURE_PRESENTATION[f.key].category === 'reminders',
-    ).length;
-    expect(tabFor('reminders').textContent).toContain(`0/${total}`);
-    fireEvent.click(
-      screen.getByRole('switch', { name: t('web.feature_wallet_low_balance_reminders_title') }),
-    );
-    await waitFor(() => expect(tabFor('reminders').textContent).toContain(`1/${total}`));
-  });
-
-  it('puts a flag this build does not know under «other», with the server text kept for support', async () => {
+  it('puts a flag this build does not know in the list, with the server text kept for support', async () => {
     stubApi([{ url: '/features', body: { flags: [flag('brand_new_flag', true)] } }]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
-    expect(
-      await screen.findByRole('tab', { name: new RegExp(t('web.feature_cat_other')) }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(t('web.feature_unknown_summary'))).toBeInTheDocument();
+    expect(await screen.findByText(t('web.feature_unknown_summary'))).toBeInTheDocument();
   });
 });
 
@@ -301,8 +196,7 @@ describe('a feature’s related settings read as words, never as JSON', () => {
       },
     ]);
     const view = renderPage(<FeaturesPage mayEdit denied={false} />);
-    await screen.findByRole('tablist');
-    fireEvent.click(tabFor('referral'));
+    fireEvent.click(await screen.findByRole('button', { name: /نمایش بقیهٔ قابلیت‌ها/u }));
     await waitFor(() => expect(view.container.textContent).toContain('20,000'));
     const text = view.container.textContent ?? '';
     expect(text).toContain('20,000 تومان');
@@ -321,8 +215,7 @@ describe('a feature’s related settings read as words, never as JSON', () => {
       },
     ]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
-    await screen.findByRole('tablist');
-    fireEvent.click(tabFor('panel'));
+    fireEvent.click(await screen.findByRole('button', { name: /نمایش بقیهٔ قابلیت‌ها/u }));
     fireEvent.click(
       await screen.findByRole('switch', { name: t('web.feature_service_auto_delete_title') }),
     );

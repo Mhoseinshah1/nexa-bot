@@ -320,9 +320,9 @@ describe('the reseller list', () => {
     await screen.findByText('Reza Reseller');
     expect(gets(api, '/resellers?limit=10&search=5551234567')).toHaveLength(1);
 
-    // Redesign: the status chips are quick filters over the table; the tier select is in the
-    // «فیلترها» panel.
-    fireEvent.click(screen.getByRole('button', { name: 'معلق' }));
+    // Demo parity: the status chips and the tier select both live in the «فیلترها» panel.
+    const panel = openFilterPanel();
+    fireEvent.click(within(panel).getByRole('button', { name: 'معلق' }));
     await waitFor(() => expect(gets(api, 'status=SUSPENDED')).toHaveLength(1));
 
     fireEvent.change(within(openFilterPanel()).getByLabelText('سطح'), {

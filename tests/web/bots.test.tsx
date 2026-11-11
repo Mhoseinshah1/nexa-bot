@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PermissionKey } from '@nexa/contracts';
 import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { BotsPage } from '../../apps/web/src/pages/bots';
 import { resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
@@ -109,6 +110,17 @@ const expectTokenCleared = async () => {
 };
 
 describe('the Bots page', () => {
+  it('demo parity: the h1 is the page name alone, with no count chip beside it', async () => {
+    stubApi([
+      listRoute([bot(), bot({ id: '0192a0ab-cdef-7012-8345-6789abcdef02', username: 'b2_bot' })]),
+    ]);
+    renderPage(page({}));
+    await screen.findByText('@acme_store_bot');
+    const h1 = screen.getByRole('heading', { level: 1 });
+    expect(h1.textContent).toBe(t('web.nav_bots'));
+    expect(h1.parentElement?.querySelector('.count, .chip, .badge')).toBeNull();
+  });
+
   it('shows a view-only role the bot, its binding and every readiness cause, and nothing to press', async () => {
     stubApi([listRoute()]);
     const { container } = renderPage(page({}));

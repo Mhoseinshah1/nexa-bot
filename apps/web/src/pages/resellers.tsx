@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { ListFilterBar } from '../ui/filter-bar';
 import { Drawer, Modal } from '../ui/overlays';
-import { QuickFilters } from '../ui/redesign';
+import { PageMoreMenu } from '../ui/page-more-menu';
+import { chipFilter } from './money-filters';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import {
@@ -35,7 +36,6 @@ import {
   Banner,
   Card,
   CursorPager,
-  Disclosure,
   DataTable,
   Empty,
   Field,
@@ -474,6 +474,32 @@ export function ResellersPage({
         actions={
           <>
             <ListFreshness query={resellers} hidden={denied} />
+            {/* Demo parity: the page head's more-menu — what the page already does (clear its filters, re-read). */}
+            {!denied && (
+              <PageMoreMenu
+                items={[
+                  {
+                    key: 'clear',
+                    label: t('web.filters_clear_all'),
+                    disabled: !filtered,
+                    onSelect: () => {
+                      setStatus('ALL');
+                      setTierId('');
+                      setDraft({ applied: '', value: '' });
+                      if (applied !== '') setQueries(route, [['search', null]]);
+                    },
+                  },
+                  {
+                    key: 'reread',
+                    label: t('web.nc_reread'),
+                    icon: 'refresh' as const,
+                    onSelect: () => {
+                      void resellers.refetch();
+                    },
+                  },
+                ]}
+              />
+            )}
             <a className="btn" href="/reseller-tiers" onClick={onLink}>
               <Icon name="layers" />
               {t('web.nav_reseller_tiers')}
@@ -504,7 +530,8 @@ export function ResellersPage({
         }
       />
 
-      <Disclosure size="sm" summary={t('web.resellers_scope_title')}>
+      {/* Demo parity: the rules this page keeps are a section with a heading, not a collapsed fold. */}
+      <Card title={t('web.resellers_scope_title')}>
         <p className="muted small">{t('web.resellers_intro')}</p>
         <p className="muted small">{t('web.resellers_list_hint')}</p>
         <ul className="cb-notes">
@@ -521,23 +548,9 @@ export function ResellersPage({
             {t('web.reseller_plans_title')}
           </a>
         </p>
-      </Disclosure>
+      </Card>
 
-      <Card>
-        <div hidden={!mayRequest(resellers, denied)}>
-          <QuickFilters
-            label={t('web.reseller_status_filter')}
-            items={[
-              { key: 'ALL', label: t('web.reseller_status_all') },
-              ...RESELLER_STATUSES.map((one) => ({
-                key: one as StatusFilter,
-                label: t(RESELLER_STATUS_LABELS[one]),
-              })),
-            ]}
-            value={status}
-            onChange={setStatus}
-          />
-        </div>
+      <Card title={t('web.resellers_list_title')}>
         {/* Hidden while the list cannot answer: a filter mints a request the server has
             just refused. */}
         <div className="cb-filters" hidden={!mayRequest(resellers, denied)}>
@@ -577,6 +590,18 @@ export function ResellersPage({
               </form>
             }
             filters={[
+              // Demo parity: the status filter lives in the «فیلترها» panel, not in a chip row.
+              chipFilter<StatusFilter>({
+                key: 'status',
+                label: t('web.status'),
+                value: status === 'ALL' ? null : status,
+                allLabel: t('web.reseller_status_all'),
+                onChange: (next) => setStatus(next ?? 'ALL'),
+                items: RESELLER_STATUSES.map((one) => ({
+                  id: one as StatusFilter,
+                  label: t(RESELLER_STATUS_LABELS[one]),
+                })),
+              }),
               {
                 key: 'tier',
                 label: t('web.reseller_tier'),

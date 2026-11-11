@@ -418,43 +418,44 @@ export function PanelsPage({
       render: (row) => <ProviderBadge panel={row} />,
     },
     {
-      // Health and the error type in ONE cell (owner decision, PR-7): the badge, and under it
-      // the failure kind of the last probe when there is one.
       key: 'health',
       header: t('web.panel_health'),
-      render: (row) => (
-        <CellMain
-          primary={<HealthBadge panel={row} />}
-          {...(row.health.failure === null
-            ? {}
-            : { secondary: <FailureBadge failure={row.health.failure} /> })}
-        />
-      ),
+      render: (row) => <HealthBadge panel={row} />,
     },
     {
-      // The last check and the latency, merged so the table fits without a sideways scroll.
+      // Demo parity: the failure kind of the last probe is its own column («نوع خطا»).
+      key: 'failure',
+      header: t('web.panel_failure'),
+      render: (row) =>
+        row.health.failure === null ? (
+          <span className="faint">—</span>
+        ) : (
+          <FailureBadge failure={row.health.failure} />
+        ),
+    },
+    {
       key: 'checked',
       header: t('web.panel_last_check'),
-      render: (row) => (
-        <CellMain
-          primary={
-            row.health.checkedAt === null ? (
-              <span className="faint">—</span>
-            ) : (
-              <span className="nowrap small">{formatTimestamp(row.health.checkedAt)}</span>
-            )
-          }
-          secondary={
-            row.health.latencyMs === null ? (
-              <span className="faint">—</span>
-            ) : (
-              <Quantity>
-                <Num value={row.health.latencyMs} /> ms
-              </Quantity>
-            )
-          }
-        />
-      ),
+      render: (row) =>
+        row.health.checkedAt === null ? (
+          <span className="faint">—</span>
+        ) : (
+          <span className="nowrap small">{formatTimestamp(row.health.checkedAt)}</span>
+        ),
+    },
+    {
+      // Demo parity: the latency is its own column («تأخیر»).
+      key: 'latency',
+      header: t('web.panel_latency'),
+      align: 'end',
+      render: (row) =>
+        row.health.latencyMs === null ? (
+          <span className="faint">—</span>
+        ) : (
+          <Quantity>
+            <Num value={row.health.latencyMs} /> ms
+          </Quantity>
+        ),
     },
     {
       key: 'capacity',
@@ -2263,6 +2264,7 @@ function OverviewTab({
             {panel.status !== 'ARCHIVED' && (
               <QuickAction
                 danger
+                ellipsis={false}
                 label={t('web.panel_archive')}
                 disabled={status.isPending}
                 onClick={() => setArchiveAsked(true)}

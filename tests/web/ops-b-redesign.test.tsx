@@ -187,28 +187,23 @@ describe('the settings page, as a product settings page', () => {
     const field = (await screen.findByLabelText(
       t('web.setting_payment_window_minutes'),
     )) as HTMLInputElement;
-    const heads = [
-      ...document.querySelectorAll<HTMLButtonElement>('.settings-section-head button'),
-    ];
-    const sales = heads.find((one) =>
+    // Demo parity: a strip of category tabs with counts shows ONE group at a time.
+    const tabs = screen.getAllByRole('tab');
+    const sales = tabs.find((one) =>
       (one.textContent ?? '').startsWith(t('web.settings_group_sales')),
     )!;
-    const support = heads.find((one) =>
+    const support = tabs.find((one) =>
       (one.textContent ?? '').startsWith(t('web.settings_group_support')),
     )!;
-    // The first section starts open, the others closed.
-    expect(sales).toHaveAttribute('aria-expanded', 'true');
-    expect(support).toHaveAttribute('aria-expanded', 'false');
+    expect(sales).toHaveAttribute('aria-selected', 'true');
+    expect(support).toHaveAttribute('aria-selected', 'false');
     fireEvent.change(field, { target: { value: '45' } });
 
     const scrolled = window.scrollY;
     fireEvent.click(support);
-    expect(support).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.click(sales);
-    expect(sales).toHaveAttribute('aria-expanded', 'false');
-    // A closed section is hidden, not unmounted: its draft and its count survive.
-    expect(field.closest('.settings-section-body')).toHaveAttribute('hidden');
-    expect(within(sales).getByText('1')).toBeInTheDocument();
+    expect(support).toHaveAttribute('aria-selected', 'true');
+    // The other category is hidden, not unmounted: its draft and the bar's count survive.
+    expect(field.closest('.settings-group')).toHaveAttribute('hidden');
     expect(screen.getByText(barCount(1))).toBeInTheDocument();
     expect(window.scrollY).toBe(scrolled);
     fireEvent.click(sales);
@@ -361,6 +356,21 @@ describe('the texts page, as a list beside one editor', () => {
   const editor = (key: string) => document.getElementById(`body-${key}`) as HTMLTextAreaElement;
   const shown = (key: string) => editor(key).closest('[hidden]') === null;
   const item = (key: string) => document.getElementById(`template-item-${key}`) as HTMLElement;
+
+  it('demo parity: the page head has the «بیشتر» menu (clear filters, re-read)', async () => {
+    stubApi([
+      {
+        url: '/templates',
+        body: { templates: [view(BALANCE, 'موجودی: {balance}'), view(CANCELLED, 'سفارش لغو شد.')] },
+      },
+    ]);
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findByRole('button', { name: new RegExp(nameOf(BALANCE)) });
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_more_menu') }));
+    // Nothing is filtered yet, so «clear» has nothing to do; re-read is always there.
+    expect(screen.getByRole('menuitem', { name: t('web.filters_clear_all') })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: t('web.nc_reread') })).toBeEnabled();
+  });
 
   it('shows the chosen template, keeps the other mounted, and marks an unsaved one', async () => {
     stubApi([

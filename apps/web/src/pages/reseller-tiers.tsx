@@ -41,7 +41,6 @@ import {
   Badge,
   Banner,
   Card,
-  Disclosure,
   Checkbox,
   Copyable,
   DataTable,
@@ -466,7 +465,8 @@ export function ResellerTiersPage({
         }
       />
 
-      <Disclosure size="sm" summary={t('web.reseller_tiers_scope_title')}>
+      {/* Demo parity: the rules this page keeps are a section with a heading, not a collapsed fold. */}
+      <Card title={t('web.reseller_tiers_scope_title')}>
         <p className="muted small">{t('web.reseller_tiers_intro')}</p>
         <p className="muted small">{t('web.reseller_tiers_list_hint')}</p>
         <ul className="cb-notes">
@@ -480,9 +480,9 @@ export function ResellerTiersPage({
             {t('web.reseller_tiers_resellers_link')}
           </a>
         </p>
-      </Disclosure>
+      </Card>
 
-      <Card className="tiers-list">
+      <Card className="tiers-list" title={t('web.reseller_tiers_list_title')}>
         <StateSwitch
           query={tiers}
           denied={denied}
