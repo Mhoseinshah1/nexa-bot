@@ -31,7 +31,7 @@ Statuses: FIXED = matches the demo now; KEEP = on the owner's KEEP list; NOT DON
 | `/content`             | 2   | 1     | 0    | 1        | 0          | one table per template: app keeps its editor list (PR-4)                                                                                                                       |
 | `/custom-service`      | 12  | 12    | 0    | 0        | 0          |                                                                                                                                                                                |
 | `/discounts`           | 21  | 21    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/extra-devices`       | 6   | 0     | 0    | 6        | 0          | rows open edit from the name button, no «ویرایش» (not handled by any PR)                                                                                                       |
+| `/extra-devices`       | 6   | 0     | 0    | 0        | 6          | PR-3 added a per-row «ویرایش» (`extra-devices.tsx:344`, test in `catalog-marketing-parity.test.tsx`); the fallback fixture run did not show it — check on a real install       |
 | `/features`            | 29  | 29    | 0    | 0        | 0          |                                                                                                                                                                                |
 | `/gift-cards`          | 1   | 1     | 0    | 0        | 0          |                                                                                                                                                                                |
 | `/notification-center` | 5   | 4     | 0    | 1        | 0          | demo button is a chip inside the panel (PR-2 expected leftover)                                                                                                                |
@@ -44,7 +44,7 @@ Statuses: FIXED = matches the demo now; KEEP = on the owner's KEEP list; NOT DON
 | `/recovery`            | 3   | 0     | 0    | 3        | 0          | per-invoice result card removed on purpose by owner (f9ec6f869); no API (PR-4)                                                                                                 |
 | `/referrals`           | 17  | 17    | 0    | 0        | 0          |                                                                                                                                                                                |
 | `/reminders`           | 1   | 1     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/reports`             | 7   | 0     | 7    | 0        | 0          | dashboard range chips (post-demo, owner KEEP list)                                                                                                                             |
+| `/reports`             | 7   | 0     | 0    | 7        | 0          | range chips: not on the owner's KEEP list (that names the dashboard chips only) and no PR moved them; left for the next round                                                  |
 | `/reseller-plans`      | 5   | 1     | 0    | 4        | 0          | tier-name buttons still rendered in rows (PR-4 ~14 leftovers)                                                                                                                  |
 | `/reseller-tiers`      | 6   | 2     | 0    | 4        | 0          | tier-name buttons still rendered in rows (PR-4 ~14 leftovers)                                                                                                                  |
 | `/resellers`           | 21  | 10    | 0    | 11       | 0          | row name button / «صفحهٔ مشتری» kept: only path to the standing drawer (PR-4)                                                                                                  |
@@ -68,14 +68,14 @@ Statuses: FIXED = matches the demo now; KEEP = on the owner's KEEP list; NOT DON
 | `/business-chats/:id`  | 12  | 12    | 0    | 0        | 0          |                                                                                                                                                                                |
 | `/incidents/:id`       | 1   | 0     | 0    | 1        | 0          | status/severity chips on the detail head (no PR addressed it)                                                                                                                  |
 
-Totals: 477 items: **FIXED 427, KEEP 7, NOT DONE 32, UNVERIFIED 11.**
+Totals: 477 items: **FIXED 427, KEEP 0, NOT DONE 33, UNVERIFIED 17.** (Lead correction: `/reports` range chips moved KEEP → NOT DONE; `/extra-devices` moved NOT DONE → UNVERIFIED.)
 
 Notes on the reasons:
 
-- `/reports` range chips: the dashboard range chips are on the owner's KEEP list in the brief, but not in `demo-diff.keep.json`, which is why the kit report still showed them. Adding a KEEP entry would remove them from the tool's output.
+- `/reports` range chips: the owner's KEEP list names the DASHBOARD range chips only, so these are NOT DONE: no PR of this round moved them into «فیلترها» (PR-3 did it on `/referrals` only).
 - `/recovery`: the Recovery Kit removal is KEEP, and the owner removed the per-invoice result card on purpose (`f9ec6f869`); it is classed NOT DONE only because no KEEP entry names it.
 - `/resellers`, `/reseller-plans`, `/reseller-tiers`: the leftovers are row-level buttons (the reseller name that opens the standing drawer, «صفحهٔ مشتری», tier names). PR-4 expected about 14 leftovers on its routes.
-- `/extra-devices`: no PR handled it; rows still open edit from the name button instead of a «ویرایش» button. This is a real gap for the next round.
+- `/extra-devices`: PR-3 restored a per-row «ویرایش» button (`apps/web/src/pages/extra-devices.tsx:344`, asserted in `tests/web/catalog-marketing-parity.test.tsx`), but the fallback fixture run's DOM did not show it; UNVERIFIED until checked on a real install or against the owner's demo.
 - `/incidents/:id`: the status and severity chips on the detail head are not in the owner's demo; no PR handled them. Real gap.
 - `/users/:id`: the blocked banner is covered by a PR-1 test with a mutation check, but not visible in the fixture run (its customer is not blocked).
 - «بیشتر» menus: their contents were restored from the actions each page already had, because the demo HTML was never seen (stated in PRs #460, #462, #464). If the owner's demo shows other entries, that is not visible here.
