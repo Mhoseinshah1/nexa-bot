@@ -1,8 +1,9 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { escapeIdentifier, type PoolClient } from 'pg';
+import { Client, escapeIdentifier } from 'pg';
 import type {
   LegacyCleanupClearedTable,
   LegacyCompactionFailureCode,
+  LegacyCompactionReason,
   LegacyCompactionState,
   LegacyHistoryRecordType,
 } from '@nexa/contracts';
@@ -14,11 +15,13 @@ import {
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
 import { lockLegacyImportExclusion } from '../../../../infrastructure/persistence/legacy-import-exclusion.js';
-import type {
-  ClearBatchResult,
-  CompactionSizes,
-  LegacyCompactionRepository,
-  LegacyCompactionRow,
+import {
+  LegacyVacuumFailed,
+  type ClearBatchResult,
+  type CompactionSizes,
+  type LegacyCompactionRepository,
+  type LegacyCompactionRow,
+  type VacuumProof,
 } from '../application/ports.js';
 import { balanceReconciliationClean } from '../application/cleanup-rules.js';
 import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
@@ -67,6 +70,9 @@ type Raw = {
   after: CompactionSizes | null;
   failure_code: string | null;
   finished_at: Date | string | null;
+  reason: string;
+  revision: number;
+  vacuumed_at: Date | string | null;
 };
 
 const date = (value: Date | string): Date => (value instanceof Date ? value : new Date(value));
@@ -89,7 +95,80 @@ function toRow(raw: Raw): LegacyCompactionRow {
     after: raw.after,
     failureCode: raw.failure_code as LegacyCompactionFailureCode | null,
     finishedAt: raw.finished_at === null ? null : date(raw.finished_at),
+    reason: raw.reason as LegacyCompactionReason,
+    revision: Number(raw.revision),
+    vacuumedAt: raw.vacuumed_at === null ? null : date(raw.vacuumed_at),
   };
+}
+
+/**
+ * PR-L: one session on the database as the TABLES' OWNER, for VACUUM FULL only.
+ *
+ * PostgreSQL 16 lets only a table's owner (or a superuser) vacuum it, and it does not raise
+ * for anyone else: `WARNING: permission denied to vacuum "…", skipping it`, then success.
+ * Every serving process connects as `nexa_app` (ADR-0037), which owns no table, so the
+ * vacuum on the ordinary pool was a silent no-op on every installation that had switched —
+ * the owner's runs COMPLETED with byte-identical sizes. This session is NOT the query path:
+ * opened for the vacuum, closed after it, never pooled.
+ */
+export interface MaintenanceSession {
+  query<R extends Record<string, unknown>>(
+    text: string,
+    values?: readonly unknown[],
+  ): Promise<{ readonly rows: readonly R[] }>;
+  /** Every NOTICE / WARNING the server sends while the session is open. */
+  onNotice(
+    listener: (notice: { readonly severity: string; readonly message: string }) => void,
+  ): void;
+  close(): Promise<void>;
+}
+
+export interface MaintenanceConnector {
+  connect(): Promise<MaintenanceSession>;
+}
+
+/**
+ * The owner's connection (`DATABASE_URL`): `statement_timeout = 0` (a VACUUM FULL of a
+ * multi-GB table cannot finish within the query path's 15 s — v0.9.7's runs failed on it)
+ * and `lock_timeout` kept, so a vacuum that cannot get its lock fails (55P03) and is retried.
+ */
+export function ownerMaintenanceConnector(
+  databaseUrl: string,
+  options: { readonly lockTimeoutMs: number },
+): MaintenanceConnector {
+  return {
+    async connect(): Promise<MaintenanceSession> {
+      const client = new Client({
+        connectionString: databaseUrl,
+        options: `-c statement_timeout=0 -c lock_timeout=${String(options.lockTimeoutMs)}`,
+      });
+      // A connection that dies mid-vacuum fails the query in flight; this keeps the event
+      // from becoming an uncaught exception.
+      client.on('error', () => undefined);
+      await client.connect();
+      return {
+        query: async <R extends Record<string, unknown>>(
+          text: string,
+          values?: readonly unknown[],
+        ) => {
+          const result = await client.query<R>(text, values === undefined ? [] : [...values]);
+          return { rows: result.rows };
+        },
+        onNotice: (listener) => {
+          client.on('notice', (notice) =>
+            listener({ severity: notice.severity ?? '', message: notice.message ?? '' }),
+          );
+        },
+        close: () => client.end(),
+      };
+    },
+  };
+}
+
+/** A table or type name from a contract constant, inlined: identifiers-and-underscores only. */
+function literal(value: string): SQL {
+  if (!/^[A-Za-z0-9_]{1,64}$/.test(value)) throw new Error('not a plain table or type name');
+  return sql.raw(`'${value}'`);
 }
 
 const textArray = (values: readonly string[]): SQL =>
@@ -101,12 +180,12 @@ const textArray = (values: readonly string[]): SQL =>
 @ScopeBound({ installation: true })
 export class DrizzleLegacyCompactionRepository implements LegacyCompactionRepository {
   /**
-   * `maintenance` hands out the dedicated connection `vacuum()` runs on (a `pg` pool, or a
-   * `DatabaseHandle.pool`): it is not the query path, so it never touches `db`'s timeouts.
+   * `maintenance` opens the dedicated session `vacuum()` runs on — as the tables' OWNER
+   * (`ownerMaintenanceConnector`): it is not the query path, so it never touches `db`.
    */
   constructor(
     private readonly db: Database,
-    private readonly maintenance: { connect(): Promise<PoolClient> },
+    private readonly maintenance: MaintenanceConnector,
   ) {}
 
   async latest(tenantId: string, tx?: Executor): Promise<LegacyCompactionRow | null> {
@@ -122,10 +201,15 @@ export class DrizzleLegacyCompactionRepository implements LegacyCompactionReposi
    * is already cleaned up. A later import (v0.9.7: a fresh package after a cleanup) is cleaned
    * up again; the earlier run does not count for it.
    */
-  async completedExists(tenantId: string, tx?: Executor): Promise<boolean> {
+  async completedExists(
+    tenantId: string,
+    tx?: Executor,
+    options: { readonly minRevision?: number } = {},
+  ): Promise<boolean> {
     const rows = await (tx ?? this.db).execute(sql`
       SELECT 1 FROM legacy_compaction_runs run
        WHERE run.tenant_id = ${tenantId}::uuid AND run.state = 'COMPLETED'
+         AND run.revision >= ${options.minRevision ?? 0}
          AND run.requested_at >= coalesce((
                SELECT max(i.finished_at) FROM legacy_nxpkg_imports i
                 WHERE i.tenant_id = ${tenantId}::uuid
@@ -169,16 +253,33 @@ export class DrizzleLegacyCompactionRepository implements LegacyCompactionReposi
   async automaticCandidates(input: {
     readonly now: Date;
     readonly retryFailedBefore: Date;
-  }): Promise<readonly { readonly tenantId: string; readonly importId: string }[]> {
+    readonly revision: number;
+  }): Promise<
+    readonly {
+      readonly tenantId: string;
+      readonly importId: string;
+      readonly reason: LegacyCompactionReason;
+    }[]
+  > {
     // Per tenant, its latest finished import; a candidate when no import is in flight, no run
-    // is active, none COMPLETED since that import finished, and none FAILED since it finished
-    // within the last day (a failure is retried daily, never in a loop).
-    const rows = await this.db.execute<{ tenant_id: string; id: string }>(sql`
+    // is active, none of the current revision COMPLETED since that import finished, and none
+    // FAILED since it finished within the last day (a failure is retried daily, never in a
+    // loop). PR-L: a COMPLETED run of an OLDER revision since that import makes it a
+    // SUPPLEMENTARY run («پاک‌سازی تکمیلی»), a new row — the old one is never touched.
+    const rows = await this.db.execute<{
+      tenant_id: string;
+      id: string;
+      supplementary: boolean;
+    }>(sql`
       WITH done AS (
         SELECT DISTINCT ON (tenant_id) tenant_id, id, finished_at FROM legacy_nxpkg_imports
          WHERE status = ANY(${textArray(IMPORT_DONE)})
          ORDER BY tenant_id, finished_at DESC NULLS LAST, id DESC)
-      SELECT done.tenant_id, done.id FROM done
+      SELECT done.tenant_id, done.id,
+             EXISTS (SELECT 1 FROM legacy_compaction_runs earlier
+                      WHERE earlier.tenant_id = done.tenant_id AND earlier.state = 'COMPLETED'
+                        AND earlier.requested_at >= done.finished_at) AS supplementary
+        FROM done
        WHERE NOT EXISTS (
                SELECT 1 FROM legacy_nxpkg_imports busy
                 WHERE busy.tenant_id = done.tenant_id
@@ -190,6 +291,7 @@ export class DrizzleLegacyCompactionRepository implements LegacyCompactionReposi
          AND NOT EXISTS (
                SELECT 1 FROM legacy_compaction_runs completed
                 WHERE completed.tenant_id = done.tenant_id AND completed.state = 'COMPLETED'
+                  AND completed.revision >= ${input.revision}
                   AND completed.requested_at >= done.finished_at)
          AND NOT EXISTS (
                SELECT 1 FROM legacy_compaction_runs failed
@@ -197,7 +299,11 @@ export class DrizzleLegacyCompactionRepository implements LegacyCompactionReposi
                   AND failed.requested_at >= done.finished_at
                   AND failed.requested_at > ${input.retryFailedBefore})
        ORDER BY done.tenant_id`);
-    return rows.rows.map((row) => ({ tenantId: row.tenant_id, importId: row.id }));
+    return rows.rows.map((row) => ({
+      tenantId: row.tenant_id,
+      importId: row.id,
+      reason: row.supplementary ? 'SUPPLEMENTARY' : 'INITIAL',
+    }));
   }
 
   async awaitingDestinationOpen(tenantId: string): Promise<boolean> {
@@ -216,15 +322,19 @@ export class DrizzleLegacyCompactionRepository implements LegacyCompactionReposi
       readonly now: Date;
       readonly adminId: string | null;
       readonly label: string | null;
+      readonly reason: LegacyCompactionReason;
+      readonly revision: number;
     },
     tx: Executor,
   ): Promise<boolean> {
     try {
       await tx.execute(sql`
         INSERT INTO legacy_compaction_runs
-          (id, tenant_id, state, requested_at, requested_by_admin_id, requested_by_label, updated_at)
+          (id, tenant_id, state, requested_at, requested_by_admin_id, requested_by_label, updated_at,
+           reason, revision)
         VALUES (${input.id}::uuid, ${input.tenantId}::uuid, 'REQUESTED', ${input.now},
-                ${input.adminId}::uuid, ${input.label}, ${input.now})`);
+                ${input.adminId}::uuid, ${input.label}, ${input.now}, ${input.reason},
+                ${input.revision})`);
       return true;
     } catch (error) {
       // The one-active index: another run is in flight.
@@ -308,6 +418,7 @@ export class DrizzleLegacyCompactionRepository implements LegacyCompactionReposi
       readonly before?: CompactionSizes;
       readonly after?: CompactionSizes;
       readonly failureCode?: LegacyCompactionFailureCode;
+      readonly vacuumedAt?: Date;
       readonly addDeleted?: number;
       readonly addDeduplicated?: number;
       readonly addStripped?: number;
@@ -325,6 +436,7 @@ export class DrizzleLegacyCompactionRepository implements LegacyCompactionReposi
         before = ${input.before === undefined ? sql`before` : sql`${JSON.stringify(input.before)}::jsonb`},
         after = ${input.after === undefined ? sql`after` : sql`${JSON.stringify(input.after)}::jsonb`},
         failure_code = ${input.failureCode === undefined ? sql`failure_code` : sql`${input.failureCode}`},
+        vacuumed_at = ${input.vacuumedAt === undefined ? sql`vacuumed_at` : sql`${input.vacuumedAt}`},
         deleted = deleted + ${input.addDeleted ?? 0},
         deduplicated = deduplicated + ${input.addDeduplicated ?? 0},
         stripped = stripped + ${input.addStripped ?? 0},
@@ -340,36 +452,79 @@ export class DrizzleLegacyCompactionRepository implements LegacyCompactionReposi
     input: {
       readonly tenantId: string;
       readonly types: readonly LegacyHistoryRecordType[];
+      readonly archiveTables: readonly string[];
       readonly after: string | null;
       readonly limit: number;
     },
   ): Promise<{ readonly count: number; readonly last: string | null }> {
+    // PR-L: the raw archive copies of a dropped type's Mirza table go too (exact spelling).
+    const archive =
+      input.archiveTables.length === 0
+        ? sql`false`
+        : sql`(record_type = 'archive_row'
+               AND payload->'provenance'->>'source_table' = ANY(${textArray(input.archiveTables)}))`;
     return this.batch(
       tx,
       sql`DELETE FROM legacy_history_records WHERE id IN (SELECT id FROM picked)`,
-      sql`tenant_id = ${input.tenantId}::uuid AND record_type = ANY(${textArray(input.types)})`,
+      sql`tenant_id = ${input.tenantId}::uuid
+          AND (record_type = ANY(${textArray(input.types)}) OR ${archive})`,
       input.after,
       input.limit,
     );
   }
 
   /**
-   * `archive_row` records OF THE INVOICE TABLE whose invoice has a row in
-   * `legacy_invoice_archive` — the copy every invoice reader reads. An archive row of any
-   * other table, or an invoice row with no twin, is kept.
+   * `archive_row` records that have a TWIN for the same source key, and only those:
+   *
+   * - of the invoice table, whose invoice has a row in `legacy_invoice_archive` — the copy
+   *   every invoice reader reads;
+   * - PR-L: of a table of `twins`, whose typed record of the paired type, of the same tenant,
+   *   names in its `provenance` the same source table (exact spelling: `Requestagent` and
+   *   `requestagent` are two tables) and the same source primary key. The type alone is not
+   *   enough: `discount_usage` also carries `Giftcodeconsumed` rows.
+   *
+   * An archive row of any other table, or with no twin, is kept. Each probe is an index
+   * lookup (`legacy_history_records_source_key_idx`, an online index).
    */
   async dedupBatch(
     tx: Executor,
-    input: { readonly tenantId: string; readonly after: string | null; readonly limit: number },
+    input: {
+      readonly tenantId: string;
+      readonly twins: readonly {
+        readonly sourceTable: string;
+        readonly recordType: LegacyHistoryRecordType;
+      }[];
+      readonly after: string | null;
+      readonly limit: number;
+    },
   ): Promise<{ readonly count: number; readonly last: string | null }> {
+    const archived = sql`legacy_history_records.payload->'provenance'`;
+    // One probe per pair, its table and type as LITERALS (contract constants, checked
+    // below), so the planner can use the partial `legacy_history_records_source_key_idx`.
+    const typed =
+      input.twins.length === 0
+        ? sql`false`
+        : sql.join(
+            input.twins.map(
+              (pair) => sql`(${archived}->>'source_table' = ${literal(pair.sourceTable)}
+                AND EXISTS (SELECT 1 FROM legacy_history_records twin
+                             WHERE twin.tenant_id = legacy_history_records.tenant_id
+                               AND twin.record_type = ${literal(pair.recordType)}
+                               AND (twin.payload -> 'provenance' ->> 'source_table') = ${literal(pair.sourceTable)}
+                               AND (twin.payload -> 'provenance' ->> 'source_pk') = ${archived}->>'source_pk'))`,
+            ),
+            sql` OR `,
+          );
     return this.batch(
       tx,
       sql`DELETE FROM legacy_history_records WHERE id IN (SELECT id FROM picked)`,
       sql`tenant_id = ${input.tenantId}::uuid AND record_type = 'archive_row'
-          AND lower(payload->'provenance'->>'source_table') = 'invoice'
-          AND EXISTS (SELECT 1 FROM legacy_invoice_archive twin
-                       WHERE twin.tenant_id = legacy_history_records.tenant_id
-                         AND twin.invoice_key = legacy_history_records.payload->'provenance'->>'source_pk')`,
+          AND ${archived}->>'source_pk' IS NOT NULL
+          AND ((lower(${archived}->>'source_table') = 'invoice'
+                AND EXISTS (SELECT 1 FROM legacy_invoice_archive twin
+                             WHERE twin.tenant_id = legacy_history_records.tenant_id
+                               AND twin.invoice_key = ${archived}->>'source_pk'))
+               OR ${typed})`,
       input.after,
       input.limit,
     );
@@ -537,33 +692,83 @@ export class DrizzleLegacyCompactionRepository implements LegacyCompactionReposi
   }
 
   /**
-   * VACUUM FULL of the compacted tables. Outside any transaction (PostgreSQL refuses one
-   * inside), and it takes an ACCESS EXCLUSIVE lock on each table for its duration: the
-   * legacy history pages wait while it runs — the maintenance window the UI announces.
-   *
-   * On its OWN connection with `statement_timeout = 0`: the ordinary pool caps a statement
-   * at DATABASE_STATEMENT_TIMEOUT_MS (15 s), which a VACUUM FULL of a multi-GB table never
-   * meets — v0.9.7's runs were cancelled (57014) at this stage and FAILED. `lock_timeout`
-   * is left as the connection option set it, so a VACUUM that cannot get its lock fails
-   * (55P03) and the stage is retried. The connection is destroyed afterwards, never
-   * returned to the pool, so nothing else inherits the unlimited timeout.
-   *
-   * Resuming: a retry (or a new request after FAILED) vacuums a table again even if it
-   * already succeeded. That is cheap — by then the table holds only its live,
-   * post-compaction rows — so no per-table progress is recorded.
+   * PR-L: planner statistics of `legacy_history_records` before DEDUPING, on the owner's
+   * session (a non-owner's ANALYZE is skipped with a WARNING, like its VACUUM). A sample, not
+   * a rewrite: seconds, no exclusive lock. A WARNING here is an error, never ignored.
    */
-  async vacuum(): Promise<void> {
-    const client = await this.maintenance.connect();
+  async analyze(): Promise<void> {
+    const session = await this.maintenance.connect();
+    const warnings: string[] = [];
+    session.onNotice((notice) => {
+      if (notice.severity === 'WARNING') warnings.push(notice.message);
+    });
     try {
-      await client.query('SET statement_timeout = 0');
-      await client.query(`VACUUM (FULL, ANALYZE) ${escapeIdentifier('legacy_history_records')}`);
-      // v0.9.7: the tables CLEARING emptied give their space back too.
-      for (const table of LEGACY_CLEANUP_CLEARED_TABLES) {
-        await client.query(`VACUUM (FULL, ANALYZE) ${escapeIdentifier(table)}`);
+      await session.query(`ANALYZE ${escapeIdentifier('legacy_history_records')}`);
+      if (warnings.length > 0) {
+        throw new LegacyVacuumFailed('legacy_history_records', 'REFUSED', true);
       }
     } finally {
-      // `true`: destroy the connection (it carries the session-level override).
-      client.release(true);
+      await session.close().catch(() => undefined);
+    }
+  }
+
+  /**
+   * VACUUM (FULL, ANALYZE) of `legacy_history_records` and every table CLEARING emptied.
+   * Outside any transaction (PostgreSQL refuses one inside), and it takes an ACCESS EXCLUSIVE
+   * lock on each table for its duration: the legacy history pages wait while it runs — the
+   * maintenance window the UI announces.
+   *
+   * PR-L: on a session as the TABLES' OWNER (`ownerMaintenanceConnector`), and PROVEN.
+   * PostgreSQL 16 skips a table the connection does not own with a WARNING and reports
+   * success; on the application pool (`nexa_app`, ADR-0037) every one was skipped, and the
+   * owner's runs COMPLETED with "after" sizes byte-identical to "before". So, per table:
+   *
+   * 1. the session must own it (or be a superuser), else `REFUSED` before anything runs;
+   * 2. a WARNING during its VACUUM is a refusal (`REFUSED`);
+   * 3. a VACUUM FULL rewrites the table into a new file: an unchanged file node means it did
+   *    not happen (`NOT_REWRITTEN`).
+   *
+   * Any other error (a `lock_timeout`, 55P03) is `ERROR`, retryable. Nothing is swallowed.
+   * Resuming: a retry vacuums every table again, cheap once they hold only their live rows.
+   */
+  async vacuum(): Promise<VacuumProof> {
+    const tables = ['legacy_history_records', ...LEGACY_CLEANUP_CLEARED_TABLES];
+    const session = await this.maintenance.connect();
+    const warnings: string[] = [];
+    session.onNotice((notice) => {
+      if (notice.severity === 'WARNING') warnings.push(notice.message);
+    });
+    try {
+      for (const table of tables) {
+        const owned = await session.query<{ may: boolean | null; node: string | null }>(
+          `SELECT (pg_has_role(current_user, c.relowner, 'USAGE')
+                   OR (SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = current_user)) AS may,
+                  pg_relation_filenode(c.oid)::text AS node
+             FROM pg_class c WHERE c.oid = to_regclass($1)`,
+          [table],
+        );
+        const before = owned.rows[0];
+        if (before?.may !== true) throw new LegacyVacuumFailed(table, 'REFUSED', true);
+        warnings.length = 0;
+        try {
+          await session.query(`VACUUM (FULL, ANALYZE) ${escapeIdentifier(table)}`);
+        } catch (error) {
+          throw new LegacyVacuumFailed(table, 'ERROR', false, { cause: error });
+        }
+        if (warnings.length > 0) throw new LegacyVacuumFailed(table, 'REFUSED', true);
+        const after = await session.query<{ node: string | null }>(
+          'SELECT pg_relation_filenode(to_regclass($1))::text AS node',
+          [table],
+        );
+        const node = after.rows[0]?.node ?? null;
+        if (node === null || node === before.node) {
+          throw new LegacyVacuumFailed(table, 'NOT_REWRITTEN', true);
+        }
+      }
+      return { tables };
+    } finally {
+      // Closed, never pooled: nothing inherits the unlimited statement timeout.
+      await session.close().catch(() => undefined);
     }
   }
 }

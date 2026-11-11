@@ -11,11 +11,16 @@ import {
   createAdmin,
   createTestContext,
   tenantA,
+  testAppDatabaseUrl,
   testConfig,
   type TestContext,
 } from './harness';
 import { LegacyCompactionExecutor } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-compaction.executor';
-import { DrizzleLegacyCompactionRepository } from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
+import {
+  DrizzleLegacyCompactionRepository,
+  ownerMaintenanceConnector,
+  type MaintenanceConnector,
+} from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
 import { createDatabase } from '../../apps/api/src/infrastructure/persistence/database';
 import { lockLegacyImportExclusion } from '../../apps/api/src/infrastructure/persistence/legacy-import-exclusion';
 import type { BackupRunPartRow } from '../../apps/api/src/modules/platform/backup/application/ports';
@@ -30,6 +35,10 @@ import type { BackupRunPartRow } from '../../apps/api/src/modules/platform/backu
  */
 
 type Rec = Record<string, unknown>;
+
+/** PR-L: the cleanup's VACUUM session, as the tables' owner (production's wiring). */
+const ownerVacuum = () =>
+  ownerMaintenanceConnector(testConfig().DATABASE_URL, { lockTimeoutMs: 5_000 });
 
 /** v0.9.7: the import's recorded balance reconciliation, clean (the cleanup's precondition). */
 const CLEAN_REPORT = JSON.stringify({
@@ -81,6 +90,7 @@ describe('the legacy data compaction (E1)', () => {
   }
 
   beforeEach(async () => {
+    errors.length = 0;
     await ctx.reset();
     const owner = await createAdmin(ctx.container, tenantA, {
       username: 'owner-compaction',
@@ -106,6 +116,9 @@ describe('the legacy data compaction (E1)', () => {
     /** Runs inside the substituted backup, before it answers (a long or failing archive). */
     during?: () => Promise<void>;
     heartbeatIntervalMs?: number;
+    /** PR-L: the VACUUM session (default: as the tables' owner, production's wiring). */
+    maintenance?: MaintenanceConnector;
+    batchSize?: number;
   }): { executor: LegacyCompactionExecutor; titles: string[] } {
     const titles: string[] = [];
     const backupId = randomUUID();
@@ -113,7 +126,10 @@ describe('the legacy data compaction (E1)', () => {
     return {
       titles,
       executor: new LegacyCompactionExecutor({
-        repository: new DrizzleLegacyCompactionRepository(c.database.db, c.database.pool),
+        repository: new DrizzleLegacyCompactionRepository(
+          c.database.db,
+          input.maintenance ?? ownerVacuum(),
+        ),
         uow: c.uow,
         audit: c.audit,
         opsLog: c.opsLog,
@@ -156,7 +172,7 @@ describe('the legacy data compaction (E1)', () => {
           correlationId: 'compaction-test' as never,
         }),
         leaseOwner: 'test:compaction',
-        batchSize: 2,
+        batchSize: input.batchSize ?? 2,
         tickIntervalMs: 60_000,
         ...(input.heartbeatIntervalMs === undefined
           ? {}
@@ -165,7 +181,7 @@ describe('the legacy data compaction (E1)', () => {
           info() {},
           warn() {},
           error(context: Record<string, unknown>) {
-            errors.push(String(context['err']));
+            errors.push(JSON.stringify(context['err']));
           },
         },
       }),
@@ -299,16 +315,26 @@ describe('the legacy data compaction (E1)', () => {
     expect(ended?.after?.recordTypes['panel_target']).toBeUndefined();
     expect(Number(ended?.after?.tables['legacy_history_records'])).toBeGreaterThan(0);
 
-    // One audit row per BATCH (batch size 2): 3 dropped → 2 batches, 1 dedup, 2 stripped → 1.
+    // One audit row per BATCH (batch size 2): 1 dedup (it runs FIRST, PR-L), 3 dropped →
+    // 2 batches, 2 stripped → 1, and the vacuum's proof.
     const batches = await q<{ after: Rec }>(
       sql`SELECT after FROM audit_logs WHERE action = 'legacy.compaction.batch' ORDER BY occurred_at, id`,
     );
     expect(batches.map((row) => row.after['stage'])).toEqual([
-      'DROPPING',
-      'DROPPING',
       'DEDUPING',
+      'DROPPING',
+      'DROPPING',
       'STRIPPING',
+      'VACUUMING',
     ]);
+    expect(batches.at(-1)?.after['tables']).toEqual([
+      'legacy_history_records',
+      'legacy_trial_eligibility',
+      'legacy_service_candidates',
+      'legacy_import_map',
+      'legacy_invoice_archive_staging',
+    ]);
+    expect(ended?.vacuumedAt).not.toBeNull();
   }, 120_000);
 
   it('resumes after the last committed batch, without redoing it', async () => {
@@ -316,7 +342,7 @@ describe('the legacy data compaction (E1)', () => {
     await request();
     const repository = new DrizzleLegacyCompactionRepository(
       ctx.container.database.db,
-      ctx.container.database.pool,
+      ownerVacuum(),
     );
     // A worker that claimed, archived and measured, then died after one batch.
     const { executor: first } = executor({ parts: [{}] });
@@ -478,7 +504,8 @@ describe('the legacy data compaction (E1)', () => {
       code: PLATFORM_ERROR_CODES.LEGACY_COMPACTION_ACTIVE,
     });
     await ctx.container.database.db.execute(
-      sql`UPDATE legacy_compaction_runs SET state = 'COMPLETED', finished_at = now()`,
+      sql`UPDATE legacy_compaction_runs SET state = 'COMPLETED', finished_at = now(),
+                                            vacuumed_at = now()`,
     );
     await expect(newImport()).resolves.toMatchObject({ status: 'UPLOADED' });
   });
@@ -530,7 +557,7 @@ describe('the legacy data compaction (E1)', () => {
     const [run] = await q<{ id: string }>(sql`SELECT id FROM legacy_compaction_runs`);
     const repository = new DrizzleLegacyCompactionRepository(
       ctx.container.database.db,
-      ctx.container.database.pool,
+      ownerVacuum(),
     );
     await repository.claim({
       leaseOwner: 'test:compaction',
@@ -584,9 +611,11 @@ describe('the legacy data compaction (E1)', () => {
       idleInTransactionTimeoutMs: 60_000,
     });
     try {
-      const repository = new DrizzleLegacyCompactionRepository(tiny.db, tiny.pool);
-      await expect(repository.vacuum()).resolves.toBeUndefined();
-      // The unlimited timeout stayed on the destroyed connection: a fresh checkout has 50ms.
+      const repository = new DrizzleLegacyCompactionRepository(tiny.db, ownerVacuum());
+      await expect(repository.vacuum()).resolves.toMatchObject({
+        tables: expect.arrayContaining(['legacy_history_records']) as unknown,
+      });
+      // The unlimited timeout never reached the pool: a checkout still has 50ms.
       const shown = await tiny.pool.query<{ statement_timeout: string }>('SHOW statement_timeout');
       expect(shown.rows[0]?.statement_timeout).toBe('50ms');
       // And the same VACUUM through the ordinary path IS cancelled: the test has teeth.
@@ -595,6 +624,194 @@ describe('the legacy data compaction (E1)', () => {
       await tiny.pool.end();
     }
   }, 120_000);
+
+  // --- PR-L ---------------------------------------------------------------------------------
+
+  /** Typed record `type` of Mirza `table` row `pk`, as the converter writes its provenance. */
+  const typed = (type: string, table: string, pk: string, extra: Rec = {}) =>
+    history(type, { provenance: { source_table: table, source_pk: pk }, ...extra });
+  /** The raw `archive_row` copy of Mirza `table` row `pk`. */
+  const raw = (table: string, pk: string) =>
+    history('archive_row', {
+      schema: 'mirza.archive_row.v1',
+      provenance: { source_table: table, source_pk: pk },
+      fields_raw: { id: pk },
+    });
+
+  it('dedupes an archive row only against a typed twin of the same table and key (L2, L3)', async () => {
+    const gone: string[] = [];
+    const kept: string[] = [];
+    // Every owner pair: a raw copy WITH its twin goes, one WITHOUT stays.
+    for (const [table, type] of [
+      ['Payment_report', 'payment'],
+      ['service_other', 'service_operation'],
+      ['reagent_report', 'referral'],
+      ['wallet_transaction', 'wallet_transaction'],
+      ['discount_sell_used', 'discount_usage'],
+    ] as const) {
+      await typed(type, table, '1');
+      gone.push(await raw(table, '1'));
+      kept.push(await raw(table, '2'));
+    }
+    // The TYPE alone is no twin: `discount_usage` also carries `Giftcodeconsumed` rows.
+    await typed('discount_usage', 'Giftcodeconsumed', '9');
+    kept.push(await raw('discount_sell_used', '9'));
+    // Exact spelling: `Requestagent` and `requestagent` are two tables. The twin's type is
+    // DROPPED afterwards, and still proves its raw copy redundant (DEDUPING runs first).
+    const agentRequest = await typed('agent_request', 'Requestagent', '7');
+    gone.push(await raw('Requestagent', '7'));
+    kept.push(await raw('requestagent', '7'));
+    // A twin of another tenant's is no twin; a raw row of a table with no pair stays.
+    kept.push(await raw('Payment_report', '3'));
+    kept.push(await raw('user', '1'));
+    // L3: no lucky wheel. Its typed spins and every raw `wheel_list` row go, twin or not.
+    const spin = await typed('wheel_result', 'wheel_list', '1');
+    gone.push(await raw('wheel_list', '1'), await raw('wheel_list', '404'), spin, agentRequest);
+
+    await request();
+    const { executor: run } = executor({ parts: [{}] });
+    const ended = await run.tick();
+    expect(errors).toEqual([]);
+    expect(ended?.state).toBe('COMPLETED');
+    const left = await ids();
+    for (const id of gone) expect(left.has(id), id).toBe(false);
+    for (const id of kept) expect(left.has(id), id).toBe(true);
+    // 5 owner pairs, Requestagent and the wheel_list row with its spin deduped (DEDUPING runs
+    // first); the twinless wheel_list row, the spin and the request dropped.
+    expect(ended?.deduplicated).toBe(7n);
+    expect(ended?.deleted).toBe(3n);
+  }, 120_000);
+
+  it('gives the space back: after (measured after VACUUM FULL) is smaller than before (L1, L2)', async () => {
+    // The size probe of the PR: LEGACY_DEDUPE_SIZE_ROWS=200000 for the PR's numbers.
+    const rows = Number(process.env['LEGACY_DEDUPE_SIZE_ROWS'] ?? '4000');
+    const pad = (n: number) => sql`repeat('x', ${n})`;
+    // Typed payments and their raw `Payment_report` copies (≈ a Mirza row each), plus a
+    // tenth more raw rows that have NO twin and stay.
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO legacy_history_records
+        (id, tenant_id, nxpkg_import_id, package_import_id, record_type, idempotency_key, payload, created_at)
+      SELECT gen_random_uuid(), ${tenantA.tenantId}::uuid, ${importId}::uuid, 'pkg-1', kind,
+             'legacy:' || kind || ':' || g, jsonb_build_object(
+               'schema', 'mirza.' || kind || '.v1',
+               'provenance', jsonb_build_object('source_table', 'Payment_report', 'source_pk', g::text),
+               'fields_raw', jsonb_build_object('id_user', g, 'price', g * 1000, 'note', ${pad(400)})),
+             now()
+        FROM generate_series(1, ${rows}) AS g, (VALUES ('payment'), ('archive_row')) AS k(kind)`);
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO legacy_history_records
+        (id, tenant_id, nxpkg_import_id, package_import_id, record_type, idempotency_key, payload, created_at)
+      SELECT gen_random_uuid(), ${tenantA.tenantId}::uuid, ${importId}::uuid, 'pkg-1', 'archive_row',
+             'legacy:orphan:' || g, jsonb_build_object(
+               'provenance', jsonb_build_object('source_table', 'Payment_report', 'source_pk', 'x' || g),
+               'fields_raw', jsonb_build_object('note', ${pad(400)})), now()
+        FROM generate_series(1, ${Math.ceil(rows / 10)}) AS g`);
+    await request();
+    const { executor: run } = executor({ parts: [{}], batchSize: 5000 });
+    const ended = await run.tick();
+    expect(errors).toEqual([]);
+    expect(ended?.state).toBe('COMPLETED');
+    expect(ended?.deduplicated).toBe(BigInt(rows));
+    expect(ended?.vacuumedAt).not.toBeNull();
+    const before = Number(ended?.before?.tables['legacy_history_records']);
+    const after = Number(ended?.after?.tables['legacy_history_records']);
+    // Without a real VACUUM FULL the relation keeps every page: after === before, byte for
+    // byte, as on the owner's server.
+    expect(after).toBeLessThan(before * 0.75);
+    expect(ended?.after?.recordTypes['archive_row']).toBe(Math.ceil(rows / 10));
+    if (process.env['LEGACY_DEDUPE_SIZE_ROWS'] !== undefined) {
+      process.stderr.write(
+        `size probe: rows=${String(rows)} history ${String(before)} → ${String(after)} bytes\n`,
+      );
+    }
+  }, 600_000);
+
+  it('FAILS before deleting anything a run whose session may not maintain the tables (nexa_app)', async () => {
+    const dropped = await history('agent_log', { a: 1 });
+    await request();
+    // The application's role owns no table: PostgreSQL 16 answers its VACUUM / ANALYZE with
+    // a WARNING and success. That is the owner's v0.9.13 run, which COMPLETED having vacuumed
+    // nothing. Now it is found at MEASURING, before the first delete.
+    const { executor: run } = executor({
+      parts: [{}],
+      maintenance: ownerMaintenanceConnector(testAppDatabaseUrl(), { lockTimeoutMs: 5_000 }),
+    });
+    const ended = await run.tick();
+    expect(ended?.state).toBe('FAILED');
+    expect(ended?.failureCode).toBe('legacy_compaction.vacuum_failed');
+    expect(ended?.vacuumedAt).toBeNull();
+    expect((await ids()).has(dropped)).toBe(true);
+  }, 120_000);
+
+  it('FAILS, never completes, a run whose VACUUM answers with a WARNING and does nothing', async () => {
+    const dropped = await history('agent_log', { a: 1 });
+    await request();
+    // PostgreSQL's answer to a VACUUM it skips, replayed: a WARNING, then success.
+    const owner = ownerVacuum();
+    const skipping: MaintenanceConnector = {
+      async connect() {
+        const session = await owner.connect();
+        const listeners: ((n: { severity: string; message: string }) => void)[] = [];
+        session.onNotice((n) => {
+          for (const l of listeners) l(n);
+        });
+        return {
+          ...session,
+          onNotice: (listener) => listeners.push(listener),
+          query: async (text, values) => {
+            if (!text.startsWith('VACUUM')) return session.query(text, values);
+            for (const l of listeners) l({ severity: 'WARNING', message: 'skipping it' });
+            return { rows: [] };
+          },
+        };
+      },
+    };
+    const { executor: run } = executor({ parts: [{}], maintenance: skipping });
+    const ended = await run.tick();
+    expect(ended?.state).toBe('FAILED');
+    expect(ended?.failureCode).toBe('legacy_compaction.vacuum_failed');
+    expect(ended?.vacuumedAt).toBeNull();
+    expect(ended?.after).toBeNull();
+    // The rows went before the vacuum (the archive holds them); the run says it did not finish.
+    expect((await ids()).has(dropped)).toBe(false);
+  }, 120_000);
+
+  it('FAILS as vacuum_failed a vacuum that keeps hitting its lock timeout, after the retries', async () => {
+    await request();
+    const owner = ownerVacuum();
+    const locked: MaintenanceConnector = {
+      async connect() {
+        const session = await owner.connect();
+        return {
+          ...session,
+          query: (text, values) =>
+            text.startsWith('VACUUM')
+              ? Promise.reject(
+                  Object.assign(new Error('canceling statement due to lock timeout'), {
+                    code: '55P03',
+                  }),
+                )
+              : session.query(text, values),
+        };
+      },
+    };
+    const { executor: run } = executor({ parts: [{}], maintenance: locked });
+    expect((await run.tick())?.state).toBe('VACUUMING');
+    expect((await run.tick())?.state).toBe('VACUUMING');
+    const ended = await run.tick();
+    expect(ended?.state).toBe('FAILED');
+    expect(ended?.failureCode).toBe('legacy_compaction.vacuum_failed');
+  }, 120_000);
+
+  it('refuses, in the database, a run of the current rules COMPLETED without a proven vacuum', async () => {
+    await request();
+    await expect(
+      ctx.container.database.db.execute(sql`
+        UPDATE legacy_compaction_runs SET state = 'COMPLETED', finished_at = now(), revision = 2`),
+    ).rejects.toMatchObject({
+      cause: { constraint: 'legacy_compaction_runs_vacuum_proven_check' },
+    });
+  });
 
   /** A valid `legacy_invoice_archive` row (the fixture `legacy-customer-invoices.test.ts` uses). */
   async function insertInvoiceTwin(invoiceKey: string): Promise<void> {

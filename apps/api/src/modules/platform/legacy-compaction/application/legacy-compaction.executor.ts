@@ -11,8 +11,18 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { BackupOutcome } from '../../backup/application/backup.service.js';
 import type { BackupRunPartRow } from '../../backup/application/ports.js';
-import type { CompactionSizes, LegacyCompactionRepository, LegacyCompactionRow } from './ports.js';
-import { COMPACTION_STRIP_KEYS, compactionDropTypes } from './read-map.js';
+import {
+  LegacyVacuumFailed,
+  type CompactionSizes,
+  type LegacyCompactionRepository,
+  type LegacyCompactionRow,
+} from './ports.js';
+import {
+  COMPACTION_STRIP_KEYS,
+  compactionArchiveTwins,
+  compactionDropArchiveTables,
+  compactionDropTypes,
+} from './read-map.js';
 import { errorDiagnostics } from '../../legacy-migration/domain/error-diagnostics.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
@@ -179,7 +189,13 @@ export class LegacyCompactionExecutor {
       return;
     }
     this.failures.delete(key);
-    await this.fail(run, 'legacy_compaction.step_failed');
+    // PR-L: a vacuum that kept failing is named as such — never a COMPLETED run.
+    await this.fail(
+      run,
+      run.state === 'VACUUMING'
+        ? 'legacy_compaction.vacuum_failed'
+        : 'legacy_compaction.step_failed',
+    );
   }
 
   /** A long stage, with the lease refreshed while it runs so no replica takes it over. */
@@ -282,31 +298,47 @@ export class LegacyCompactionExecutor {
         return 'NEXT';
       }
       case 'MEASURING': {
+        // PR-L: fresh planner statistics first, so DEDUPING's per-row twin probe uses its
+        // index (a never-analysed history table planned it as a scan per archive row).
+        // A session that may not maintain the tables is found HERE, before anything is deleted.
+        try {
+          await this.deps.repository.analyze();
+        } catch (error) {
+          if (error instanceof LegacyVacuumFailed && error.deterministic) {
+            await this.fail(run, 'legacy_compaction.vacuum_failed');
+            return 'NEXT';
+          }
+          throw error;
+        }
         const before = await this.deps.repository.measure(run.tenantId);
         await this.deps.repository.advance({
           id: run.id,
           leaseOwner: owner,
           from: 'MEASURING',
-          to: 'DROPPING',
+          // PR-L: the dedupe FIRST, while every typed twin still exists (a twin of a type
+          // DROPPING then deletes — an agent request — still proves its archive copy redundant).
+          to: 'DEDUPING',
           now: now(),
           before,
           cursor: null,
         });
         return 'NEXT';
       }
-      case 'DROPPING':
-        return this.batched(run, scope, 'DROPPING', 'DEDUPING', (tx, after) =>
-          this.deps.repository.deleteDropBatch(tx, {
+      case 'DEDUPING':
+        return this.batched(run, scope, 'DEDUPING', 'DROPPING', (tx, after) =>
+          this.deps.repository.dedupBatch(tx, {
             tenantId: run.tenantId,
-            types: compactionDropTypes(),
+            twins: compactionArchiveTwins(),
             after,
             limit: this.deps.batchSize,
           }),
         );
-      case 'DEDUPING':
-        return this.batched(run, scope, 'DEDUPING', 'STRIPPING', (tx, after) =>
-          this.deps.repository.dedupBatch(tx, {
+      case 'DROPPING':
+        return this.batched(run, scope, 'DROPPING', 'STRIPPING', (tx, after) =>
+          this.deps.repository.deleteDropBatch(tx, {
             tenantId: run.tenantId,
+            types: compactionDropTypes(),
+            archiveTables: compactionDropArchiveTables(),
             after,
             limit: this.deps.batchSize,
           }),
@@ -324,17 +356,58 @@ export class LegacyCompactionExecutor {
         return this.cleared(run, scope);
       case 'VACUUMING': {
         await this.notice(scope, run, 'maintenance', {});
-        await this.heartbeating(run, () => this.deps.repository.vacuum());
+        let proof: { readonly tables: readonly string[] };
+        try {
+          proof = await this.heartbeating(run, () => this.deps.repository.vacuum());
+        } catch (error) {
+          // PR-L: a vacuum that was refused or did not rewrite its table cannot succeed by
+          // retrying: the run FAILS now (retried daily by the scheduler), never COMPLETES.
+          if (error instanceof LegacyVacuumFailed && error.deterministic) {
+            this.deps.logger.error(
+              { compactionId: run.id, table: error.table, why: error.why },
+              'the legacy cleanup VACUUM FULL did not happen',
+            );
+            await this.fail(run, 'legacy_compaction.vacuum_failed');
+            return 'NEXT';
+          }
+          throw error;
+        }
+        // "after" is measured AFTER the vacuum, by construction: it is what the vacuum left.
         const after = await this.deps.repository.measure(run.tenantId);
-        await this.deps.repository.advance({
-          id: run.id,
-          leaseOwner: owner,
-          from: 'VACUUMING',
-          to: 'COMPLETED',
-          now: now(),
-          after,
+        const completed = await this.deps.uow.run(scope, async (tx) => {
+          if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
+          const moved = await this.deps.repository.advance(
+            {
+              id: run.id,
+              leaseOwner: owner,
+              from: 'VACUUMING',
+              to: 'COMPLETED',
+              now: now(),
+              after,
+              vacuumedAt: now(),
+            },
+            tx.tx,
+          );
+          if (!moved) return false;
+          // ONE audit row for the vacuum: which tables were PROVEN rewritten. Never a value.
+          await this.deps.audit.record(
+            scope,
+            this.deps.actor(),
+            {
+              action: 'legacy.compaction.batch',
+              entityType: 'LegacyCompaction',
+              entityId: run.id,
+              before: null,
+              after: { stage: 'VACUUMING', tables: [...proof.tables] },
+              result: 'SUCCESS',
+            },
+            tx,
+          );
+          return true;
         });
+        if (!completed) return 'WAIT';
         await this.notice(scope, run, 'completed', {
+          reason: run.reason,
           deleted: String(run.deleted),
           deduplicated: String(run.deduplicated),
           stripped: String(run.stripped),
@@ -356,7 +429,7 @@ export class LegacyCompactionExecutor {
     run: LegacyCompactionRow,
     scope: TenantContext,
     from: 'DROPPING' | 'DEDUPING' | 'STRIPPING',
-    to: 'DEDUPING' | 'STRIPPING' | 'CLEARING',
+    to: 'DROPPING' | 'STRIPPING' | 'CLEARING',
     batch: (
       tx: TransactionScope['tx'],
       after: string | null,
@@ -479,7 +552,8 @@ export class LegacyCompactionExecutor {
       | 'legacy_compaction.archive_out_of_memory'
       | 'legacy_compaction.import_not_completed'
       | 'legacy_compaction.reconciliation_not_clean'
-      | 'legacy_compaction.step_failed',
+      | 'legacy_compaction.step_failed'
+      | 'legacy_compaction.vacuum_failed',
     backupId?: string,
   ): Promise<void> {
     await this.deps.repository.advance({

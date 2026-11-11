@@ -55,7 +55,6 @@ const facts: CustomerMoneyFacts = {
     },
   ],
   walletTransactions: [],
-  wheel: [],
   serviceOperations: [],
   referrals: { asReferee: 1, asReferrer: 0, referrerGiftsPaid: 0 },
   discountsUsed: 0,

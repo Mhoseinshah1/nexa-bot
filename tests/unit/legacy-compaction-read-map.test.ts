@@ -1,8 +1,14 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { LEGACY_COMPACTION_DROP_TYPES, LEGACY_HISTORY_RECORD_TYPES } from '@nexa/contracts';
 import {
+  LEGACY_COMPACTION_ARCHIVE_TWINS,
+  LEGACY_COMPACTION_DROP_TYPES,
+  LEGACY_HISTORY_RECORD_TYPES,
+} from '@nexa/contracts';
+import {
+  compactionArchiveTwins,
+  compactionDropArchiveTables,
   compactionDropTypes,
   compactionKeptTypes,
   LEGACY_COMPACTION_READ_MAP,
@@ -90,6 +96,53 @@ describe('the legacy compaction read map (E1)', () => {
       const text = readFileSync(path, 'utf8');
       for (const type of compactionDropTypes()) {
         if (quoted(type).test(text)) offenders.push(`${name} names ${type}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  // --- PR-L ---------------------------------------------------------------------------------
+
+  it('holds the archive-row twins the owner counted, each raw table to its typed record', () => {
+    expect(
+      Object.fromEntries(compactionArchiveTwins().map((p) => [p.sourceTable, p.recordType])),
+    ).toEqual({
+      Payment_report: 'payment',
+      wheel_list: 'wheel_result',
+      service_other: 'service_operation',
+      reagent_report: 'referral',
+      wallet_transaction: 'wallet_transaction',
+      discount_sell_used: 'discount_usage',
+      Requestagent: 'agent_request',
+      requestagent: 'agent_request',
+    });
+    // One pair per raw table; every paired type is a real record type.
+    const tables = LEGACY_COMPACTION_ARCHIVE_TWINS.map((p) => p.sourceTable);
+    expect(new Set(tables).size).toBe(tables.length);
+    for (const pair of LEGACY_COMPACTION_ARCHIVE_TWINS) {
+      expect(LEGACY_HISTORY_RECORD_TYPES, pair.recordType).toContain(pair.recordType);
+    }
+    // A twin is a typed record: an archive row is never another archive row's twin.
+    expect(LEGACY_COMPACTION_ARCHIVE_TWINS.map((p) => p.recordType as string)).not.toContain(
+      'archive_row',
+    );
+  });
+
+  it('drops the wheel: wheel_result is unread, and its raw wheel_list rows go with it (L3)', () => {
+    expect(LEGACY_COMPACTION_READ_MAP.wheel_result).toEqual([]);
+    expect(compactionDropTypes()).toContain('wheel_result');
+    expect(compactionKeptTypes()).not.toContain('wheel_result');
+    expect(compactionDropArchiveTables()).toEqual(['wheel_list']);
+  });
+
+  it('finds NO source file outside the catalogue that names a dropped raw archive table', () => {
+    const offenders: string[] = [];
+    for (const path of SOURCES.flatMap(files)) {
+      const name = relative(ROOT, path);
+      if (CATALOGUE.has(name)) continue;
+      const text = readFileSync(path, 'utf8');
+      for (const table of compactionDropArchiveTables()) {
+        if (quoted(table).test(text)) offenders.push(`${name} names ${table}`);
       }
     }
     expect(offenders).toEqual([]);

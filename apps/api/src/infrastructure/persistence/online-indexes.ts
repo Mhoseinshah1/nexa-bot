@@ -728,6 +728,17 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     definition:
       'ON "services" USING btree ("tenant_id","state_since") WHERE (state = \'EXPIRED\') OR (state = \'SUSPENDED\')',
   },
+  {
+    /*
+     * PR-L: the legacy cleanup's archive-row dedupe. The twin of an `archive_row` is the typed
+     * record naming the same provenance table and primary key; without this each archive row
+     * probed every typed record of its type (234k payments on the owner's import). Typed rows
+     * only: an archive row is never anyone's twin. CONCURRENTLY: the history is multi-GB.
+     */
+    name: 'legacy_history_records_source_key_idx',
+    definition:
+      'ON "legacy_history_records" USING btree ("tenant_id","record_type",((("payload" -> \'provenance\') ->> \'source_table\')),((("payload" -> \'provenance\') ->> \'source_pk\'))) WHERE record_type <> \'archive_row\'',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

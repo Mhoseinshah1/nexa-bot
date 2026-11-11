@@ -1,4 +1,6 @@
 import {
+  LEGACY_COMPACTION_ARCHIVE_TWINS,
+  LEGACY_COMPACTION_DROP_ARCHIVE_TABLES,
   LEGACY_COMPACTION_DROP_TYPES,
   LEGACY_HISTORY_RECORD_TYPES,
   type LegacyHistoryRecordType,
@@ -59,10 +61,6 @@ export const LEGACY_COMPACTION_READ_MAP: Readonly<
     'legacy-history/infrastructure/drizzle-legacy-money-history.reader.ts',
     'legacy-materialize/application/referral-history.step.ts',
   ],
-  wheel_result: [
-    'legacy-history/infrastructure/drizzle-legacy-money-history.reader.ts',
-    'legacy-materialize/application/wallet-history.step.ts',
-  ],
   support_message: ['legacy-materialize/application/ticket-history.step.ts'],
   ticket: [
     'legacy-history/infrastructure/drizzle-legacy-history.repository.ts',
@@ -72,8 +70,10 @@ export const LEGACY_COMPACTION_READ_MAP: Readonly<
     'legacy-history/infrastructure/drizzle-legacy-history.repository.ts',
     'legacy-materialize/application/ticket-history.step.ts',
   ],
-  // Read by no type-selecting code. `archive_row` is KEPT anyway: only its invoice-table
-  // rows are duplicated elsewhere (`legacy_invoice_archive`), and only those are deduped.
+  // Read by no type-selecting code. `archive_row` is KEPT anyway; only a row with a TWIN for
+  // the same source key is deduped: an invoice in `legacy_invoice_archive`, or (PR-L) a typed
+  // record of `LEGACY_COMPACTION_ARCHIVE_TWINS` (`compactionArchiveTwins`). The raw copies of
+  // a dropped type's table (`wheel_list`) are dropped with it.
   archive_row: [],
   // Read by nothing; dropped (`LEGACY_COMPACTION_DROP_TYPES`).
   manual_config_inventory: [],
@@ -87,12 +87,36 @@ export const LEGACY_COMPACTION_READ_MAP: Readonly<
   program_setting: [],
   support_department: [],
   configuration_row: [],
+  // PR-L, owner decision: Nexa has no lucky wheel. The money-history reader, the money
+  // reconciliation and the wallet-history materialize step no longer read it; dropped.
+  wheel_result: [],
 };
 
 /** The types a compaction deletes. Never one with a reader. */
 export function compactionDropTypes(): readonly LegacyHistoryRecordType[] {
   return LEGACY_COMPACTION_DROP_TYPES.filter(
     (type) => (LEGACY_COMPACTION_READ_MAP[type] ?? ['unknown']).length === 0,
+  );
+}
+
+/**
+ * PR-L: the archive-row twins DEDUPING deletes by — each a raw Mirza table and the typed
+ * record type whose record of the same source key makes its archive copy redundant.
+ */
+export function compactionArchiveTwins(): readonly {
+  readonly sourceTable: string;
+  readonly recordType: LegacyHistoryRecordType;
+}[] {
+  return LEGACY_COMPACTION_ARCHIVE_TWINS;
+}
+
+/** PR-L: Mirza tables whose raw archive rows DROPPING deletes: their typed type is dropped. */
+export function compactionDropArchiveTables(): readonly string[] {
+  const dropped = new Set<string>(compactionDropTypes());
+  return LEGACY_COMPACTION_DROP_ARCHIVE_TABLES.filter((table) =>
+    LEGACY_COMPACTION_ARCHIVE_TWINS.some(
+      (pair) => pair.sourceTable === table && dropped.has(pair.recordType),
+    ),
   );
 }
 

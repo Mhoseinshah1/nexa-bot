@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   LEGACY_COMPACTION_CONFIRMATION_PHRASE,
+  type LegacyCompactionReason,
   type LegacyCompactionRun,
   type LegacyCompactionState,
 } from '@nexa/contracts';
@@ -23,6 +24,12 @@ import { formatTimestamp } from '../format';
  * and deletes nothing unless every part of it reached Telegram. While the history tables
  * are rewritten (VACUUM FULL) the card says the legacy pages are in maintenance.
  */
+
+/** PR-L: a second, automatic run after older rules is labelled `web.lcp_reason_supplementary`. */
+const REASON_LABEL: Readonly<Record<LegacyCompactionReason, WebKey>> = {
+  INITIAL: 'web.lcp_reason_initial',
+  SUPPLEMENTARY: 'web.lcp_reason_supplementary',
+};
 
 const STATE_LABEL: Readonly<Record<LegacyCompactionState, WebKey>> = {
   REQUESTED: 'web.lcp_state_requested',
@@ -118,7 +125,15 @@ export function LegacyCompactionCard({ mayApply }: { mayApply: boolean }) {
         {run !== null && (
           <KV
             items={[
-              [t('web.lcp_state'), t(STATE_LABEL[run.state])],
+              [t('web.lcp_reason'), t(REASON_LABEL[run.reason])],
+              [
+                t('web.lcp_state'),
+                t(
+                  run.state === 'FAILED' && run.failureCode === 'legacy_compaction.vacuum_failed'
+                    ? 'web.lcp_state_failed_vacuum'
+                    : STATE_LABEL[run.state],
+                ),
+              ],
               [t('web.lcp_requested'), formatTimestamp(run.requestedAt)],
               [t('web.lcp_deleted'), String(run.deleted)],
               [t('web.lcp_deduplicated'), String(run.deduplicated)],
@@ -134,7 +149,9 @@ export function LegacyCompactionCard({ mayApply }: { mayApply: boolean }) {
                 ? 'web.lcp_failed_memory'
                 : run.failureCode === 'legacy_compaction.reconciliation_not_clean'
                   ? 'web.lcp_failed_reconciliation'
-                  : 'web.lcp_failed',
+                  : run.failureCode === 'legacy_compaction.vacuum_failed'
+                    ? 'web.lcp_failed_vacuum'
+                    : 'web.lcp_failed',
             )}{' '}
             <bdi dir="ltr" className="ltr mono">
               {run.failureCode}

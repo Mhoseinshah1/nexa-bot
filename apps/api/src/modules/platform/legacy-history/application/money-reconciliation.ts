@@ -192,7 +192,7 @@ export function summarisePayments(groups: readonly PaymentGroup[]): PaymentSumma
   };
 }
 
-// --- wallet transactions, wheel, service operations ---------------------------------------
+// --- wallet transactions, service operations ----------------------------------------------
 
 /** Mirza's wallet-transaction chain, per currency: credits, debits (as negative sums), zeros. */
 export interface WalletTransactionGroup {
@@ -236,20 +236,6 @@ export function summariseWalletTransactions(
     ),
     noChange: groups.reduce((n, g) => n + g.zeroCount, 0),
     unparsedAmounts: groups.reduce((n, g) => n + g.unparsed, 0),
-  };
-}
-
-export interface WheelGroup extends AmountGroup {
-  readonly won: boolean | null;
-}
-
-export function summariseWheel(groups: readonly WheelGroup[]): {
-  readonly spins: number;
-  readonly prizesWon: MoneyTotal;
-} {
-  return {
-    spins: groups.reduce((n, g) => n + g.count, 0),
-    prizesWon: totalOf(groups.filter((g) => g.won === true)),
   };
 }
 
@@ -416,7 +402,6 @@ export interface TenantMoneyInput {
   readonly stated: readonly StatedImportTotals[];
   readonly payments: readonly PaymentGroup[];
   readonly walletTransactions: readonly WalletTransactionGroup[];
-  readonly wheel: readonly WheelGroup[];
   readonly serviceOperations: readonly StatusGroup[];
   readonly referrals: { readonly records: number; readonly referrerGiftsPaid: number };
   readonly discountsUsed: number;
@@ -451,7 +436,6 @@ export interface TenantMoneyReport {
   };
   readonly payments: PaymentSummary;
   readonly walletTransactions: WalletTransactionSummary;
-  readonly wheel: { readonly spins: number; readonly prizesWon: MoneyTotal };
   readonly serviceOperations: readonly { readonly status: string; readonly total: MoneyTotal }[];
   readonly referrals: { readonly records: number; readonly referrerGiftsPaid: number };
   readonly discountsUsed: number;
@@ -585,7 +569,6 @@ export function buildTenantMoneyReport(input: TenantMoneyInput): TenantMoneyRepo
     },
     payments: summarisePayments(input.payments),
     walletTransactions: summariseWalletTransactions(input.walletTransactions),
-    wheel: summariseWheel(input.wheel),
     serviceOperations: summariseByStatus(input.serviceOperations),
     referrals: input.referrals,
     discountsUsed: input.discountsUsed,

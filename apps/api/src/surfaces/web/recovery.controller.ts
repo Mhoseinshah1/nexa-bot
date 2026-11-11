@@ -581,6 +581,7 @@ function toCompactionRun(row: LegacyCompactionRow): LegacyCompactionRun {
   return {
     id: row.id,
     state: row.state,
+    reason: row.reason,
     requestedAt: row.requestedAt.toISOString(),
     requestedBy: row.requestedByLabel,
     updatedAt: row.updatedAt.toISOString(),

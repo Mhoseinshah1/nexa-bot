@@ -42,7 +42,10 @@ const INVOICES = 450;
 /** The digests captured before the speed work. */
 const PINNED: Record<string, string> = {
   dryRunReport: '7bfda0b23617014ebb8ca9879b0baff9a7bfb836deede0f88873f5fa85cda7b5',
-  applyCounts: '1fdc6591c9f884a55b322a0c815973f4d1b48f27b69c0506a37f07ef20cdda44',
+  // Re-pinned in the demo-parity round, PR-L (L3): the exact-match reconciliation no longer
+  // has a `wheel_list → wallet_history_imports` row (0 = 0 here); the wheel is dropped, and it
+  // is the ONLY difference in this section.
+  applyCounts: '9392478896370757d0e6ef407208b85ddf0c221fe47f5bfb65b8fcca2a79f10b',
   customers: '1795829b5ff6e48d250360a90fedcbb326f433e36a47f59b16460a502bfe1393',
   wallet: '75a385e8b3e2d0757651d8ba72a53de012a355f0eaa4dbd454541d79ff734d3b',
   trials: '559b0781174574a505585078a6692341553dbc4666b0cffa0e746614da1ef3ee',

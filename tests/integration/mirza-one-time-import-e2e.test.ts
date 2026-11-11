@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { systemJobActor, type CorrelationId } from '@nexa/contracts';
-import { createTestContext, tenantA, type TestContext } from './harness';
+import { createTestContext, tenantA, testConfig, type TestContext } from './harness';
 import {
   MigrationRig,
   TENANT,
@@ -18,7 +18,10 @@ import {
 } from '../support/legacy-migration-rig';
 import { LegacyCleanupScheduler } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-cleanup.scheduler';
 import { LegacyCompactionExecutor } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-compaction.executor';
-import { DrizzleLegacyCompactionRepository } from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
+import {
+  DrizzleLegacyCompactionRepository,
+  ownerMaintenanceConnector,
+} from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
 
 /**
  * The one-time Mirza import, end to end (owner decision 2026-10-17,
@@ -363,7 +366,10 @@ describe('the one-time Mirza import, end to end', () => {
     const c = ctx.container;
     const actor = systemJobActor('mirza-e2e-cleanup', 'corr-mirza-e2e' as CorrelationId);
     const scheduler = new LegacyCleanupScheduler({
-      repository: new DrizzleLegacyCompactionRepository(c.database.db, c.database.pool),
+      repository: new DrizzleLegacyCompactionRepository(
+        c.database.db,
+        ownerMaintenanceConnector(testConfig().DATABASE_URL, { lockTimeoutMs: 5_000 }),
+      ),
       service: c.legacyCompaction,
       backupDestination: async () => 'DEDICATED_CHAT',
       opsLog: c.opsLog,
@@ -374,7 +380,10 @@ describe('the one-time Mirza import, end to end', () => {
     await scheduler.tick();
     const backupId = '00000000-0000-4000-8000-00000000e2e1';
     const executor = new LegacyCompactionExecutor({
-      repository: new DrizzleLegacyCompactionRepository(c.database.db, c.database.pool),
+      repository: new DrizzleLegacyCompactionRepository(
+        c.database.db,
+        ownerMaintenanceConnector(testConfig().DATABASE_URL, { lockTimeoutMs: 5_000 }),
+      ),
       uow: c.uow,
       audit: c.audit,
       opsLog: c.opsLog,

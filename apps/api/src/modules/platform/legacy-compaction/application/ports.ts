@@ -1,6 +1,7 @@
 import type {
   LegacyCleanupClearedTable,
   LegacyCompactionFailureCode,
+  LegacyCompactionReason,
   LegacyCompactionState,
   LegacyHistoryRecordType,
 } from '@nexa/contracts';
@@ -29,6 +30,38 @@ export interface LegacyCompactionRow {
   readonly after: CompactionSizes | null;
   readonly failureCode: LegacyCompactionFailureCode | null;
   readonly finishedAt: Date | null;
+  /** PR-L: `SUPPLEMENTARY` — «پاک‌سازی تکمیلی», a second run after an older rule revision. */
+  readonly reason: LegacyCompactionReason;
+  /** PR-L: the cleanup rules' revision this run applies (`LEGACY_CLEANUP_REVISION`). */
+  readonly revision: number;
+  /** PR-L: when its VACUUM FULL was proven; null when never. */
+  readonly vacuumedAt: Date | null;
+}
+
+/** PR-L: the proof a VACUUM FULL happened — every table it rewrote, by name. */
+export interface VacuumProof {
+  readonly tables: readonly string[];
+}
+
+/**
+ * PR-L: a VACUUM FULL that did not happen. PostgreSQL does not raise for a table the
+ * connection may not vacuum: it prints `WARNING: permission denied to vacuum "…", skipping
+ * it` and reports success. That is how the owner's runs COMPLETED with byte-identical sizes:
+ * the worker connects as `nexa_app`, which owns no table. So the vacuum is PROVEN per table
+ * (the relation was rewritten: its file node changed) and this is thrown when it was not.
+ * `deterministic`: retrying cannot help (refused, not rewritten); otherwise (a lock it could
+ * not get) the stage is retried before the run fails.
+ */
+export class LegacyVacuumFailed extends Error {
+  constructor(
+    readonly table: string,
+    readonly why: 'REFUSED' | 'NOT_REWRITTEN' | 'ERROR',
+    readonly deterministic: boolean,
+    options?: { readonly cause?: unknown },
+  ) {
+    super(`the VACUUM FULL of ${table} did not happen (${why})`, options);
+    this.name = 'LegacyVacuumFailed';
+  }
 }
 
 export interface BatchResult {
@@ -47,8 +80,15 @@ export interface ClearBatchResult {
 
 export interface LegacyCompactionRepository {
   latest(tenantId: string, tx?: Executor): Promise<LegacyCompactionRow | null>;
-  /** A COMPLETED run requested after the tenant's latest finished import. */
-  completedExists(tenantId: string, tx?: Executor): Promise<boolean>;
+  /**
+   * A COMPLETED run requested after the tenant's latest finished import — of at least
+   * `minRevision` when given (PR-L: the automatic cleanup asks for the current revision).
+   */
+  completedExists(
+    tenantId: string,
+    tx?: Executor,
+    options?: { readonly minRevision?: number },
+  ): Promise<boolean>;
   importReadiness(
     tenantId: string,
     tx?: Executor,
@@ -59,14 +99,22 @@ export interface LegacyCompactionRepository {
     readonly reconciled: boolean;
   }>;
   /**
-   * v0.9.7: the tenants whose latest finished import has not been cleaned up — no active or
-   * COMPLETED run since it finished, and no FAILED one since `retryFailedBefore` — and that
-   * have no import in flight.
+   * v0.9.7: the tenants whose latest finished import has not been cleaned up — no active run,
+   * no COMPLETED run of `revision` (or later) since it finished, and no FAILED one since
+   * `retryFailedBefore` — and that have no import in flight. PR-L: `SUPPLEMENTARY` when a
+   * COMPLETED run of an older revision since that import exists, else `INITIAL`.
    */
   automaticCandidates(input: {
     readonly now: Date;
     readonly retryFailedBefore: Date;
-  }): Promise<readonly { readonly tenantId: string; readonly importId: string }[]>;
+    readonly revision: number;
+  }): Promise<
+    readonly {
+      readonly tenantId: string;
+      readonly importId: string;
+      readonly reason: LegacyCompactionReason;
+    }[]
+  >;
   /** Whether the «waiting for a backup destination» condition is open for the tenant. */
   awaitingDestinationOpen(tenantId: string): Promise<boolean>;
   create(
@@ -76,6 +124,8 @@ export interface LegacyCompactionRepository {
       readonly now: Date;
       readonly adminId: string | null;
       readonly label: string | null;
+      readonly reason: LegacyCompactionReason;
+      readonly revision: number;
     },
     tx: Executor,
   ): Promise<boolean>;
@@ -117,6 +167,7 @@ export interface LegacyCompactionRepository {
       readonly before?: CompactionSizes;
       readonly after?: CompactionSizes;
       readonly failureCode?: LegacyCompactionFailureCode;
+      readonly vacuumedAt?: Date;
       readonly addDeleted?: number;
       readonly addDeduplicated?: number;
       readonly addStripped?: number;
@@ -128,13 +179,28 @@ export interface LegacyCompactionRepository {
     input: {
       readonly tenantId: string;
       readonly types: readonly LegacyHistoryRecordType[];
+      /** PR-L: Mirza tables whose raw `archive_row` copies are dropped too. */
+      readonly archiveTables: readonly string[];
       readonly after: string | null;
       readonly limit: number;
     },
   ): Promise<BatchResult>;
+  /**
+   * `archive_row` records with a twin for the same source key: an invoice in
+   * `legacy_invoice_archive`, or (PR-L) a typed record of `twins`' paired type naming the same
+   * provenance table and source primary key. No twin: kept.
+   */
   dedupBatch(
     tx: Executor,
-    input: { readonly tenantId: string; readonly after: string | null; readonly limit: number },
+    input: {
+      readonly tenantId: string;
+      readonly twins: readonly {
+        readonly sourceTable: string;
+        readonly recordType: LegacyHistoryRecordType;
+      }[];
+      readonly after: string | null;
+      readonly limit: number;
+    },
   ): Promise<BatchResult>;
   stripBatch(
     tx: Executor,
@@ -156,5 +222,11 @@ export interface LegacyCompactionRepository {
    */
   authorise(tx: Executor, runId: string): Promise<void>;
   measure(tenantId: string): Promise<CompactionSizes>;
-  vacuum(): Promise<void>;
+  /** PR-L: ANALYZE of `legacy_history_records`, as the owner (on the maintenance session). */
+  analyze(): Promise<void>;
+  /**
+   * VACUUM (FULL, ANALYZE) of `legacy_history_records` and every cleared table, PROVEN per
+   * table; throws `LegacyVacuumFailed` for one that was not rewritten.
+   */
+  vacuum(): Promise<VacuumProof>;
 }

@@ -11,7 +11,6 @@ import {
   type StatusGroup,
   type TenantMoneyInput,
   type WalletTransactionGroup,
-  type WheelGroup,
 } from '../application/money-reconciliation.js';
 import type {
   CustomerMoneyFacts,
@@ -71,7 +70,6 @@ export class DrizzleLegacyMoneyHistoryReader implements LegacyMoneyHistoryReader
       return {
         payments: await this.payments(q, tenantId, of),
         walletTransactions: await this.walletTransactions(q, tenantId, of),
-        wheel: await this.wheel(q, tenantId, of),
         serviceOperations: await this.serviceOperations(q, tenantId, of),
         referrals: {
           asReferee: await this.count(q, tenantId, 'referral', of),
@@ -130,7 +128,6 @@ export class DrizzleLegacyMoneyHistoryReader implements LegacyMoneyHistoryReader
         stated: stated.map(statedOf),
         payments: await this.payments(q, tenantId, all),
         walletTransactions: await this.walletTransactions(q, tenantId, all),
-        wheel: await this.wheel(q, tenantId, all),
         serviceOperations: await this.serviceOperations(q, tenantId, all),
         referrals: { records: int(referrals?.n), referrerGiftsPaid: int(referrals?.gifts) },
         discountsUsed: await this.count(q, tenantId, 'discount_usage', all),
@@ -212,25 +209,6 @@ export class DrizzleLegacyMoneyHistoryReader implements LegacyMoneyHistoryReader
       outcome: str(g['outcome']),
       method: str(g['method']),
       purpose: str(g['purpose']),
-    }));
-  }
-
-  private async wheel(q: Q, tenantId: string, of: SQL): Promise<WheelGroup[]> {
-    const groups = await this.amountGroups(
-      q,
-      tenantId,
-      'wheel_result',
-      of,
-      { won: sql.raw(`h.payload ->> 'won'`) },
-      'prize,amount_minor',
-      'prize,currency',
-    );
-    return groups.map((g) => ({
-      currency: g.currency,
-      count: g.count,
-      sumMinor: g.sumMinor,
-      unparsed: g.unparsed,
-      won: g['won'] === 'true' ? true : g['won'] === 'false' ? false : null,
     }));
   }
 

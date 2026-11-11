@@ -20,6 +20,7 @@ import {
 import { sql } from 'drizzle-orm';
 import {
   LEGACY_COMPACTION_FAILURE_CODES,
+  LEGACY_COMPACTION_REASONS,
   LEGACY_COMPACTION_STATES,
   LEGACY_INVOICE_ARCHIVE_CLASSES,
   LEGACY_WALLET_DEBT_CURRENCY,
@@ -765,9 +766,25 @@ export const legacyCompactionRuns = pgTable(
     after: jsonb('after'),
     failureCode: text('failure_code'),
     finishedAt: timestamptz('finished_at'),
+    /** PR-L: `SUPPLEMENTARY` — the second run («پاک‌سازی تکمیلی») after an older revision. */
+    reason: text('reason').notNull().default('INITIAL'),
+    /**
+     * PR-L: the revision of the cleanup rules the run applies (`LEGACY_CLEANUP_REVISION`).
+     * Every run before PR-L is 1: none of them proved its vacuum, deduped the archive twins or
+     * dropped the wheel, so a tenant whose only COMPLETED run is older is cleaned up again.
+     */
+    revision: integer('revision').notNull().default(1),
+    /** PR-L: when the VACUUM FULL was PROVEN (every table rewritten). Null: never proven. */
+    vacuumedAt: timestamptz('vacuumed_at'),
   },
   (table) => [
     check('legacy_compaction_runs_state_check', enumCheck('state', LEGACY_COMPACTION_STATES)),
+    check('legacy_compaction_runs_reason_check', enumCheck('reason', LEGACY_COMPACTION_REASONS)),
+    // PR-L: a run of the current rules is never COMPLETED without a proven vacuum.
+    check(
+      'legacy_compaction_runs_vacuum_proven_check',
+      sql`state <> 'COMPLETED' OR revision < 2 OR vacuumed_at IS NOT NULL`,
+    ),
     check(
       'legacy_compaction_runs_failure_code_check',
       enumCheck('failure_code', LEGACY_COMPACTION_FAILURE_CODES),
