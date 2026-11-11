@@ -114,7 +114,9 @@ CRLF, RFC quoting, every cell formula-guarded, Persian headers from `@nexa/i18n`
 the clock alone.
 
 A successful export is itself recorded: `audit.export` on entity `AuditLog`, `after` holding
-the format, the row count and the filter. A refused one is recorded as DENIED — for want of
+the format, the row count and the filter — and, when a «ورود به پنل» session takes it, the
+hosted bot as `hostedTenantId` (the row is then the installation owner's, never the hosted
+bot's; PR-N N3). A refused one is recorded as DENIED — for want of
 `audit.export`, or (`reason` `EXPORT_ROW_LIMIT_EXCEEDED`, `after` holding the bound and the
 filter) for being over the row bound, recorded before the refusal is returned.
 
