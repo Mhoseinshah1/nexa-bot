@@ -3,20 +3,13 @@ import { useQuery } from '@tanstack/react-query';
 import { keepPageWhileTurning, useKeptTotal } from '../ui/paging';
 import { uuidV7Schema, type CustomerStatus, type CustomerSummaryResponse } from '@nexa/contracts';
 import { fetchCustomers } from '../api/client';
-import { formatNumber, formatTimestamp } from '../format';
+import { formatTimestamp } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
-import {
-  CSV_EXPORT_MAX_ROWS,
-  downloadCsv,
-  toCsv,
-  useRowSelection,
-  type ExportColumn,
-} from '../ui/row-export';
-import { QuickFilters, SelectionBar } from '../ui/redesign';
+import { ListExportBar, useRowSelection, type ExportColumn } from '../ui/row-export';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { ChipGroup, useListClearAll } from './commerce-parts';
@@ -27,7 +20,6 @@ import {
   Banner,
   Button,
   Card,
-  Checkbox,
   CursorPager,
   DataTable,
   Disclosure,
@@ -256,47 +248,53 @@ export function UsersPage({
     },
     {
       /*
-       * One cell for who they are: the row opens from the NAME (a link — no «مشاهده» column),
-       * the @username under it. A customer with neither a name nor a username is opened from
-       * the Telegram id, which is the identity a support conversation quotes.
+       * Demo parity: the Telegram id, the @username and the name are three columns. The row
+       * opens from exactly ONE of them — the name; a customer without one is opened from the
+       * @username, and one with neither from the Telegram id, which is the identity a support
+       * conversation quotes.
        */
-      key: 'user',
-      header: t('web.users_column_user'),
+      key: 'telegram',
+      header: t('web.user_telegram_id'),
+      render: (row) =>
+        displayName(row) === null && row.username === null ? (
+          <a href={`/users/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+            <Ltr>{row.telegramUserId}</Ltr>
+          </a>
+        ) : (
+          <Ltr>{row.telegramUserId}</Ltr>
+        ),
+    },
+    {
+      key: 'username',
+      header: t('web.user_username'),
+      render: (row) =>
+        row.username === null ? (
+          <span className="muted">—</span>
+        ) : displayName(row) === null ? (
+          <a href={`/users/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+            <Ltr>{`@${row.username}`}</Ltr>
+          </a>
+        ) : (
+          <Ltr>{`@${row.username}`}</Ltr>
+        ),
+    },
+    {
+      key: 'name',
+      header: t('web.user_name'),
       render: (row) => {
         const name = displayName(row);
-        const label =
-          name ??
-          (row.username === null ? (
-            <Ltr>{row.telegramUserId}</Ltr>
-          ) : (
-            <Ltr>{`@${row.username}`}</Ltr>
-          ));
+        if (name === null) return <span className="muted">—</span>;
         return (
           <span className="who">
-            <span
-              className={`avatar ${avatarTint(name ?? row.username ?? '#')}`}
-              aria-hidden="true"
-            >
-              {initialOf(name ?? row.username ?? '#')}
+            <span className={`avatar ${avatarTint(name)}`} aria-hidden="true">
+              {initialOf(name)}
             </span>
-            <span className="who-text">
-              <a href={`/users/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-                {label}
-              </a>
-              {name !== null && row.username !== null && (
-                <span className="muted small">
-                  <Ltr>{`@${row.username}`}</Ltr>
-                </span>
-              )}
-            </span>
+            <a href={`/users/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+              {name}
+            </a>
           </span>
         );
       },
-    },
-    {
-      key: 'telegram',
-      header: t('web.user_telegram_id'),
-      render: (row) => <Ltr>{row.telegramUserId}</Ltr>,
     },
     {
       key: 'status',
@@ -434,20 +432,6 @@ export function UsersPage({
             <Banner tone="info">{t('web.users_search_denied')}</Banner>
           </div>
         )}
-        <div className="ca-quick" hidden={toolbarHidden}>
-          {/* The status filter as chips (server-side, in the URL as `status`); no counts —
-              the list has no server total per status, and a client count would be a lie. */}
-          <QuickFilters
-            label={t('web.users_filter_status')}
-            value={appliedStatus ?? 'ALL'}
-            onChange={(next) => setQuery(route, 'status', next === 'ALL' ? null : next)}
-            items={[
-              { key: 'ALL' as const, label: t('web.users_filter_all') },
-              { key: 'ACTIVE' as const, label: t('web.user_status_active') },
-              { key: 'BLOCKED' as const, label: t('web.user_status_blocked') },
-            ]}
-          />
-        </div>
         <div hidden={toolbarHidden}>
           <ListFilterBar
             first="search"
@@ -476,21 +460,6 @@ export function UsersPage({
           />
         </div>
 
-        {/* Only while rows are ticked: the ticked rows of THIS page, as a CSV. */}
-        {!denied && (
-          <SelectionBar count={selection.chosen.length} onClear={selection.clear}>
-            <Button
-              size="sm"
-              onClick={() => downloadCsv('users.csv', toCsv(selection.chosen, exportColumns))}
-            >
-              {t('web.export_csv')}
-            </Button>
-            <span className="muted small">
-              {t('web.export_cap')} {formatNumber(CSV_EXPORT_MAX_ROWS)}
-            </span>
-          </SelectionBar>
-        )}
-
         <StateSwitch
           query={customers}
           denied={denied}
@@ -514,16 +483,12 @@ export function UsersPage({
             rowKey={(row) => row.id}
             sticky
             toolbar={
-              !denied && rows.length > 0 ? (
-                <Checkbox
-                  checked={
-                    selection.chosen.length > 0 &&
-                    selection.chosen.length === Math.min(rows.length, CSV_EXPORT_MAX_ROWS)
-                  }
-                  onChange={() => selection.toggleAll()}
-                  label={t('web.users_select_all')}
-                />
-              ) : undefined
+              <ListExportBar
+                selection={selection}
+                columns={exportColumns}
+                filename="users"
+                allowed={!denied}
+              />
             }
           />
         </StateSwitch>

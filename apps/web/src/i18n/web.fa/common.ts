@@ -221,6 +221,8 @@ export const WEB_FA_COMMON = {
   'web.export_select_row': 'انتخاب این ردیف',
   'web.export_select_all': 'انتخاب همهٔ ردیف‌های این صفحه',
   'web.export_csv': 'خروجی CSV',
+  'web.export_selected': 'انتخاب‌شده: {n}',
+  'web.page_more_menu': 'بیشتر',
   'web.export_cap': 'حداکثر ردیف در هر فایل:',
   // Payment routes (Phase 5C) — which ways a customer may pay, and under what
   // conditions. The route is not the destination: `web.payment_accounts_*` above is

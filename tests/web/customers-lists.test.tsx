@@ -212,33 +212,31 @@ describe('the order list and page (W1, W4)', () => {
     ]);
   });
 
-  it('draws the state as quick-filter chips without counts, writing the same state key', async () => {
+  it('keeps the state filter in the «فیلترها» panel, writing the same state key', async () => {
     navigate('/orders', { replace: true, force: true });
     stubApi([{ url: '/orders', body: { orders: [order()], nextCursor: null } }]);
     renderPage(<LiveOrders />);
     await screen.findByText(String(order().lineTitle));
-    const chips = screen.getByRole('group', { name: t('web.status') });
-    // The list sends no total: a chip carries no count.
-    expect(chips.querySelector('.cnt')).toBeNull();
+    // Demo parity: no always-visible chip row on the page.
+    expect(screen.queryByRole('group', { name: t('web.status') })).toBeNull();
+    const chips = within(openFilterPanel()).getByRole('group', { name: t('web.status') });
     fireEvent.click(within(chips).getByRole('button', { name: t('web.order_state_refunded') }));
     await waitFor(() =>
       expect(new URLSearchParams(window.location.search).get('state')).toBe('REFUNDED'),
     );
   });
 
-  it('draws the selection bar only while rows are ticked, and merges the code under the name', async () => {
+  it('draws the export row always, and the selection clear only while rows are ticked', async () => {
     navigate('/orders', { replace: true, force: true });
     stubApi([{ url: '/orders', body: { orders: [order()], nextCursor: null } }]);
     renderPage(<LiveOrders />);
     await screen.findByText(String(order().lineTitle));
-    expect(screen.queryByRole('region', { name: t('web.kit_selection_bar') })).toBeNull();
-    // No «مشاهده» column: the row opens from its name, and the table has no separate code column.
-    expect(screen.queryByRole('columnheader', { name: t('web.record_code') })).toBeNull();
-    fireEvent.click(screen.getByRole('checkbox', { name: t('web.export_select_row') }));
-    const bar = screen.getByRole('region', { name: t('web.kit_selection_bar') });
+    const bar = screen.getByRole('group', { name: t('web.export_bar') });
     expect(within(bar).getByRole('button', { name: t('web.export_csv') })).toBeEnabled();
+    expect(within(bar).queryByRole('button', { name: t('web.kit_selection_clear') })).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox', { name: t('web.export_select_row') }));
     fireEvent.click(within(bar).getByRole('button', { name: t('web.kit_selection_clear') }));
-    expect(screen.queryByRole('region', { name: t('web.kit_selection_bar') })).toBeNull();
+    expect(within(bar).queryByRole('button', { name: t('web.kit_selection_clear') })).toBeNull();
   });
 
   it('draws the pricing under the two balanced columns, never in the tall one', async () => {

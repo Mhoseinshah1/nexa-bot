@@ -99,17 +99,20 @@ export function QuickAction({
   disabled = false,
   disabledReason,
   icon,
+  ellipsis = true,
 }: {
   label: string;
   onClick?: () => void;
   danger?: boolean;
+  /** A dangerous action ends in «…» by default; the demo's framed boxes print some without. */
+  ellipsis?: boolean;
   disabled?: boolean;
   /** Shown on hover/focus while `disabled`. */
   disabledReason?: string;
   icon?: Parameters<typeof Icon>[0]['name'];
 }) {
   const reasonId = useId();
-  const shown = danger && !label.endsWith('…') ? `${label}…` : label;
+  const shown = danger && ellipsis && !label.endsWith('…') ? `${label}…` : label;
   const why = disabled && disabledReason !== undefined && disabledReason !== '';
   return (
     <span
