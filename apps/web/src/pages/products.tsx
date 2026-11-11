@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import { ListFreshness } from '../ui/list-search';
@@ -1059,24 +1059,23 @@ export const DESCRIPTION_CAPTURE_POLL_MS = 3_000;
  * request for THIS product; the administrator sends or forwards the description to the bot, and
  * this fills the field when it arrives (polling, and again when the tab regains focus). Nothing
  * is saved: the ordinary Save is still the only thing that writes the product.
+ *
+ * The request id and its polling live in `useDescriptionCapture`, called by the always-mounted
+ * `ProductForm`: this component is drawn only on the basic tab, and leaving that tab must not
+ * drop the open request (the description still fills, even while another tab is shown).
  */
-function DescriptionFromTelegram({
-  productId,
-  hasEmoji,
-  onCaptured,
-}: {
-  productId: string;
-  hasEmoji: boolean;
-  onCaptured: (stored: string) => void;
-}) {
+function useDescriptionCapture(
+  productId: string | undefined,
+  onCaptured: (stored: string) => void,
+) {
   const submission = useSubmissionKey();
   const [captureId, setCaptureId] = useState<string | null>(null);
   const applied = useRef<string | null>(null);
 
   const capture = useQuery({
     queryKey: ['product-description-capture', productId, captureId],
-    queryFn: () => fetchProductDescriptionCapture(productId, captureId as string),
-    enabled: captureId !== null,
+    queryFn: () => fetchProductDescriptionCapture(productId as string, captureId as string),
+    enabled: productId !== undefined && captureId !== null,
     refetchOnWindowFocus: true,
     refetchInterval: pollUnlessFinalWhile<ProductDescriptionCaptureResponse>(
       DESCRIPTION_CAPTURE_POLL_MS,
@@ -1086,7 +1085,7 @@ function DescriptionFromTelegram({
   const open = useMutation({
     mutationFn: () =>
       openProductDescriptionCapture({
-        id: productId,
+        id: productId as string,
         idempotencyKey: submission.current({ descriptionCapture: productId, at: captureId }),
       }),
     onSuccess: (opened) => {
@@ -1107,7 +1106,17 @@ function DescriptionFromTelegram({
       onCaptured(data.description);
     }
   }, [data, onCaptured]);
+  return { open, capture, data };
+}
 
+function DescriptionFromTelegram({
+  hasEmoji,
+  request,
+}: {
+  hasEmoji: boolean;
+  request: ReturnType<typeof useDescriptionCapture>;
+}) {
+  const { open, capture, data } = request;
   const waiting = data?.state === 'OPEN';
   const failure = open.error ?? capture.error;
   return (
@@ -1192,6 +1201,17 @@ function ProductForm({
   const [state, setState] = useState<FormState>(product === undefined ? BLANK : stateOf(product));
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setState((current) => ({ ...current, [key]: value }));
+  const descriptionCapture = useDescriptionCapture(
+    mode === 'edit' ? product?.id : undefined,
+    useCallback((stored: string) => {
+      const captured = descriptionToEditable(stored);
+      setState((current) => ({
+        ...current,
+        description: captured.text,
+        descriptionEmojis: captured.emojis,
+      }));
+    }, []),
+  );
 
   /*
    * The panel list, for a select rather than a typed uuid.
@@ -1389,16 +1409,8 @@ function ProductForm({
               </Field>
               {mode === 'edit' && product !== undefined && (
                 <DescriptionFromTelegram
-                  productId={product.id}
                   hasEmoji={state.descriptionEmojis.length > 0}
-                  onCaptured={(stored) => {
-                    const captured = descriptionToEditable(stored);
-                    setState((current) => ({
-                      ...current,
-                      description: captured.text,
-                      descriptionEmojis: captured.emojis,
-                    }));
-                  }}
+                  request={descriptionCapture}
                 />
               )}
             </div>

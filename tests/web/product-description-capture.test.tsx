@@ -123,4 +123,32 @@ describe('«ارسال توضیح از تلگرام» on the product page', () =
       await screen.findByText(t('web.err_product_description_capture_telegram_unlinked')),
     ).toBeInTheDocument();
   });
+
+  it('keeps the open request when another tab is shown, and fills the field even if it arrives while away', async () => {
+    const reply: Record<string, unknown> = { ...capture('OPEN') };
+    stubApi([
+      ...fixtures({ description: 'قدیمی' }),
+      { url: '/description-captures', method: 'POST', body: capture('OPEN') },
+      { url: `/description-captures/${CAPTURE}`, method: 'GET', body: reply },
+    ]);
+    renderPage(<ProductDetailPage id={ID} mayEdit denied={false} />);
+    await field();
+    fireEvent.click(screen.getByRole('button', { name: t('web.product_capture_button') }));
+    expect(await screen.findByText(t('web.product_capture_instruction'))).toBeInTheDocument();
+
+    // Leave the basic tab (the capture component unmounts) and let the message arrive there.
+    fireEvent.click(screen.getByRole('tab', { name: new RegExp(t('web.cb_section_pricing')) }));
+    expect(screen.queryByLabelText(t('web.product_description'))).toBeNull();
+    Object.assign(reply, capture('CAPTURED', 'متن تازه'));
+
+    // Polling continued while away: coming back shows the filled description and the outcome.
+    await waitFor(
+      async () => {
+        fireEvent.click(screen.getByRole('tab', { name: new RegExp(t('web.cb_section_basic')) }));
+        expect((await field()).value).toBe('متن تازه');
+      },
+      { timeout: 8000 },
+    );
+    expect(await screen.findByText(t('web.product_capture_done'))).toBeInTheDocument();
+  }, 15000);
 });
