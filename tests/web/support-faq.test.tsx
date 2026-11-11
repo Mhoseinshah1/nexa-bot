@@ -285,13 +285,16 @@ describe('the support page', () => {
   });
 });
 
-describe('PR-3: the list and the way to reach support are one row, the intro a fold', () => {
-  it('draws the destination beside the list at one height, with no restating subtitle', async () => {
+describe('demo parity: one list card, the way to reach support a line under it, the intro a fold', () => {
+  it('draws the destination as a line in the list card, with no heading of its own', async () => {
     stubApi([listAndRow([faq()], faq())]);
     renderPage(<SupportPage denied={false} mayEdit={false} />);
     await screen.findByText('آیا آی‌پی ثابت است؟');
-    const row = screen.getByText(t('web.support_destination_title')).closest('.card-row');
-    expect(row?.textContent).toContain('آیا آی‌پی ثابت است؟');
+    // The demo has no «راه ارتباط با پشتیبانی» heading: the sentence and its link are a line.
+    expect(screen.queryByRole('heading', { name: 'راه ارتباط با پشتیبانی' })).toBeNull();
+    const link = screen.getByRole('link', { name: t('web.support_destination_link') });
+    expect(link).toHaveAttribute('href', '/settings');
+    expect(link.closest('.card')?.textContent).toContain('آیا آی‌پی ثابت است؟');
     expect(screen.getByText(t('web.support_about_fold'))).toBeInTheDocument();
   });
 });

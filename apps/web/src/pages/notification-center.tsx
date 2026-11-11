@@ -14,7 +14,8 @@ import {
 } from '@nexa/contracts';
 import { fetchInbox, fetchInboxSummary, fetchOpsLog, markAllInbox, markInbox } from '../api/client';
 import { AlertStatusBadge, AlertsPage, alertMessage, type AlertEvent } from './alerts';
-import { AttentionStrip, QuickFilters } from '../ui/redesign';
+import { AttentionStrip } from '../ui/redesign';
+import { PageMoreMenu } from '../ui/page-more-menu';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler, useRoute } from '../router';
@@ -30,6 +31,8 @@ import {
   Disclosure,
   Drawer,
   Empty,
+  FilterChip,
+  FilterChips,
   KV,
   PageHead,
   Select,
@@ -558,23 +561,22 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
   const feedQuery = withAlerts && alerts.isError && !inbox.isError ? alerts : inbox;
 
   const unread = summary.data;
-  const chips = (
-    <QuickFilters<Filter>
-      label={t('web.nc_filters_label')}
-      value={filter}
-      onChange={setFilter}
-      items={[
-        {
-          key: 'UNREAD',
-          label: t('web.nc_filter_unread'),
-          ...(unread !== undefined && !unread.atLeast ? { count: unread.unread } : {}),
-        },
-        { key: 'ALL', label: t('web.nc_filter_all') },
-        { key: 'OPEN', label: t('web.nc_filter_open_alerts') },
-        { key: 'RECORDED', label: t('web.nc_filter_recorded_alerts') },
-      ]}
-    />
-  );
+  /*
+   * Demo parity: what the page shows (unread / all / open alerts / recorded alerts) is the
+   * first filter of the «فیلترها» panel, not a chip row above the list. «خوانده‌نشده» is the
+   * default, so the filter draws no chip while it is in force. The unread count is the
+   * server's, as before.
+   */
+  const feedItems: readonly { key: Filter; label: string; count?: number }[] = [
+    {
+      key: 'UNREAD',
+      label: t('web.nc_filter_unread'),
+      ...(unread !== undefined && !unread.atLeast ? { count: unread.unread } : {}),
+    },
+    { key: 'ALL', label: t('web.nc_filter_all') },
+    { key: 'OPEN', label: t('web.nc_filter_open_alerts') },
+    { key: 'RECORDED', label: t('web.nc_filter_recorded_alerts') },
+  ];
   const hasOpen = (openProbe.data?.events.length ?? 0) > 0;
 
   return (
@@ -582,16 +584,32 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
       <PageHead
         title={t('web.nc_title')}
         actions={
-          categories.length > 0 && inboxFeed ? (
-            <Button
-              size="sm"
-              icon="check"
-              disabled={markAll.isPending}
-              onClick={() => markAll.mutate()}
-            >
-              {t('web.nc_mark_all')}
-            </Button>
-          ) : undefined
+          <PageMoreMenu
+            items={[
+              // The mark-all that was a page-head button, behind the same condition and the
+              // same mutation.
+              ...(categories.length > 0 && inboxFeed
+                ? [
+                    {
+                      key: 'mark-all',
+                      label: t('web.nc_mark_all'),
+                      icon: 'check' as const,
+                      disabled: markAll.isPending,
+                      onSelect: () => markAll.mutate(),
+                    },
+                  ]
+                : []),
+              {
+                key: 'reread',
+                label: t('web.nc_reread'),
+                icon: 'refresh' as const,
+                onSelect: () => {
+                  refresh();
+                  void queries.invalidateQueries({ queryKey: ['ops-log'] });
+                },
+              },
+            ]}
+          />
         }
       />
       <Disclosure size="sm" summary={t('web.nc_about_fold')}>
@@ -611,39 +629,63 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
           ]}
         />
       )}
-      <div className="nc-toolbar">{chips}</div>
-      {inboxFeed && categories.length > 1 && (
-        <div className="nc-toolbar">
-          <ListFilterBar
-            label={t('web.nc_title')}
-            filters={[
-              {
-                key: 'category',
-                label: t('web.nc_filter_category'),
-                active: category === '' ? null : t(CATEGORY_LABELS[category]),
-                onClear: () => setCategory(''),
-                control: (
-                  <Select
-                    size="sm"
-                    aria-label={t('web.nc_filter_category')}
-                    value={category}
-                    onChange={(event) =>
-                      setCategory(event.target.value as NotificationCategory | '')
-                    }
-                  >
-                    <option value="">{t('web.nc_category_all')}</option>
-                    {categories.map((one) => (
-                      <option key={one} value={one}>
-                        {t(CATEGORY_LABELS[one])}
-                      </option>
-                    ))}
-                  </Select>
-                ),
-              },
-            ]}
-          />
-        </div>
-      )}
+      <div className="nc-toolbar">
+        <ListFilterBar
+          label={t('web.nc_title')}
+          filters={[
+            {
+              key: 'feed',
+              label: t('web.nc_filters_label'),
+              active:
+                filter === 'UNREAD'
+                  ? null
+                  : (feedItems.find((one) => one.key === filter)?.label ?? null),
+              onClear: () => setFilter('UNREAD'),
+              control: (
+                <FilterChips label={t('web.nc_filters_label')}>
+                  {feedItems.map((one) => (
+                    <FilterChip
+                      key={one.key}
+                      pressed={filter === one.key}
+                      onClick={() => setFilter(one.key)}
+                    >
+                      {one.label}
+                      {one.count === undefined ? null : <Num value={one.count} />}
+                    </FilterChip>
+                  ))}
+                </FilterChips>
+              ),
+            },
+            ...(inboxFeed && categories.length > 1
+              ? [
+                  {
+                    key: 'category',
+                    label: t('web.nc_filter_category'),
+                    active: category === '' ? null : t(CATEGORY_LABELS[category]),
+                    onClear: () => setCategory(''),
+                    control: (
+                      <Select
+                        size="sm"
+                        aria-label={t('web.nc_filter_category')}
+                        value={category}
+                        onChange={(event) =>
+                          setCategory(event.target.value as NotificationCategory | '')
+                        }
+                      >
+                        <option value="">{t('web.nc_category_all')}</option>
+                        {categories.map((one) => (
+                          <option key={one} value={one}>
+                            {t(CATEGORY_LABELS[one])}
+                          </option>
+                        ))}
+                      </Select>
+                    ),
+                  },
+                ]
+              : []),
+          ]}
+        />
+      </div>
       {(mark.error !== null || markAll.error !== null) && (
         <Banner tone="danger">
           {messageFor(mark.error ?? markAll.error)}

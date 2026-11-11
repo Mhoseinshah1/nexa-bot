@@ -55,7 +55,7 @@ import { formatDecimalText, formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState, staleAfterError } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
-import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 import {
@@ -68,16 +68,9 @@ import {
 import { messageFor } from './settings';
 import { PaymentTimelineCard } from './payment-timeline';
 import { ReceiptReviewCard } from './payment-receipt-review';
-import { RowExportBar, selectColumn, useRowSelection, type ExportColumn } from '../ui/row-export';
-import {
-  AttentionStrip,
-  CardRows,
-  KpiRow,
-  QuickAction,
-  QuickActionBar,
-  QuickFilters,
-  type QuickActionGroup,
-} from '../ui/redesign';
+import { ListExportBar, selectColumn, useRowSelection, type ExportColumn } from '../ui/row-export';
+import { PageMoreMenu } from '../ui/page-more-menu';
+import { AttentionStrip, CardRows, KpiRow } from '../ui/redesign';
 import { Modal } from '../ui/overlays';
 import { CodeName } from './code-name';
 import { queryChipFilter } from './money-filters';
@@ -557,39 +550,35 @@ function present(items: [ReactNode, ReactNode | null | undefined][]): [ReactNode
 }
 
 /**
- * The payment's header card (redesign PR-2): its state and route as chips, a meta line of links —
- * the customer (named here once and nowhere else on the page), the order, when it was made — and
- * the grouped quick-action bar. The bar only JUMPS to the card that holds the action: the
+ * The payment's header card: a meta line of links — the method, the customer (named here once
+ * and nowhere else on the page), the order, when it was made. Demo parity: the state is part
+ * of the page title, and there is no quick-action strip (it only scrolled to cards): the
  * receipt review, the reconcile, the late-payment decision and the refund form keep their own
- * hooks, permissions, confirmations and reason fields where they always were.
+ * hooks, permissions, confirmations and reason fields on the cards that hold them.
  */
 function PaymentHeaderCard({
   row,
   onLink,
-  groups,
 }: {
   row: PaymentDetailResponse;
   onLink: ReturnType<typeof useLinkHandler>;
-  groups: readonly QuickActionGroup[];
 }) {
   return (
     <Card className="pay-head">
-      <div className="pay-head-chips">
-        <StateBadge value={row.state} />
-        {inProviderReview(row) && (
-          <Badge tone="info">{t('web.payment_provider_review_badge')}</Badge>
-        )}
-        <Badge tone="neutral">
-          {t(METHOD_LABELS[row.method])}
-          {row.gatewayProvider === null || row.gatewayProvider === 'MANUAL_TRANSFER' ? null : (
-            <>
-              {' · '}
-              <GatewayName provider={row.gatewayProvider} />
-            </>
-          )}
-        </Badge>
-      </div>
       <span className="meta-links muted small">
+        {/* Demo parity: the state is part of the title; the method is a fact of this line. */}
+        <span>
+          {t('web.payment_method')}{' '}
+          <span>
+            {t(METHOD_LABELS[row.method])}
+            {row.gatewayProvider === null || row.gatewayProvider === 'MANUAL_TRANSFER' ? null : (
+              <>
+                {' · '}
+                <GatewayName provider={row.gatewayProvider} />
+              </>
+            )}
+          </span>
+        </span>
         <span>
           {t('web.payment_customer')}{' '}
           <span className="nowrap record-ref">
@@ -618,7 +607,6 @@ function PaymentHeaderCard({
           {t('web.payment_created_at')} {formatTimestamp(row.createdAt)}
         </span>
       </span>
-      <QuickActionBar label={t('web.pay_qa_label')} groups={groups} />
     </Card>
   );
 }
@@ -1004,7 +992,20 @@ export function PaymentsPage({
   const exportColumns: readonly ExportColumn<PaymentSummaryResponse>[] = [
     { header: t('web.payment_reference'), value: (row) => paymentTrackingCode(row) },
     { header: t('web.payment_state'), value: (row) => t(STATE_LABELS[row.state]) },
+    {
+      header: t('web.payment_ops_situation'),
+      value: (row) => (row.situation === null ? '' : t(SITUATION_LABELS[row.situation.situation])),
+    },
     { header: t('web.payment_method'), value: (row) => t(METHOD_LABELS[row.method]) },
+    {
+      header: t('web.payment_gateway'),
+      value: (row) => (row.gatewayProvider === null ? '' : gatewayLabel(row.gatewayProvider)),
+    },
+    {
+      header: t('web.payment_disposition'),
+      value: (row) =>
+        row.receiptDisposition === null ? '' : t(DISPOSITION_LABELS[row.receiptDisposition]),
+    },
     { header: t('web.payment_amount'), value: (row) => row.amount },
     { header: t('web.payment_currency'), value: (row) => row.currency },
     { header: t('web.order_created_at'), value: (row) => formatTimestamp(row.createdAt) },
@@ -1030,9 +1031,10 @@ export function PaymentsPage({
     },
     {
       /*
-       * Redesign PR-2: the state, the server's situation (roadmap E1) and how the receipt left
-       * review (WP10 follow-up §5) are ONE cell, one badge each, so the table fits at 1440
-       * without a sideways scroll. The situation is beside the state and never instead of it.
+       * Demo parity: one column per fact, as the demo draws them — the payment's state, the
+       * server's situation (roadmap E1) as «وضعیت عملیاتی» beside it and never instead of it,
+       * the method, «درگاه», and how the receipt left review (WP10 follow-up §5) as
+       * «نتیجهٔ رسید» — instead of the one badge cell the redesign merged them into.
        */
       key: 'state',
       header: t('web.payment_state'),
@@ -1043,24 +1045,32 @@ export function PaymentsPage({
           {inProviderReview(row) && (
             <Badge tone="info">{t('web.payment_provider_review_badge')}</Badge>
           )}
-          <SituationBadge value={row.situation} />
-          <DispositionBadge value={row.receiptDisposition} />
         </span>
       ),
     },
     {
-      // Method and gateway in one cell: the route, then the provider under it.
+      key: 'situation',
+      header: t('web.payment_ops_situation'),
+      wrap: true,
+      render: (row) => <SituationBadge value={row.situation} />,
+    },
+    {
       key: 'method',
       header: t('web.payment_method'),
       wrap: true,
-      render: (row) => (
-        <span className="pay-route-cell">
-          <span>{t(METHOD_LABELS[row.method])}</span>
-          <span className="muted small">
-            <GatewayName provider={row.gatewayProvider} />
-          </span>
-        </span>
-      ),
+      render: (row) => <span>{t(METHOD_LABELS[row.method])}</span>,
+    },
+    {
+      key: 'gateway',
+      header: t('web.payment_gateway'),
+      wrap: true,
+      render: (row) => <GatewayName provider={row.gatewayProvider} />,
+    },
+    {
+      key: 'disposition',
+      header: t('web.payment_disposition'),
+      wrap: true,
+      render: (row) => <DispositionBadge value={row.receiptDisposition} />,
     },
     {
       // What the gateway last said (program §10): the provider's word, never Nexa's state.
@@ -1176,34 +1186,29 @@ export function PaymentsPage({
         title={t('web.payment_ops_title')}
         // Redesign PR-2: no count chip — `GET /payments` sends a keyset page and no total (the
         // queue counts below are per queue, not the list's). The intro moved into a fold.
-        actions={<ListFreshness query={payments} hidden={toolbarHidden} />}
+        actions={
+          <>
+            <ListFreshness query={payments} hidden={toolbarHidden} />
+            {/* Demo parity: the page head's more-menu — the page's own secondary moves, each
+                one something the page already did (clear its filters) or a link to a page
+                that checks its own permission. */}
+            {!denied && (
+              <PageMoreMenu
+                items={[
+                  { key: 'clear', label: t('web.filters_clear_all'), onSelect: clearAll },
+                  {
+                    key: 'methods',
+                    label: t('web.payment_gateways_title'),
+                    onSelect: () => navigate('/payment-gateways'),
+                  },
+                ]}
+              />
+            )}
+          </>
+        }
       />
 
       <Card className="ca-list">
-        {/* The queue as quick-filter chips with the server's own counts (`/payment-operations/
-            attention`); the same `queue` query key as the filter below, which keeps its chip. */}
-        {!denied && (
-          <div hidden={toolbarHidden}>
-            <QuickFilters
-              label={t('web.payment_ops_queue')}
-              value={queue ?? 'ALL'}
-              onChange={(next) =>
-                setQueries(route, [
-                  ['queue', next === 'ALL' ? null : next],
-                  ['cursor', null],
-                ])
-              }
-              items={[
-                { key: 'ALL' as const, label: t('web.payment_ops_queue_all') },
-                ...QUEUE_ORDER.map((one) => ({
-                  key: one,
-                  label: t(QUEUE_LABELS[one]),
-                  ...(counts === null ? {} : { count: counts[one] }),
-                })),
-              ]}
-            />
-          </div>
-        )}
         <div hidden={toolbarHidden}>
           <ListFilterBar
             first="search"
@@ -1310,7 +1315,7 @@ export function PaymentsPage({
                 dense
                 sticky
                 toolbar={
-                  <RowExportBar
+                  <ListExportBar
                     selection={selection}
                     columns={exportColumns}
                     filename="payments"
@@ -2169,65 +2174,6 @@ export function PaymentDetailPage({
   const hasLateDecision = mayReconcile && (row?.situation?.actions ?? []).includes('LATE_DELIVER');
   const jumpTo = (anchor: string) =>
     document.getElementById(anchor)?.scrollIntoView?.({ block: 'start' });
-  const actionGroups: readonly QuickActionGroup[] =
-    row === undefined
-      ? []
-      : [
-          {
-            key: 'receipt',
-            label: t('web.pay_qa_group_receipt'),
-            actions: [
-              mayViewReceipts && usesReceipts ? (
-                <QuickAction
-                  key="view"
-                  label={t('web.pay_qa_view_receipts')}
-                  onClick={() => jumpTo('pay-card-receipts')}
-                />
-              ) : null,
-              hasReview ? (
-                <QuickAction
-                  key="review"
-                  label={t('web.pay_qa_review')}
-                  onClick={() => jumpTo('pay-card-review')}
-                />
-              ) : null,
-            ],
-          },
-          {
-            key: 'gateway',
-            label: t('web.pay_qa_group_gateway'),
-            actions: [
-              mayReconcile && row.state === 'UNKNOWN' && row.method === 'GATEWAY' ? (
-                <QuickAction
-                  key="reconcile"
-                  label={t('web.pay_qa_reconcile')}
-                  onClick={() => jumpTo('pay-card-reconcile')}
-                />
-              ) : null,
-              hasLateDecision ? (
-                <QuickAction
-                  key="late"
-                  label={t('web.pay_qa_late')}
-                  onClick={() => jumpTo('pay-card-late')}
-                />
-              ) : null,
-            ],
-          },
-          {
-            key: 'refund',
-            label: t('web.pay_qa_group_refund'),
-            actions: [
-              mayViewRefunds && mayIssueRefunds ? (
-                <QuickAction
-                  key="refund"
-                  danger
-                  label={t('web.pay_qa_refund')}
-                  onClick={() => jumpTo('pay-card-refunds')}
-                />
-              ) : null,
-            ],
-          },
-        ];
 
   return (
     <>
@@ -2241,13 +2187,22 @@ export function PaymentDetailPage({
               <CopyCodeButton code={paymentTrackingCode(row)} />
             </span>
           }
+          // Demo parity: the state is part of the title, as the demo draws it.
+          badge={
+            <span className="ca-badges">
+              <StateBadge value={row.state} />
+              {inProviderReview(row) && (
+                <Badge tone="info">{t('web.payment_provider_review_badge')}</Badge>
+              )}
+            </span>
+          }
         />
       )}
 
       <StateSwitch query={payment} denied={denied}>
         {row === undefined ? null : (
           <>
-            <PaymentHeaderCard row={row} onLink={onLink} groups={actionGroups} />
+            <PaymentHeaderCard row={row} onLink={onLink} />
             {(row.state === 'UNKNOWN' || hasReview || hasLateDecision) && (
               /* The yellow strip (redesign PR-2): what waits for a decision on this payment. */
               <AttentionStrip>

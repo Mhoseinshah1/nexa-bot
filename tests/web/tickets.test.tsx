@@ -151,7 +151,7 @@ describe('the ticket inbox', () => {
     expect(screen.queryByText('WAITING_FOR_SUPPORT')).toBeNull();
   });
 
-  it('PR-3: the status is a row of quick-filter chips over the table, and the categories wait behind a button', async () => {
+  it('demo parity: the status is in the «فیلترها» panel, the categories table is inline, the columns are split', async () => {
     stubApi([
       { url: '/tickets', body: { tickets: [summary()], nextCursor: null } },
       { url: '/ticket-categories', body: categories },
@@ -165,7 +165,9 @@ describe('the ticket inbox', () => {
       />,
     );
     await screen.findByRole('link', { name: '#42' });
-    const chips = screen.getByRole('group', { name: t('web.status') });
+    // No chip row over the table; the status chips are in the panel.
+    expect(screen.queryByRole('group', { name: t('web.status') })).toBeNull();
+    const chips = within(openFilterPanel()).getByRole('group', { name: t('web.status') });
     expect(
       within(chips)
         .getByRole('button', { name: t('web.ticket_filter_awaiting_support') })
@@ -174,11 +176,24 @@ describe('the ticket inbox', () => {
     fireEvent.click(within(chips).getByRole('button', { name: t('web.ticket_status_open') }));
     expect(new URLSearchParams(window.location.search).get('status')).toBe('OPEN');
     expect(new URLSearchParams(window.location.search).get('awaiting')).toBeNull();
-    // No restating subtitle: the intro sits in a fold; the categories card is closed until asked.
+    // No restating subtitle: the intro sits in a fold; the categories table is on the page.
     expect(screen.getByText(t('web.tickets_about_fold'))).toBeTruthy();
-    expect(screen.queryByRole('table', { name: t('web.ticket_categories_title') })).toBeNull();
-    // Status and priority share one cell; created sits under the last message.
-    expect(screen.queryByRole('columnheader', { name: t('web.ticket_priority') })).toBeNull();
+    expect(
+      await screen.findByRole('table', { name: t('web.ticket_categories_title') }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: t('web.ticket_categories_title') })).toBeNull();
+    // Status, priority, last message and created are columns of their own.
+    const headers = within(screen.getAllByRole('table')[0]!)
+      .getAllByRole('columnheader')
+      .map((cell) => cell.textContent);
+    for (const key of [
+      'web.status',
+      'web.ticket_priority',
+      'web.ticket_last_message',
+      'web.ticket_created_at',
+    ] as const) {
+      expect(headers, key).toContain(t(key));
+    }
   });
 
   it('has no search row of its own: the customer field is a filter in the «فیلترها» panel', async () => {
@@ -303,8 +318,7 @@ describe('the ticket inbox', () => {
     const { unmount } = renderPage(
       <TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories={false} />,
     );
-    // The categories card opens from the page head's button (it was always open before).
-    fireEvent.click(screen.getByRole('button', { name: t('web.tickets_categories_show') }));
+    // Demo parity: the categories table is on the page, with no button to open it.
     await screen.findAllByText('مشکل اتصال');
     expect(screen.queryByRole('button', { name: t('web.ticket_category_add') })).toBeNull();
     unmount();
@@ -322,7 +336,6 @@ describe('the ticket inbox', () => {
       },
     ]);
     renderPage(<TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories />);
-    fireEvent.click(screen.getByRole('button', { name: t('web.tickets_categories_show') }));
     // W3: the create form opens from the card's «افزودن دسته» button, in a drawer.
     fireEvent.click(await screen.findByRole('button', { name: t('web.ticket_category_add') }));
     const drawer = await screen.findByRole('dialog', { name: t('web.ticket_category_add') });
@@ -367,13 +380,12 @@ describe('the ticket inbox', () => {
       },
     ]);
     renderPage(<TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories />);
-    fireEvent.click(screen.getByRole('button', { name: t('web.tickets_categories_show') }));
     const table = await screen.findByRole('table', { name: t('web.ticket_categories_title') });
-    // W3: the row's «ذخیرهٔ ترتیب» opens the same input in a drawer.
-    fireEvent.click(within(table).getByRole('button', { name: t('web.ticket_category_reorder') }));
-    const drawer = await screen.findByRole('dialog');
-    const order = within(drawer).getByLabelText(t('web.ticket_category_order'));
-    const save = within(drawer).getByRole('button', { name: t('web.ticket_category_reorder') });
+    // Demo parity: the order is an input in the row and ONE «ذخیرهٔ ترتیب» saves the changed rows.
+    const order = within(table).getByLabelText(
+      `${t('web.ticket_category_order')} — ${categories.categories[0]!.title}`,
+    );
+    const save = screen.getByRole('button', { name: t('web.ticket_category_reorder') });
     expect((order as HTMLInputElement).value).toBe('10');
     // Unchanged, and then not a number: nothing to save either time.
     expect((save as HTMLButtonElement).disabled).toBe(true);
@@ -405,12 +417,9 @@ describe('the ticket inbox', () => {
     renderPage(
       <TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories={false} />,
     );
-    fireEvent.click(screen.getByRole('button', { name: t('web.tickets_categories_show') }));
     const table = await screen.findByRole('table', { name: t('web.ticket_categories_title') });
-    expect(within(table).queryByLabelText(t('web.ticket_category_order'))).toBeNull();
-    expect(
-      within(table).queryByRole('button', { name: t('web.ticket_category_reorder') }),
-    ).toBeNull();
+    expect(within(table).queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.ticket_category_reorder') })).toBeNull();
     expect(within(table).getByText('10')).toBeTruthy();
   });
 
@@ -884,12 +893,13 @@ describe('one ticket', () => {
     );
   });
 
-  it('PR-3: the close action is red and sits in the head card’s grouped action bar', async () => {
+  it('demo parity: the close action is red and sits in the «مدیریت تیکت» framed box', async () => {
     stubApi([{ url: `/tickets/${TICKET_ID}`, body: detail({ status: 'OPEN' }) }]);
     renderPage(
       <TicketDetailPage id={TICKET_ID} denied={false} mayReply={false} mayAssign mayClose />,
     );
-    const bar = await screen.findByRole('toolbar', { name: t('web.ticket_actions') });
+    // Demo parity (A1): «مدیریت تیکت» is a framed box (a titled section), not a toolbar strip.
+    const bar = await screen.findByRole('region', { name: t('web.ticket_actions') });
     expect(
       within(bar).getByRole('button', { name: t('web.ticket_action_close') }).className,
     ).toContain('danger');

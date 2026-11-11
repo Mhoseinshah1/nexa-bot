@@ -192,6 +192,12 @@ const items = () => {
   return within(thread).getAllByRole('listitem');
 };
 
+/** Demo parity: the sender filter is one select (the demo has no chip row in a conversation). */
+const chooseSender = (value: 'all' | 'customer' | 'ai' | 'operator' | 'events') =>
+  fireEvent.change(screen.getByRole('combobox', { name: t('web.bchat_thread_filters') }), {
+    target: { value },
+  });
+
 describe('the thread model', () => {
   const dayOf = (iso: string) => iso.slice(0, 10);
   const at = (hour: number, minute = 0, day = 1) =>
@@ -404,20 +410,19 @@ describe('the thread on the page', () => {
     open(conversation(8), {}, [handoff('2026-10-01T10:02:30.000Z')]);
     await screen.findByText('پیام شمارهٔ 8');
     expect(document.querySelector('[data-event="handoff"]')).toBeTruthy();
-    const chips = screen.getByRole('group', { name: t('web.bchat_thread_filters') });
 
-    fireEvent.click(within(chips).getByRole('button', { name: t('web.bchat_tf_customer') }));
+    chooseSender('customer');
     expect(items().map((item) => item.getAttribute('data-origin'))).toEqual(['INBOUND', 'INBOUND']);
 
-    fireEvent.click(within(chips).getByRole('button', { name: t('web.bchat_tf_ai') }));
+    chooseSender('ai');
     expect(new Set(items().map((item) => item.getAttribute('data-origin')))).toEqual(
       new Set(['OWN_ECHO']),
     );
 
-    fireEvent.click(within(chips).getByRole('button', { name: t('web.bchat_tf_operator') }));
+    chooseSender('operator');
     expect(items().map((item) => item.getAttribute('data-origin'))).toEqual(['HUMAN', 'HUMAN']);
 
-    fireEvent.click(within(chips).getByRole('button', { name: t('web.bchat_tf_events') }));
+    chooseSender('events');
     expect(items().map((item) => item.getAttribute('data-event'))).toEqual(['handoff']);
   });
 
@@ -439,8 +444,7 @@ describe('the thread on the page', () => {
     expect(searched[0]!.query.get('before')).toBeNull();
 
     // The filter's speaker goes with the words: the customer's hits only (5, 53, 57).
-    const chips = screen.getByRole('group', { name: t('web.bchat_thread_filters') });
-    fireEvent.click(within(chips).getByRole('button', { name: t('web.bchat_tf_customer') }));
+    chooseSender('customer');
     await waitFor(() => expect(items()).toHaveLength(3));
     expect(new Set(items().map((item) => item.getAttribute('data-origin')))).toEqual(
       new Set(['INBOUND']),
@@ -482,8 +486,7 @@ describe('the thread on the page', () => {
   it('searches the handoffs by their label without asking the server under «events»', async () => {
     const calls = openServed(conversation(8), {}, [handoff('2026-10-01T10:02:30.000Z')]);
     await screen.findByText('پیام شمارهٔ 8');
-    const chips = screen.getByRole('group', { name: t('web.bchat_thread_filters') });
-    fireEvent.click(within(chips).getByRole('button', { name: t('web.bchat_tf_events') }));
+    chooseSender('events');
     fireEvent.change(screen.getByLabelText(t('web.bchat_thread_search')), {
       target: { value: t('web.bchat_event_handoff') },
     });

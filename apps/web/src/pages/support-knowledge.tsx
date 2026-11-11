@@ -32,7 +32,6 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { QuickFilters } from '../ui/redesign';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
@@ -530,21 +529,7 @@ export function SupportKnowledgePage({
       </Banner>
       {/* Demo parity (DIFFS support-knowledge #1): the filter line in a bordered card of its own. */}
       <Card tight className="sk-filters">
-        {/* The state as quick-filter chips (the same filter as the panel's select, one state). */}
-        <div className="sk-quick">
-          <QuickFilters
-            label={t('web.sk_col_state')}
-            value={state}
-            onChange={setState}
-            items={[
-              { key: 'ALL' as const, label: t('web.sk_all') },
-              ...SUPPORT_KNOWLEDGE_ARTICLE_STATES.map((value) => ({
-                key: value,
-                label: t(KNOWLEDGE_STATE_LABELS[value]),
-              })),
-            ]}
-          />
-        </div>
+        {/* Demo parity: the state is a filter of the filters panel, not a chip row above it. */}
         <ListFilterBar
           label={t('web.sk_title')}
           filters={[
@@ -894,20 +879,37 @@ export function LearningCandidatesPage({
     <>
       <PageHead title={t('web.sk_cand_title')} />
       <Banner tone="info">{t('web.sk_cand_nothing_active')}</Banner>
-      {/* The shared toolbar pattern (no demo page here): the state pills in a bordered card
-          of their own, as the knowledge list's filter line beside it. */}
+      {/* The filter line in a bordered card of its own, as the knowledge list's beside it. */}
       <Card tight className="sk-filters">
-        <div className="sk-quick">
-          <QuickFilters
-            label={t('web.sk_cand_state')}
-            value={state}
-            onChange={setState}
-            items={SUPPORT_LEARNING_CANDIDATE_STATES.map((value) => ({
-              key: value,
-              label: t(CANDIDATE_STATE_LABELS[value]),
-            }))}
-          />
-        </div>
+        <ListFilterBar
+          label={t('web.sk_cand_title')}
+          filters={[
+            {
+              key: 'state',
+              label: t('web.sk_cand_state'),
+              // «در انتظار بازبینی» is the page's own default and draws no chip while in force.
+              active: state === 'PENDING' ? null : t(CANDIDATE_STATE_LABELS[state]),
+              onClear: () => setState('PENDING'),
+              control: (
+                <Select
+                  id="sk-cand-state"
+                  size="sm"
+                  aria-label={t('web.sk_cand_state')}
+                  value={state}
+                  onChange={(event) =>
+                    setState(event.target.value as SupportLearningCandidateState)
+                  }
+                >
+                  {SUPPORT_LEARNING_CANDIDATE_STATES.map((value) => (
+                    <option key={value} value={value}>
+                      {t(CANDIDATE_STATE_LABELS[value])}
+                    </option>
+                  ))}
+                </Select>
+              ),
+            },
+          ]}
+        />
       </Card>
       {decide.error != null && editing === null && (
         <Banner tone="danger" role="alert">

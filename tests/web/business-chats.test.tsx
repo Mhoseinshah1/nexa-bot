@@ -13,6 +13,7 @@ import { ApiError } from '../../apps/web/src/api/client';
 import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * TB2 — the Web Admin's Telegram Business inbox and one conversation. Fixtures go through
@@ -193,8 +194,9 @@ describe('the business inbox', () => {
     expect(params.get('cursor')).toBeNull();
     expect(await screen.findByText(t('web.bchat_connections_empty'))).toBeTruthy();
 
-    // Quick-filter chips over the table (the redesign), not a filter panel.
-    const chips = screen.getByRole('group', { name: t('web.status') });
+    // Demo parity: the state filter is in the «فیلترها» panel, not a chip row over the table.
+    expect(screen.queryByRole('group', { name: t('web.status') })).toBeNull();
+    const chips = within(openFilterPanel()).getByRole('group', { name: t('web.status') });
     fireEvent.click(within(chips).getByRole('button', { name: t('web.bchat_state_paused') }));
     expect(new URLSearchParams(window.location.search).get('state')).toBe('PAUSED');
     fireEvent.click(within(chips).getByRole('button', { name: t('web.bchat_filter_all') }));
