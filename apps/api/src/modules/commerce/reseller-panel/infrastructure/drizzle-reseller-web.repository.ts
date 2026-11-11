@@ -252,8 +252,8 @@ export class DrizzleResellerWebRepository implements ResellerWebRepository {
     return rows.length === 1;
   }
 
-  async countSecondFactorAttempt(scope: TenantContext, id: string): Promise<number> {
-    const [row] = await this.db
+  async countSecondFactorAttempt(scope: TenantContext, id: string, tx: unknown): Promise<number> {
+    const [row] = await this.exec(tx)
       .update(resellerWebSessions)
       .set({ secondFactorAttempts: sql`${resellerWebSessions.secondFactorAttempts} + 1` })
       .where(
@@ -432,8 +432,12 @@ export class DrizzleResellerWebRepository implements ResellerWebRepository {
     });
   }
 
-  async countActivationAttempt(scope: TenantContext, customerId: string): Promise<number | null> {
-    const [row] = await this.db
+  async countActivationAttempt(
+    scope: TenantContext,
+    customerId: string,
+    tx: unknown,
+  ): Promise<number | null> {
+    const [row] = await this.exec(tx)
       .update(resellerWebTotpFactors)
       .set({ activationAttempts: sql`${resellerWebTotpFactors.activationAttempts} + 1` })
       .where(

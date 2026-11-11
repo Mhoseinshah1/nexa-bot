@@ -371,69 +371,105 @@ export class ResellerWebAccessService {
       throw sessionInvalid();
     }
     const actor = resellerWebActor(session.id, request.correlationId, request);
-    const outcome = parsed.success
-      ? await this.deps.uow.run(tenant, async (tx) => {
-          const at = this.deps.clock.now();
-          const locked = await this.deps.repository.lockSession(tenant, session.id, tx);
-          if (locked === null || !sessionLive(locked, at, 'PENDING_SECOND_FACTOR')) {
-            return 'GONE' as const;
-          }
-          const factor = await this.deps.repository.lockFactor(tenant, locked.customerId, tx);
-          if (factor === null || factor.state !== 'ACTIVE') return 'GONE' as const;
-          const secret = this.deps.cipher.decrypt(
-            { ciphertext: factor.ciphertext, keyId: factor.keyId },
-            totpContext(tenant.tenantId, factor.id),
-          );
-          const step = matchTotp(secret, parsed.data.code, at, factor.lastUsedStep);
-          if (step === null) return 'WRONG' as const;
-          if (!(await this.deps.repository.consumeStep(tenant, { id: factor.id, step }, tx))) {
-            return 'WRONG' as const;
-          }
-          const absoluteExpiresAt = sessionAbsoluteEnd(at, 'ACTIVE');
-          if (
-            !(await this.deps.repository.activateSession(
-              tenant,
-              { id: locked.id, now: at, absoluteExpiresAt },
-              tx,
-            ))
-          ) {
-            return 'GONE' as const;
-          }
-          await this.signedIn(tenant, actor, {
-            sessionId: locked.id,
-            customerId: locked.customerId,
-            botInstanceId: locked.botInstanceId as BotInstanceId,
-            fingerprint: locked.deviceFingerprint,
-            now: at,
-            secondFactor: true,
-            tx,
-          });
-          return { expiresAt: absoluteExpiresAt };
-        })
-      : ('WRONG' as const);
-    if (outcome === 'GONE') throw sessionInvalid();
-    if (outcome === 'WRONG') {
-      // Counted in a commit of its own; past the bound the session ends and the link is spent.
-      const attempts = await this.deps.repository.countSecondFactorAttempt(tenant, session.id);
-      if (attempts >= RESELLER_WEB_SECOND_FACTOR_MAX_ATTEMPTS) {
-        await this.deps.repository.endSession(tenant, {
-          id: session.id,
-          customerId: session.customerId,
-          reason: 'SECOND_FACTOR_FAILED',
-          now: this.deps.clock.now(),
-        });
+    /*
+     * The attempt bound is decided UNDER the session row's lock, in the same transaction that
+     * judges the code: a wrong code is counted (and the session ended at the bound) before the
+     * transaction commits, so parallel wrong codes serialise on the row and never exceed it.
+     */
+    const outcome = await this.deps.uow.run(tenant, async (tx) => {
+      const at = this.deps.clock.now();
+      const locked = await this.deps.repository.lockSession(tenant, session.id, tx);
+      if (locked === null || !sessionLive(locked, at, 'PENDING_SECOND_FACTOR')) {
+        return { kind: 'GONE' as const };
       }
+      if (locked.secondFactorAttempts >= RESELLER_WEB_SECOND_FACTOR_MAX_ATTEMPTS) {
+        await this.endAtBound(tenant, locked, at, tx);
+        return { kind: 'GONE' as const };
+      }
+      const factor = await this.deps.repository.lockFactor(tenant, locked.customerId, tx);
+      if (factor === null || factor.state !== 'ACTIVE') return { kind: 'GONE' as const };
+      const step = parsed.success
+        ? matchTotp(
+            this.deps.cipher.decrypt(
+              { ciphertext: factor.ciphertext, keyId: factor.keyId },
+              totpContext(tenant.tenantId, factor.id),
+            ),
+            parsed.data.code,
+            at,
+            factor.lastUsedStep,
+          )
+        : null;
+      if (
+        step === null ||
+        !(await this.deps.repository.consumeStep(tenant, { id: factor.id, step }, tx))
+      ) {
+        const attempts = await this.wrongAttempt(tenant, locked, at, tx);
+        return { kind: 'WRONG' as const, attempts };
+      }
+      const absoluteExpiresAt = sessionAbsoluteEnd(at, 'ACTIVE');
+      if (
+        !(await this.deps.repository.activateSession(
+          tenant,
+          { id: locked.id, now: at, absoluteExpiresAt },
+          tx,
+        ))
+      ) {
+        return { kind: 'GONE' as const };
+      }
+      await this.signedIn(tenant, actor, {
+        sessionId: locked.id,
+        customerId: locked.customerId,
+        botInstanceId: locked.botInstanceId as BotInstanceId,
+        fingerprint: locked.deviceFingerprint,
+        now: at,
+        secondFactor: true,
+        tx,
+      });
+      return { kind: 'ACTIVE' as const, expiresAt: absoluteExpiresAt };
+    });
+    if (outcome.kind === 'GONE') throw sessionInvalid();
+    if (outcome.kind === 'WRONG') {
       await this.deps.audit.record(tenant, actor, {
         action: RESELLER_WEB_AUDIT_ACTIONS.SECOND_FACTOR,
         entityType: 'Customer',
         entityId: session.customerId,
         before: null,
-        after: { attempts },
+        after: { attempts: outcome.attempts },
         result: 'DENIED',
       });
       throw errors.unauthenticated(CODES.SECOND_FACTOR_INVALID, 'The code is not valid.');
     }
-    return outcome;
+    return { expiresAt: outcome.expiresAt };
+  }
+
+  /**
+   * One wrong code on a LOCKED session row, inside the caller's transaction: counted, and the
+   * session ended when the count reaches the bound. Answers the new count.
+   */
+  private async wrongAttempt(
+    tenant: TenantContext,
+    locked: ResellerWebSessionRecord,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number> {
+    const attempts = await this.deps.repository.countSecondFactorAttempt(tenant, locked.id, tx);
+    if (attempts >= RESELLER_WEB_SECOND_FACTOR_MAX_ATTEMPTS) {
+      await this.endAtBound(tenant, locked, now, tx);
+    }
+    return attempts;
+  }
+
+  private async endAtBound(
+    tenant: TenantContext,
+    locked: ResellerWebSessionRecord,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<void> {
+    await this.deps.repository.endSession(
+      tenant,
+      { id: locked.id, customerId: locked.customerId, reason: 'SECOND_FACTOR_FAILED', now },
+      tx,
+    );
   }
 
   /** A session became ACTIVE: the device is recorded, a new one announced, the login audited. */
@@ -723,23 +759,17 @@ export class ResellerWebAccessService {
     };
   }
 
-  /** Turns a pending enrolment on with a code; every OTHER session of the reseller ends. */
+  /**
+   * Turns a pending enrolment on with a code; every OTHER session of the reseller ends.
+   *
+   * The pending factor's row is locked, its attempt count read and incremented in THAT
+   * transaction: past `RESELLER_WEB_SECOND_FACTOR_MAX_ATTEMPTS` wrong codes the pending factor is
+   * deleted (enrolment starts again), so parallel guesses never exceed the bound. The pending
+   * factor itself is the freshness: it was enrolled from a fresh sign-in, within its window.
+   */
   async activateTotp(context: ResellerWebContext, input: unknown): Promise<{ ended: number }> {
     const tenant = this.tenantOf(context);
     const command = this.parseCode(input);
-    const attempts = await this.deps.repository.countActivationAttempt(tenant, context.customer.id);
-    if (attempts === null) {
-      throw errors.conflict(CODES.SECOND_FACTOR_STATE, 'No enrolment is waiting.');
-    }
-    if (attempts > RESELLER_WEB_SECOND_FACTOR_MAX_ATTEMPTS) {
-      await this.deps.uow.run(tenant, async (tx) => {
-        const factor = await this.deps.repository.lockFactor(tenant, context.customer.id, tx);
-        if (factor?.state === 'PENDING') {
-          await this.deps.repository.deleteFactor(tenant, context.customer.id, tx);
-        }
-      });
-      throw errors.conflict(CODES.SECOND_FACTOR_STATE, 'No enrolment is waiting.');
-    }
     const outcome = await this.deps.uow.run(tenant, async (tx) => {
       const now = this.deps.clock.now();
       const factor = await this.deps.repository.lockFactor(tenant, context.customer.id, tx);
@@ -748,16 +778,33 @@ export class ResellerWebAccessService {
         factor.state !== 'PENDING' ||
         now.getTime() >= factor.createdAt.getTime() + TOTP_ENROLMENT_TTL_SECONDS * 1000
       ) {
-        return 'NOT_PENDING' as const;
+        return { kind: 'NOT_PENDING' as const };
+      }
+      if (factor.activationAttempts >= RESELLER_WEB_SECOND_FACTOR_MAX_ATTEMPTS) {
+        await this.deps.repository.deleteFactor(tenant, context.customer.id, tx);
+        return { kind: 'NOT_PENDING' as const };
       }
       const secret = this.deps.cipher.decrypt(
         { ciphertext: factor.ciphertext, keyId: factor.keyId },
         totpContext(tenant.tenantId, factor.id),
       );
-      const step = matchTotp(secret, command.code, now, null);
-      if (step === null) return 'WRONG' as const;
+      const step = command === null ? null : matchTotp(secret, command.code, now, null);
+      if (step === null) {
+        const attempts = await this.deps.repository.countActivationAttempt(
+          tenant,
+          context.customer.id,
+          tx,
+        );
+        if (
+          (attempts ?? RESELLER_WEB_SECOND_FACTOR_MAX_ATTEMPTS) >=
+          RESELLER_WEB_SECOND_FACTOR_MAX_ATTEMPTS
+        ) {
+          await this.deps.repository.deleteFactor(tenant, context.customer.id, tx);
+        }
+        return { kind: 'WRONG' as const };
+      }
       if (!(await this.deps.repository.activateFactor(tenant, { id: factor.id, step, now }, tx))) {
-        return 'NOT_PENDING' as const;
+        return { kind: 'NOT_PENDING' as const };
       }
       const ended = await this.deps.repository.endSessionsOf(
         tenant,
@@ -782,32 +829,50 @@ export class ResellerWebAccessService {
         },
         tx,
       );
-      return { ended };
+      return { kind: 'DONE' as const, ended };
     });
-    if (outcome === 'NOT_PENDING') {
+    if (outcome.kind === 'NOT_PENDING') {
       throw errors.conflict(CODES.SECOND_FACTOR_STATE, 'No enrolment is waiting.');
     }
-    if (outcome === 'WRONG') {
+    if (outcome.kind === 'WRONG') {
       throw errors.unauthenticated(CODES.SECOND_FACTOR_INVALID, 'The code is not valid.');
     }
-    return outcome;
+    return { ended: outcome.ended };
   }
 
-  /** Turns the factor off: a fresh sign-in AND a current code. */
+  /**
+   * Turns the factor off: a fresh sign-in AND a current code — under the replay rule (the step
+   * is consumed before the factor goes, so a code already used cannot be used again) and the
+   * same per-session attempt bound as the code step, decided under this session's row lock: at
+   * the bound the session ends and the reseller must sign in again from a fresh link.
+   */
   async disableTotp(context: ResellerWebContext, input: unknown): Promise<void> {
     this.requireFreshSignIn(context);
     const tenant = this.tenantOf(context);
     const command = this.parseCode(input);
     const outcome = await this.deps.uow.run(tenant, async (tx) => {
       const now = this.deps.clock.now();
+      const locked = await this.deps.repository.lockSession(tenant, context.sessionId, tx);
+      if (locked === null || !sessionLive(locked, now, 'ACTIVE')) return 'GONE' as const;
+      if (locked.secondFactorAttempts >= RESELLER_WEB_SECOND_FACTOR_MAX_ATTEMPTS) {
+        await this.endAtBound(tenant, locked, now, tx);
+        return 'GONE' as const;
+      }
       const factor = await this.deps.repository.lockFactor(tenant, context.customer.id, tx);
       if (factor === null || factor.state !== 'ACTIVE') return 'NOT_ACTIVE' as const;
       const secret = this.deps.cipher.decrypt(
         { ciphertext: factor.ciphertext, keyId: factor.keyId },
         totpContext(tenant.tenantId, factor.id),
       );
-      const step = matchTotp(secret, command.code, now, factor.lastUsedStep);
-      if (step === null) return 'WRONG' as const;
+      const step =
+        command === null ? null : matchTotp(secret, command.code, now, factor.lastUsedStep);
+      if (
+        step === null ||
+        !(await this.deps.repository.consumeStep(tenant, { id: factor.id, step }, tx))
+      ) {
+        await this.wrongAttempt(tenant, locked, now, tx);
+        return 'WRONG' as const;
+      }
       await this.deps.repository.deleteFactor(tenant, context.customer.id, tx);
       await this.deps.audit.record(
         tenant,
@@ -824,6 +889,7 @@ export class ResellerWebAccessService {
       );
       return 'DONE' as const;
     });
+    if (outcome === 'GONE') throw sessionInvalid();
     if (outcome === 'NOT_ACTIVE') {
       throw errors.conflict(CODES.SECOND_FACTOR_STATE, 'Two-step sign-in is not on.');
     }
@@ -973,12 +1039,10 @@ export class ResellerWebAccessService {
     }
   }
 
-  private parseCode(input: unknown): { readonly code: string } {
+  /** A code that is not six digits is a wrong code: counted like one, never a free try. */
+  private parseCode(input: unknown): { readonly code: string } | null {
     const parsed = resellerTotpCodeRequestSchema.safeParse(input ?? {});
-    if (!parsed.success) {
-      throw errors.unauthenticated(CODES.SECOND_FACTOR_INVALID, 'The code is not valid.');
-    }
-    return parsed.data;
+    return parsed.success ? parsed.data : null;
   }
 
   private qrDataUrl(uri: string): string | null {

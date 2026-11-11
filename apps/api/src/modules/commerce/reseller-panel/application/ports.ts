@@ -123,8 +123,8 @@ export interface ResellerWebRepository {
     input: { readonly id: string; readonly now: Date; readonly absoluteExpiresAt: Date },
     tx: unknown,
   ): Promise<boolean>;
-  /** Counts one wrong code on a pending session; answers the new count. */
-  countSecondFactorAttempt(scope: TenantContext, id: string): Promise<number>;
+  /** Counts one wrong code on a session (pending or, for 2FA changes, active); the new count. */
+  countSecondFactorAttempt(scope: TenantContext, id: string, tx: unknown): Promise<number>;
   /** Ends ONE live session of this customer; false when it was not live or not theirs. */
   endSession(
     scope: TenantContext,
@@ -184,7 +184,12 @@ export interface ResellerWebRepository {
     },
     tx: unknown,
   ): Promise<void>;
-  countActivationAttempt(scope: TenantContext, customerId: string): Promise<number | null>;
+  /** Counts one wrong activation code on the PENDING factor; the new count, null if none. */
+  countActivationAttempt(
+    scope: TenantContext,
+    customerId: string,
+    tx: unknown,
+  ): Promise<number | null>;
   activateFactor(
     scope: TenantContext,
     input: { readonly id: string; readonly step: number; readonly now: Date },
