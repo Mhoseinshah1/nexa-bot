@@ -42,10 +42,12 @@ export function readActivationToken(hash: string): string | null {
  */
 export function HostedActivatePage({
   initialToken,
+  linkAlreadyOpened = false,
   onSignIn,
 }: {
   /** Injected for tests; the app passes the fragment's token. */
   initialToken: string | null;
+  linkAlreadyOpened?: boolean;
   onSignIn: () => void;
 }) {
   // Held in state: the fragment is wiped from the address bar by the caller before this renders.
@@ -108,7 +110,9 @@ export function HostedActivatePage({
           <p className="muted">{t('web.activate_intro')}</p>
         </header>
         {token === null ? (
-          <Banner tone="danger">{t('web.activate_no_token')}</Banner>
+          <Banner tone="danger">
+            {t(linkAlreadyOpened ? 'web.activate_link_used' : 'web.activate_no_token')}
+          </Banner>
         ) : (
           <form onSubmit={submit} autoComplete="off" noValidate>
             <Field
