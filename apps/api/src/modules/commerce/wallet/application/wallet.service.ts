@@ -133,6 +133,8 @@ export interface WalletAdjustment {
 export interface WalletHistoryQuery {
   readonly limit?: number;
   readonly cursor?: WalletCursor;
+  /** PR-4 (reseller panel «واریز / برداشت»): only the movements of one direction. */
+  readonly direction?: 'CREDIT' | 'DEBIT';
 }
 
 /**
@@ -223,6 +225,8 @@ export class WalletService {
       await this.sellingCurrency(scope),
       limit,
       query.cursor ?? null,
+      undefined,
+      query.direction,
     );
   }
 

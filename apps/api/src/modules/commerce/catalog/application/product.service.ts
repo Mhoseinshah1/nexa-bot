@@ -10,6 +10,7 @@ import {
   type AuditWriter,
   type SalesCurrencyCode,
   type Clock,
+  type Money,
   type IdGenerator,
   type IdempotencyStore,
   type PanelId,
@@ -386,6 +387,64 @@ export class ProductService {
       view.audience,
     );
     return this.offered(scope, view, page, customerId);
+  }
+
+  /**
+   * PR-4 (reseller web panel «لیست قیمت»): the reseller's whole catalogue, category by category
+   * in the tenant's order, each plan with its LIST price and the price the reseller is offered
+   * (`ResellerService.offeredPrices`, the quote's own function — the same courtesy the bot's
+   * buttons draw). Read-only and decides nothing: a purchase is priced again at the one
+   * boundary. Empty for a customer who is not an ACTIVE reseller.
+   */
+  async resellerPriceList(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: string,
+  ): Promise<
+    readonly {
+      readonly category: ProductCategoryRecord;
+      readonly items: readonly {
+        readonly product: ProductRecord;
+        readonly listPrice: Money;
+        readonly offered: Money;
+      }[];
+    }[]
+  > {
+    await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
+    const view = await this.catalogueView(scope, customerId);
+    if (view === null || view.standing === undefined) return [];
+    const categories = await this.deps.repository.listCustomerCategories(
+      scope,
+      PRODUCT_PAGE_MAX,
+      0,
+      view.panelIds,
+      view.audience,
+    );
+    const out = [];
+    for (const category of categories.items) {
+      const page = await this.deps.repository.listCustomerProductsInCategory(
+        scope,
+        category.id,
+        PRODUCT_PAGE_MAX,
+        0,
+        view.panelIds,
+        view.audience,
+      );
+      const offered = await this.deps.resellers.offeredPrices(
+        scope,
+        view.standing,
+        'NEW_SERVICE',
+        page.items,
+      );
+      const items = page.items.flatMap((product) => {
+        const price = offered.get(product.id) ?? null;
+        return product.price === null || price === null
+          ? []
+          : [{ product, listPrice: product.price, offered: price }];
+      });
+      if (items.length > 0) out.push({ category, items });
+    }
+    return out;
   }
 
   /**

@@ -89,6 +89,7 @@ import * as autoRenewFlow from './runtime/auto-renew-flow.js';
 import * as serviceActionsFlow from './runtime/service-actions-flow.js';
 import * as supportFlow from './runtime/support-flow.js';
 import * as resellerRequestFlow from './runtime/reseller-request-flow.js';
+import * as resellerWebFlow from './runtime/reseller-web-flow.js';
 import * as adminResellerRequestFlow from './runtime/admin-reseller-request-flow.js';
 import * as trialFlow from './runtime/trial-flow.js';
 import * as referralFlow from './runtime/referral-flow.js';
@@ -1818,6 +1819,10 @@ export class BotRuntime {
         buttons: [mainMenuButton()],
         orderId: null,
       };
+    }
+    // PR-4: «ورود به پنل وب» — a fresh one-time link to the reseller web panel.
+    if (command.intent === 'RESELLER_WEB_LINK') {
+      return resellerWebFlow.issueLink(this, scope, actor, customer, input.botInstanceId);
     }
     if (command.intent === 'GIFT_CARD') {
       return topupFlow.giftCardBegin(
