@@ -1,3 +1,6 @@
+// Must stay the first import: it captures the address fragment (a one-time link's token)
+// before any other module can rewrite the history entry.
+import './initial-fragment';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClientProvider } from '@tanstack/react-query';
