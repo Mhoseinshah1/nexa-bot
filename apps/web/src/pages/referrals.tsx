@@ -32,7 +32,8 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { RecordLink, recordHref } from '../ui/record-ref';
 import { setQueries, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
-import { QuickFilters, type QuickFilterItem } from '../ui/redesign';
+import { ListFilterBar } from '../ui/filter-bar';
+import { chipFilter } from './money-filters';
 import { FilePicker } from '../ui/file-picker';
 import {
   Badge,
@@ -48,7 +49,6 @@ import {
   Ltr,
   Money,
   PageHead,
-  Disclosure,
   Button,
   StateSwitch,
   useToast,
@@ -234,14 +234,15 @@ export function ReferralsPage({
   return (
     <>
       <PageHead title={t('web.referrals_title')} />
-      <Disclosure size="sm" summary={t('web.referrals_scope_title')}>
+      {/* Demo parity: the rules this page keeps are a section with a heading, not a collapsed fold. */}
+      <Card title={t('web.referrals_scope_title')}>
         <p className="muted small">{t('web.referrals_intro')}</p>
         <ul className="cb-notes">
           <li>{t('web.referrals_rule_read_only')}</li>
           <li>{t('web.referrals_rule_configure')}</li>
           <li>{t('web.referrals_rule_unrecovered')}</li>
         </ul>
-      </Disclosure>
+      </Card>
 
       {!denied && (
         <Card className="referrals-filter">
@@ -519,23 +520,27 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
     );
   };
 
-  const stateItems: QuickFilterItem<StateFilter>[] = [
-    { key: 'ALL', label: t('web.referrals_state_all') },
-    ...REFERRAL_COMMISSION_STATES.map((one) => ({
-      key: one as StateFilter,
-      label: t(COMMISSION_STATE_LABELS[one]),
-    })),
-  ];
   return (
     <Card title={t('web.referrals_commissions_title')} hint={t('web.referrals_commissions_hint')}>
       {/* Hidden while the list cannot answer: a filter mints a request the server has
           just refused. */}
       <div className="cb-filters" hidden={!mayRequest(commissions, denied)}>
-        <QuickFilters
+        {/* Demo parity: the state filter lives in the filters panel, not in an always-visible row. */}
+        <ListFilterBar
           label={t('web.status')}
-          items={stateItems}
-          value={state}
-          onChange={setState}
+          filters={[
+            chipFilter<ReferralCommissionState>({
+              key: 'commission-state',
+              label: t('web.status'),
+              value: state === 'ALL' ? null : state,
+              allLabel: t('web.referrals_state_all'),
+              onChange: (next) => setState(next ?? 'ALL'),
+              items: REFERRAL_COMMISSION_STATES.map((one) => ({
+                id: one,
+                label: t(COMMISSION_STATE_LABELS[one]),
+              })),
+            }),
+          ]}
         />
       </div>
 

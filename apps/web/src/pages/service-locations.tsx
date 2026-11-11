@@ -54,7 +54,8 @@ import { CheckField, FormSection, SaveBar } from './editor-layout';
 import { Drawer } from '../ui/overlays';
 import { useConfirmedClose } from '../ui/unsaved';
 import { ListFreshness } from '../ui/list-search';
-import { QuickFilters } from '../ui/redesign';
+import { ListFilterBar } from '../ui/filter-bar';
+import { chipFilter } from './money-filters';
 import { ErrorRef } from '../ui/technical-details';
 
 /**
@@ -335,25 +336,7 @@ export function ServiceLocationsPage({
         <CellMain
           primary={
             <span className="row">
-              {mayEdit ? (
-                <button
-                  type="button"
-                  className="link strong"
-                  disabled={busy}
-                  title={t('web.service_locations_edit')}
-                  onClick={() =>
-                    discard.confirmDiscard(() => {
-                      setEditing(row.id);
-                      setForm(formOf(row));
-                      setOpen(true);
-                    })
-                  }
-                >
-                  {row.label}
-                </button>
-              ) : (
-                <span className="strong">{row.label}</span>
-              )}
+              <span className="strong">{row.label}</span>
               {row.initial && <Badge tone="info">{t('web.service_locations_initial_badge')}</Badge>}
             </span>
           }
@@ -416,6 +399,21 @@ export function ServiceLocationsPage({
       render: (row) =>
         !mayEdit ? null : (
           <RowActions>
+            {/* Demo parity: a per-row edit button (the label used to be the button). */}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() =>
+                discard.confirmDiscard(() => {
+                  setEditing(row.id);
+                  setForm(formOf(row));
+                  setOpen(true);
+                })
+              }
+            >
+              {t('web.service_locations_edit')}
+            </Button>
             <IconButton
               size="sm"
               icon="trash"
@@ -432,7 +430,6 @@ export function ServiceLocationsPage({
     <>
       <PageHead
         title={t('web.service_locations_title')}
-        {...(denied ? {} : { count: rows.length })}
         actions={
           <>
             {!denied && <ListFreshness query={locations} />}
@@ -489,22 +486,30 @@ export function ServiceLocationsPage({
           }
         >
           <Card title={t('web.service_locations_list')}>
-            <QuickFilters
+            {/* Demo parity: the target filter lives in the filters panel, not in an always-visible row. */}
+            <ListFilterBar
               label={t('web.service_locations_filter_label')}
-              value={filter}
-              onChange={setFilter}
-              items={[
-                { key: 'all', label: t('web.service_locations_filter_all'), count: rows.length },
-                {
-                  key: 'on',
-                  label: t('web.service_locations_target_on'),
-                  count: rows.filter((row) => row.enabled).length,
-                },
-                {
-                  key: 'off',
-                  label: t('web.service_locations_target_off'),
-                  count: rows.filter((row) => !row.enabled).length,
-                },
+              filters={[
+                chipFilter({
+                  key: 'location-target',
+                  label: t('web.service_locations_filter_label'),
+                  value: filter === 'all' ? null : filter,
+                  allLabel: t('web.service_locations_filter_all'),
+                  allCount: rows.length,
+                  onChange: (next) => setFilter(next ?? 'all'),
+                  items: [
+                    {
+                      id: 'on',
+                      label: t('web.service_locations_target_on'),
+                      count: rows.filter((row) => row.enabled).length,
+                    },
+                    {
+                      id: 'off',
+                      label: t('web.service_locations_target_off'),
+                      count: rows.filter((row) => !row.enabled).length,
+                    },
+                  ],
+                }),
               ]}
             />
             <DataTable

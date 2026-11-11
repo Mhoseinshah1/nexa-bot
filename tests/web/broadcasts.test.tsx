@@ -19,7 +19,7 @@ import {
 import { renderTemplateBody } from '@nexa/i18n';
 import { renderPage, stubApi } from './harness';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { setDateField } from './ui-helpers';
+import { openFilterPanel, setDateField } from './ui-helpers';
 
 /**
  * «ارسال همگانی» in the Web Admin (round N, B1): the list, the confirmation that binds to the
@@ -412,8 +412,14 @@ describe('broadcast in the Web Admin', () => {
     const first = api.calls.find((call) => call.url.includes('/recipients'));
     expect(new URL(first?.url ?? '', 'http://x').searchParams.get('limit')).toBe('10');
     const card = screen.getByRole('heading', { name: t('web.bc_recipients') }).closest('section');
+    // Demo parity: the state filter is inside the «فیلترها» panel, not a chip row.
+    expect(
+      within(card as HTMLElement).queryByRole('button', { name: t('web.bc_r_failed') }),
+    ).toBeNull();
     fireEvent.click(
-      within(card as HTMLElement).getByRole('button', { name: t('web.bc_r_failed') }),
+      within(openFilterPanel(card as HTMLElement)).getByRole('button', {
+        name: t('web.bc_r_failed'),
+      }),
     );
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.includes('/recipients?limit=10&state=FAILED'))).toBe(

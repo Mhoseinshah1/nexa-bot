@@ -114,17 +114,9 @@ const input = (id: string): HTMLInputElement => {
 const posts = (api: Api, suffix: string) =>
   api.calls.filter((call) => call.method === 'POST' && call.url.endsWith(suffix));
 
-/** The three sections are tabs: a test opens the one it asserts on (all stay mounted). */
-const openTab = (name: string) => fireEvent.click(screen.getByRole('tab', { name }));
-const discountTable = () => {
-  openTab('قاعده‌های تخفیف');
-  return screen.getByRole('table', { name: 'قاعده‌های تخفیف' });
-};
-const cashbackTable = () => {
-  openTab('قاعده‌های کش‌بک');
-  return screen.getByRole('table', { name: 'قاعده‌های کش‌بک' });
-};
-const openPreview = () => openTab(t('web.preview_title'));
+/** Demo parity: the three sections are stacked on the page (no tabs), so nothing is opened. */
+const discountTable = () => screen.getByRole('table', { name: 'قاعده‌های تخفیف' });
+const cashbackTable = () => screen.getByRole('table', { name: 'قاعده‌های کش‌بک' });
 
 /** W3: a list's «افزودن» opens its create form in a drawer. */
 const addButton = (table: HTMLElement) =>
@@ -406,7 +398,6 @@ describe('cashback rules', () => {
       },
     ]);
     render();
-    openTab('قاعده‌های کش‌بک');
     await screen.findByText('هنوز قاعدهٔ کش‌بکی ثبت نشده است.');
     fireEvent.click(
       within(
@@ -636,7 +627,6 @@ describe('the price preview', () => {
     const api = stubApi([...lists(), { url: '/pricing/preview', body: preview }]);
     const { container } = render();
     await screen.findByText('Summer launch');
-    openPreview();
 
     const run = screen.getByRole('button', { name: 'محاسبه' });
     // Nothing to price yet.
@@ -688,7 +678,6 @@ describe('the price preview', () => {
     ]);
     render();
     await screen.findByText('Summer launch');
-    openPreview();
     fireEvent.change(input('preview-product'), { target: { value: PRODUCT_ID } });
     fireEvent.change(input('preview-code'), { target: { value: 'SUMMER25' } });
     fireEvent.click(screen.getByRole('button', { name: 'محاسبه' }));
@@ -719,7 +708,6 @@ describe('the price preview', () => {
     ]);
     const { container } = render();
     await screen.findByText('Summer launch');
-    openPreview();
     fireEvent.change(input('preview-product'), { target: { value: PRODUCT_ID } });
     fireEvent.click(screen.getByRole('button', { name: 'محاسبه' }));
     expect(await screen.findByText('تخفیف شخصی مشتری')).toBeInTheDocument();
@@ -731,7 +719,6 @@ describe('the price preview', () => {
     const api = stubApi([...lists(), { url: '/pricing/preview', body: preview }]);
     render();
     await screen.findByText('Summer launch');
-    openPreview();
     fireEvent.change(input('preview-purpose'), { target: { value: 'ADD_TRAFFIC' } });
     expect(document.getElementById('preview-product')).toBeNull();
     const addon = '019270ab-cdef-7012-8345-6789abcdef01';

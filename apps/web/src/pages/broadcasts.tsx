@@ -55,13 +55,9 @@ import {
 } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
 import { ListFreshness } from '../ui/list-search';
-import {
-  AttentionStrip,
-  CardRows,
-  KpiRow,
-  QuickFilters,
-  type QuickFilterItem,
-} from '../ui/redesign';
+import { AttentionStrip, CardRows, KpiRow } from '../ui/redesign';
+import { ListFilterBar } from '../ui/filter-bar';
+import { chipFilter } from './money-filters';
 import { jalaliDatesIn } from './editor-layout';
 import { FilePicker } from '../ui/file-picker';
 import { DateField } from '../ui/date-field';
@@ -77,7 +73,6 @@ import {
   ConfirmDialog,
   CursorPager,
   LIST_PAGE_SIZE,
-  CellMain,
   DataTable,
   Disclosure,
   Empty,
@@ -285,24 +280,20 @@ export function BroadcastsPage({
     {
       key: 'title',
       header: t('web.bc_title'),
-      // The kind of message sits under the name (the former «نوع» column, merged).
       render: (row) => (
-        <CellMain
-          primary={
-            <a
-              href={`/broadcasts/${encodeURIComponent(row.id)}`}
-              onClick={onLink}
-              className="strong"
-            >
-              {row.title}
-            </a>
-          }
-          secondary={
-            <Badge tone="neutral" outline>
-              {t(KIND_LABELS[row.contentKind])}
-            </Badge>
-          }
-        />
+        <a href={`/broadcasts/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+          {row.title}
+        </a>
+      ),
+    },
+    // Demo parity: the message kind is a column of its own again (it had been merged under the title).
+    {
+      key: 'kind',
+      header: t('web.bc_kind'),
+      render: (row) => (
+        <Badge tone="neutral" outline>
+          {t(KIND_LABELS[row.contentKind])}
+        </Badge>
       ),
     },
     {
@@ -1899,23 +1890,27 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
     }
     seenState.current = broadcastState;
   }, [broadcastState, client, id]);
-  const recipientItems: QuickFilterItem<BroadcastRecipientState | 'ALL'>[] = [
-    { key: 'ALL', label: t('web.aud_any') },
-    ...BROADCAST_RECIPIENT_STATES.map((option) => ({
-      key: option as BroadcastRecipientState | 'ALL',
-      label: t(RECIPIENT_LABELS[option]),
-    })),
-  ];
   return (
     <Card title={t('web.bc_recipients')}>
-      <QuickFilters
+      {/* Demo parity: the delivery-state filter lives in the filters panel, not in an always-visible row. */}
+      <ListFilterBar
         label={t('web.bc_state')}
-        items={recipientItems}
-        value={state === '' ? 'ALL' : state}
-        onChange={(next) => {
-          setState(next === 'ALL' ? '' : next);
-          setTrail([]);
-        }}
+        filters={[
+          chipFilter<BroadcastRecipientState>({
+            key: 'recipient-state',
+            label: t('web.bc_state'),
+            value: state === '' ? null : state,
+            allLabel: t('web.aud_any'),
+            onChange: (next) => {
+              setState(next ?? '');
+              setTrail([]);
+            },
+            items: BROADCAST_RECIPIENT_STATES.map((option) => ({
+              id: option,
+              label: t(RECIPIENT_LABELS[option]),
+            })),
+          }),
+        ]}
       />
       <StateSwitch query={rows}>
         {rows.data === undefined ? null : (

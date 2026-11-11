@@ -64,7 +64,6 @@ import {
   Card,
   CursorPager,
   DataTable,
-  Disclosure,
   Empty,
   Field,
   KV,
@@ -75,10 +74,8 @@ import {
   Progress,
   RowActions,
   StateSwitch,
-  Tabs,
   ButtonGroup,
   Button,
-  IconButton,
   IdText,
   CellMain,
   useToast,
@@ -133,20 +130,6 @@ export function DiscountsPage({
 }) {
   const options = useScopeOptions(!denied);
   const onLink = useLinkHandler();
-  // The three sections are tabs; all three stay mounted (a closed one is `hidden`), so a
-  // draft in an open form, a filter and a cursor survive a tab switch.
-  const [tab, setTab] = useState<DiscountsTab>('discounts');
-  const panel = (id: DiscountsTab, children: ReactNode) => (
-    <div
-      key={id}
-      role="tabpanel"
-      hidden={tab !== id}
-      {...(tab === id ? { id: 'discounts-panel' } : {})}
-      aria-labelledby={`discounts-panel-tab-${id}`}
-    >
-      {children}
-    </div>
-  );
   return (
     <>
       <PageHead
@@ -158,48 +141,26 @@ export function DiscountsPage({
           </a>
         }
       />
-      <Disclosure size="sm" summary={t('web.discounts_scope_title')}>
+      {/* Demo parity: the rules this page keeps are a section with a heading, not a collapsed fold. */}
+      <Card title={t('web.discounts_scope_title')}>
         <p className="muted small">{t('web.discounts_intro')}</p>
         <ul className="cb-notes">
           <li>{t('web.discounts_rule_no_delete')}</li>
           <li>{t('web.discounts_rule_usage')}</li>
           <li>{t('web.discounts_rule_cashback')}</li>
         </ul>
-      </Disclosure>
-      <Tabs
-        value={tab}
-        onChange={setTab}
-        panelId="discounts-panel"
-        label={t('web.discounts_title')}
-        items={[
-          { id: 'discounts', label: t('web.discounts_rules_title') },
-          { id: 'cashback', label: t('web.cashback_rules_title') },
-          { id: 'preview', label: t('web.preview_title') },
-        ]}
-      />
-      {panel(
-        'discounts',
-        <DiscountRules denied={denied} mayEdit={mayEditDiscounts} options={options} />,
-      )}
-      {panel(
-        'cashback',
-        <CashbackRules denied={denied} mayEdit={mayEditCashback} options={options} />,
-      )}
-      {panel('preview', <PricePreview denied={denied} options={options} />)}
+      </Card>
+      {/* Demo parity: the three sections are stacked on one page, not tabs. */}
+      <DiscountRules denied={denied} mayEdit={mayEditDiscounts} options={options} />
+      <CashbackRules denied={denied} mayEdit={mayEditCashback} options={options} />
+      <PricePreview denied={denied} options={options} />
     </>
   );
 }
 
-type DiscountsTab = 'discounts' | 'cashback' | 'preview';
-
-/** A rule's name: the way into its edit form (a link-styled button) when the actor may edit. */
-function RuleName({ label, onOpen }: { label: string; onOpen: (() => void) | null }) {
-  if (onOpen === null) return <span className="strong">{label}</span>;
-  return (
-    <button type="button" className="link strong" onClick={onOpen}>
-      {label}
-    </button>
-  );
+/** A rule's name, as text (the edit button of its row opens the form). */
+function RuleName({ label }: { label: string }) {
+  return <span className="strong">{label}</span>;
 }
 
 // ---------------------------------------------------------------------------
@@ -442,13 +403,9 @@ function RuleRowActions({
   if (stacked) {
     return (
       <span className="discounts-row-actions">
-        <IconButton
-          icon="edit"
-          label={t('web.rule_edit')}
-          size="sm"
-          disabled={busy}
-          onClick={onEdit}
-        />
+        <Button size="sm" variant="ghost" icon="edit" disabled={busy} onClick={onEdit}>
+          {t('web.rule_edit')}
+        </Button>
         {toggle}
       </span>
     );
@@ -560,25 +517,13 @@ function DiscountRules({
     onError: (error) => submission.settleOn(error),
   });
 
-  /** The name's link opens the same edit form as the row's pencil. */
-  const openEdit = (row: DiscountSummaryResponse): (() => void) | null =>
-    !mayEdit
-      ? null
-      : () => {
-          if (open && editing?.id === row.id) return;
-          discard.confirmDiscard(() => {
-            setEditing(row);
-            setOpen(true);
-          });
-        };
-
   const columns: readonly Column<DiscountSummaryResponse>[] = [
     {
       key: 'label',
       header: t('web.rule_label'),
       render: (row) => (
         <CellMain
-          primary={<RuleName label={row.label} onOpen={openEdit(row)} />}
+          primary={<RuleName label={row.label} />}
           {...(row.code === null
             ? {}
             : {
@@ -1765,23 +1710,11 @@ function CashbackRules({
     onError: (error) => submission.settleOn(error),
   });
 
-  /** The name's link opens the same edit form as the row's pencil. */
-  const openEdit = (row: CashbackRuleSummaryResponse): (() => void) | null =>
-    !mayEdit
-      ? null
-      : () => {
-          if (open && editing?.id === row.id) return;
-          discard.confirmDiscard(() => {
-            setEditing(row);
-            setOpen(true);
-          });
-        };
-
   const columns: readonly Column<CashbackRuleSummaryResponse>[] = [
     {
       key: 'label',
       header: t('web.rule_label'),
-      render: (row) => <RuleName label={row.label} onOpen={openEdit(row)} />,
+      render: (row) => <RuleName label={row.label} />,
     },
     {
       key: 'percent',

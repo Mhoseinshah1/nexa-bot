@@ -58,7 +58,6 @@ import {
   Badge,
   Banner,
   Card,
-  CellMain,
   CursorPager,
   Disclosure,
   LIST_PAGE_SIZE,
@@ -85,14 +84,10 @@ import { Icon } from '../ui/icons';
 import { ErrorCodeLabel } from '../ui/technical-details';
 import { DotTabs, SaveBar, jalaliDatesIn } from './editor-layout';
 import { ListFreshness } from '../ui/list-search';
-import {
-  AttentionStrip,
-  CardRows,
-  KpiRow,
-  QuickActionBar,
-  QuickFilters,
-  type QuickFilterItem,
-} from '../ui/redesign';
+import { AttentionStrip, CardRows, KpiRow, QuickActionBar } from '../ui/redesign';
+import { ListFilterBar } from '../ui/filter-bar';
+import { chipFilter } from './money-filters';
+import { PageMoreMenu } from '../ui/page-more-menu';
 import { TimeField24 } from '../ui/time-field24';
 
 /**
@@ -269,18 +264,17 @@ export function CampaignsPage({
     {
       key: 'name',
       header: t('web.campaign_name'),
-      // The name opens the campaign; the kinds of action it takes sit under it (the former
-      // «اقدام‌ها» column, merged so the table fits at 1440).
       render: (row) => (
-        <CellMain
-          primary={
-            <a href={`/campaigns/${row.id}`} onClick={onLink} className="strong">
-              {row.name}
-            </a>
-          }
-          secondary={<KindTags kinds={row.actionKinds} />}
-        />
+        <a href={`/campaigns/${row.id}`} onClick={onLink} className="strong">
+          {row.name}
+        </a>
       ),
+    },
+    // Demo parity: the kinds of action are the actions column again (they had been merged under the name).
+    {
+      key: 'actions',
+      header: t('web.campaign_actions'),
+      render: (row) => <KindTags kinds={row.actionKinds} />,
     },
     { key: 'state', header: t('web.status'), render: (row) => <StateBadge value={row.state} /> },
     {
@@ -305,13 +299,10 @@ export function CampaignsPage({
     },
   ];
 
-  const stateItems: QuickFilterItem<StateFilter>[] = [
-    { key: 'ALL', label: t('web.campaign_filter_all') },
-    ...CAMPAIGN_STATES.map((state) => ({
-      key: state as StateFilter,
-      label: t(CAMPAIGN_STATE_LABELS[state]),
-    })),
-  ];
+  const selectState = (next: StateFilter) => {
+    const suffix = next === 'ALL' ? '' : `?state=${next}`;
+    navigate(`/campaigns${suffix}`, { replace: true });
+  };
 
   return (
     <>
@@ -320,6 +311,27 @@ export function CampaignsPage({
         actions={
           <>
             <ListFreshness query={list} hidden={denied} />
+            {/* Demo parity: the page head's more-menu — what the page already does (clear its filter, re-read). */}
+            {!denied && (
+              <PageMoreMenu
+                items={[
+                  {
+                    key: 'clear',
+                    label: t('web.filters_clear_all'),
+                    disabled: filter === 'ALL',
+                    onSelect: () => selectState('ALL'),
+                  },
+                  {
+                    key: 'reread',
+                    label: t('web.nc_reread'),
+                    icon: 'refresh' as const,
+                    onSelect: () => {
+                      void list.refetch();
+                    },
+                  },
+                ]}
+              />
+            )}
             {mayManage && !denied ? (
               <>
                 <a className="btn" href="/discounts" onClick={onLink}>
@@ -343,14 +355,22 @@ export function CampaignsPage({
         <p className="muted small">{t('web.campaign_semantics_results')}</p>
       </Disclosure>
       <Card>
-        <QuickFilters
+        {/* Demo parity: the state filter lives in the filters panel, not in an always-visible row. */}
+        <ListFilterBar
           label={t('web.status')}
-          items={stateItems}
-          value={filter}
-          onChange={(next) => {
-            const suffix = next === 'ALL' ? '' : `?state=${next}`;
-            navigate(`/campaigns${suffix}`, { replace: true });
-          }}
+          filters={[
+            chipFilter<CampaignState>({
+              key: 'state',
+              label: t('web.status'),
+              value: filter === 'ALL' ? null : filter,
+              allLabel: t('web.campaign_filter_all'),
+              onChange: (next) => selectState(next ?? 'ALL'),
+              items: CAMPAIGN_STATES.map((state) => ({
+                id: state,
+                label: t(CAMPAIGN_STATE_LABELS[state]),
+              })),
+            }),
+          ]}
         />
         <StateSwitch
           query={list}

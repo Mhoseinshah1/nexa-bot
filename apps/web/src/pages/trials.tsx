@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ListFreshness } from '../ui/list-search';
-import { QuickFilters } from '../ui/redesign';
+import { ListFilterBar } from '../ui/filter-bar';
+import { chipFilter } from './money-filters';
 import { Drawer } from '../ui/overlays';
 import { useConfirmedClose } from '../ui/unsaved';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
@@ -176,17 +177,24 @@ function PanelTrialsCard({
           <Empty title={t('web.trials_panels_empty')} />
         ) : (
           <>
-            <QuickFilters
+            {/* Demo parity: the state filter lives in the filters panel, not in an always-visible row. */}
+            <ListFilterBar
               label={t('web.trials_panels_filter')}
-              value={stateFilter}
-              onChange={setStateFilter}
-              items={[
-                { key: 'all', label: t('web.trials_filter_all'), count: panels.data.panels.length },
-                ...(['offered', 'not_offered', 'disabled'] as const).map((key) => ({
-                  key,
-                  label: t(PANEL_FILTER_LABEL[key]),
-                  count: panels.data.panels.filter((row) => panelTrialStateOf(row) === key).length,
-                })),
+              filters={[
+                chipFilter({
+                  key: 'trial-state',
+                  label: t('web.trials_panels_filter'),
+                  value: stateFilter === 'all' ? null : stateFilter,
+                  allLabel: t('web.trials_filter_all'),
+                  allCount: panels.data.panels.length,
+                  onChange: (next) => setStateFilter(next ?? 'all'),
+                  items: (['offered', 'not_offered', 'disabled'] as const).map((key) => ({
+                    id: key,
+                    label: t(PANEL_FILTER_LABEL[key]),
+                    count: panels.data.panels.filter((row) => panelTrialStateOf(row) === key)
+                      .length,
+                  })),
+                }),
               ]}
             />
             <DataTable

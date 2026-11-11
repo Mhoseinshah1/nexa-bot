@@ -291,7 +291,7 @@ describe('replacing unsaved input in the category form', () => {
     await waitFor(() => expect(name()).toBeNull());
 
     // A row's «ویرایش» opens the drawer with that row, and closing it untouched asks nothing.
-    fireEvent.click(within(rowFor('عمومی')).getByRole('button', { name: 'عمومی' }));
+    fireEvent.click(within(rowFor('عمومی')).getByRole('button', { name: t('web.category_edit') }));
     await waitFor(() => expect(name()!.value).toBe('عمومی'));
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('alertdialog')).toBeNull();

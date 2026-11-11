@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import { ListFreshness } from '../ui/list-search';
-import { AttentionStrip, CardRows, KpiRow, QuickActionBar, QuickFilters } from '../ui/redesign';
+import { AttentionStrip, CardRows, KpiRow } from '../ui/redesign';
+import { ActionPanel } from '../ui/action-panel';
 import {
   PANEL_PAGE_MAX,
   SALES_CURRENCY_CODES,
@@ -79,6 +80,8 @@ import {
   type Column,
   type Tone,
   Num,
+  Tabs,
+  TabPanel,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { listRouteKey, useDebouncedApply } from '../ui/list-search';
@@ -300,6 +303,8 @@ const PRODUCT_FILTER_KEYS = ['status', 'audience', 'categoryId', 'title'] as con
  * sit under «آرشیو»; which row belongs where is the SERVER's predicate, on the keyset, never a
  * filter or a count on this page.
  */
+/** The view tabs' one panel (a `Tabs` strip names it by id). */
+const VIEW_PANEL_ID = 'products-view-panel';
 const PRODUCT_VIEW_TABS = ['current', 'archive'] as const;
 type ProductViewTab = (typeof PRODUCT_VIEW_TABS)[number];
 const PRODUCT_VIEW_OF: Readonly<Record<ProductViewTab, ProductListView>> = {
@@ -493,19 +498,17 @@ export function ProductsPage({
       key: 'status',
       header: t('web.status'),
       render: (row) => (
-        <CellMain
-          primary={
-            <Badge tone={STATUS_TONES[row.status]} dot>
-              {t(STATUS_LABELS[row.status])}
-            </Badge>
-          }
-          secondary={
-            <CatalogueBadge
-              row={row}
-              category={categoryFactsFor(row, categories.data?.categories)}
-            />
-          }
-        />
+        <Badge tone={STATUS_TONES[row.status]} dot>
+          {t(STATUS_LABELS[row.status])}
+        </Badge>
+      ),
+    },
+    {
+      // Demo parity: the in-bot-list column is its own column (the catalogue gap used to ride under the state).
+      key: 'in-bot',
+      header: t('web.products_col_in_bot'),
+      render: (row) => (
+        <CatalogueBadge row={row} category={categoryFactsFor(row, categories.data?.categories)} />
       ),
     },
     {
@@ -562,16 +565,17 @@ export function ProductsPage({
 
       <div>
         <Card className="products-list-card">
-          {/* No server total per view: the chips carry no count. */}
+          {/* Demo parity: real tabs (current / archive), not chips; no count, the list has no total. */}
           {!denied && (
-            <QuickFilters
+            <Tabs
               label={t('web.products_title')}
               value={viewTab}
               onChange={setViewTab}
               items={[
-                { key: 'current', label: t('web.products_view_current') },
-                { key: 'archive', label: t('web.products_view_archive') },
+                { id: 'current', label: t('web.products_view_current') },
+                { id: 'archive', label: t('web.products_view_archive') },
               ]}
+              panelId={VIEW_PANEL_ID}
             />
           )}
           {archive && <p className="muted small">{t('web.products_archive_intro')}</p>}
@@ -670,36 +674,38 @@ export function ProductsPage({
             />
           </div>
 
-          <StateSwitch
-            query={products}
-            denied={denied}
-            isEmpty={rows.length === 0}
-            empty={
-              searching ? (
-                <Empty
-                  title={t('web.products_search_empty')}
-                  hint={t('web.products_search_empty_hint')}
-                  icon="inbox"
-                />
-              ) : archive ? (
-                <Empty title={t('web.products_archive_empty')} icon="inbox" />
-              ) : (
-                <Empty
-                  title={t('web.products_empty')}
-                  hint={t('web.products_empty_hint')}
-                  icon="products"
-                />
-              )
-            }
-          >
-            <DataTable
-              caption={t('web.products_title')}
-              columns={columns}
-              rows={rows}
-              rowKey={(row) => row.id}
-              sticky
-            />
-          </StateSwitch>
+          <TabPanel id={VIEW_PANEL_ID} labelledBy={`${VIEW_PANEL_ID}-tab-${viewTab}`}>
+            <StateSwitch
+              query={products}
+              denied={denied}
+              isEmpty={rows.length === 0}
+              empty={
+                searching ? (
+                  <Empty
+                    title={t('web.products_search_empty')}
+                    hint={t('web.products_search_empty_hint')}
+                    icon="inbox"
+                  />
+                ) : archive ? (
+                  <Empty title={t('web.products_archive_empty')} icon="inbox" />
+                ) : (
+                  <Empty
+                    title={t('web.products_empty')}
+                    hint={t('web.products_empty_hint')}
+                    icon="products"
+                  />
+                )
+              }
+            >
+              <DataTable
+                caption={t('web.products_title')}
+                columns={columns}
+                rows={rows}
+                rowKey={(row) => row.id}
+                sticky
+              />
+            </StateSwitch>
+          </TabPanel>
 
           {!denied && queryState(products) === 'ready' && (
             <CursorPager
@@ -1882,11 +1888,12 @@ export function ProductDetailPage({
             */}
             {mayEdit && (
               <>
-                <QuickActionBar
+                <ActionPanel
+                  title={t('web.action_panel_title')}
                   groups={[
                     {
                       key: 'catalogue',
-                      label: t('web.product_actions_catalogue'),
+                      title: t('web.product_actions_catalogue'),
                       actions: [
                         <Button key="move" icon="folder" onClick={() => setMoving(true)}>
                           {t('web.product_category_assign')}

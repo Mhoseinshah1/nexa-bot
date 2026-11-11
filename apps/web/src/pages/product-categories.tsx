@@ -17,7 +17,8 @@ import { formatNumber } from '../format';
 import { messageFor } from './settings';
 import { useLinkHandler } from '../router';
 import { ListFreshness } from '../ui/list-search';
-import { QuickFilters } from '../ui/redesign';
+import { ListFilterBar } from '../ui/filter-bar';
+import { chipFilter } from './money-filters';
 import {
   Badge,
   Banner,
@@ -271,25 +272,7 @@ export function ProductCategoriesPage({
               {row.emoji}{' '}
             </span>
           )}
-          {mayEdit ? (
-            <button
-              type="button"
-              className="link strong"
-              disabled={busy}
-              title={t('web.category_edit')}
-              onClick={() =>
-                discard.confirmDiscard(() => {
-                  setEditing(row.id);
-                  setForm(formOf(row));
-                  setFormOpen(true);
-                })
-              }
-            >
-              {row.name}
-            </button>
-          ) : (
-            <span className="strong">{row.name}</span>
-          )}
+          <span className="strong">{row.name}</span>
         </span>
       ),
     },
@@ -326,6 +309,21 @@ export function ProductCategoriesPage({
         const index = rows.findIndex((candidate) => candidate.id === row.id);
         return (
           <RowActions>
+            {/* Demo parity: a per-row edit button (the name used to be the button). */}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() =>
+                discard.confirmDiscard(() => {
+                  setEditing(row.id);
+                  setForm(formOf(row));
+                  setFormOpen(true);
+                })
+              }
+            >
+              {t('web.category_edit')}
+            </Button>
             <Button
               size="sm"
               variant="ghost"
@@ -391,7 +389,6 @@ export function ProductCategoriesPage({
     <>
       <PageHead
         title={t('web.categories_title')}
-        {...(denied ? {} : { count: rows.length })}
         actions={
           <>
             {!denied && <ListFreshness query={categories} />}
@@ -450,27 +447,35 @@ export function ProductCategoriesPage({
             }
           >
             <Card title={t('web.categories_title')}>
-              <QuickFilters
+              {/* Demo parity: the status chips live in the filters panel, not in an always-visible row. */}
+              <ListFilterBar
                 label={t('web.categories_filter_label')}
-                value={filter}
-                onChange={setFilter}
-                items={[
-                  { key: 'all', label: t('web.categories_filter_all'), count: rows.length },
-                  {
-                    key: 'active',
-                    label: t('web.category_active'),
-                    count: rows.filter((row) => row.status === 'ACTIVE').length,
-                  },
-                  {
-                    key: 'inactive',
-                    label: t('web.category_inactive'),
-                    count: rows.filter((row) => row.status !== 'ACTIVE').length,
-                  },
-                  {
-                    key: 'hidden',
-                    label: t('web.category_hidden'),
-                    count: rows.filter((row) => row.visibility !== 'VISIBLE').length,
-                  },
+                filters={[
+                  chipFilter({
+                    key: 'category-state',
+                    label: t('web.categories_filter_label'),
+                    value: filter === 'all' ? null : filter,
+                    allLabel: t('web.categories_filter_all'),
+                    allCount: rows.length,
+                    onChange: (next) => setFilter(next ?? 'all'),
+                    items: [
+                      {
+                        id: 'active',
+                        label: t('web.category_active'),
+                        count: rows.filter((row) => row.status === 'ACTIVE').length,
+                      },
+                      {
+                        id: 'inactive',
+                        label: t('web.category_inactive'),
+                        count: rows.filter((row) => row.status !== 'ACTIVE').length,
+                      },
+                      {
+                        id: 'hidden',
+                        label: t('web.category_hidden'),
+                        count: rows.filter((row) => row.visibility !== 'VISIBLE').length,
+                      },
+                    ],
+                  }),
                 ]}
               />
               <DataTable

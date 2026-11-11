@@ -1,3 +1,4 @@
+import { PageMoreMenu } from '../ui/page-more-menu';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
@@ -179,6 +180,20 @@ export function GiftCardsPage({
         actions={
           <>
             <ListFreshness query={list} />
+            {/* Demo parity: the page head's more-menu. Its one item is a plain re-read of the
+                list; nothing that creates, exports or redeems moved into it. */}
+            <PageMoreMenu
+              items={[
+                {
+                  key: 'reread',
+                  label: t('web.nc_reread'),
+                  icon: 'refresh' as const,
+                  onSelect: () => {
+                    void list.refetch();
+                  },
+                },
+              ]}
+            />
             {mayCreate ? (
               <Button
                 variant="primary"

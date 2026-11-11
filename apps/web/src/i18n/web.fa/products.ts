@@ -200,6 +200,7 @@ export const WEB_FA_PRODUCTS = {
   // The products list's two tabs: the working list and the import's historical archive.
   'web.products_view_current': 'محصولات جاری',
   'web.products_view_archive': 'آرشیو',
+  'web.products_col_in_bot': 'در فهرست ربات',
   'web.products_archive_intro':
     'محصولات تاریخچه‌ای که هنگام انتقال اطلاعات برای سفارش‌ها و سرویس‌های قدیمی ساخته شده‌اند: غیرفعال، پنهان و بدون پنل. فروخته نمی‌شوند و چون سابقه به آن‌ها ارجاع می‌دهد، هرگز حذف نمی‌شوند.',
   'web.products_archive_empty': 'آرشیو خالی است.',
