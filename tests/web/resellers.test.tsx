@@ -654,6 +654,22 @@ describe('the standing and register surfaces (W2/W3)', () => {
     );
   });
 
+  it('draws the row menu in the page body, outside the clipping table cell, and a pick does not open the row', async () => {
+    stubApi(listRoutes());
+    renderList();
+    const row = (await screen.findByText('Reza Reseller')).closest('tr') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: t('web.page_more_menu') }));
+    const menu = await screen.findByRole('menu', { name: t('web.page_more_menu') });
+    // Revert the `portal` prop and the menu is a descendant of the cell (clipped by
+    // `.tbl-wrap.stack .tbl td { overflow: hidden }` under 820px).
+    expect(row.contains(menu)).toBe(false);
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.classList.contains('portal')).toBe(true);
+    fireEvent.click(within(menu).getByRole('menuitem', { name: t('web.reseller_customer_page') }));
+    expect(window.location.pathname).toBe(`/users/${CUSTOMER_ID}`);
+    expect(document.getElementById('reseller-standing')).toBeNull();
+  });
+
   it('opens the standing from a click on the row and from Enter on the focused row, not from its menu', async () => {
     stubApi(listRoutes());
     renderList();

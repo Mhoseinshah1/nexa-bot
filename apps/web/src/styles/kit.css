@@ -2595,6 +2595,29 @@ textarea.input,
   z-index: 30;
   animation: pop-up 0.12s ease;
 }
+.menu-anchor[aria-expanded='true'] {
+  anchor-name: --nx-menu;
+}
+/* `portal`: in document.body, so no table cell or scroll wrapper clips it; one menu is open at
+   a time, so one anchor name. No inline style (CSP). */
+.menu.portal {
+  position: fixed;
+}
+@supports (anchor-name: --a) {
+  .menu.portal {
+    position-anchor: --nx-menu;
+    inset: auto;
+    top: anchor(bottom);
+    inset-inline-end: anchor(end);
+    margin: 6px 0 0;
+    position-try-fallbacks: flip-block, flip-inline;
+  }
+  .menu.portal.up {
+    top: auto;
+    bottom: anchor(top);
+    margin: 0 0 6px;
+  }
+}
 .menu.up {
   top: auto;
   bottom: calc(100% + 6px);

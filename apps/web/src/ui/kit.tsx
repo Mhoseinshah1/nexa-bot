@@ -2126,6 +2126,8 @@ export function DataTable<T>({
 }
 /** True when a click landed on the row's own surface, not on a control or an open menu inside it. */
 function isRowBackground(target: Element, row: Element): boolean {
+  // A portaled menu's events still bubble through React to the row, but its node is not in it.
+  if (!row.contains(target)) return false;
   const control = target.closest(
     'a, button, input, select, textarea, label, summary, [role="menu"], [role="menuitem"], [role="dialog"]',
   );

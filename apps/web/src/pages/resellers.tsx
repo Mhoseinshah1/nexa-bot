@@ -455,6 +455,7 @@ export function ResellersPage({
           )}
           {/* Owner ruling: the customer-page link lives in the row's more-menu. */}
           <Menu
+            portal
             label={t('web.page_more_menu')}
             triggerClassName="btn sm ghost"
             trigger={
