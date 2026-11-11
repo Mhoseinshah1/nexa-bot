@@ -18,11 +18,15 @@ import {
   createTestContext,
   tenantA,
   tenantB,
+  testConfig,
   type TestContext,
 } from './harness';
 import { LegacyCompactionExecutor } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-compaction.executor';
 import { LegacyCleanupScheduler } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-cleanup.scheduler';
-import { DrizzleLegacyCompactionRepository } from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
+import {
+  DrizzleLegacyCompactionRepository,
+  ownerMaintenanceConnector,
+} from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
 import { DrizzleCustomerBotLinkRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer-bot-link.repository';
 import { DrizzleTermsRepository } from '../../apps/api/src/modules/control/terms/infrastructure/drizzle-terms.repository';
 import { DrizzleLegacyRecordsRepository } from '../../apps/api/src/modules/platform/legacy-history/infrastructure/drizzle-legacy-records.repository';
@@ -40,6 +44,10 @@ import type { BackupRunPartRow } from '../../apps/api/src/modules/platform/backu
  */
 
 type Rec = Record<string, unknown>;
+
+/** PR-L: the cleanup's VACUUM session, as the tables' owner (production's wiring). */
+const ownerVacuum = () =>
+  ownerMaintenanceConnector(testConfig().DATABASE_URL, { lockTimeoutMs: 5_000 });
 const HASH = 'a'.repeat(64);
 const TG = '7000000201';
 const CLEAN = {
@@ -229,7 +237,7 @@ describe('the automatic cleanup after an import (v0.9.7)', () => {
     const titles: string[] = [];
     const backupId = randomUUID();
     const c = ctx.container;
-    const repository = new DrizzleLegacyCompactionRepository(c.database.db, c.database.pool);
+    const repository = new DrizzleLegacyCompactionRepository(c.database.db, ownerVacuum());
     if (options.vacuumFails === true) {
       repository.vacuum = async () => {
         throw new Error('canceling statement due to statement timeout');
@@ -292,7 +300,7 @@ describe('the automatic cleanup after an import (v0.9.7)', () => {
   function scheduler(destination: () => BackupDeliveryDestination = () => 'DEDICATED_CHAT') {
     const c = ctx.container;
     return new LegacyCleanupScheduler({
-      repository: new DrizzleLegacyCompactionRepository(c.database.db, c.database.pool),
+      repository: new DrizzleLegacyCompactionRepository(c.database.db, ownerVacuum()),
       service: c.legacyCompaction,
       backupDestination: async () => destination(),
       opsLog: c.opsLog,
@@ -487,7 +495,61 @@ describe('the automatic cleanup after an import (v0.9.7)', () => {
     const [requested] = await q<{ actor_type: string; after: Rec }>(
       sql`SELECT actor_type, after FROM audit_logs WHERE action = 'legacy.compaction.request'`,
     );
-    expect(requested).toMatchObject({ actor_type: 'SYSTEM_JOB', after: { automatic: true } });
+    expect(requested).toMatchObject({
+      actor_type: 'SYSTEM_JOB',
+      after: { automatic: true, reason: 'INITIAL', revision: 2 },
+    });
+    expect(ended).toMatchObject({ reason: 'INITIAL', revision: 2 });
+    expect(ended?.vacuumedAt).not.toBeNull();
+  }, 120_000);
+
+  it('cleans up once more («پاک‌سازی تکمیلی») an import an older rule revision cleaned, as a NEW run', async () => {
+    const importId = await nxpkgImport({
+      status: 'COMPLETED',
+      finishedAt: new Date(nowMs - 60 * 60_000),
+      reconciliation: CLEAN,
+    });
+    // The owner's v0.9.13 run: COMPLETED under revision 1, its vacuum never proven, its
+    // working tables already emptied.
+    const old = randomUUID();
+    await db().execute(sql`
+      INSERT INTO legacy_compaction_runs
+        (id, tenant_id, state, requested_at, updated_at, finished_at, deleted, deduplicated,
+         before, after)
+      VALUES (${old}, ${tenantA.tenantId}, 'COMPLETED', ${new Date(nowMs - 30 * 60_000)},
+              ${new Date(nowMs - 20 * 60_000)}, ${new Date(nowMs - 20 * 60_000)}, 2571, 139313,
+              '{"tables":{"legacy_history_records":"2081210368"},"recordTypes":{}}'::jsonb,
+              '{"tables":{"legacy_history_records":"2081210368"},"recordTypes":{}}'::jsonb)`);
+    const [oldBefore] = await q(sql`SELECT * FROM legacy_compaction_runs WHERE id = ${old}`);
+    await scheduler().tick();
+    const created = await q<{ id: string; state: string; reason: string; revision: number }>(
+      sql`SELECT id, state, reason, revision FROM legacy_compaction_runs
+           WHERE id <> ${old} ORDER BY requested_at`,
+    );
+    expect(created).toMatchObject([{ state: 'REQUESTED', reason: 'SUPPLEMENTARY', revision: 2 }]);
+    const [audited] = await q<{ after: Rec }>(
+      sql`SELECT after FROM audit_logs WHERE action = 'legacy.compaction.request'`,
+    );
+    expect(audited?.after).toMatchObject({ reason: 'SUPPLEMENTARY', importId });
+
+    // Under every rule of the first: the archive FIRST, then the stages, a proven vacuum.
+    const { executor: run, titles } = executor();
+    const ended = await run.tick();
+    expect(errors).toEqual([]);
+    expect(titles).toEqual([LEGACY_COMPACTION_ARCHIVE_TITLE]);
+    expect(ended).toMatchObject({ state: 'COMPLETED', reason: 'SUPPLEMENTARY', revision: 2 });
+    expect(ended?.vacuumedAt).not.toBeNull();
+    // The old run is never edited.
+    const [oldAfter] = await q(sql`SELECT * FROM legacy_compaction_runs WHERE id = ${old}`);
+    expect(oldAfter).toEqual(oldBefore);
+    // The card shows the supplementary run.
+    const status = await ctx.container.legacyCompaction.status(tenantA, adminActorFor(owner));
+    expect(status.run).toMatchObject({ id: created[0]?.id, reason: 'SUPPLEMENTARY' });
+
+    // Done: not again, the next day either.
+    nowMs += 25 * 60 * 60_000;
+    await scheduler().tick();
+    expect(await runs()).toHaveLength(2);
   }, 120_000);
 
   it('deletes NOTHING when a part of the archive has no message id', async () => {
@@ -520,7 +582,8 @@ describe('the automatic cleanup after an import (v0.9.7)', () => {
     const failing = executor({ vacuumFails: true });
     const failed = await failing.executor.tick();
     expect(failed?.state).toBe('FAILED');
-    expect(failed?.failureCode).toBe('legacy_compaction.step_failed');
+    // PR-L: named as the vacuum's failure, and never COMPLETED.
+    expect(failed?.failureCode).toBe('legacy_compaction.vacuum_failed');
     // The archive was delivered and the cleared tables are already empty.
     expect(failing.titles).toEqual([LEGACY_COMPACTION_ARCHIVE_TITLE]);
     expect(await working()).toEqual({ map: 0, candidates: 0, trials: 0, staging: 3, archive: 1 });
@@ -544,7 +607,7 @@ describe('the automatic cleanup after an import (v0.9.7)', () => {
       reconciliation: CLEAN,
     });
     await scheduler().tick();
-    const repository = new DrizzleLegacyCompactionRepository(db(), ctx.container.database.pool);
+    const repository = new DrizzleLegacyCompactionRepository(db(), ownerVacuum());
     const claimed = await repository.claim({
       leaseOwner: 'test:cleanup',
       now: new Date(),

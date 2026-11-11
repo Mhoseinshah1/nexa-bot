@@ -99,6 +99,7 @@ export const SYSTEM_PATH_ALLOWLIST: readonly string[] = [
   'DrizzleInstallationKeyRepository.rewrap',
   'DrizzleInstallationKeyRepository.secretCountsByKeyId',
   'DrizzleLegacyCompactionRepository.advance',
+  'DrizzleLegacyCompactionRepository.analyze',
   'DrizzleLegacyCompactionRepository.authorise',
   'DrizzleLegacyCompactionRepository.automaticCandidates',
   'DrizzleLegacyCompactionRepository.awaitingDestinationOpen',

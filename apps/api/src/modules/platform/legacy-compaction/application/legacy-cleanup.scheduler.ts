@@ -10,6 +10,7 @@ import {
 } from '@nexa/contracts';
 import type { LegacyCompactionService } from './legacy-compaction.service.js';
 import type { LegacyCompactionRepository } from './ports.js';
+import { LEGACY_CLEANUP_REVISION } from './cleanup-rules.js';
 
 /**
  * v0.9.7 PR-1 — the AUTOMATIC cleanup after an import («پاک‌سازی داده‌های انتقال»).
@@ -75,12 +76,17 @@ export class LegacyCleanupScheduler {
     const candidates = await this.deps.repository.automaticCandidates({
       now,
       retryFailedBefore: new Date(at - DAY_MS),
+      revision: LEGACY_CLEANUP_REVISION,
     });
     for (const candidate of candidates) await this.consider(candidate, at);
   }
 
   private async consider(
-    candidate: { readonly tenantId: string; readonly importId: string },
+    candidate: {
+      readonly tenantId: string;
+      readonly importId: string;
+      readonly reason: 'INITIAL' | 'SUPPLEMENTARY';
+    },
     at: number,
   ): Promise<void> {
     const scope: TenantContext = { tenantId: candidate.tenantId as never, botInstanceId: null };
@@ -121,14 +127,19 @@ export class LegacyCleanupScheduler {
       this.recordedAt.delete(`${LEGACY_CLEANUP_AWAITING_DESTINATION_CODE}:${candidate.tenantId}`);
     }
     // One request per import and day: a FAILED run is retried the next day, never in a loop.
+    // PR-L: the supplementary run («پاک‌سازی تکمیلی») under its own key, by revision.
     const day = new Date(at).toISOString().slice(0, 10);
+    const key =
+      candidate.reason === 'SUPPLEMENTARY'
+        ? `legacy-cleanup:supplementary:r${String(LEGACY_CLEANUP_REVISION)}:${candidate.importId}:${day}`
+        : `legacy-cleanup:auto:${candidate.importId}:${day}`;
     const run = await this.deps.service.requestAutomatic(scope, this.deps.actor(), {
       importId: candidate.importId,
-      idempotencyKey: `legacy-cleanup:auto:${candidate.importId}:${day}`,
+      idempotencyKey: key,
     });
     if (run !== null) {
       this.deps.logger.info(
-        { compactionId: run.id, importId: candidate.importId },
+        { compactionId: run.id, importId: candidate.importId, reason: run.reason },
         'the automatic cleanup of the imported legacy data was requested',
       );
     }

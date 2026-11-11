@@ -11,7 +11,10 @@ import {
 } from '@nexa/contracts';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import type { LegacyTrialFacts } from '../../apps/api/src/modules/commerce/trials/application/legacy-trial-eligibility';
-import { DrizzleLegacyCompactionRepository } from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
+import {
+  DrizzleLegacyCompactionRepository,
+  ownerMaintenanceConnector,
+} from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -20,6 +23,7 @@ import {
   SEED_IDS,
   tenantA,
   tenantB,
+  testConfig,
   type TestContext,
 } from './harness';
 
@@ -511,7 +515,7 @@ describe('legacy trial eligibility', () => {
 
     const repository = new DrizzleLegacyCompactionRepository(
       ctx.container.database.db,
-      ctx.container.database.pool,
+      ownerMaintenanceConnector(testConfig().DATABASE_URL, { lockTimeoutMs: 5_000 }),
     );
     const run = randomUUID();
     await ctx.container.database.db.execute(sql`

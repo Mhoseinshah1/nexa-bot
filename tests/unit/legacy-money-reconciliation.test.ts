@@ -7,7 +7,6 @@ import {
   reconcile,
   summarisePayments,
   summariseWalletTransactions,
-  summariseWheel,
   totalOf,
   type CustomerOpeningEvidence,
   type TenantMoneyInput,
@@ -134,7 +133,7 @@ describe('payments', () => {
   });
 });
 
-describe('wallet transactions and the wheel', () => {
+describe('wallet transactions', () => {
   it('reports debits as magnitudes and keeps zero and unparsed rows out of the sums', () => {
     const w = summariseWalletTransactions([
       {
@@ -154,15 +153,6 @@ describe('wallet transactions and the wheel', () => {
     });
     expect(w.noChange).toBe(4);
     expect(w.unparsedAmounts).toBe(1);
-  });
-
-  it('sums only the prizes that were won', () => {
-    const wheel = summariseWheel([
-      { won: true, currency: 'IRT', count: 2, sumMinor: 20000n, unparsed: 0 },
-      { won: false, currency: 'IRT', count: 5, sumMinor: 0n, unparsed: 0 },
-    ]);
-    expect(wheel.spins).toBe(7);
-    expect(wheel.prizesWon).toMatchObject({ count: 2, amounts: [{ amountMinor: 20000n }] });
   });
 });
 
@@ -316,7 +306,6 @@ describe('the tenant-wide report', () => {
     ],
     payments: [],
     walletTransactions: [],
-    wheel: [],
     serviceOperations: [],
     referrals: { records: 0, referrerGiftsPaid: 0 },
     discountsUsed: 0,

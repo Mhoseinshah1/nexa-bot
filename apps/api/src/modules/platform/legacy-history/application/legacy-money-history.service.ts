@@ -18,7 +18,6 @@ import {
   summariseByStatus,
   summarisePayments,
   summariseWalletTransactions,
-  summariseWheel,
   totalWire,
   type CustomerOpeningEvidence,
   type PaymentGroup,
@@ -26,7 +25,6 @@ import {
   type TenantMoneyInput,
   type TenantMoneyReport,
   type WalletTransactionGroup,
-  type WheelGroup,
 } from './money-reconciliation.js';
 
 /**
@@ -51,7 +49,6 @@ export const LEGACY_MONEY_HISTORY_DEBTS_PERMISSION = 'legacy.debts.view' satisfi
 export interface CustomerMoneyFacts {
   readonly payments: readonly PaymentGroup[];
   readonly walletTransactions: readonly WalletTransactionGroup[];
-  readonly wheel: readonly WheelGroup[];
   readonly serviceOperations: readonly StatusGroup[];
   readonly referrals: {
     readonly asReferee: number;
@@ -128,7 +125,6 @@ function publicCode(value: string | null): string | null {
 export function customerMoneyView(facts: CustomerMoneyFacts): LegacyMoneyHistoryResponse {
   const payments = summarisePayments(facts.payments);
   const wallet = summariseWalletTransactions(facts.walletTransactions);
-  const wheel = summariseWheel(facts.wheel);
   const result = reconcile(facts.opening);
   const credit =
     facts.opening.openingCredits.length === 1 ? facts.opening.openingCredits[0] : undefined;
@@ -154,7 +150,6 @@ export function customerMoneyView(facts: CustomerMoneyFacts): LegacyMoneyHistory
       noChange: wallet.noChange,
       unparsedAmounts: wallet.unparsedAmounts,
     },
-    wheel: { spins: wheel.spins, prizesWon: totalWire(wheel.prizesWon) },
     referrals: { ...facts.referrals },
     discountsUsed: facts.discountsUsed,
     serviceOperations: summariseByStatus(facts.serviceOperations).map((row) => ({

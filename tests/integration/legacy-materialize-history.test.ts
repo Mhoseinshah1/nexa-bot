@@ -509,6 +509,7 @@ describe('Mirza import: history into the normal tables', () => {
         arithmetic: 'ARITHMETIC_NO_CHANGE',
       });
       await walletTx(6, { created_at: { unix: null, local: null } });
+      // PR-L (owner decision: no lucky wheel): spins are no longer carried at all.
       await wheel(1, {}); // +1000
       await wheel(2, { prize: { amount_minor: '0', currency: 'IRT' } });
       await wheel(3, { prize: { amount_minor: null, currency: null } });
@@ -531,10 +532,10 @@ describe('Mirza import: history into the normal tables', () => {
       const triggeredBefore = await triggered();
 
       const out = await steps().walletHistory.apply(materializeCtx());
-      expect(out).toMatchObject({ written: 5, alreadyPresent: 0, diverged: 0 });
+      expect(out).toMatchObject({ written: 3, alreadyPresent: 0, diverged: 0 });
       expect(out.skipped).toEqual({
-        CUSTOMER_NOT_IMPORTED: 2,
-        UNPARSEABLE_AMOUNT: 2,
+        CUSTOMER_NOT_IMPORTED: 1,
+        UNPARSEABLE_AMOUNT: 1,
         UNPARSEABLE_TIME: 1,
       });
 
@@ -575,10 +576,9 @@ describe('Mirza import: history into the normal tables', () => {
           ['WALLET_TRANSACTION', 'MIRZA', 'CREDIT', 5000n, 5000n],
           ['WALLET_TRANSACTION', 'MIRZA', 'DEBIT', 3000n, -3000n],
           ['WALLET_TRANSACTION', 'MIRZA', null, 0n, 0n],
-          ['WHEEL_SPIN', 'MIRZA', 'CREDIT', 1000n, 1000n],
-          ['WHEEL_SPIN', 'MIRZA', null, 0n, 0n],
         ]),
       );
+      expect(imported.items.some((i) => i.origin === 'WHEEL_SPIN')).toBe(false);
       // Newest first, with a cursor that pages without repeating.
       const first = await ctx.container.wallet.importedHistory(tenantA, actor, customerA, {
         limit: 2,
@@ -598,7 +598,7 @@ describe('Mirza import: history into the normal tables', () => {
       await steps().walletHistory.apply(materializeCtx());
       const snapshot = await q(sql`SELECT * FROM wallet_history_imports ORDER BY source_ref`);
       const second = await steps().walletHistory.apply(materializeCtx());
-      expect(second).toMatchObject({ written: 0, alreadyPresent: 5, diverged: 0 });
+      expect(second).toMatchObject({ written: 0, alreadyPresent: 3, diverged: 0 });
       expect(await q(sql`SELECT * FROM wallet_history_imports ORDER BY source_ref`)).toEqual(
         snapshot,
       );
@@ -617,17 +617,15 @@ describe('Mirza import: history into the normal tables', () => {
       await seed();
       await steps().walletHistory.apply(materializeCtx());
       const rows = await matchOf(steps().walletHistory);
-      expect(rows.map((r) => r.mirzaTable)).toEqual(['wallet_transaction', 'wheel_list']);
+      expect(rows.map((r) => r.mirzaTable)).toEqual(['wallet_transaction']);
       for (const row of rows) expect(exactMatchHolds(row)).toBe(true);
-      const [tx, wh] = rows as [ExactMatchRow, ExactMatchRow];
+      const [tx] = rows as [ExactMatchRow];
       expect(tx).toMatchObject({ mirzaRows: 6, nexaRows: 3, nexaSumMinor: 8_000n });
       expect(gaps(tx)).toEqual({
         CUSTOMER_NOT_IMPORTED: 1,
         UNPARSEABLE_AMOUNT: 1,
         UNPARSEABLE_TIME: 1,
       });
-      expect(wh).toMatchObject({ mirzaRows: 4, nexaRows: 2, nexaSumMinor: 1_000n });
-      expect(gaps(wh)).toEqual({ CUSTOMER_NOT_IMPORTED: 1, UNPARSEABLE_AMOUNT: 1 });
     });
   });
 

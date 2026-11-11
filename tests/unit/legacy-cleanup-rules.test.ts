@@ -90,7 +90,9 @@ describe('the automatic cleanup scheduler', () => {
     const requested: string[] = [];
     const scheduler = new LegacyCleanupScheduler({
       repository: {
-        automaticCandidates: async () => [{ tenantId: 't-1', importId: 'i-1' }],
+        automaticCandidates: async () => [
+          { tenantId: 't-1', importId: 'i-1', reason: 'INITIAL' as const },
+        ],
         importReadiness: async () => ({
           completed: true,
           inFlight: false,

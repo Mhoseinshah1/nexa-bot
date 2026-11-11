@@ -1,0 +1,7 @@
+ALTER TABLE "legacy_compaction_runs" DROP CONSTRAINT "legacy_compaction_runs_failure_code_check";--> statement-breakpoint
+ALTER TABLE "legacy_compaction_runs" ADD COLUMN "reason" text DEFAULT 'INITIAL' NOT NULL;--> statement-breakpoint
+ALTER TABLE "legacy_compaction_runs" ADD COLUMN "revision" integer DEFAULT 1 NOT NULL;--> statement-breakpoint
+ALTER TABLE "legacy_compaction_runs" ADD COLUMN "vacuumed_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "legacy_compaction_runs" ADD CONSTRAINT "legacy_compaction_runs_reason_check" CHECK (reason IN ('INITIAL', 'SUPPLEMENTARY'));--> statement-breakpoint
+ALTER TABLE "legacy_compaction_runs" ADD CONSTRAINT "legacy_compaction_runs_vacuum_proven_check" CHECK (state <> 'COMPLETED' OR revision < 2 OR vacuumed_at IS NOT NULL);--> statement-breakpoint
+ALTER TABLE "legacy_compaction_runs" ADD CONSTRAINT "legacy_compaction_runs_failure_code_check" CHECK (failure_code IN ('legacy_compaction.archive_failed', 'legacy_compaction.archive_not_delivered', 'legacy_compaction.archive_out_of_memory', 'legacy_compaction.import_not_completed', 'legacy_compaction.step_failed', 'legacy_compaction.reconciliation_not_clean', 'legacy_compaction.vacuum_failed'));
