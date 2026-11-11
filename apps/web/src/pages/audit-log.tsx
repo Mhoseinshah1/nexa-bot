@@ -40,6 +40,7 @@ import {
 import { DateField } from '../ui/date-field';
 import { ListFilterBar } from '../ui/filter-bar';
 import { Icon } from '../ui/icons';
+import { PageMoreMenu } from '../ui/page-more-menu';
 import { auditActionLabel } from '../audit-action-labels';
 import { auditReasonCode, auditReasonLabel } from '../audit-reason-labels';
 import { CodeLabel, ProviderText } from '../ui/technical-details';
@@ -372,6 +373,27 @@ export function AuditLogPage({
       {/* The audit tab of the System page: no page title of its own, the tab is the title. */}
       <div className="toolbar">
         <ListFreshness query={log} />
+        {/* Demo parity: the tab's more-menu — what the page already does (clear its filters, re-read). */}
+        {!denied && (
+          <PageMoreMenu
+            items={[
+              {
+                key: 'clear',
+                label: t('web.filters_clear_all'),
+                disabled: !filtering,
+                onSelect: clear,
+              },
+              {
+                key: 'reread',
+                label: t('web.nc_reread'),
+                icon: 'refresh' as const,
+                onSelect: () => {
+                  void log.refetch();
+                },
+              },
+            ]}
+          />
+        )}
         {mayExport && !denied && (
           <a
             className="btn sm"

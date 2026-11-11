@@ -219,6 +219,19 @@ const chip = (id: string) => document.querySelector(`[data-chip="${id}"]`) as HT
 const page = () => <BotButtonsPage mayEdit denied={false} mayViewTemplates mayEditTemplates />;
 
 describe('«دکمه‌های ربات»', () => {
+  it('demo parity: «دکمه‌های آزاد» is a heading over the free box, and the menu preview is drawn with its buttons', async () => {
+    api();
+    renderPage(page());
+    await waitFor(() => expect(chip('wallet')).not.toBeNull());
+    expect(screen.getByRole('heading', { name: t('web.kit_dnd_free') })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: t('web.bb_menu_preview_title') }),
+    ).toBeInTheDocument();
+    const preview = screen.getByTestId('bb-menu-preview');
+    expect(preview.querySelectorAll('.menu-preview-key').length).toBeGreaterThan(0);
+    expect(preview.textContent).toContain(CATALOGUE_FA['bot.menu.wallet']);
+  });
+
   it('re-reads the menu after a label is saved through the texts card (Codex #7)', async () => {
     const calls = api();
     renderPage(page());

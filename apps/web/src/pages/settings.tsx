@@ -47,6 +47,7 @@ import {
   PageHead,
   StateSwitch,
   Switch,
+  Tabs,
   confirmDialogOpen,
   useToast,
   useFocusAfterWrite,
@@ -103,6 +104,13 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
       !(SETTINGS_RETIRED as readonly string[]).includes(setting.key),
   );
   const sections = grouped(rows);
+  // Demo parity: the category strip shows ONE group at a time. Every group stays mounted
+  // (the others `hidden`), so a draft typed in one survives a switch to another.
+  const [category, setCategory] = useState<string | null>(null);
+  const activeGroup =
+    category !== null && sections.some((one) => one.group === category)
+      ? category
+      : (sections[0]?.group ?? null);
 
   // Every row keeps its own draft and writes one registry row at the version it was read at;
   // the page adds the sum of them, ONE leave guard and ONE sticky save bar. The bar's «ذخیره»
@@ -148,13 +156,32 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
       <StateSwitch query={settings} denied={denied} isEmpty={rows.length === 0}>
         <DirtyScope report={report}>
           <BarContext.Provider value={bar.current}>
-            {/* One group at a time is no longer a tab: each group is a collapsible section,
-                every one stays mounted (a closed one is `hidden`) so drafts survive. */}
-            {sections.map(({ group, title, members }, sectionIndex) => (
-              <div key={group} id={`settings-${group}`} className="settings-group">
+            <div className="settings-categories">
+              <Tabs
+                boxed
+                label={t('web.settings_categories_label')}
+                panelId="settings-panel"
+                value={activeGroup ?? ''}
+                onChange={setCategory}
+                items={sections.map(({ group, title, members }) => ({
+                  id: group as string,
+                  label: t(title),
+                  count: members.length,
+                }))}
+              />
+            </div>
+            {sections.map(({ group, title, members }) => (
+              <div
+                key={group}
+                id={group === activeGroup ? 'settings-panel' : `settings-${group}`}
+                role="tabpanel"
+                aria-labelledby={`settings-panel-tab-${group}`}
+                hidden={group !== activeGroup}
+                className="settings-group"
+              >
                 <SettingsSection
                   title={t(title)}
-                  defaultOpen={sectionIndex === 0}
+                  defaultOpen
                   changed={members.filter((member) => dirty.has(member.key)).length}
                 >
                   {/* PR-3: the automatic deletion's preview sits above its own settings. */}

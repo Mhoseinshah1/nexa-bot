@@ -54,6 +54,19 @@ const entry = (overrides: Record<string, unknown> = {}) => ({
 const route = (query = '') => ({ path: '/audit-log', query: new URLSearchParams(query) });
 
 describe('the audit log page', () => {
+  it('demo parity: the tab has the «بیشتر» menu (clear filters, re-read) beside its export', async () => {
+    const api = stubApi([{ url: '/audit-log', body: { entries: [entry()], nextCursor: null } }]);
+    renderPage(<AuditLogPage route={route('result=DENIED')} denied={false} mayExport />);
+    await screen.findByRole('link', { name: t('web.audit_link_order') });
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_more_menu') }));
+    const clear = screen.getByRole('menuitem', { name: t('web.filters_clear_all') });
+    expect(clear).not.toBeDisabled();
+    const before = api.calls.length;
+    fireEvent.click(screen.getByRole('menuitem', { name: t('web.nc_reread') }));
+    await waitFor(() => expect(api.calls.length).toBeGreaterThan(before));
+    expect(screen.getByRole('link', { name: t('web.audit_export_csv') })).toBeInTheDocument();
+  });
+
   it('lists rows with Persian labels and the server’s deep links', async () => {
     stubApi([
       {

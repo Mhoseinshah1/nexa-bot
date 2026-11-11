@@ -131,26 +131,11 @@
 
 /* --- Features (`#/features`) ------------------------------------------------------------ */
 
-/*
- * One page, two panes: the category list on the start side, the chosen category's flags in the
- * main pane. Below 860px the categories become a wrapped row of boxes above the pane.
- */
-.feature-split {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
-}
-.feature-split > .tabs.boxed {
-  position: sticky;
-  inset-block-start: 16px;
-}
-/* The list is its own scroll panel, so choosing a category never scrolls the whole page. */
-.feature-pane-body {
-  min-width: 0;
-  max-block-size: max(360px, calc(100dvh - 250px));
-  overflow-y: auto;
-  overscroll-behavior: contain;
+/* «نمایش بقیهٔ قابلیت‌ها»: one button under the list. */
+.feature-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
 }
 .feature-meta {
   display: flex;
@@ -170,28 +155,6 @@
 .feature-meta dd {
   margin: 0;
   min-width: 0;
-}
-.feature-empty {
-  padding: 18px;
-}
-@media (max-width: 860px) {
-  .feature-split {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .feature-pane-body {
-    max-block-size: none;
-    overflow-y: visible;
-  }
-  .feature-split > .tabs.boxed {
-    position: static;
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-  .feature-split > .tabs.boxed button {
-    inline-size: auto;
-    flex: 1 1 auto;
-    gap: 10px;
-  }
 }
 
 /* A related setting: its name on the start side, its value at the far end, as the demo. */

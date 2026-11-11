@@ -107,18 +107,17 @@ describe('the feature flags page', () => {
     expect(container.textContent).not.toContain('Project operational events');
   });
 
-  it('is one page: no pager and no «show more», every category reachable at once', async () => {
+  it('is one list: no pager, ten rows and «نمایش بقیهٔ قابلیت‌ها (N)» for the rest', async () => {
     const flags = FEATURE_FLAGS.map((definition) => flag({ key: definition.key }));
     stubApi([{ url: '/features', body: { flags, total: flags.length } }]);
     const { container } = renderPage(<FeaturesPage mayEdit denied={false} />);
-    await screen.findByRole('tablist', { name: t('web.features_categories_label') });
+    await screen.findByRole('heading', { name: t('web.features_list_title') });
     expect(screen.queryByTestId('counted-pager-info')).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.page_next_aria') })).toBeNull();
-    // The first category shows ALL of its flags (more than ten would be clipped by a pager).
-    const first = FEATURE_FLAGS.filter((f) => FEATURE_PRESENTATION[f.key].category === 'reminders');
-    expect(first.length).toBeGreaterThan(10);
-    expect(container.querySelectorAll('.feature-row')).toHaveLength(first.length);
-    expect(container.querySelector('.feature-pane')).toBeNull();
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(10);
+    fireEvent.click(screen.getByRole('button', { name: /نمایش بقیهٔ قابلیت‌ها/u }));
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(flags.length);
   });
 
   /**
@@ -481,12 +480,9 @@ describe('the feature presentation catalogue', () => {
     ]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
     await screen.findAllByRole('switch');
-    // One category at a time; walk every category, none is lost.
-    const switches: HTMLElement[] = [];
-    for (const tab of screen.getAllByRole('tab')) {
-      fireEvent.click(tab);
-      switches.push(...screen.getAllByRole('switch'));
-    }
+    // One list; the rest sits behind «نمایش بقیهٔ قابلیت‌ها», none is lost.
+    fireEvent.click(screen.getByRole('button', { name: /نمایش بقیهٔ قابلیت‌ها/u }));
+    const switches = screen.getAllByRole('switch');
     expect(switches).toHaveLength(FEATURE_FLAGS.length);
     for (const one of switches) {
       expect(one.getAttribute('aria-label') ?? one.textContent ?? '').not.toMatch(

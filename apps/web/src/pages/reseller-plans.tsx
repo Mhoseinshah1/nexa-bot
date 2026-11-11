@@ -54,7 +54,6 @@ import {
   Badge,
   Banner,
   Card,
-  Disclosure,
   DataTable,
   Empty,
   Field,
@@ -364,7 +363,8 @@ export function ResellerPlansPage({
         }
       />
 
-      <Disclosure size="sm" summary={t('web.reseller_minimum_rules_title')}>
+      {/* Demo parity: how the monthly minimum is counted is a section with a heading, not a collapsed fold. */}
+      <Card title={t('web.reseller_minimum_rules_title')}>
         <p className="muted small">{t('web.reseller_plans_intro')}</p>
         <ul className="cb-notes">
           <li>{t('web.reseller_minimum_rule_counts')}</li>
@@ -386,7 +386,7 @@ export function ResellerPlansPage({
             {t('web.reseller_tiers_resellers_link')}
           </a>
         </p>
-      </Disclosure>
+      </Card>
 
       <Card title={t('web.reseller_plans_tiers_title')} hint={t('web.reseller_plans_tiers_hint')}>
         <StateSwitch

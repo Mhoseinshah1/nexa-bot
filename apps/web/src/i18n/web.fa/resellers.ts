@@ -25,7 +25,6 @@ export const WEB_FA_RESELLERS = {
     'تعلیق فقط امتیازهای نمایندگی را برمی‌دارد؛ مسدود کردن مشتری اهرم جداگانه‌ای است که در صفحهٔ مشتری است. تغییر سطح یا نرخ فقط بر سفارش‌هایی اثر دارد که پس از آن تأیید شوند.',
   'web.resellers_tiers_link': 'سطوح نمایندگی و مجوزهای آنها',
   'web.reseller_customer': 'نماینده',
-  'web.reseller_status_filter': 'فیلتر وضعیت نماینده',
   'web.reseller_customer_page': 'صفحهٔ مشتری',
   'web.reseller_customer_id': 'مشتری',
   'web.reseller_tier': 'سطح',

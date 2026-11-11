@@ -232,6 +232,7 @@ export function LayoutDnd({
   disabled = false,
   onSelect,
   className,
+  freeTitle,
 }: {
   layout: DndLayout;
   onChange: (next: DndLayout) => void;
@@ -247,6 +248,8 @@ export function LayoutDnd({
   onSelect?: (id: string) => void;
   /** Extra class on the root, for a page's own look of the items. */
   className?: string;
+  /** A visible heading over the free box (the demo's free-buttons section). */
+  freeTitle?: string;
 }) {
   const fixed = rules.fixed ?? [];
   const hintId = useId();
@@ -436,6 +439,7 @@ export function LayoutDnd({
       <div className={`dnd-new-row${overKey === 'new-row' ? ' over' : ''}`} data-dnd-new-row>
         {t('web.kit_dnd_new_row')}
       </div>
+      {freeTitle !== undefined && <h4 className="dnd-free-title">{freeTitle}</h4>}
       <div
         className={`dnd-free${overKey === 'free' ? ' over' : ''}`}
         data-dnd-free

@@ -100,8 +100,8 @@ export const WEB_FA_PANELS = {
   // The username policy. Read back in full on the panel page, for the reason
   // `docs/conventions.md` names: a setting a surface can write and cannot read is the
   // legacy screen where "the only way to read a price is to overwrite it".
-  'web.panel_username_policy': 'نام کاربری سرویس‌ها',
-  'web.panel_username_custom': 'نام کاربری دلخواه مشتری',
+  'web.panel_username_policy': 'یوزرنیم سرویس‌ها',
+  'web.panel_username_custom': 'یوزرنیم دلخواه مشتری',
   'web.panel_username_custom_hint':
     'مشتری خودش نام کاربری را می‌نویسد: 4 تا 20 نویسه از a-z، A-Z، 0-9، - و _ ، با حداقل یک حرف و یک رقم. حروف بزرگ و کوچک فرقی ندارند و با حروف کوچک ذخیره می‌شود.',
   'web.panel_username_automatic': 'انتخاب خودکار',

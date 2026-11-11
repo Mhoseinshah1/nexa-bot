@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import {
   ResellerPlansPage,
@@ -183,6 +184,17 @@ const render = (keys: { edit?: boolean; orders?: boolean } = {}) =>
   );
 
 describe('the reseller plans page', () => {
+  it('demo parity: «حداقل فروش ماهانه چگونه حساب می‌شود» is a heading over its rules, not a folded line', async () => {
+    stubApi(routes());
+    render();
+    const heading = await screen.findByRole('heading', {
+      name: t('web.reseller_minimum_rules_title'),
+    });
+    const block = heading.closest('section') as HTMLElement;
+    expect(block.querySelector('details')).toBeNull();
+    expect(within(block).getByText(t('web.reseller_minimum_rule_counts'))).toBeVisible();
+  });
+
   it('is in the navigation under resellers.view and resolves with its Persian title', () => {
     const entry = NAV.find((candidate) => candidate.path === '/reseller-plans');
     expect(entry).toBeDefined();

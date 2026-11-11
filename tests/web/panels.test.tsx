@@ -301,7 +301,7 @@ describe('the panel list', () => {
     expect(screen.getByRole('button', { name: t('web.page_older') })).toBeInTheDocument();
   });
 
-  it('PR-7: draws the provider name only, and the health and the error type in one cell', async () => {
+  it('demo parity: draws the provider name only, with «نوع خطا» and «تأخیر» as their own columns', async () => {
     stubApi(
       list([
         panel({
@@ -311,6 +311,7 @@ describe('the panel list', () => {
             ...(panel().health as object),
             state: 'UNREACHABLE',
             failure: 'TIMEOUT',
+            latencyMs: 87,
             providerVersion: '1.2.3',
           },
         }),
@@ -319,13 +320,15 @@ describe('the panel list', () => {
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
     expect(screen.queryByText('1.2.3')).toBeNull();
-    const healthCell = screen.getByText(t('web.health_unreachable')).closest('td');
-    expect(healthCell).not.toBeNull();
-    expect(
-      within(healthCell as HTMLElement).getByText(t('web.failure_short_timeout')),
-    ).toBeTruthy();
-    // The separate «نوع خطا» column is gone.
-    expect(screen.queryByRole('columnheader', { name: t('web.panel_failure') })).toBeNull();
+    const headers = screen.getAllByRole('columnheader').map((one) => one.textContent);
+    expect(headers).toContain(t('web.panel_failure'));
+    expect(headers).toContain(t('web.panel_latency'));
+    // Each value sits in its own cell, not under the health badge.
+    const healthCell = screen.getByText(t('web.health_unreachable')).closest('td') as HTMLElement;
+    expect(within(healthCell).queryByText(t('web.failure_short_timeout'))).toBeNull();
+    const failureCell = screen.getByText(t('web.failure_short_timeout')).closest('td');
+    expect(failureCell).not.toBe(healthCell);
+    expect(screen.getByText('87').closest('td')).not.toBe(healthCell);
   });
 
   it('distinguishes an empty fleet from a failed request', async () => {
@@ -1410,6 +1413,17 @@ describe('the panel detail', () => {
    * finished panel — the mechanism that releases its name and takes it out of
    * lists and probes — nor restore one archived through another client.
    */
+  it('demo parity: «یوزرنیم سرویس‌ها» and «یوزرنیم دلخواه مشتری», and «بایگانی» without «…»', async () => {
+    stubApi(detail());
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    expect(screen.getByRole('heading', { name: 'یوزرنیم سرویس‌ها' })).toBeInTheDocument();
+    expect(screen.getByLabelText('یوزرنیم دلخواه مشتری')).toBeInTheDocument();
+    expect(screen.queryByText('نام کاربری دلخواه مشتری')).toBeNull();
+    const archive = screen.getByRole('button', { name: 'بایگانی' });
+    expect(archive.textContent).toBe('بایگانی');
+  });
+
   it('offers archiving on a live panel', async () => {
     // Two presses now, and the second is the one that writes — see the Phase 6B
     // group below, which owns the rule. This case keeps asserting that the
@@ -1421,7 +1435,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
     fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_confirm') }));
     await waitFor(() => {
       const write = api.calls.find((call) => call.url.includes('/status'));
@@ -1590,7 +1604,7 @@ describe('the panel detail', () => {
       screen.queryByRole('heading', { name: /* former web.panel_lifecycle */ 'چرخهٔ عمر' }),
     ).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: t('web.panel_tab_workload') }));
-    const archive = screen.getByRole('button', { name: `${t('web.panel_archive')}…` });
+    const archive = screen.getByRole('button', { name: t('web.panel_archive') });
     // Above the tab strip, not inside the overview it used to sit in.
     expect(archive.closest('[role="tabpanel"]')).toBeNull();
     expect(screen.getByRole('button', { name: t('web.panel_disable') })).toHaveAttribute(
@@ -1609,7 +1623,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
 
     expect(await screen.findByText(t('web.panel_archive_confirm_title'))).toBeTruthy();
     expect(api.calls.some((call) => call.url.includes('/status'))).toBe(false);
@@ -1626,7 +1640,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
     // W3: the confirmation is a dialog now.
     const confirmation = await screen.findByRole('dialog', {
       name: t('web.panel_archive_confirm_title'),
@@ -1644,7 +1658,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
     fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_confirm') }));
 
     await waitFor(() => {
@@ -1658,7 +1672,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
     fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_cancel') }));
 
     await waitFor(() => {
@@ -1691,7 +1705,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: `${t('web.panel_archive')}…` }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
     fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_confirm') }));
 
     await waitFor(() => {

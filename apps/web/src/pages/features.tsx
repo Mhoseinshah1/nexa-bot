@@ -7,29 +7,10 @@ import { settingPresentation } from '../settings-presentation';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
 import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
-import {
-  Badge,
-  Card,
-  FilterBar,
-  FilterChip,
-  FilterChips,
-  Ltr,
-  PageHead,
-  SearchInput,
-  StateSwitch,
-  Switch,
-  Tabs,
-  Value,
-} from '../ui/kit';
+import { Badge, Button, Card, Ltr, PageHead, StateSwitch, Switch, Value } from '../ui/kit';
 import { ListFreshness } from '../ui/list-search';
 import { useLinkHandler } from '../router';
-import {
-  FEATURE_CATEGORIES,
-  FEATURE_CATEGORY_TITLE,
-  FEATURE_WHERE_LABEL,
-  featurePresentation,
-  type FeatureCategory,
-} from './features-catalogue';
+import { FEATURE_WHERE_LABEL, featurePresentation } from './features-catalogue';
 import { ErrorReport, registryLabel } from './settings';
 import { AutoDeletePreviewSentence } from './auto-delete-preview';
 import { TechnicalDetails } from '../ui/technical-details';
@@ -50,64 +31,20 @@ import { TechnicalDetails } from '../ui/technical-details';
  * threshold sit on different screens, the flag is off, and nothing on either screen says
  * that the value therefore does nothing (CBR-007, GSR-008).
  */
-type CategoryId = FeatureCategory | 'other';
-type StatusFilter = 'all' | 'on' | 'off';
-
-/** The category a flag is drawn under; a flag this build does not know goes to the «other» category. */
-function categoryOf(key: string): CategoryId {
-  return featurePresentation(key)?.category ?? 'other';
-}
-
-/** The words a search looks through: the Persian name and sentence (the server's text for an unknown flag). */
-function searchText(flag: FeatureFlagResponse): string {
-  const presentation = featurePresentation(flag.key);
-  if (presentation === undefined) return `${flag.key} ${flag.description}`.toLowerCase();
-  return `${t(presentation.title)} ${t(presentation.summary)}`.toLowerCase();
-}
+/** Demo parity: the list opens with this many whole rows; the rest sit behind one button. */
+export const FEATURES_FIRST_SHOWN = 10;
 
 /**
  * One page, no paging. The API answers with every flag (the earlier ten-at-a-time paging was
- * done here, in the browser), so the category counts come from the complete list.
+ * done here, in the browser). Demo parity: ONE list in the server's order, the first ten rows
+ * drawn and «نمایش بقیهٔ قابلیت‌ها (N)» for the rest — no category tabs, no on/off chips, no search.
  */
 export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
   const flags = useQuery({ queryKey: ['features'], queryFn: fetchFeatureFlags, enabled: !denied });
   const rows = flags.data?.flags ?? [];
-
-  const [picked, setPicked] = useState<CategoryId | null>(null);
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState<StatusFilter>('all');
-
-  const byCategory = new Map<CategoryId, FeatureFlagResponse[]>();
-  for (const flag of rows) {
-    const id = categoryOf(flag.key);
-    byCategory.set(id, [...(byCategory.get(id) ?? []), flag]);
-  }
-  const categories = [...FEATURE_CATEGORIES, 'other' as const].filter((id) => byCategory.has(id));
-  const selected: CategoryId | undefined =
-    picked !== null && byCategory.has(picked) ? picked : categories[0];
-
-  const needle = query.trim().toLowerCase();
-  const searching = needle !== '';
-  const passes = (flag: FeatureFlagResponse) =>
-    (status === 'all' || (status === 'on') === flag.enabled) &&
-    (!searching || searchText(flag).includes(needle));
-
-  const onCount = rows.filter((flag) => flag.enabled).length;
-  const panelId = 'feature-pane';
-  // The list is its own scroll panel: choosing a category (or starting a search) shows the new
-  // list from its top, and never moves the page.
-  const pane = useRef<HTMLDivElement>(null);
-  const paneKey = searching ? '' : (selected ?? '');
-  useEffect(() => {
-    pane.current?.scrollTo?.({ top: 0 });
-  }, [paneKey, searching]);
-  const groups = searching
-    ? categories
-        .map((id) => ({ id, flags: (byCategory.get(id) ?? []).filter(passes) }))
-        .filter((group) => group.flags.length > 0)
-    : selected === undefined
-      ? []
-      : [{ id: selected, flags: (byCategory.get(selected) ?? []).filter(passes) }];
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? rows : rows.slice(0, FEATURES_FIRST_SHOWN);
+  const hidden = rows.length - shown.length;
 
   return (
     <>
@@ -117,89 +54,20 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
         actions={<ListFreshness query={flags} />}
       />
       <StateSwitch query={flags} denied={denied} isEmpty={rows.length === 0}>
-        <FilterBar>
-          <SearchInput
-            value={query}
-            onChange={setQuery}
-            label={t('web.features_search_label')}
-            placeholder={t('web.features_search_placeholder')}
-          />
-          <FilterChips label={t('web.features_filter_label')}>
-            <FilterChip
-              pressed={status === 'all'}
-              onClick={() => setStatus('all')}
-              count={rows.length}
-            >
-              {t('web.features_filter_all')}
-            </FilterChip>
-            <FilterChip pressed={status === 'on'} onClick={() => setStatus('on')} count={onCount}>
-              {t('web.features_filter_on')}
-            </FilterChip>
-            <FilterChip
-              pressed={status === 'off'}
-              onClick={() => setStatus('off')}
-              count={rows.length - onCount}
-            >
-              {t('web.features_filter_off')}
-            </FilterChip>
-          </FilterChips>
-        </FilterBar>
-        <div className="feature-split">
-          {selected !== undefined && (
-            <Tabs
-              boxed
-              vertical
-              panelId={panelId}
-              label={t('web.features_categories_label')}
-              value={selected}
-              onChange={(next) => {
-                // Choosing a category ends a search: the pane then shows that category.
-                setQuery('');
-                setPicked(next);
-              }}
-              items={categories.map((id) => {
-                const inCategory = byCategory.get(id) ?? [];
-                const on = inCategory.filter((flag) => flag.enabled).length;
-                return {
-                  id,
-                  label: t(FEATURE_CATEGORY_TITLE[id]),
-                  countText: `${formatNumber(on)}/${formatNumber(inCategory.length)}`,
-                };
-              })}
-            />
+        <Card title={t('web.features_list_title')} hint={t('web.features_list_hint')} tight>
+          <ul className="feature-list">
+            {shown.map((flag) => (
+              <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
+            ))}
+          </ul>
+          {hidden > 0 && (
+            <div className="feature-more">
+              <Button onClick={() => setExpanded(true)}>
+                {t('web.features_show_rest').replace('{n}', formatNumber(hidden))}
+              </Button>
+            </div>
           )}
-          <div
-            id={panelId}
-            ref={pane}
-            className="feature-pane-body"
-            {...(searching || selected === undefined
-              ? { role: 'region', 'aria-label': t('web.features_results_label') }
-              : { role: 'tabpanel', 'aria-labelledby': `${panelId}-tab-${selected}` })}
-          >
-            {groups.length === 0 || groups.every((group) => group.flags.length === 0) ? (
-              <Card title={t('web.features_list_title')} tight>
-                <p className="muted feature-empty">
-                  {searching ? t('web.features_no_match') : t('web.features_cat_empty')}
-                </p>
-              </Card>
-            ) : (
-              groups.map((group) => (
-                <Card
-                  key={group.id}
-                  title={t(FEATURE_CATEGORY_TITLE[group.id])}
-                  hint={searching ? undefined : t('web.features_list_hint')}
-                  tight
-                >
-                  <ul className="feature-list">
-                    {group.flags.map((flag) => (
-                      <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
-                    ))}
-                  </ul>
-                </Card>
-              ))
-            )}
-          </div>
-        </div>
+        </Card>
       </StateSwitch>
     </>
   );
