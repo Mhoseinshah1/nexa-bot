@@ -469,6 +469,8 @@ import {
   PRODUCT_ROUTES,
   productListResponseSchema,
   productResponseSchema,
+  productDescriptionCaptureSchema,
+  type ProductDescriptionCaptureResponse,
   PRODUCT_CATEGORY_ROUTES,
   productCategoryListResponseSchema,
   productCategoryResponseSchema,
@@ -1653,6 +1655,26 @@ export function createProduct(input: ProductWriteInput): Promise<ProductResponse
   return post(PRODUCT_ROUTES.create, input, productResponseSchema);
 }
 
+/** Opens the ten-minute, single-use «send the description from Telegram» request for a product. */
+export function openProductDescriptionCapture(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<ProductDescriptionCaptureResponse> {
+  const { id, ...body } = input;
+  return post(PRODUCT_ROUTES.descriptionCaptures(id), body, productDescriptionCaptureSchema);
+}
+
+/** One capture request's state; the page polls it until it is no longer OPEN. */
+export function fetchProductDescriptionCapture(
+  id: string,
+  captureId: string,
+): Promise<ProductDescriptionCaptureResponse> {
+  return authedGet(
+    PRODUCT_ROUTES.descriptionCapture(id, captureId),
+    productDescriptionCaptureSchema,
+  );
+}
+
 export function updateProduct(input: ProductWriteInput & { id: string }): Promise<ProductResponse> {
   const { id, ...body } = input;
   return post(PRODUCT_ROUTES.update(id), body, productResponseSchema);
@@ -2834,7 +2856,7 @@ export function updatePanel(input: {
   filesOnlyDelivery?: boolean;
   qrKind?: PanelQrKind;
   singboxIntervalMinutes?: number;
-  /** «نام پروفایل در sing-box» (RickPanel only); absent leaves them. */
+  /** The sing-box profile name (RickPanel only); absent leaves them. */
   singboxNameMode?: SingboxNameMode;
   singboxNameCustom?: string | null;
   idempotencyKey: string;

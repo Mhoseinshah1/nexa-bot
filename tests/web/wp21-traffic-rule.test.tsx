@@ -10,6 +10,7 @@ import { bodyFrom } from '../../apps/web/src/pages/products';
 const state = (trafficGb: string, trafficUnlimited = false) => ({
   title: 'پلن',
   description: '',
+  descriptionEmojis: [],
   audience: 'EVERYONE' as const,
   sortOrder: '0',
   panelId: '',

@@ -420,6 +420,8 @@ import { DrizzleCustomerLocationOverrideRepository } from './modules/commerce/lo
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import type { RichMessageSupport } from './modules/commerce/messaging/application/rich-messages.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
+import { ProductDescriptionCaptureService } from './modules/commerce/catalog/application/product-description-capture.service.js';
+import { DrizzleProductDescriptionCaptureRepository } from './modules/commerce/catalog/infrastructure/drizzle-product-description-capture.repository.js';
 import { LegacyProductService } from './modules/commerce/catalog/application/legacy-product.service.js';
 import { LegacyProductReviewService } from './modules/commerce/legacy-product-review/application/legacy-product-review.service.js';
 import { LegacyServiceReviewService } from './modules/platform/legacy-service-review/application/legacy-service-review.service.js';
@@ -1406,6 +1408,8 @@ export interface Container {
   /** Customer 360 (§11.4): suspend or resume all of one customer's configurations. */
   readonly customerServicesToggle: CustomerServicesToggleService;
   readonly products: ProductService;
+  /** «ارسال توضیح از تلگرام»: the Web Admin's capture request and the bot's reading of it. */
+  readonly productDescriptionCapture: ProductDescriptionCaptureService;
   /**
    * Program Item 14: hidden legacy product shapes and their current tariff. Migration
    * prerequisites only — no surface calls it yet (P6/P7 are on hold).
@@ -7430,6 +7434,21 @@ export function createContainer(
     ids,
     clock,
   });
+  const productDescriptionCaptureService = new ProductDescriptionCaptureService({
+    captures: new DrizzleProductDescriptionCaptureRepository(database.db),
+    products: productRepository,
+    bots: botInstances,
+    admins,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
   const provisionedServiceFacts = new ProvisionedServiceFacts({
     services: provisioningService,
     panels: panelRepository,
@@ -9982,6 +10001,8 @@ export function createContainer(
       clientApps: clientAppCatalog,
       // Spec §7: the tutorial video — the admin wizard and the customer's app screen.
       clientAppVideos: clientAppVideoService,
+      // «ارسال توضیح از تلگرام»: an administrator's next message, offered to their open request.
+      productDescriptionCapture: productDescriptionCaptureService,
       serviceTransfers: serviceTransferService,
       // Round 10, D1: «تمدید خودکار» on the service screen.
       autoRenew: serviceAutoRenewService,
@@ -10114,6 +10135,7 @@ export function createContainer(
     clientApps: clientAppService,
     clientAppVideos: clientAppVideoService,
     clientAppVideoWeb: clientAppVideoWebService,
+    productDescriptionCapture: productDescriptionCaptureService,
     deliveryTutorials: deliveryTutorialService,
     clientAppCatalog,
     templateRepository,
