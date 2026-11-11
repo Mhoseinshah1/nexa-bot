@@ -1,5 +1,5 @@
 {
-  "id": "d0ab6616-f1b5-4cd6-bd55-9282474a4ffc",
+  "id": "4a30709e-8e4f-4a01-ba7f-efa29a5113dc",
   "prevId": "a9880c33-6296-4fc3-aa45-11008ae6e82d",
   "version": "7",
   "dialect": "postgresql",
@@ -8413,7 +8413,7 @@
       "checkConstraints": {
         "secret_reentry_items_purpose_check": {
           "name": "secret_reentry_items_purpose_check",
-          "value": "purpose IN ('bot_instance.token', 'panel.username', 'panel.password', 'panel.api_token', 'payment_gateway.api_key', 'payment_gateway.webhook_secret', 'payment_gateway.verify_key', 'payment_gateway.refund_card', 'admin.totp_secret', 'support_ai_provider.api_key', 'legacy_migration.package_key', 'backup.archive_password', 'gift_card.batch_export', 'hosting.totp_secret', 'hosting.archive_password')"
+          "value": "purpose IN ('bot_instance.token', 'panel.username', 'panel.password', 'panel.api_token', 'payment_gateway.api_key', 'payment_gateway.webhook_secret', 'payment_gateway.verify_key', 'payment_gateway.refund_card', 'admin.totp_secret', 'support_ai_provider.api_key', 'legacy_migration.package_key', 'backup.archive_password', 'gift_card.batch_export', 'hosting.totp_secret', 'hosting.archive_password', 'reseller_web.totp_secret')"
         },
         "secret_reentry_items_entity_table_check": {
           "name": "secret_reentry_items_entity_table_check",
@@ -48229,14 +48229,14 @@
           "primaryKey": false,
           "notNull": true
         },
-        "ciphertext": {
-          "name": "ciphertext",
+        "totp_secret_ciphertext": {
+          "name": "totp_secret_ciphertext",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "key_id": {
-          "name": "key_id",
+        "totp_secret_key_id": {
+          "name": "totp_secret_key_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true

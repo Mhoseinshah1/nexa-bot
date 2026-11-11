@@ -168,8 +168,9 @@ export const resellerWebTotpFactors = pgTable(
       .references(() => tenants.id),
     customerId: uuid('customer_id').notNull(),
     state: text('state').notNull(),
-    ciphertext: text('ciphertext').notNull(),
-    keyId: text('key_id').notNull(),
+    /** Sealed under `reseller_web.totp_secret`, the entity being this row's id. */
+    totpSecretCiphertext: text('totp_secret_ciphertext').notNull(),
+    totpSecretKeyId: text('totp_secret_key_id').notNull(),
     lastUsedStep: integer('last_used_step'),
     activationAttempts: integer('activation_attempts').notNull().default(0),
     createdAt: timestamptz('created_at').notNull(),
