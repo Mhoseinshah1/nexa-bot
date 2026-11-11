@@ -187,7 +187,7 @@ describe('Customer 360 — the customer page', () => {
     await openC360Tab('controls');
     await screen.findByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' });
     expect(screen.queryByRole('button', { name: 'معاف کردن' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'انتقال حساب کاربری…' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'انتقال حساب کاربری' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'افزودن دستی سفارش' })).toBeNull();
     await openC360Tab('timeline');
     expect(
@@ -449,7 +449,7 @@ describe('Customer 360 — the customer page', () => {
       ]),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} mayTransfer denied={false} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری' }));
     fireEvent.change(screen.getByLabelText('آی‌دی عددی تلگرام مقصد'), { target: { value: '999' } });
     fireEvent.click(screen.getByRole('button', { name: 'پیش‌نمایش انتقال' }));
     await screen.findByText('مشتری با این آی‌دی عددی در این ربات وجود ندارد.');
@@ -501,7 +501,7 @@ describe('Customer 360 — the customer page', () => {
     });
     stubApi(routes([{ url: `/users/${ID}/transfer/preview`, body: preview(true, true) }]));
     renderPage(<UserDetailPage id={ID} {...OFF} mayTransfer denied={false} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری' }));
     fireEvent.change(screen.getByLabelText('آی‌دی عددی تلگرام مقصد'), { target: { value: '777' } });
     fireEvent.click(screen.getByRole('button', { name: 'پیش‌نمایش انتقال' }));
     await screen.findByText('معافیت از تأیید شماره (می‌ماند)');
@@ -549,7 +549,7 @@ describe('Customer 360 — the customer page', () => {
       ]),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} mayTransfer denied={false} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری' }));
     fireEvent.change(screen.getByLabelText('آی‌دی عددی تلگرام مقصد'), { target: { value: '999' } });
     fireEvent.click(screen.getByRole('button', { name: 'پیش‌نمایش انتقال' }));
     await screen.findByText('مشتری با این آی‌دی عددی در این ربات وجود ندارد.');
@@ -626,7 +626,7 @@ describe('Customer 360 — the customer page', () => {
       ]),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} mayTransfer denied={false} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری' }));
     fireEvent.change(screen.getByLabelText('آی‌دی عددی تلگرام مقصد'), { target: { value: '777' } });
     fireEvent.click(screen.getByRole('button', { name: 'پیش‌نمایش انتقال' }));
     await screen.findByText('سرویس‌های آزمایشی منتقل نمی‌شوند.');
@@ -737,14 +737,14 @@ describe('Customer 360 — the customer page', () => {
     expect(screen.getByRole('option', { name: 'پلن اول' })).toBeTruthy();
   });
 
-  it("links the head's order list by the unified search, ?q=<customerId>", async () => {
+  it("opens the order list by the unified search, ?q=<customerId>, from the «سفارش‌ها» box's button", async () => {
     stubApi(routes());
-    const { container } = renderPage(
-      <UserDetailPage id={ID} {...OFF} mayViewOrders denied={false} />,
-    );
-    const link = await screen.findByRole('link', { name: 'مشاهده سفارش‌ها' });
-    expect(link.getAttribute('href')).toBe(`/orders?q=${ID}`);
-    expect(container).toBeTruthy();
+    renderPage(<UserDetailPage id={ID} {...OFF} mayViewOrders denied={false} />);
+    // Demo parity: «مشاهده سفارش‌ها» is a BUTTON in the orders box (it navigates, it is not a link).
+    const button = await screen.findByRole('button', { name: 'مشاهده سفارش‌ها' });
+    expect(screen.queryByRole('link', { name: 'مشاهده سفارش‌ها' })).toBeNull();
+    fireEvent.click(button);
+    expect(window.location.pathname + window.location.search).toBe(`/orders?q=${ID}`);
   });
 });
 
@@ -756,7 +756,7 @@ describe('Customer 360 — the customer page', () => {
 describe('Customer 360 — tabs and the action panel', () => {
   const OTHER = '019210ab-cdef-7012-8345-6789abcdef02';
 
-  it('draws only the chosen tab, and opens another customer on «خلاصه»', async () => {
+  it('draws only the chosen tab, and opens another customer on «نمای کلی»', async () => {
     stubApi([
       ...routes([{ url: `/users/${ID}/timeline`, body: { entries: [] } }]),
       { url: `/users/${OTHER}`, body: { customer: customer({ id: OTHER }) } },
@@ -767,11 +767,11 @@ describe('Customer 360 — tabs and the action panel', () => {
     const view = renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
     const tabs = await screen.findAllByRole('tab');
     expect(tabs.map((tab) => tab.textContent)).toEqual([
-      'خلاصه',
-      'سرویس‌ها',
-      'پرداخت‌ها و کیف پول',
-      'تأیید و دسترسی',
-      'تاریخچهٔ مدیر',
+      'نمای کلی',
+      'سرویس‌ها و سفارش‌ها',
+      'مالی',
+      'محدودیت‌ها و کنترل‌ها',
+      'تاریخچهٔ مدیریتی',
       'پشتیبانی',
       'معرف و نماینده',
       'یادداشت‌ها و برچسب‌ها',
@@ -782,11 +782,13 @@ describe('Customer 360 — tabs and the action panel', () => {
       await screen.findByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' }),
     ).toBeInTheDocument();
     view.rerender(<UserDetailPage id={OTHER} {...OFF} denied={false} />);
-    expect(await screen.findByRole('tab', { name: 'خلاصه', selected: true })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('tab', { name: 'نمای کلی', selected: true }),
+    ).toBeInTheDocument();
     expect(screen.queryByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' })).toBeNull();
   });
 
-  it("groups the actions in the head card's quick-action bar, the dangerous ones red and ending in «…»", async () => {
+  it('groups the actions in titled boxes of one panel, the dangerous ones in the red «عملیات حساس» box', async () => {
     stubApi(routes());
     renderPage(
       <UserDetailPage
@@ -801,39 +803,44 @@ describe('Customer 360 — tabs and the action panel', () => {
         mayTransfer
         mayEditServices
         mayViewServices
+        mayViewOrders
         denied={false}
       />,
     );
-    const panel = await screen.findByRole('toolbar', { name: 'عملیات روی این مشتری' });
-    // The bar lives INSIDE the head card, not in a panel of its own.
-    expect(panel.closest('.detail-head')).not.toBeNull();
+    const panel = await screen.findByRole('region', { name: 'عملیات روی این مشتری' });
+    // Demo parity: a panel of its own under the head, NOT a strip inside the head card.
+    expect(panel.closest('.detail-head')).toBeNull();
     const group = (name: string) => within(panel).getByRole('group', { name });
     expect(within(group('کیف پول')).getByRole('button', { name: 'افزایش موجودی' })).toBeTruthy();
     expect(within(group('کیف پول')).getByRole('button', { name: 'کسر موجودی' })).toBeTruthy();
     expect(
       within(group('سفارش‌ها')).getByRole('button', { name: 'افزودن دستی سفارش' }),
     ).toBeTruthy();
+    expect(within(group('سفارش‌ها')).getByRole('button', { name: 'مشاهده سفارش‌ها' })).toBeTruthy();
     expect(
       within(group('ارتباط و دسترسی')).getByRole('button', { name: 'ارسال پیام' }),
     ).toBeTruthy();
-    expect(within(group('حساب')).getByRole('button', { name: 'مسدود کردن…' })).toBeTruthy();
-    expect(within(group('حساب')).getByRole('button', { name: 'انتقال حساب کاربری…' })).toBeTruthy();
-    // The dangerous ones are red; a plain one is not.
-    expect(within(group('حساب')).getByRole('button', { name: 'مسدود کردن…' })).toHaveClass(
+    expect(
+      within(group('ارتباط و دسترسی')).getByRole('button', { name: 'مسدود کردن…' }),
+    ).toHaveClass('danger');
+    // The red box: the demo prints the two account-wide actions without a trailing «…».
+    const sensitive = group('عملیات حساس');
+    expect(sensitive).toHaveClass('danger');
+    expect(within(sensitive).getByRole('button', { name: 'انتقال حساب کاربری' })).toHaveClass(
       'danger',
     );
     expect(
-      within(group('سرویس‌ها')).getByRole('button', { name: 'غیرفعال کردن همه کانفیگ‌ها…' }),
+      within(sensitive).getByRole('button', { name: 'غیرفعال کردن همه کانفیگ‌ها' }),
     ).toHaveClass('danger');
     expect(
-      within(group('سرویس‌ها')).getByRole('button', { name: 'فعال کردن همه کانفیگ‌ها' }),
+      within(sensitive).getByRole('button', { name: 'فعال کردن همه کانفیگ‌ها' }),
     ).not.toHaveClass('danger');
     // «افزایش موجودی» opens the wallet dialog directly — no scroll, no tab change needed.
     fireEvent.click(within(group('کیف پول')).getByRole('button', { name: 'افزایش موجودی' }));
     expect(screen.getByRole('dialog', { name: 'واریز به کیف پول' })).toBeInTheDocument();
   });
 
-  it('draws a blocked customer as a red strip in the head area, with unblock in the account group', async () => {
+  it('draws a blocked customer as a red alert card with its sentence, and unblock in the contact box', async () => {
     stubApi(
       routes([], undefined).map((route) =>
         route.url === `/users/${ID}`
@@ -850,13 +857,16 @@ describe('Customer 360 — tabs and the action panel', () => {
           : route,
       ),
     );
-    const { container } = renderPage(<UserDetailPage id={ID} {...OFF} mayBlock denied={false} />);
-    const bar = await screen.findByRole('toolbar', { name: 'عملیات روی این مشتری' });
-    const unblock = within(bar).getByRole('button', { name: 'رفع مسدودی' });
+    renderPage(<UserDetailPage id={ID} {...OFF} mayBlock denied={false} />);
+    const panel = await screen.findByRole('region', { name: 'عملیات روی این مشتری' });
+    const unblock = within(within(panel).getByRole('group', { name: 'ارتباط و دسترسی' })).getByRole(
+      'button',
+      { name: 'رفع مسدودی' },
+    );
     expect(unblock).not.toHaveClass('danger');
-    const strip = container.querySelector('.attention-strip.danger') as HTMLElement;
-    expect(strip).not.toBeNull();
-    expect(strip.textContent ?? '').toContain(t('web.user_blocked_banner_title'));
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent ?? '').toContain(t('web.user_blocked_banner_title'));
+    expect(alert.textContent ?? '').toContain(t('web.user_blocked_banner_body'));
   });
 
   it('sets a trial override through a dialog, asking before a typed limit is dropped', async () => {

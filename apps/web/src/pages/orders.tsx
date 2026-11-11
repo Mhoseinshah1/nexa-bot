@@ -24,27 +24,14 @@ import {
   fetchServiceOperations,
   fetchServices,
 } from '../api/client';
-import {
-  currencyLabel,
-  formatNumber,
-  formatTimestampNumeric,
-  formatTrafficGbText,
-} from '../format';
+import { currencyLabel, formatTimestampNumeric, formatTrafficGbText } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
-import {
-  CSV_EXPORT_MAX_ROWS,
-  downloadCsv,
-  selectColumn,
-  toCsv,
-  useRowSelection,
-  type ExportColumn,
-  type RowSelection,
-} from '../ui/row-export';
-import { AttentionStrip, CardRows, KpiRow, QuickFilters, SelectionBar } from '../ui/redesign';
+import { ListExportBar, selectColumn, useRowSelection, type ExportColumn } from '../ui/row-export';
+import { AttentionStrip, CardRows, KpiRow } from '../ui/redesign';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
@@ -82,7 +69,6 @@ import { ChipGroup, useListClearAll } from './commerce-parts';
 import {
   Badge,
   Banner,
-  Button,
   Card,
   Copyable,
   CursorPager,
@@ -290,25 +276,33 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
   ];
 
   /*
-   * Redesign PR-1: the order's code sits under its name, and the expiry under the creation, so
-   * the table fits at 1440px without sideways scroll. Every field is still drawn.
+   * Demo parity: one column per field — «سرویس», «کد», وضعیت, مبلغ, مشتری, «ثبت‌شده در» and
+   * «اعتبار تا» — instead of the two-line cells the redesign merged them into. The phone
+   * keeps the labelled card stack of `DataTable`.
    */
   const columns: readonly Column<OrderSummaryResponse>[] = [
     {
       key: 'title',
-      header: t('web.orders_col_order'),
+      header: t('web.order_line'),
       render: (row) => (
-        <div className="cell-stack">
-          <a href={`/orders/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-            {/* The SNAPSHOT title, not a lookup. What the customer bought. */}
-            {row.lineTitle}
-          </a>
-          {/* PR-C: the order's short public code, never its uuid. */}
-          <span className="muted small">
-            <RecordLink href={recordHref.order(row.id)} id={row.id} code={row.code} />
-          </span>
-        </div>
+        <a href={`/orders/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+          {/* The SNAPSHOT title, not a lookup. What the customer bought. */}
+          {row.lineTitle}
+        </a>
       ),
+    },
+    {
+      // PR-C: the order's short public code, never its uuid.
+      key: 'code',
+      header: t('web.record_code'),
+      render: (row) => <RecordLink href={recordHref.order(row.id)} id={row.id} code={row.code} />,
+    },
+    { key: 'state', header: t('web.status'), render: (row) => <StateBadge value={row.state} /> },
+    {
+      key: 'total',
+      header: t('web.order_total'),
+      align: 'end',
+      render: (row) => <Money value={{ amountMinor: row.totalAmount, currency: row.currency }} />,
     },
     {
       key: 'customer',
@@ -323,25 +317,20 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
         />
       ),
     },
-    { key: 'state', header: t('web.status'), render: (row) => <StateBadge value={row.state} /> },
-    {
-      key: 'total',
-      header: t('web.order_total'),
-      align: 'end',
-      render: (row) => <Money value={{ amountMinor: row.totalAmount, currency: row.currency }} />,
-    },
     {
       key: 'created',
-      header: t('web.orders_col_dates'),
-      render: (row) => (
-        <div className="cell-stack">
-          <span className="nowrap">{formatTimestampNumeric(row.createdAt)}</span>
-          <span className="muted small nowrap">
-            {t('web.order_expires_at')}{' '}
-            {row.expiresAt === null ? <Dash /> : formatTimestampNumeric(row.expiresAt)}
-          </span>
-        </div>
-      ),
+      header: t('web.order_created_at'),
+      render: (row) => <span className="nowrap">{formatTimestampNumeric(row.createdAt)}</span>,
+    },
+    {
+      key: 'expires',
+      header: t('web.order_expires_at'),
+      render: (row) =>
+        row.expiresAt === null ? (
+          <Dash />
+        ) : (
+          <span className="nowrap">{formatTimestampNumeric(row.expiresAt)}</span>
+        ),
     },
     selectColumn(selection, orderKey),
   ];
@@ -383,19 +372,6 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
       />
 
       <Card className="ca-list">
-        {/* The state as quick-filter chips (no counts: the list has no totals); the same
-            `state` query key as the filter below, which keeps its removable chip. */}
-        {!denied && (
-          <QuickFilters
-            label={t('web.status')}
-            value={appliedState ?? 'ALL'}
-            onChange={(next) => setQuery(route, 'state', next === 'ALL' ? null : next)}
-            items={[
-              { key: 'ALL' as const, label: t('web.users_filter_all') },
-              ...ORDER_STATES.map((state) => ({ key: state, label: t(STATE_LABELS[state]) })),
-            ]}
-          />
-        )}
         <div hidden={toolbarHidden}>
           <ListFilterBar
             first="search"
@@ -456,7 +432,12 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
             dense
             sticky
             toolbar={
-              <OrderSelection selection={selection} columns={exportColumns} allowed={!denied} />
+              <ListExportBar
+                selection={selection}
+                columns={exportColumns}
+                filename="orders"
+                allowed={!denied}
+              />
             }
           />
         </StateSwitch>
@@ -478,47 +459,6 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
           />
         )}
       </Card>
-    </>
-  );
-}
-
-/**
- * R12 F3 item 8, redesigned (PR-1): a select-the-page tick above the rows, and the selection bar —
- * count, the CSV export, the cap, clear — only while rows are ticked. The export itself is what
- * `RowExportBar` did: the ticked rows as the columns print them.
- */
-function OrderSelection({
-  selection,
-  columns,
-  allowed,
-}: {
-  selection: RowSelection<OrderSummaryResponse>;
-  columns: readonly ExportColumn<OrderSummaryResponse>[];
-  allowed: boolean;
-}) {
-  if (!allowed || selection.rows.length === 0) return null;
-  const count = selection.chosen.length;
-  return (
-    <>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={count > 0 && count === Math.min(selection.rows.length, CSV_EXPORT_MAX_ROWS)}
-          onChange={selection.toggleAll}
-        />
-        <span>{t('web.export_select_all')}</span>
-      </label>
-      <SelectionBar count={count} onClear={selection.clear}>
-        <Button
-          size="sm"
-          onClick={() => downloadCsv('orders.csv', toCsv(selection.chosen, columns))}
-        >
-          {t('web.export_csv')}
-        </Button>
-        <span className="muted small">
-          {t('web.export_cap')} {formatNumber(CSV_EXPORT_MAX_ROWS)}
-        </span>
-      </SelectionBar>
     </>
   );
 }
@@ -557,10 +497,11 @@ export function OrderDetailPage({
       ) : (
         <PageHead
           title={row.lineTitle}
+          // Demo parity: the h1 is the line's title and the state only; the purpose
+          // («خرید سرویس جدید», …) stays in the order's details card below.
           badge={
             <span className="ca-badges">
               <StateBadge value={row.state} />
-              <Badge tone="neutral">{t(ORDER_PURPOSE_LABELS[row.purpose])}</Badge>
             </span>
           }
           meta={

@@ -9,6 +9,7 @@ import { fetchCustomerWorkspace, fetchTickets } from '../api/client';
 import { customerAttentionItems, workspaceWithheld } from '../attention-view';
 import { formatNumber, formatTimestamp } from '../format';
 import { CodeText } from '../ui/record-ref';
+import { Icon } from '../ui/icons';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import {
@@ -24,7 +25,6 @@ import {
   StateSwitch,
   type Column,
 } from '../ui/kit';
-import { AttentionStrip } from '../ui/redesign';
 import { STATE_LABELS as ORDER_STATE_LABELS, STATE_TONES as ORDER_STATE_TONES } from './orders';
 import {
   PAYMENT_METHOD_LABELS,
@@ -56,37 +56,48 @@ export function useCustomerWorkspace(customerId: string) {
 }
 
 /**
- * What about this customer waits for a person, as the yellow strip under the head: one chip per
- * item, each a link to where it is handled. Nothing waiting draws nothing (the strip is not
- * noise); a section the viewer's role withholds is said in the strip's note, never read as
- * "nothing waits" (review N3).
+ * What about this customer waits for a person — the demo's «نیازمند رسیدگی» card, ALWAYS drawn:
+ * one chip per item, each a link to where it is handled, or «nothing waits» when it is clear
+ * (demo parity; the yellow strip that vanished when empty was the redesign's choice). A
+ * section the viewer's role withholds is said in a note and «nothing waits» is NOT claimed over
+ * it (review N3); a failed read is said, never drawn as «nothing waits».
  */
 export function CustomerAttentionStrip({ customerId }: { customerId: string }) {
   const onLink = useLinkHandler();
   const workspace = useCustomerWorkspace(customerId);
   const data = workspace.data?.workspace;
-  // A failed read is said, never drawn as «nothing waits».
   if (workspace.isError) return <ErrorState query={workspace} />;
   if (data === undefined) return null;
   const items = customerAttentionItems(customerId, data);
   const withheld = workspaceWithheld(data);
-  if (items.length === 0 && !withheld) return null;
   return (
-    <div id="c360-attention" title={t('web.c360ws_attention_hint')}>
-      <AttentionStrip title={t('web.c360ws_attention_title')}>
-        {items.map((item) => (
-          <a key={item.key} className="attn-item" href={item.href} onClick={onLink}>
-            {t(item.label)}
-            <span className="num">
-              {' · '}
-              {formatNumber(item.count)}
-              {item.atLeast ? '+' : ''}
-            </span>
-          </a>
-        ))}
-        {withheld && <span className="muted small">{t('web.c360ws_withheld')}</span>}
-      </AttentionStrip>
-    </div>
+    <Card
+      id="c360-attention"
+      title={t('web.c360ws_attention_title')}
+      hint={t('web.c360ws_attention_hint')}
+    >
+      {items.length > 0 && (
+        <div className="attention-strip warn" role="status">
+          {items.map((item) => (
+            <a key={item.key} className="attn-item" href={item.href} onClick={onLink}>
+              {t(item.label)}
+              <span className="num">
+                {' · '}
+                {formatNumber(item.count)}
+                {item.atLeast ? '+' : ''}
+              </span>
+            </a>
+          ))}
+        </div>
+      )}
+      {items.length === 0 && !withheld && (
+        <p className="attn-empty">
+          <Icon name="check" size={16} />
+          <span>{t('web.c360ws_nothing')}</span>
+        </p>
+      )}
+      {withheld && <p className="muted small">{t('web.c360ws_withheld')}</p>}
+    </Card>
   );
 }
 

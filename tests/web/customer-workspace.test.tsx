@@ -193,6 +193,25 @@ describe('Customer 360 workspace — what waits for a person', () => {
     expect(screen.queryByText('برای این مشتری چیزی در انتظار رسیدگی نیست.')).toBeNull();
   });
 
+  it('draws the «نیازمند رسیدگی» card even when nothing waits, and says so (demo parity)', async () => {
+    stubApi(
+      routes(
+        workspace({
+          tickets: { awaitingSupport: 0, open: 0 },
+          businessHandoffs: 0,
+          services: { unreconciled: 0 },
+          payments: { unknown: 0, latest: [] },
+        }),
+      ),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    const card = await attentionStrip();
+    expect(within(card).getByRole('heading', { name: 'نیازمند رسیدگی' })).toBeInTheDocument();
+    expect(
+      within(card).getByText('برای این مشتری چیزی در انتظار رسیدگی نیست.'),
+    ).toBeInTheDocument();
+  });
+
   it('draws only the withheld note when no counting section was counted', async () => {
     stubApi(
       routes(workspace({ tickets: null, businessHandoffs: null, services: null, payments: null })),
