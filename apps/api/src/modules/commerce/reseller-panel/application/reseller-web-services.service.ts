@@ -2,7 +2,7 @@ import {
   NexaError,
   RESELLER_SERVICE_FILTERS,
   RESELLER_WEB_AUDIT_ACTIONS,
-  RESELLER_WEB_ERROR_CODES as CODES,
+  RESELLER_WEB_ERROR_CODES,
   RESELLER_WEB_EXPIRING_DAYS,
   RESELLER_WEB_EXPIRING_TRAFFIC_PERCENT,
   RESELLER_WEB_FILE_FETCHES_PER_WINDOW,
@@ -113,7 +113,7 @@ export function profileNameOf(importUrl: string | undefined): string | null {
   }
 }
 
-const notFound = (): NexaError => errors.notFound(CODES.NOT_FOUND, 'Not found.');
+const notFound = (): NexaError => errors.notFound(RESELLER_WEB_ERROR_CODES.NOT_FOUND, 'Not found.');
 
 /**
  * PR-4 §5.2 «سرویس‌های من» and the «مدیریت» drawer, for one reseller's OWN services.
@@ -271,7 +271,10 @@ export class ResellerWebServicesService {
     } catch (error) {
       if (error instanceof NexaError && error.kind === 'NOT_FOUND') throw notFound();
       if (error instanceof NexaError) {
-        throw errors.conflict(CODES.TELEGRAM_UNDELIVERED, 'The bot could not deliver it.');
+        throw errors.conflict(
+          RESELLER_WEB_ERROR_CODES.TELEGRAM_UNDELIVERED,
+          'The bot could not deliver it.',
+        );
       }
       throw error;
     }
@@ -294,7 +297,10 @@ export class ResellerWebServicesService {
   ): Promise<void> {
     const service = await this.own(context, serviceId);
     if (!(await this.deps.provisioning.customerRotationFor(context.scope, service)).offered) {
-      throw errors.conflict(CODES.ROTATE_UNAVAILABLE, 'This service cannot get a fresh link.');
+      throw errors.conflict(
+        RESELLER_WEB_ERROR_CODES.ROTATE_UNAVAILABLE,
+        'This service cannot get a fresh link.',
+      );
     }
     await this.deps.provisioning.requestRotation(
       context.scope,
@@ -337,7 +343,10 @@ export class ResellerWebServicesService {
     });
     if (fetched.outcome === 'NOT_FOUND') throw notFound();
     if (fetched.outcome !== 'FILES') {
-      throw errors.conflict(CODES.FILES_UNAVAILABLE, 'The connection files are not available.');
+      throw errors.conflict(
+        RESELLER_WEB_ERROR_CODES.FILES_UNAVAILABLE,
+        'The connection files are not available.',
+      );
     }
     return fetched.files;
   }
@@ -363,9 +372,15 @@ export class ResellerWebServicesService {
     if (result.outcome === 'NOT_FOUND') throw notFound();
     if (result.outcome === 'SENT') return { sent: result.sent };
     if (result.outcome === 'STOPPED') {
-      throw errors.conflict(CODES.TELEGRAM_UNDELIVERED, 'The bot could not deliver the files.');
+      throw errors.conflict(
+        RESELLER_WEB_ERROR_CODES.TELEGRAM_UNDELIVERED,
+        'The bot could not deliver the files.',
+      );
     }
-    throw errors.conflict(CODES.FILES_UNAVAILABLE, 'The connection files are not available.');
+    throw errors.conflict(
+      RESELLER_WEB_ERROR_CODES.FILES_UNAVAILABLE,
+      'The connection files are not available.',
+    );
   }
 
   // --- helpers ------------------------------------------------------------------------------
@@ -412,7 +427,7 @@ export class ResellerWebServicesService {
     if (!allowed) {
       throw new NexaError({
         kind: 'RATE_LIMITED',
-        code: CODES.RATE_LIMITED,
+        code: RESELLER_WEB_ERROR_CODES.RATE_LIMITED,
         message: 'Too many file requests for this service. Wait a few minutes.',
         details: { windowSeconds: RESELLER_WEB_FILE_FETCH_WINDOW_SECONDS },
       });

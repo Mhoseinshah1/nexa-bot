@@ -4,7 +4,7 @@ import {
   RESELLER_WEB_ACTIVITY_ACTIONS,
   RESELLER_WEB_ACTIVITY_PAGE_SIZE,
   RESELLER_WEB_AUDIT_ACTIONS,
-  RESELLER_WEB_ERROR_CODES as CODES,
+  RESELLER_WEB_ERROR_CODES,
   RESELLER_WEB_LINK_TTL_SECONDS,
   RESELLER_WEB_LINKS_PER_HOUR,
   RESELLER_WEB_PANEL_FEATURE,
@@ -147,9 +147,12 @@ function totpContext(tenantId: string, factorId: string): SecretContext {
 }
 
 const sessionInvalid = (): NexaError =>
-  errors.unauthenticated(CODES.SESSION_INVALID, 'This panel session is not valid.');
+  errors.unauthenticated(
+    RESELLER_WEB_ERROR_CODES.SESSION_INVALID,
+    'This panel session is not valid.',
+  );
 const unavailable = (): NexaError =>
-  errors.notFound(CODES.UNAVAILABLE, 'The reseller panel is not available.');
+  errors.notFound(RESELLER_WEB_ERROR_CODES.UNAVAILABLE, 'The reseller panel is not available.');
 
 /**
  * PR-4 §5.1 — the reseller panel's way in and its sessions.
@@ -278,26 +281,44 @@ export class ResellerWebAccessService {
         const now = this.deps.clock.now();
         const link = await this.deps.repository.lockLinkByHash(tenant, tokenHash, tx);
         if (link === null) {
-          throw errors.unauthenticated(CODES.LINK_INVALID, 'This sign-in link is not valid.');
+          throw errors.unauthenticated(
+            RESELLER_WEB_ERROR_CODES.LINK_INVALID,
+            'This sign-in link is not valid.',
+          );
         }
         if (link.usedAt !== null) {
-          throw errors.unauthenticated(CODES.LINK_USED, 'This sign-in link was already opened.');
+          throw errors.unauthenticated(
+            RESELLER_WEB_ERROR_CODES.LINK_USED,
+            'This sign-in link was already opened.',
+          );
         }
         if (now.getTime() >= link.expiresAt.getTime()) {
-          throw errors.unauthenticated(CODES.LINK_EXPIRED, 'This sign-in link has expired.');
+          throw errors.unauthenticated(
+            RESELLER_WEB_ERROR_CODES.LINK_EXPIRED,
+            'This sign-in link has expired.',
+          );
         }
         refusedFor = link.customerId;
         if (!(await this.deps.scopeActivity.scopeIsActive(tenant, tx))) {
-          throw errors.unauthenticated(CODES.LINK_INVALID, 'This sign-in link is not valid.');
+          throw errors.unauthenticated(
+            RESELLER_WEB_ERROR_CODES.LINK_INVALID,
+            'This sign-in link is not valid.',
+          );
         }
         const customer = await this.deps.customers.findById(tenant, link.customerId as UserId, tx);
         const standing = await this.deps.resellers.standing(tenant, link.customerId, tx);
         if (customer === null || customer.status === 'BLOCKED' || standing === null) {
-          throw errors.unauthenticated(CODES.LINK_INVALID, 'This sign-in link is not valid.');
+          throw errors.unauthenticated(
+            RESELLER_WEB_ERROR_CODES.LINK_INVALID,
+            'This sign-in link is not valid.',
+          );
         }
         // Spent FIRST of the writes; everything below shares the transaction.
         if (!(await this.deps.repository.spendLink(tenant, { id: link.id, sessionId, now }, tx))) {
-          throw errors.unauthenticated(CODES.LINK_USED, 'This sign-in link was already opened.');
+          throw errors.unauthenticated(
+            RESELLER_WEB_ERROR_CODES.LINK_USED,
+            'This sign-in link was already opened.',
+          );
         }
         const factor = await this.deps.repository.findFactor(tenant, link.customerId, tx);
         const state = factor?.state === 'ACTIVE' ? 'PENDING_SECOND_FACTOR' : 'ACTIVE';
@@ -437,7 +458,10 @@ export class ResellerWebAccessService {
         after: { attempts: outcome.attempts },
         result: 'DENIED',
       });
-      throw errors.unauthenticated(CODES.SECOND_FACTOR_INVALID, 'The code is not valid.');
+      throw errors.unauthenticated(
+        RESELLER_WEB_ERROR_CODES.SECOND_FACTOR_INVALID,
+        'The code is not valid.',
+      );
     }
     return { expiresAt: outcome.expiresAt };
   }
@@ -547,7 +571,10 @@ export class ResellerWebAccessService {
     if (session === null) throw sessionInvalid();
     if (!sessionLive(session, now, 'ACTIVE')) {
       if (sessionLive(session, now, 'PENDING_SECOND_FACTOR')) {
-        throw errors.unauthenticated(CODES.SECOND_FACTOR_REQUIRED, 'The sign-in code is owed.');
+        throw errors.unauthenticated(
+          RESELLER_WEB_ERROR_CODES.SECOND_FACTOR_REQUIRED,
+          'The sign-in code is owed.',
+        );
       }
       throw sessionInvalid();
     }
@@ -662,7 +689,7 @@ export class ResellerWebAccessService {
       );
       return true;
     });
-    if (!ended) throw errors.notFound(CODES.NOT_FOUND, 'Not found.');
+    if (!ended) throw errors.notFound(RESELLER_WEB_ERROR_CODES.NOT_FOUND, 'Not found.');
   }
 
   // --- «کارهای اخیر روی حساب» --------------------------------------------------------------
@@ -714,7 +741,10 @@ export class ResellerWebAccessService {
       const now = this.deps.clock.now();
       const existing = await this.deps.repository.lockFactor(tenant, context.customer.id, tx);
       if (existing?.state === 'ACTIVE') {
-        throw errors.conflict(CODES.SECOND_FACTOR_STATE, 'Two-step sign-in is already on.');
+        throw errors.conflict(
+          RESELLER_WEB_ERROR_CODES.SECOND_FACTOR_STATE,
+          'Two-step sign-in is already on.',
+        );
       }
       const sealed = this.deps.cipher.encrypt(secret, totpContext(tenant.tenantId, factorId));
       await this.deps.repository.replacePendingFactor(
@@ -832,10 +862,16 @@ export class ResellerWebAccessService {
       return { kind: 'DONE' as const, ended };
     });
     if (outcome.kind === 'NOT_PENDING') {
-      throw errors.conflict(CODES.SECOND_FACTOR_STATE, 'No enrolment is waiting.');
+      throw errors.conflict(
+        RESELLER_WEB_ERROR_CODES.SECOND_FACTOR_STATE,
+        'No enrolment is waiting.',
+      );
     }
     if (outcome.kind === 'WRONG') {
-      throw errors.unauthenticated(CODES.SECOND_FACTOR_INVALID, 'The code is not valid.');
+      throw errors.unauthenticated(
+        RESELLER_WEB_ERROR_CODES.SECOND_FACTOR_INVALID,
+        'The code is not valid.',
+      );
     }
     return { ended: outcome.ended };
   }
@@ -891,10 +927,16 @@ export class ResellerWebAccessService {
     });
     if (outcome === 'GONE') throw sessionInvalid();
     if (outcome === 'NOT_ACTIVE') {
-      throw errors.conflict(CODES.SECOND_FACTOR_STATE, 'Two-step sign-in is not on.');
+      throw errors.conflict(
+        RESELLER_WEB_ERROR_CODES.SECOND_FACTOR_STATE,
+        'Two-step sign-in is not on.',
+      );
     }
     if (outcome === 'WRONG') {
-      throw errors.unauthenticated(CODES.SECOND_FACTOR_INVALID, 'The code is not valid.');
+      throw errors.unauthenticated(
+        RESELLER_WEB_ERROR_CODES.SECOND_FACTOR_INVALID,
+        'The code is not valid.',
+      );
     }
   }
 
@@ -933,7 +975,7 @@ export class ResellerWebAccessService {
   async setPreferences(context: ResellerWebContext, input: unknown): Promise<ResellerPreferences> {
     const parsed = resellerPreferencesWriteSchema.safeParse(input ?? {});
     if (!parsed.success) {
-      throw errors.validation(CODES.REQUEST_INVALID, 'The request is invalid.');
+      throw errors.validation(RESELLER_WEB_ERROR_CODES.REQUEST_INVALID, 'The request is invalid.');
     }
     const tenant = this.tenantOf(context);
     return this.deps.uow.run(tenant, async (tx) => {
@@ -995,10 +1037,13 @@ export class ResellerWebAccessService {
     const tenant: TenantContext = { tenantId: scope.tenantId, botInstanceId: null };
     return this.deps.uow.run(tenant, async (tx) => {
       if (!(await this.deps.scopeActivity.scopeIsActive(tenant, tx))) {
-        throw errors.conflict(CODES.UNAVAILABLE, 'This tenant has stopped accepting work.');
+        throw errors.conflict(
+          RESELLER_WEB_ERROR_CODES.UNAVAILABLE,
+          'This tenant has stopped accepting work.',
+        );
       }
       if (!(await this.deps.repository.lockReseller(tenant, customerId, tx))) {
-        throw errors.notFound(CODES.NOT_FOUND, 'No such reseller.');
+        throw errors.notFound(RESELLER_WEB_ERROR_CODES.NOT_FOUND, 'No such reseller.');
       }
       const ended = await this.deps.repository.endSessionsOf(
         tenant,
@@ -1032,7 +1077,7 @@ export class ResellerWebAccessService {
     const age = this.deps.clock.now().getTime() - context.sessionCreatedAt.getTime();
     if (age > TOTP_ENROLMENT_TTL_SECONDS * 1000) {
       throw errors.conflict(
-        CODES.SECOND_FACTOR_STATE,
+        RESELLER_WEB_ERROR_CODES.SECOND_FACTOR_STATE,
         'Sign in again from a fresh link to change two-step sign-in.',
         { reason: 'FRESH_SIGN_IN_REQUIRED' },
       );
