@@ -84,6 +84,7 @@ export const LEDGER_REASON_LABELS: Readonly<Record<LedgerReason, WebKey>> = {
   ACCOUNT_TRANSFER_IN: 'web.ledger_reason_account_transfer_in',
   RESELLER_SETTLEMENT: 'web.ledger_reason_reseller_settlement',
   RESELLER_MEMBERSHIP_FEE: 'web.ledger_reason_reseller_membership_fee',
+  HOSTED_BOT_FEE: 'web.ledger_reason_hosted_bot_fee',
   MIGRATION_OPENING_BALANCE: 'web.ledger_reason_migration_opening_balance',
   CHARGEBACK: 'web.ledger_reason_chargeback',
   CORRECTION: 'web.ledger_reason_correction',

@@ -105,8 +105,9 @@ describe('ledger reason catalog', () => {
     // (docs/customer-account-transfer-audit.md). Migration P2 added
     // MIGRATION_OPENING_BALANCE (docs/migration-opening-balance.md). R5A item 4 added
     // GATEWAY_LATE_CREDIT (a gateway's late approval credited to the wallet). R10 D4 added
-    // GIFT_CARD_REDEMPTION (a redeemed wallet top-up code).
-    expect(LEDGER_REASONS.length).toBe(33);
+    // GIFT_CARD_REDEMPTION (a redeemed wallet top-up code). Reseller-phase PR-6 added
+    // HOSTED_BOT_FEE (a reseller's monthly dedicated-bot fee).
+    expect(LEDGER_REASONS.length).toBe(34);
     expect(new Set(LEDGER_REASONS).size).toBe(LEDGER_REASONS.length);
   });
 

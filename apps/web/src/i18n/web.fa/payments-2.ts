@@ -473,6 +473,7 @@ export const WEB_FA_PAYMENTS_2 = {
   'web.ledger_reason_account_transfer_in': 'انتقال موجودی از حساب دیگر',
   'web.ledger_reason_reseller_settlement': 'تسویهٔ نمایندگی',
   'web.ledger_reason_reseller_membership_fee': 'حق عضویت نمایندگی',
+  'web.ledger_reason_hosted_bot_fee': 'هزینهٔ ماهانهٔ ربات اختصاصی',
   'web.ledger_reason_migration_opening_balance': 'موجودی اولیه',
   'web.ledger_reason_chargeback': 'برگشت تراکنش بانکی',
   'web.ledger_reason_correction': 'اصلاح',
