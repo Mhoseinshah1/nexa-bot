@@ -363,6 +363,28 @@ describe('/tickets (demo parity)', () => {
     );
     expect(api.calls.find((call) => call.method === 'POST')!.body).toEqual({ isActive: false });
   });
+
+  it('locks the order inputs while «ذخیرهٔ ترتیب» runs, so no edit is dropped when it succeeds', async () => {
+    open(true);
+    const table = await screen.findByRole('table', { name: t('web.ticket_categories_title') });
+    const input = within(table).getByRole('textbox', {
+      name: `${t('web.ticket_category_order')} — مشکل اتصال`,
+    }) as HTMLInputElement;
+    // The save never answers: the mutation stays pending.
+    const answered = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown, init?: RequestInit) =>
+        (init?.method ?? 'GET') === 'POST'
+          ? new Promise<Response>(() => {})
+          : (answered as typeof fetch)(input as RequestInfo, init),
+      ),
+    );
+    expect(input.disabled).toBe(false);
+    fireEvent.change(input, { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.ticket_category_reorder') }));
+    await waitFor(() => expect(input.disabled).toBe(true));
+  });
 });
 
 describe('/tickets/:id (demo parity)', () => {
