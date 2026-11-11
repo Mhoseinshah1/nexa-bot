@@ -293,26 +293,7 @@ export function ExtraDevicesPage({
     {
       key: 'title',
       header: t('web.extra_devices_rate_title'),
-      render: (row) =>
-        !mayEdit ? (
-          <span className="strong">{row.title}</span>
-        ) : (
-          <button
-            type="button"
-            className="link strong"
-            disabled={busy}
-            title={t('web.extra_devices_edit')}
-            onClick={() =>
-              discard.confirmDiscard(() => {
-                setEditing(row.id);
-                setForm(formOf(row));
-                setOpen(true);
-              })
-            }
-          >
-            {row.title}
-          </button>
-        ),
+      render: (row) => <span className="strong">{row.title}</span>,
     },
     {
       key: 'price',
@@ -360,6 +341,21 @@ export function ExtraDevicesPage({
       render: (row) =>
         !mayEdit ? null : (
           <RowActions>
+            {/* Demo parity: a per-row edit button (the title used to be the button). */}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() =>
+                discard.confirmDiscard(() => {
+                  setEditing(row.id);
+                  setForm(formOf(row));
+                  setOpen(true);
+                })
+              }
+            >
+              {t('web.extra_devices_edit')}
+            </Button>
             <Button
               size="sm"
               variant="ghost"

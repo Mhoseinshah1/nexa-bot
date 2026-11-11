@@ -197,7 +197,7 @@ describe('replacing unsaved input in the location form', () => {
     expect(document.getElementById('sl-label')).toBeNull();
     fireEvent.click(
       within(cell.closest('tr') as HTMLElement).getByRole('button', {
-        name: 'هلند',
+        name: t('web.service_locations_edit'),
       }),
     );
     const drawer = screen.getByRole('dialog', { name: t('web.service_locations_editing') });

@@ -86,6 +86,7 @@ import {
 import type { DonutSlice, SeriesTone } from '../ui/charts';
 import { Icon } from '../ui/icons';
 import { QuickFilters } from '../ui/redesign';
+import { ListFilterBar } from '../ui/filter-bar';
 import { TrendChart } from '../ui/trend-chart';
 import { STATE_LABELS as SERVICE_STATE_LABELS } from './services';
 import { STATUS_LABELS as PRODUCT_STATUS_LABELS } from './products';
@@ -193,9 +194,16 @@ function useReport<T>(
 export function RangePicker({
   route,
   selection,
+  inFilterPanel,
 }: {
   route: Route;
   selection: ReportRangeSelection;
+  /**
+   * Demo parity: draw the period inside a filters panel instead of an always-visible chip
+   * row. The value is the page's DEFAULT range (the period that is not a filter); the same
+   * URL keys and presets apply either way.
+   */
+  inFilterPanel?: ReportRange;
 }) {
   const choose = (range: ReportRange) => {
     if (range === 'CUSTOM') {
@@ -208,7 +216,7 @@ export function RangePicker({
       ['to', null],
     ]);
   };
-  return (
+  const controls = (
     <div className="report-range">
       {/* Redesign PR-2: the range as quick-filter chips (same URL keys, same presets). */}
       <QuickFilters
@@ -231,6 +239,23 @@ export function RangePicker({
         />
       )}
     </div>
+  );
+  if (inFilterPanel === undefined) return controls;
+  return (
+    <ListFilterBar
+      label={t('web.period_label')}
+      filters={[
+        {
+          key: 'period',
+          label: t('web.period_label'),
+          control: controls,
+          wide: true,
+          active:
+            selection.range === inFilterPanel ? null : t(REPORT_RANGE_LABELS[selection.range]),
+          onClear: () => choose(inFilterPanel),
+        },
+      ]}
+    />
   );
 }
 
@@ -1603,7 +1628,7 @@ export function ReferralAnalytics({
         </>
       }
     >
-      <RangePicker route={route} selection={selection} />
+      <RangePicker route={route} selection={selection} inFilterPanel="LAST_30_DAYS" />
       <StateSwitch query={referrals}>
         {data !== undefined && (
           <>

@@ -214,7 +214,7 @@ describe('the rate editor drawer (W2)', () => {
     expect(document.getElementById('xd-title')).toBeNull();
     fireEvent.click(
       within(cell.closest('tr') as HTMLElement).getByRole('button', {
-        name: 'کاربر اضافه',
+        name: t('web.extra_devices_edit'),
       }),
     );
     const drawer = screen.getByRole('dialog', { name: t('web.extra_devices_editing') });

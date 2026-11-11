@@ -1,3 +1,4 @@
+import { PageMoreMenu } from '../ui/page-more-menu';
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -341,14 +342,32 @@ export function RemindersPage({
         title={t('web.reminders_title')}
         badge={<UnsavedCount count={dirty.size} />}
         actions={
-          <ListFreshness
-            query={{
-              dataUpdatedAt: Math.min(settings.dataUpdatedAt, flags.dataUpdatedAt),
-              isFetching: settings.isFetching || flags.isFetching,
-              refetch: () => Promise.all([settings.refetch(), flags.refetch()]),
-            }}
-            hidden={denied}
-          />
+          <>
+            <ListFreshness
+              query={{
+                dataUpdatedAt: Math.min(settings.dataUpdatedAt, flags.dataUpdatedAt),
+                isFetching: settings.isFetching || flags.isFetching,
+                refetch: () => Promise.all([settings.refetch(), flags.refetch()]),
+              }}
+              hidden={denied}
+            />
+            {/* Demo parity: the page head's more-menu. Its one item is a plain re-read of the
+                settings and flags; no switch, value or save moved into it. */}
+            {!denied && (
+              <PageMoreMenu
+                items={[
+                  {
+                    key: 'reread',
+                    label: t('web.nc_reread'),
+                    icon: 'refresh' as const,
+                    onSelect: () => {
+                      void Promise.all([settings.refetch(), flags.refetch()]);
+                    },
+                  },
+                ]}
+              />
+            )}
+          </>
         }
       />
       <Disclosure size="sm" summary={t('web.reminders_about_fold')}>

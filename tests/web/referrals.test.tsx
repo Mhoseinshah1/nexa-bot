@@ -6,6 +6,7 @@ import { UserDetailPage } from '../../apps/web/src/pages/users';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { customer, renderPage, stubApi, type Api } from './harness';
 import { openC360Tab } from './c360-helpers';
+import { openFilterPanel } from './ui-helpers';
 import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
@@ -249,8 +250,9 @@ describe('the commission ledger', () => {
       expect(gets(api, '/referral-commissions?limit=10&cursor=com-cursor-2')).toHaveLength(1),
     );
 
-    // The state is a row of quick-filter chips over the ledger.
-    fireEvent.click(within(card).getByRole('button', { name: 'باطل شده' }));
+    // Demo parity: the state is a filter inside the «فیلترها» panel over the ledger, not a chip row.
+    expect(within(card).queryByRole('button', { name: 'باطل شده' })).toBeNull();
+    fireEvent.click(within(openFilterPanel(card)).getByRole('button', { name: 'باطل شده' }));
     await waitFor(() =>
       expect(api.calls.at(-1)?.url.endsWith('/referral-commissions?limit=10&state=VOID')).toBe(
         true,
