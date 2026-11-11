@@ -412,7 +412,8 @@ export interface BackupArchiveRetentionStore {
   /**
    * E4: runs whose LOCAL copy may go because Telegram holds every part of it.
    *
-   * Every exclusion is in the query: a run that is not SUCCEEDED, whose directory is gone,
+   * Every exclusion is in the query: a run that is not SUCCEEDED, not VERIFIED, a hosted
+   * bot's (`TENANT`) archive, a run whose directory is gone,
    * whose recorded part count does not match its part rows, ANY of whose parts lacks a
    * Telegram message id, or that is among the newest `keepDelivered` such runs, or in
    * `protectedIds`. A run delivered only in part, or not at all, is never a candidate.

@@ -31,6 +31,8 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'antispam.unavailable': 'ضدهرزنامه در دسترس نیست',
   'auth.login_locked_out': 'ورود به‌خاطر تلاش‌های ناموفق قفل شد',
   'auth.login_new_ip': 'ورود مدیر از نشانی IP تازه',
+  'backup.archive_removed_after_delivery':
+    'فایل بکاپ پس از رسیدن به گروه تلگرام از روی سرور پاک شد',
   'backup.cleanup_failed': 'پاک‌سازی پشتیبان‌های قدیمی انجام نشد',
   'backup.cleanup_ok': 'پاک‌سازی پشتیبان‌ها دوباره انجام شد',
   'backup.delivery_failed': 'ارسال پشتیبان انجام نشد',

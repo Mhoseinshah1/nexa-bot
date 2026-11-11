@@ -177,8 +177,9 @@ export class DrizzleBackupRunRepository
   /**
    * E4: runs whose LOCAL copy may go, because Telegram holds every part.
    *
-   * THE RULE, in the query and nowhere else: a SUCCEEDED run whose recorded part count
-   * equals its part rows and NONE of whose parts lacks a Telegram message id. A run that
+   * THE RULE, in the query and nowhere else: a SUCCEEDED, VERIFIED installation run whose
+   * recorded part count equals its part rows and NONE of whose parts lacks a Telegram message
+   * id. `backup.archive_keep_on_host` off asks this with `keepDelivered` 0. A run that
    * was delivered in part, not at all, or whose answer was lost is never a candidate —
    * its local copy is the only complete one. The newest `keepDelivered` such runs stay.
    */
@@ -201,6 +202,8 @@ export class DrizzleBackupRunRepository
          WHERE run.state = 'SUCCEEDED'
            AND run.archive_scope = 'INSTALLATION'
            AND run.finished_at IS NOT NULL
+           -- An archive whose verification did not pass is never removed by this rule.
+           AND run.verified_at IS NOT NULL
            AND run.archive_pruned_at IS NULL
            AND run.delivery_state = 'SUCCEEDED'
            AND run.part_count IS NOT NULL

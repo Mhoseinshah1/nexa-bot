@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT,
+  BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
+  BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
   BACKUP_DAILY_TIME_PATTERN,
   BACKUP_INTERVAL_MINUTES_MAX,
   BACKUP_INTERVAL_MINUTES_MIN,
@@ -34,6 +37,7 @@ import {
   Input,
   KV,
   Ltr,
+  Num,
   Pills,
   Select,
   StateSwitch,
@@ -42,6 +46,7 @@ import {
 import { errorText } from '../error-text';
 import { ErrorRef } from '../ui/technical-details';
 import { TimeField24 } from '../ui/time-field24';
+import { ConfirmDialog } from '../ui/confirm-dialog';
 
 /**
  * «زمان‌بندی بکاپ خودکار» — spec §13.2.
@@ -57,6 +62,11 @@ import { TimeField24 } from '../ui/time-field24';
  * name of that default is kept in a closed disclosure.
  *
  * The interval is a number and a unit, or a preset — never milliseconds.
+ *
+ * «نگه داشتن نسخه روی سرور» (owner, 2026-11-11) is a third registry value on the same card,
+ * `backup.archive_keep_on_host`, saved the same way. Turning it OFF asks first, because from
+ * then on a restore needs the file from the Telegram group; turning it on asks nothing. While
+ * it is off the archive-retention numbers are drawn greyed, with the one line that says why.
  */
 
 const PRESET_LABEL: Readonly<Record<BackupIntervalChoice, WebKey>> = {
@@ -111,6 +121,17 @@ export function BackupScheduleCard({
   const enabledRow = all.find((row) => row.key === BACKUP_SCHEDULE_SETTING_KEYS.enabled);
   const intervalRow = all.find((row) => row.key === BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes);
   const dailyRow = all.find((row) => row.key === BACKUP_SCHEDULE_SETTING_KEYS.dailyTime);
+  const keepOnHostRow = all.find((row) => row.key === BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY);
+  const keepCountRow = all.find(
+    (row) => row.key === BACKUP_ARCHIVE_RETENTION_SETTING_KEYS.keepCount,
+  );
+  const keepDaysRow = all.find((row) => row.key === BACKUP_ARCHIVE_RETENTION_SETTING_KEYS.keepDays);
+  // The value in force: the registry's default until the row is read.
+  const keepOnHost =
+    keepOnHostRow === undefined
+      ? BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT
+      : keepOnHostRow.value !== false;
+  const [confirmKeepOff, setConfirmKeepOff] = useState(false);
   const editable = mayEdit && enabledRow !== undefined && intervalRow !== undefined;
   const [dailyText, setDailyText] = useState(status.dailyTime ?? '');
   useEffect(() => setDailyText(status.dailyTime ?? ''), [status.dailyTime]);
@@ -143,12 +164,15 @@ export function BackupScheduleCard({
   const enabledKey = useSubmissionKey();
   const intervalKey = useSubmissionKey();
   const dailyKey = useSubmissionKey();
+  const keepOnHostKey = useSubmissionKey();
   const keyFor = (settingKey: string) =>
     settingKey === BACKUP_SCHEDULE_SETTING_KEYS.enabled
       ? enabledKey
       : settingKey === BACKUP_SCHEDULE_SETTING_KEYS.dailyTime
         ? dailyKey
-        : intervalKey;
+        : settingKey === BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY
+          ? keepOnHostKey
+          : intervalKey;
   const save = useMutation({
     mutationFn: (command: {
       key: string;
@@ -234,6 +258,58 @@ export function BackupScheduleCard({
       />
       {status.deliveryDestination === 'NONE' && (
         <Banner tone="warn">{t('web.backup_destination_none_hint')}</Banner>
+      )}
+
+      <ToggleRow
+        title={t('web.backup_keep_on_host')}
+        description={t('web.backup_keep_on_host_hint')}
+        checked={keepOnHost}
+        disabled={!mayEdit || keepOnHostRow === undefined || save.isPending}
+        onChange={(next) => {
+          // Off is asked first; on is today's behaviour and asks nothing.
+          if (next) write(keepOnHostRow, true);
+          else setConfirmKeepOff(true);
+        }}
+      />
+      <div
+        className={keepOnHost ? 'backup-retention' : 'backup-retention is-off'}
+        aria-disabled={keepOnHost ? undefined : true}
+        data-testid="backup-retention"
+      >
+        <KV
+          items={[
+            [
+              t('web.setting_backup_keep_count'),
+              keepCountRow === undefined ? (
+                '—'
+              ) : (
+                <Num key="count" value={String(keepCountRow.value)} />
+              ),
+            ],
+            [
+              t('web.setting_backup_keep_days'),
+              keepDaysRow === undefined ? (
+                '—'
+              ) : (
+                <Num key="days" value={String(keepDaysRow.value)} />
+              ),
+            ],
+          ]}
+        />
+      </div>
+      {!keepOnHost && <p className="muted small">{t('web.backup_keep_on_host_off_retention')}</p>}
+      {confirmKeepOff && (
+        <ConfirmDialog
+          title={t('web.backup_keep_on_host')}
+          question={t('web.backup_keep_on_host_confirm')}
+          confirmLabel={t('web.backup_keep_on_host_confirm_yes')}
+          cancelLabel={t('web.backup_keep_on_host_cancel')}
+          onConfirm={() => {
+            setConfirmKeepOff(false);
+            write(keepOnHostRow, false);
+          }}
+          onCancel={() => setConfirmKeepOff(false)}
+        />
       )}
 
       {editable && dailyRow !== undefined && (
