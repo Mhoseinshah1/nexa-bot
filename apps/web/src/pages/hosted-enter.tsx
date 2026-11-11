@@ -22,9 +22,11 @@ export function isEnterPath(pathname: string): boolean {
 
 export function HostedEnterPage({
   initialToken,
+  linkAlreadyOpened = false,
   onEntered,
 }: {
   initialToken: string | null;
+  linkAlreadyOpened?: boolean;
   onEntered: () => void;
 }) {
   const redeem = useMutation({
@@ -45,7 +47,9 @@ export function HostedEnterPage({
       <div className="screen-card">
         <h1 className="strong">{t('web.enter_title')}</h1>
         {initialToken === null ? (
-          <Banner tone="danger">{t('web.enter_no_token')}</Banner>
+          <Banner tone="danger">
+            {t(linkAlreadyOpened ? 'web.activate_link_used' : 'web.enter_no_token')}
+          </Banner>
         ) : redeem.error !== null ? (
           <Banner tone="danger">
             {errorText(redeem.error)}

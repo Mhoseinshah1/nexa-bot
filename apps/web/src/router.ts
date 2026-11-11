@@ -295,7 +295,8 @@ function stampInitialEntry(): void {
     return;
   }
   currentIndex = 0;
-  window.history.replaceState({ nexaIndex: 0 }, '', key());
+  // Keep the fragment: a one-time link's `#token=…` is read later and removed by its page.
+  window.history.replaceState({ nexaIndex: 0 }, '', `${key()}${window.location.hash}`);
 }
 
 function onPopState(event: PopStateEvent): void {

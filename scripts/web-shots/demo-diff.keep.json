@@ -1,0 +1,380 @@
+[
+  {
+    "route": "/alerts",
+    "field": "*",
+    "side": "*",
+    "match": "/.*/",
+    "reason": "Legacy path redirects to the merged alerts page / «گروه لاگ» / the audit tab of «سامانه و عملیات» (owner KEEP); the demo's page is compared through its new home"
+  },
+  {
+    "route": "/notifications",
+    "field": "*",
+    "side": "*",
+    "match": "/.*/",
+    "reason": "Legacy path redirects to the merged alerts page / «گروه لاگ» / the audit tab of «سامانه و عملیات» (owner KEEP); the demo's page is compared through its new home"
+  },
+  {
+    "route": "/audit-log",
+    "field": "*",
+    "side": "*",
+    "match": "/.*/",
+    "reason": "Legacy path redirects to the merged alerts page / «گروه لاگ» / the audit tab of «سامانه و عملیات» (owner KEEP); the demo's page is compared through its new home"
+  },
+  {
+    "route": "/notification-center",
+    "field": "h1",
+    "side": "*",
+    "match": "/.*/",
+    "reason": "System menu has 3 items; alerts and notifications merged into «اعلان‌ها و هشدارها» (owner KEEP): title «اعلان‌ها و هشدارها»"
+  },
+  {
+    "route": "/notification-center",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "مشاهدهٔ هشدارهای باز",
+    "reason": "System menu has 3 items; alerts and notifications merged into «اعلان‌ها و هشدارها» (owner KEEP): alerts tabs/links"
+  },
+  {
+    "route": "/notification-center",
+    "field": "chips",
+    "side": "ONLY-APP",
+    "match": "مشاهدهٔ هشدارهای باز",
+    "reason": "System menu has 3 items; alerts and notifications merged into «اعلان‌ها و هشدارها» (owner KEEP): alerts tabs/links"
+  },
+  {
+    "route": "/notification-center",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "هشدارهای باز",
+    "reason": "System menu has 3 items; alerts and notifications merged into «اعلان‌ها و هشدارها» (owner KEEP): alerts tabs/links"
+  },
+  {
+    "route": "/notification-center",
+    "field": "chips",
+    "side": "ONLY-APP",
+    "match": "هشدارهای باز",
+    "reason": "System menu has 3 items; alerts and notifications merged into «اعلان‌ها و هشدارها» (owner KEEP): alerts tabs/links"
+  },
+  {
+    "route": "/notification-center",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "هشدارهای ثبت‌شده",
+    "reason": "System menu has 3 items; alerts and notifications merged into «اعلان‌ها و هشدارها» (owner KEEP): alerts tabs/links"
+  },
+  {
+    "route": "/notification-center",
+    "field": "chips",
+    "side": "ONLY-APP",
+    "match": "هشدارهای ثبت‌شده",
+    "reason": "System menu has 3 items; alerts and notifications merged into «اعلان‌ها و هشدارها» (owner KEEP): alerts tabs/links"
+  },
+  {
+    "route": "/system*",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "تاریخچهٔ تغییرات",
+    "reason": "System menu has 3 items; audit log is the tab «تاریخچهٔ تغییرات», «گروه لاگ» is its own page (owner KEEP)"
+  },
+  {
+    "route": "/system*",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "گروه لاگ",
+    "reason": "System menu has 3 items; audit log is the tab «تاریخچهٔ تغییرات», «گروه لاگ» is its own page (owner KEEP)"
+  },
+  {
+    "route": "/system*",
+    "field": "tabs",
+    "side": "ONLY-APP",
+    "match": "تاریخچهٔ تغییرات",
+    "reason": "Audit log is the tab «تاریخچهٔ تغییرات» on «سامانه و عملیات» (owner KEEP)"
+  },
+  {
+    "route": "/system*",
+    "field": "buttons",
+    "side": "ONLY-DEMO",
+    "match": "گروه گزارش‌های مدیریتی",
+    "reason": "«گروه گزارش‌های مدیریتی» is renamed «گروه لاگ» (owner KEEP)"
+  },
+  {
+    "route": "/ops-group*",
+    "field": "h1",
+    "side": "*",
+    "match": "/.*/",
+    "reason": "«گروه گزارش‌های مدیریتی» is renamed «گروه لاگ» (owner KEEP)"
+  },
+  {
+    "route": "/ops-group*",
+    "field": "tabs",
+    "side": "ONLY-APP",
+    "match": "تنظیمات گروه",
+    "reason": "«گروه لاگ» has the tabs «تنظیمات گروه» / «گزارش ارسال‌ها» (owner KEEP)"
+  },
+  {
+    "route": "/ops-group*",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "تنظیمات گروه",
+    "reason": "«گروه لاگ» has the tabs «تنظیمات گروه» / «گزارش ارسال‌ها» (owner KEEP)"
+  },
+  {
+    "route": "/ops-group*",
+    "field": "tabs",
+    "side": "ONLY-APP",
+    "match": "گزارش ارسال‌ها",
+    "reason": "«گروه لاگ» has the tabs «تنظیمات گروه» / «گزارش ارسال‌ها» (owner KEEP)"
+  },
+  {
+    "route": "/ops-group*",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "گزارش ارسال‌ها",
+    "reason": "«گروه لاگ» has the tabs «تنظیمات گروه» / «گزارش ارسال‌ها» (owner KEEP)"
+  },
+  {
+    "route": "/recovery",
+    "field": "heads",
+    "side": "ONLY-DEMO",
+    "match": "کیت بازیابی",
+    "reason": "Recovery Kit removed from /recovery: kit card, keys table, kit buttons (owner KEEP)"
+  },
+  {
+    "route": "/recovery",
+    "field": "heads",
+    "side": "ONLY-DEMO",
+    "match": "کلیدهای این سرور",
+    "reason": "Recovery Kit removed from /recovery: kit card, keys table, kit buttons (owner KEEP)"
+  },
+  {
+    "route": "/recovery",
+    "field": "th",
+    "side": "ONLY-DEMO",
+    "match": "نام",
+    "reason": "Recovery Kit removed from /recovery: kit card, keys table, kit buttons (owner KEEP): keys table columns"
+  },
+  {
+    "route": "/recovery",
+    "field": "th",
+    "side": "ONLY-DEMO",
+    "match": "نقش",
+    "reason": "Recovery Kit removed from /recovery: kit card, keys table, kit buttons (owner KEEP): keys table columns"
+  },
+  {
+    "route": "/recovery",
+    "field": "th",
+    "side": "ONLY-DEMO",
+    "match": "وابستگی",
+    "reason": "Recovery Kit removed from /recovery: kit card, keys table, kit buttons (owner KEEP): keys table columns"
+  },
+  {
+    "route": "/recovery",
+    "field": "th",
+    "side": "ONLY-DEMO",
+    "match": "زمان ورود",
+    "reason": "Recovery Kit removed from /recovery: kit card, keys table, kit buttons (owner KEEP): keys table columns"
+  },
+  {
+    "route": "/recovery",
+    "field": "th",
+    "side": "ONLY-DEMO",
+    "match": "اثر انگشت",
+    "reason": "Recovery Kit removed from /recovery: kit card, keys table, kit buttons (owner KEEP): keys table columns"
+  },
+  {
+    "route": "/recovery",
+    "field": "buttons",
+    "side": "ONLY-DEMO",
+    "match": "ساخت و دریافت کیت",
+    "reason": "Recovery Kit removed from /recovery: kit card, keys table, kit buttons (owner KEEP)"
+  },
+  {
+    "route": "/recovery",
+    "field": "buttons",
+    "side": "ONLY-DEMO",
+    "match": "وارد کردن کیت",
+    "reason": "Recovery Kit removed from /recovery: kit card, keys table, kit buttons (owner KEEP)"
+  },
+  {
+    "route": "/recovery",
+    "field": "buttons",
+    "side": "ONLY-DEMO",
+    "match": "حذف",
+    "reason": "Recovery Kit removed from /recovery: kit card, keys table, kit buttons (owner KEEP)"
+  },
+  {
+    "route": "/recovery",
+    "field": "tables",
+    "side": "COUNT",
+    "match": "/^demo=4 app=3$/",
+    "reason": "Recovery Kit removed from /recovery: kit card, keys table, kit buttons (owner KEEP): the keys table"
+  },
+  {
+    "route": "/client-apps",
+    "field": "th",
+    "side": "ONLY-DEMO",
+    "match": "سازگاری",
+    "reason": "client-apps «سازگاری» column removed; icon, short description, compatibility, protocol and panel type gone from the form (owner KEEP)"
+  },
+  {
+    "route": "/client-apps",
+    "field": "labels",
+    "side": "ONLY-DEMO",
+    "match": "/^(آیکون|توضیح کوتاه|سازگاری|پروتکل|نوع پنل)/",
+    "reason": "client-apps «سازگاری» column removed; icon, short description, compatibility, protocol and panel type gone from the form (owner KEEP)"
+  },
+  {
+    "route": "/support-ai",
+    "field": "heads",
+    "side": "ONLY-APP",
+    "match": "حالت",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP)"
+  },
+  {
+    "route": "/support-ai",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "حالت",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP)"
+  },
+  {
+    "route": "/support-ai",
+    "field": "heads",
+    "side": "ONLY-APP",
+    "match": "زنجیرهٔ ارائه‌دهنده‌ها",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP)"
+  },
+  {
+    "route": "/support-ai",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "زنجیرهٔ ارائه‌دهنده‌ها",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP)"
+  },
+  {
+    "route": "/support-ai",
+    "field": "heads",
+    "side": "ONLY-APP",
+    "match": "موضوعات مجاز برای پاسخ خودکار",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP)"
+  },
+  {
+    "route": "/support-ai",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "موضوعات مجاز برای پاسخ خودکار",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP)"
+  },
+  {
+    "route": "/support-ai",
+    "field": "heads",
+    "side": "ONLY-APP",
+    "match": "تنظیمات پیشرفته",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP)"
+  },
+  {
+    "route": "/support-ai",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "تنظیمات پیشرفته",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP)"
+  },
+  {
+    "route": "/support-ai",
+    "field": "heads",
+    "side": "ONLY-APP",
+    "match": "دستور لحن",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP)"
+  },
+  {
+    "route": "/support-ai",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "دستور لحن",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP)"
+  },
+  {
+    "route": "/support-ai",
+    "field": "buttons",
+    "side": "ONLY-DEMO",
+    "match": "ذخیرهٔ پیکربندی",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP): one sticky save bar"
+  },
+  {
+    "route": "/support-ai",
+    "field": "labels",
+    "side": "ONLY-DEMO",
+    "match": "/.*/",
+    "reason": "Support AI settings use collapsible sections with one sticky save bar (PR-10, owner KEEP): fields of collapsed sections are not rendered"
+  },
+  {
+    "route": "*",
+    "field": "heads",
+    "side": "ONLY-APP",
+    "match": "دربارهٔ این صفحه",
+    "reason": "The «دربارهٔ این صفحه» fold stays; no restating subtitle (owner KEEP)"
+  },
+  {
+    "route": "*",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "دربارهٔ این صفحه",
+    "reason": "The «دربارهٔ این صفحه» fold stays (owner KEEP)"
+  },
+  {
+    "route": "/hosting*",
+    "field": "*",
+    "side": "*",
+    "match": "/.*/",
+    "reason": "Built after the demo: «میزبانی‌ها» / «درخواست‌های نمایندگی» / «خروجی داده» (Phase 6B), the demo has no such page (owner KEEP)"
+  },
+  {
+    "route": "/reseller-requests*",
+    "field": "*",
+    "side": "*",
+    "match": "/.*/",
+    "reason": "Built after the demo: «میزبانی‌ها» / «درخواست‌های نمایندگی» / «خروجی داده» (Phase 6B), the demo has no such page (owner KEEP)"
+  },
+  {
+    "route": "/data-export*",
+    "field": "*",
+    "side": "*",
+    "match": "/.*/",
+    "reason": "Built after the demo: «میزبانی‌ها» / «درخواست‌های نمایندگی» / «خروجی داده» (Phase 6B), the demo has no such page (owner KEEP)"
+  },
+  {
+    "route": "/resellers",
+    "field": "th",
+    "side": "ONLY-APP",
+    "match": "انقضا",
+    "reason": "Resellers «انقضا» column was built after the demo (owner KEEP)"
+  },
+  {
+    "route": "/",
+    "field": "chips",
+    "side": "ONLY-APP",
+    "match": "امروز",
+    "reason": "Dashboard range chips were built after the demo (owner KEEP)"
+  },
+  {
+    "route": "/",
+    "field": "chips",
+    "side": "ONLY-APP",
+    "match": "# روز",
+    "reason": "Dashboard range chips were built after the demo (owner KEEP)"
+  },
+  {
+    "route": "/",
+    "field": "chips",
+    "side": "ONLY-APP",
+    "match": "این ماه",
+    "reason": "Dashboard range chips were built after the demo (owner KEEP)"
+  },
+  {
+    "route": "/",
+    "field": "chips",
+    "side": "ONLY-APP",
+    "match": "دلخواه",
+    "reason": "Dashboard range chips were built after the demo (owner KEEP)"
+  }
+]
