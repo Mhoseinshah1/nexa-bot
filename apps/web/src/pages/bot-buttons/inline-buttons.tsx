@@ -241,6 +241,8 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'terms.accept': 'web.ib_button_terms_accept',
   'phone.verify': 'web.ib_button_phone_verify',
   'captcha.option': 'web.ib_button_captcha_option',
+  'captcha.emoji_option': 'web.ib_button_captcha_emoji_option',
+  'captcha.refresh': 'web.ib_button_captcha_refresh',
 };
 
 /** The stored value, canonical: only the buttons whose style is not their default. */
