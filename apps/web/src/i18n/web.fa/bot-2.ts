@@ -148,6 +148,8 @@ export const WEB_FA_BOT_2 = {
   'web.ib_button_marketing_opt_in': 'فعال‌سازی پیام‌های تبلیغاتی',
   'web.ib_button_reminders_opt_out': 'قطع یادآوری انقضا و حجم',
   'web.ib_button_reminders_opt_in': 'فعال‌سازی یادآوری انقضا و حجم',
+  'web.ib_button_reseller_web_open': 'ورود نماینده به پنل وب',
+  'web.ib_button_reseller_web_link': 'بازکردن لینک ورود پنل نماینده',
   'web.ib_button_reseller_request_start': 'شروع درخواست نمایندگی',
   'web.ib_button_reseller_request_skip': 'رد کردن سؤال اختیاری',
   'web.ib_button_reseller_request_back': 'بازگشت به سؤال قبل',

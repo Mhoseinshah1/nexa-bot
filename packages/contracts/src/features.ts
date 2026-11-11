@@ -792,6 +792,21 @@ export const FEATURE_FLAGS = [
     blastRadius: 'LOCAL',
     configuredBy: [],
   },
+  {
+    key: 'reseller_web_panel',
+    description:
+      'PR-4: «پنل نماینده» \u2014 an ACTIVE reseller opens a web panel on the tenant\u2019s own web ' +
+      'address from a one-time link the bot sends (button «ورود به پنل وب», ten minutes, once). ' +
+      'The panel shows the reseller\u2019s dashboard, services with their link, QR and connection ' +
+      'files, wallet, prices and tickets, through the same services the bot uses: no new price, ' +
+      'fee or credit rule. Off by default. While it is off the bot shows no button, no link is ' +
+      'issued, and every panel route answers as if it did not exist; sessions opened while it ' +
+      'was on stop working at their next request and work again if it is turned back on.',
+    defaultEnabled: false,
+    // TENANT_WIDE: turning it on offers every active reseller of the tenant a second way in.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

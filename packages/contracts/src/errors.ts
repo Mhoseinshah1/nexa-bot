@@ -1866,3 +1866,43 @@ export const MINIAPP_ERROR_CODES = {
   /** Telegram did not take the image from the bot (e.g. the customer never started the bot). */
   MINIAPP_RECEIPT_UPLOAD_FAILED: 'miniapp.receipt_upload_failed',
 } as const;
+
+/**
+ * PR-4 — the reseller web panel (`/api/reseller/v1`). Coarse on purpose where an answer
+ * could be an oracle: one `SESSION_INVALID` for no cookie, an unknown, ended, expired or
+ * suspended-reseller session; one `NOT_FOUND` for "not yours" and "does not exist". The
+ * link's codes are distinct because the page says something different for each: a used link
+ * («این لینک قبلاً باز شده است…») is not a broken one.
+ */
+export const RESELLER_WEB_ERROR_CODES = {
+  /** The panel is switched off for this tenant (`reseller_web_panel`): answered as a 404. */
+  UNAVAILABLE: 'reseller_web.unavailable',
+  /** The link is unknown, malformed, for another tenant or address, or its reseller is not ACTIVE. */
+  LINK_INVALID: 'reseller_web.link_invalid',
+  /** The link was already opened once. */
+  LINK_USED: 'reseller_web.link_used',
+  /** The link's ten minutes are over. */
+  LINK_EXPIRED: 'reseller_web.link_expired',
+  /** More than five links in an hour for this reseller. */
+  LINK_RATE_LIMITED: 'reseller_web.link_rate_limited',
+  /** No usable session: none, unknown, ended, expired, or the reseller is no longer ACTIVE. */
+  SESSION_INVALID: 'reseller_web.session_invalid',
+  /** The session waits for its second-factor code and may do nothing else yet. */
+  SECOND_FACTOR_REQUIRED: 'reseller_web.second_factor_required',
+  /** The code is wrong or already used. */
+  SECOND_FACTOR_INVALID: 'reseller_web.second_factor_invalid',
+  /** Two-step sign-in is already on (enrol) or off (disable). */
+  SECOND_FACTOR_STATE: 'reseller_web.second_factor_state',
+  /** Too many sign-in attempts from this address, or too many file fetches for this service. */
+  RATE_LIMITED: 'reseller_web.rate_limited',
+  /** The request does not match its contract schema. */
+  REQUEST_INVALID: 'reseller_web.request_invalid',
+  /** Not this reseller's, or does not exist — one answer for both. */
+  NOT_FOUND: 'reseller_web.not_found',
+  /** The panel cannot hand over connection files now (unreachable, refused, or none in this state). */
+  FILES_UNAVAILABLE: 'reseller_web.files_unavailable',
+  /** The bot could not deliver to the reseller's own chat (e.g. the bot was blocked). */
+  TELEGRAM_UNDELIVERED: 'reseller_web.telegram_undelivered',
+  /** The panel's provider cannot issue a fresh link for this service. */
+  ROTATE_UNAVAILABLE: 'reseller_web.rotate_unavailable',
+} as const;

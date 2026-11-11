@@ -311,6 +311,11 @@ export const CUSTOMER_NOTIFICATION_COMPACTION: Readonly<
   RESELLER_REQUEST_DECISION: {
     compact: 'NEVER',
     reason: 'The only delivery record of the answer to a reseller request; one per request.',
+  },  RESELLER_WEB_NEW_DEVICE: {
+    compact: 'RESOLVED',
+    reason:
+      'PR-4: one per new device fingerprint of a reseller web panel sign-in; the fingerprint ' +
+      'row, not this notice, is what stops a second alert.',
   },
 };
 

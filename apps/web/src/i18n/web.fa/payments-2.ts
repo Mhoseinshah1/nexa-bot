@@ -562,6 +562,7 @@ export const WEB_FA_PAYMENTS_2 = {
   'web.pay_notice_service_auto_delete_warning': 'هشدار حذف خودکار سرویس',
   'web.pay_notice_reseller_request_message': 'پیام مدیریت دربارهٔ درخواست نمایندگی',
   'web.pay_notice_reseller_request_decision': 'نتیجهٔ درخواست نمایندگی',
+  'web.pay_notice_reseller_web_new_device': 'ورود تازه به پنل نماینده',
   'web.pay_provider_pending': 'در انتظار',
   'web.pay_provider_processing': 'در حال پردازش',
   'web.pay_provider_completed': 'تکمیل‌شده',
