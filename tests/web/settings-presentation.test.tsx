@@ -242,6 +242,8 @@ describe('the settings page', () => {
       expect(screen.getByRole('heading', { name: t(title) })).toBeInTheDocument();
       // Only the chosen category's heading is reachable.
       expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(1);
+      // Owner ruling: the heading is text, not a second button beside the tab strip.
+      expect(screen.queryByRole('button', { name: new RegExp(`^${t(title)}$`, 'u') })).toBeNull();
     }
   });
 

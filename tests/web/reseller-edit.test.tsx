@@ -171,7 +171,7 @@ const render = (options: { mayViewCatalog?: boolean; mayEdit?: boolean } = {}) =
 
 const openStanding = async () => {
   await screen.findByText('Reza Reseller');
-  fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
+  fireEvent.click(screen.getByText('Reza Reseller'));
 };
 
 const openProducts = async () => {

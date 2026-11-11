@@ -181,7 +181,7 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
               >
                 <SettingsSection
                   title={t(title)}
-                  defaultOpen
+                  collapsible={false}
                   changed={members.filter((member) => dirty.has(member.key)).length}
                 >
                   {/* PR-3: the automatic deletion's preview sits above its own settings. */}

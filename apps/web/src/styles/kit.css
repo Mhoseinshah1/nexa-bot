@@ -1144,6 +1144,10 @@
   color: var(--fg-3);
   unicode-bidi: plaintext;
 }
+/* A row that is itself the way in (DataTable onRowActivate). */
+.tbl tbody tr.activatable {
+  cursor: pointer;
+}
 .tbl .row-actions {
   display: inline-flex;
   gap: 4px;
