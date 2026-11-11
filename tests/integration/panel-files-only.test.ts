@@ -205,4 +205,98 @@ describe('panel option: files only, no subscription link', () => {
       ),
     ).rejects.toThrow();
   });
+
+  // ---- «نام پروفایل در sing-box» -----------------------------------------------------
+
+  const nameOf = async (panelId: string) => {
+    const { panel } = await ctx.container.panels.get(tenantA, owner, panelId);
+    return { mode: panel.singboxNameMode, custom: panel.singboxNameCustom };
+  };
+
+  it('profile name defaults to «پیش‌فرض (نام دامنه)» with no text', async () => {
+    expect(await nameOf(FILES)).toEqual({ mode: 'DEFAULT', custom: null });
+  });
+
+  it('stores a trimmed custom name on a RickPanel and audits before and after', async () => {
+    await ctx.container.panels.update(tenantA, owner, FILES, {
+      singboxNameMode: 'CUSTOM',
+      singboxNameCustom: '  اشتراک {username}  ',
+      idempotencyKey: key(),
+    });
+    expect(await nameOf(FILES)).toEqual({ mode: 'CUSTOM', custom: 'اشتراک {username}' });
+    const audits = await ctx.container.database.db.execute<{
+      before: { singboxNameMode: string; singboxNameCustom: string | null };
+      after: { singboxNameMode: string; singboxNameCustom: string | null };
+    }>(sql`SELECT before, after FROM audit_logs
+            WHERE action = 'panel.update' AND entity_id = ${FILES} ORDER BY occurred_at, id`);
+    expect(audits.rows).toHaveLength(1);
+    expect(audits.rows[0]?.before).toMatchObject({
+      singboxNameMode: 'DEFAULT',
+      singboxNameCustom: null,
+    });
+    expect(audits.rows[0]?.after).toMatchObject({
+      singboxNameMode: 'CUSTOM',
+      singboxNameCustom: 'اشتراک {username}',
+    });
+  });
+
+  it('an empty custom text is stored as none; USERNAME and DEFAULT round-trip', async () => {
+    await ctx.container.panels.update(tenantA, owner, FILES, {
+      singboxNameMode: 'CUSTOM',
+      singboxNameCustom: '   ',
+      idempotencyKey: key(),
+    });
+    expect(await nameOf(FILES)).toEqual({ mode: 'CUSTOM', custom: null });
+    await ctx.container.panels.update(tenantA, owner, FILES, {
+      singboxNameMode: 'USERNAME',
+      idempotencyKey: key(),
+    });
+    expect((await nameOf(FILES)).mode).toBe('USERNAME');
+    await ctx.container.panels.update(tenantA, owner, FILES, {
+      singboxNameMode: 'DEFAULT',
+      idempotencyKey: key(),
+    });
+    expect(await nameOf(FILES)).toEqual({ mode: 'DEFAULT', custom: null });
+  });
+
+  it('refuses a text with a line break or over 64 characters, storing nothing', async () => {
+    for (const text of ['سلام\nدنیا', 'x'.repeat(65)]) {
+      await expect(
+        ctx.container.panels.update(tenantA, owner, FILES, {
+          singboxNameMode: 'CUSTOM',
+          singboxNameCustom: text,
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'panel.request_invalid' });
+    }
+    expect(await nameOf(FILES)).toEqual({ mode: 'DEFAULT', custom: null });
+  });
+
+  it('refuses a profile name for a panel that is not a RickPanel; the default is always accepted', async () => {
+    await expect(
+      ctx.container.panels.update(tenantA, owner, NO_FILES, {
+        singboxNameMode: 'USERNAME',
+        idempotencyKey: key(),
+      }),
+    ).rejects.toMatchObject({ code: 'panel.qr_kind_unsupported' });
+    await ctx.container.panels.update(tenantA, owner, NO_FILES, {
+      singboxNameMode: 'DEFAULT',
+      singboxNameCustom: null,
+      idempotencyKey: key(),
+    });
+    expect(await nameOf(NO_FILES)).toEqual({ mode: 'DEFAULT', custom: null });
+  });
+
+  it('the database refuses a mode, a line break or an over-long text', async () => {
+    for (const set of [
+      sql`singbox_name_mode = 'NOPE'`,
+      sql`singbox_name_custom = E'a\nb'`,
+      sql`singbox_name_custom = ${'x'.repeat(65)}`,
+      sql`singbox_name_custom = ''`,
+    ]) {
+      await expect(
+        ctx.container.database.db.execute(sql`UPDATE panels SET ${set} WHERE id = ${FILES}`),
+      ).rejects.toThrow();
+    }
+  });
 });

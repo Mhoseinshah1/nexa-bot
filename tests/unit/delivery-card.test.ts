@@ -131,7 +131,14 @@ function harness(
       forPanel: async () => resolvePanelPolicy({ delivery: { mode }, actions: {} }),
     },
     filesOnly: { isFilesOnly: async () => false },
-    qrOptions: { qrOptionsOf: async () => ({ kind: 'SUB_LINK' as const, intervalMinutes: 360 }) },
+    qrOptions: {
+      qrOptionsOf: async () => ({
+        kind: 'SUB_LINK' as const,
+        intervalMinutes: 360,
+        nameMode: 'DEFAULT' as const,
+        nameCustom: null,
+      }),
+    },
   };
   return { delivery: new DeliveryService(deps), encoded, files, texts, recorded };
 }

@@ -88,6 +88,8 @@ export function panel(id: string, name: string, over: Json = {}): Json {
     filesOnlyDelivery: false,
     qrKind: 'SUB_LINK',
     singboxIntervalMinutes: 360,
+    singboxNameMode: 'DEFAULT',
+    singboxNameCustom: null,
     createdAt: ago(60 * 24 * 200),
     updatedAt: ago(60 * 24 * 3),
     ...over,

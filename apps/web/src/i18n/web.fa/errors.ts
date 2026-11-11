@@ -619,6 +619,11 @@ export const WEB_FA_ERRORS = {
   'web.err_control_client_app_video_bot_unavailable': 'رباتی برای ارسال ویدیو در دسترس نیست.',
   'web.err_control_client_app_video_session_not_found':
     'نشست بارگذاری ویدیو پیدا نشد. دوباره شروع کنید.',
+  'web.err_product_description_capture_telegram_unlinked':
+    'حساب تلگرام شما وصل نیست؛ ارسال توضیح از تلگرام ممکن نیست.',
+  'web.err_product_description_capture_no_bot': 'ربات فعالی برای دریافت توضیح وجود ندارد.',
+  'web.err_product_description_capture_not_found':
+    'درخواست ارسال توضیح پیدا نشد. دوباره شروع کنید.',
   'web.err_control_client_app_video_telegram_unlinked':
     'حساب تلگرام شما وصل نیست؛ ارسال ویدیو ممکن نیست.',
   'web.err_control_invalid_value': 'این مقدار پذیرفته نشد. مقدار را بررسی کنید.',

@@ -831,6 +831,16 @@ export const COMMERCE_ERROR_CODES = {
   RESELLER_REASON_REQUIRED: 'commerce.reseller_reason_required',
 
   PRODUCT_NOT_FOUND: 'commerce.product_not_found',
+  /**
+   * «ارسال توضیح از تلگرام»: the administrator has no Telegram account bound, so nothing they
+   * send could ever be theirs. Refused before any request is opened.
+   */
+  PRODUCT_DESCRIPTION_CAPTURE_TELEGRAM_UNLINKED:
+    'commerce.product_description_capture_telegram_unlinked',
+  /** The tenant has no active bot to send the description to. */
+  PRODUCT_DESCRIPTION_CAPTURE_NO_BOT: 'commerce.product_description_capture_no_bot',
+  /** No such capture request, or one that belongs to another administrator or product. */
+  PRODUCT_DESCRIPTION_CAPTURE_NOT_FOUND: 'commerce.product_description_capture_not_found',
   /** The product exists and is withdrawn from sale. Not the same as absent. */
   PRODUCT_NOT_PURCHASABLE: 'commerce.product_not_purchasable',
   /**

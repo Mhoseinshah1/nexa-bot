@@ -336,6 +336,8 @@ export function panel(overrides: Record<string, unknown> = {}): Record<string, u
     filesOnlyDelivery: false,
     qrKind: 'SUB_LINK',
     singboxIntervalMinutes: 360,
+    singboxNameMode: 'DEFAULT',
+    singboxNameCustom: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,

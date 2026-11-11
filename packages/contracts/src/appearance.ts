@@ -176,6 +176,137 @@ export const customEmojiIdSchema = z.string().regex(CUSTOM_EMOJI_ID_PATTERN, {
 });
 
 // ---------------------------------------------------------------------------
+// Premium emoji typed in Telegram: the stored form of a product description
+// ---------------------------------------------------------------------------
+
+/**
+ * A custom emoji an administrator typed into a text (a product description, captured from
+ * Telegram), as ONE stored representation: the marker the appearance renderer already
+ * consumes, with the custom emoji's id and its covered fallback emoji in place of a slot:
+ *
+ *     {icon:5368324170671202286:😀}
+ *
+ * The renderer (`decorateAppearance`) turns it into a `custom_emoji` entity (or a
+ * `<tg-emoji>` tag) on a bot that proved it may carry custom emoji, and into the fallback
+ * emoji everywhere else — a bot that is not eligible, a message that falls back to plain,
+ * a surface that draws no decoration at all (`appearanceFallbackText`). Digits cannot collide
+ * with a slot name, so the two marker forms never read each other's.
+ *
+ * The fallback is at most `CUSTOM_EMOJI_FALLBACK_MAX_UNITS` UTF-16 code units, with no
+ * whitespace, brace or markup character: a longer or odder covered text is kept as the plain
+ * text it was and loses only its decoration.
+ */
+export const CUSTOM_EMOJI_FALLBACK_MAX_UNITS = 4;
+const CUSTOM_EMOJI_MARKER_BODY = /^([0-9]{1,32}):([^\s{}<>&\p{C}]{1,4})$/u;
+
+export function customEmojiMarker(id: string, fallback: string): string {
+  return `{icon:${id}:${fallback}}`;
+}
+
+/** The custom emoji a marker's body (the text between `{icon:` and `}`) names, or null. */
+export function parseCustomEmojiMarkerBody(
+  body: string,
+): { readonly id: string; readonly fallback: string } | null {
+  const match = CUSTOM_EMOJI_MARKER_BODY.exec(body);
+  if (match === null) return null;
+  const fallback = match[2] as string;
+  if (fallback.length > CUSTOM_EMOJI_FALLBACK_MAX_UNITS) return null;
+  return { id: match[1] as string, fallback };
+}
+
+/** The part of a Telegram `MessageEntity` a capture reads. Offsets are UTF-16 code units. */
+export interface CapturedEntity {
+  readonly type: string;
+  readonly offset: number;
+  readonly length: number;
+  readonly custom_emoji_id?: string | undefined;
+}
+
+/**
+ * A Telegram message's text and entities as the stored description: the text itself, with
+ * each `custom_emoji` entity replaced by its marker. Offsets and lengths are UTF-16 code
+ * units — what the Bot API counts and a JavaScript string indexes — so Persian letters and
+ * emoji before an entity do not move it. Every other entity (bold, links …) is dropped with
+ * its text kept: a description has no formatting of its own. An entity that is out of range,
+ * overlaps an earlier one, has no valid id or covers something that is not one short emoji
+ * is left as the plain text it covers.
+ */
+export function descriptionFromTelegramText(
+  text: string,
+  entities: readonly CapturedEntity[],
+): string {
+  const custom = entities
+    .filter((entity) => entity.type === 'custom_emoji')
+    .sort((a, b) => a.offset - b.offset);
+  let out = '';
+  let at = 0;
+  for (const entity of custom) {
+    const end = entity.offset + entity.length;
+    if (
+      !Number.isInteger(entity.offset) ||
+      !Number.isInteger(entity.length) ||
+      entity.offset < at ||
+      entity.length <= 0 ||
+      end > text.length
+    ) {
+      continue;
+    }
+    const covered = text.slice(entity.offset, end);
+    const named = parseCustomEmojiMarkerBody(`${entity.custom_emoji_id ?? ''}:${covered}`);
+    if (named === null) continue;
+    out += text.slice(at, entity.offset) + customEmojiMarker(named.id, named.fallback);
+    at = end;
+  }
+  return out + text.slice(at);
+}
+
+const STORED_CUSTOM_EMOJI = /\{icon:([^{}]*)\}/gu;
+
+/** A stored description with every custom emoji as its fallback emoji, for a plain surface. */
+export function descriptionPlainText(stored: string): string {
+  return stored.replace(STORED_CUSTOM_EMOJI, (whole, body: string) => {
+    const named = parseCustomEmojiMarkerBody(body);
+    return named === null ? whole : named.fallback;
+  });
+}
+
+/** One custom emoji of an editable description, kept beside the text, never inside it. */
+export interface EditableEmoji {
+  readonly id: string;
+  readonly fallback: string;
+}
+
+const EDITABLE_TOKEN = /⟦(\S+?) #([0-9]{1,3})⟧/gu;
+
+/**
+ * A stored description as a person edits it: each custom emoji is a short readable token,
+ * `⟦😀 #1⟧` (the fallback emoji and its number), and the ids stay in `emojis`, in a list the
+ * editor keeps. Typing around a token cannot touch an id, and deleting a token deletes that
+ * emoji. `editableToDescription` is the inverse.
+ */
+export function descriptionToEditable(stored: string): {
+  readonly text: string;
+  readonly emojis: readonly EditableEmoji[];
+} {
+  const emojis: EditableEmoji[] = [];
+  const text = stored.replace(STORED_CUSTOM_EMOJI, (whole, body: string) => {
+    const named = parseCustomEmojiMarkerBody(body);
+    if (named === null) return whole;
+    emojis.push(named);
+    return `⟦${named.fallback} #${emojis.length}⟧`;
+  });
+  return { text, emojis };
+}
+
+/** The stored form of an edited text: each token whose number names an emoji becomes its marker. */
+export function editableToDescription(text: string, emojis: readonly EditableEmoji[]): string {
+  return text.replace(EDITABLE_TOKEN, (whole, _shown: string, number: string) => {
+    const emoji = emojis[Number(number) - 1];
+    return emoji === undefined ? whole : customEmojiMarker(emoji.id, emoji.fallback);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // The per-bot eligibility test
 // ---------------------------------------------------------------------------
 

@@ -548,6 +548,198 @@ describe('«ورود به پنل» (phase 6B PR-5)', () => {
     });
   });
 
+  /*
+   * PR-N N3: the exports an entered session can take leave a row in the OWNER's log that names
+   * the hosted bot (`acted_in_tenant_id`, and `after.hostedTenantId` because the owner's audit
+   * page and its CSV do not show that column), the batch or filter, the count and the time —
+   * and nothing in the hosted bot's own log. The bot's own owner exporting is unchanged.
+   */
+  describe('exports from an entered session', () => {
+    const HOUR = 60 * 60 * 1000;
+
+    /** The hosted bot's own owner, gift cards on, one batch of three codes minted by HIM. */
+    async function hostedWithBatch(id: string) {
+      const hostedScope = { tenantId: id as never, botInstanceId: null } as TenantContext;
+      const admin = await createAdmin(api.container, hostedScope, {
+        username: 'hosted-gc-owner',
+        roleKeys: ['owner'],
+      });
+      const hostedActor: ActorContext = {
+        type: 'WEB_ADMIN',
+        id: admin.id,
+        label: admin.username,
+        surface: 'WEB',
+        correlationId: 'hosted-correlation' as CorrelationId,
+      };
+      const flag = (await api.container.featureFlags.list(hostedScope, hostedActor)).find(
+        (row) => row.key === 'gift_cards',
+      );
+      await api.container.featureFlags.set(hostedScope, hostedActor, {
+        idempotencyKey: key(),
+        key: 'gift_cards',
+        enabled: true,
+        expectedVersion: flag?.version as number,
+        confirmKey: 'gift_cards',
+        reason: 'test toggle',
+      });
+      const view = await api.container.giftCards.create(hostedScope, hostedActor, {
+        idempotencyKey: key(),
+        label: 'یلدا',
+        amountMinor: 50_000n,
+        currency: 'IRT',
+        count: 3,
+        expiresAt: new Date(now().getTime() + 30 * 24 * HOUR),
+        perCustomerLimit: null,
+        reason: 'کمپین آزمایشی',
+        expectedTotalMinor: 150_000n,
+        typedCount: 3,
+      });
+      return { hostedScope, hostedActor, batchId: view.batch.id };
+    }
+
+    const ownerRows = (id: string, action: string) =>
+      db()
+        .select()
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.tenantId, tenantA.tenantId),
+            eq(auditLogs.actedInTenantId, id),
+            eq(auditLogs.action, action),
+          ),
+        );
+    const hostedRows = (id: string, action: string) =>
+      db()
+        .select()
+        .from(auditLogs)
+        .where(and(eq(auditLogs.tenantId, id), eq(auditLogs.action, action)));
+
+    it('gift-card codes: one row in the OWNER’s log naming the bot, the batch, the count and the time; none in the bot’s', async () => {
+      const panel = await openPanel();
+      const id = await hostedBot(panel, 'alpha', DOMAIN);
+      const { batchId } = await hostedWithBatch(id);
+      const before = (await hostedAudit(id)).length;
+      const session = await entered(panel, id);
+
+      const file = await api.container.giftCards.exportCodes(session.scope, session.actor, batchId);
+      expect(file.count).toBe(3);
+
+      expect(await hostedRows(id, 'gift_card.batch.export')).toEqual([]);
+      expect((await hostedAudit(id)).length).toBe(before);
+      const rows = await ownerRows(id, 'gift_card.batch.export');
+      expect(rows).toHaveLength(1);
+      const row = rows[0]!;
+      expect(row).toMatchObject({
+        actorId: owner.id,
+        actorLabel: owner.username,
+        entityType: 'GiftCardBatch',
+        entityId: batchId,
+        result: 'SUCCESS',
+      });
+      expect(row.occurredAt.getTime()).toBe(now().getTime());
+      expect(row.after).toEqual({ count: 3, state: 'ACTIVE', hostedTenantId: id });
+      // Counts and ids only: no code of the file is anywhere in the row.
+      const lines = file.content.trimEnd().split('\r\n').slice(1);
+      expect(lines).toHaveLength(3);
+      for (const line of lines) {
+        const code = (line.split(',')[0] ?? '').replaceAll('"', '');
+        expect(code.length).toBeGreaterThan(0);
+        expect(JSON.stringify(row)).not.toContain(code);
+      }
+    });
+
+    it('gift-card codes exported by the bot’s own owner: exactly as before, in the bot’s log only', async () => {
+      const panel = await openPanel();
+      const id = await hostedBot(panel, 'alpha', DOMAIN);
+      const { hostedScope, hostedActor, batchId } = await hostedWithBatch(id);
+
+      await api.container.giftCards.exportCodes(hostedScope, hostedActor, batchId);
+
+      const rows = await hostedRows(id, 'gift_card.batch.export');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.actedInTenantId).toBeNull();
+      expect(rows[0]!.after).toEqual({ count: 3, state: 'ACTIVE' });
+      expect(await ownerRows(id, 'gift_card.batch.export')).toEqual([]);
+    });
+
+    it('the audit log: the owner’s row names the bot and the row count; the bot’s log is untouched', async () => {
+      const panel = await openPanel();
+      const id = await hostedBot(panel, 'alpha', DOMAIN);
+      const { hostedScope, hostedActor } = await hostedWithBatch(id);
+      const before = (await hostedAudit(id)).length;
+      const session = await entered(panel, id);
+
+      const file = await api.container.auditLog.export(session.scope, session.actor, {} as never);
+
+      expect((await hostedAudit(id)).length).toBe(before);
+      const rows = await ownerRows(id, 'audit.export');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ actorId: owner.id, result: 'SUCCESS' });
+      expect(rows[0]!.after).toEqual({
+        format: 'csv',
+        rows: file.rows,
+        filter: {},
+        hostedTenantId: id,
+      });
+
+      // The bot's own owner: his row, in his log, as before.
+      const own = await api.container.auditLog.export(hostedScope, hostedActor, {} as never);
+      const ownRows = await hostedRows(id, 'audit.export');
+      expect(ownRows).toHaveLength(1);
+      expect(ownRows[0]!.after).toEqual({ format: 'csv', rows: own.rows, filter: {} });
+      expect(await ownerRows(id, 'audit.export')).toHaveLength(1);
+    });
+
+    it('fail-closed: when the owner’s row cannot be written, no code and no log file leave', async () => {
+      const panel = await openPanel();
+      const id = await hostedBot(panel, 'alpha', DOMAIN);
+      const { batchId } = await hostedWithBatch(id);
+      const session = await entered(panel, id);
+      const writer = api.container.audit as { record: (...args: unknown[]) => Promise<void> };
+      const real = writer.record;
+      writer.record = async (...args: unknown[]) => {
+        const [, actor, entry] = args as [unknown, ActorContext, { action: string }];
+        if (actor.impersonation !== undefined && entry.action.endsWith('export')) {
+          throw new Error('the owner’s log is unavailable');
+        }
+        return real.apply(writer, args);
+      };
+      try {
+        await expect(
+          api.container.giftCards.exportCodes(session.scope, session.actor, batchId),
+        ).rejects.toThrow('the owner’s log is unavailable');
+        await expect(
+          api.container.auditLog.export(session.scope, session.actor, {} as never),
+        ).rejects.toThrow('the owner’s log is unavailable');
+      } finally {
+        writer.record = real;
+      }
+      expect(await ownerRows(id, 'gift_card.batch.export')).toEqual([]);
+      expect(await ownerRows(id, 'audit.export')).toEqual([]);
+    });
+
+    it('reports: refused to an entered session (the HOST principal holds no owner role), so none leaves unrecorded', async () => {
+      // If this ever opens, an entered report export must be recorded in the owner's log like
+      // the two above (N3): this test is where that decision is forced.
+      const panel = await openPanel();
+      const id = await hostedBot(panel, 'alpha', DOMAIN);
+      const before = (await hostedAudit(id)).length;
+      const session = await entered(panel, id);
+      expect(
+        await codeOf(
+          api.container.reports.export(
+            session.scope,
+            session.actor,
+            { range: 'TODAY' } as never,
+            'SALES',
+            'csv',
+          ),
+        ),
+      ).toBe(PLATFORM_ERROR_CODES.PERMISSION_DENIED);
+      expect((await hostedAudit(id)).length).toBe(before);
+    });
+  });
+
   describe('it ends with the section session', () => {
     async function isLive(token: string): Promise<boolean> {
       try {

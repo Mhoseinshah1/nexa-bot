@@ -686,7 +686,14 @@ describe('the three delivery sites draw the configured template', () => {
           resolvePanelPolicy({ delivery: { mode: 'CARD_WITH_QR' }, actions: {} }),
       },
       filesOnly: { isFilesOnly: async () => false },
-      qrOptions: { qrOptionsOf: async () => ({ kind: 'SUB_LINK' as const, intervalMinutes: 360 }) },
+      qrOptions: {
+        qrOptionsOf: async () => ({
+          kind: 'SUB_LINK' as const,
+          intervalMinutes: 360,
+          nameMode: 'DEFAULT' as const,
+          nameCustom: null,
+        }),
+      },
       linkQr: { claim: async () => true },
     };
     return { delivery: new DeliveryService(deps), files };

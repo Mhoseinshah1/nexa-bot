@@ -9,7 +9,9 @@ import {
   parseTrafficGb,
   productListQuerySchema,
   productStatusRequestSchema,
+  openProductDescriptionCaptureRequestSchema,
   productWriteSchema,
+  type ProductDescriptionCaptureResponse,
   type PanelId,
   type ProductListResponse,
   type ProductResponse,
@@ -21,6 +23,7 @@ import { CONTAINER, type Container } from '../../container.js';
 import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
+import type { DescriptionCaptureView } from '../../modules/commerce/catalog/application/product-description-capture.service.js';
 import type {
   ProductCursor,
   ProductDraft,
@@ -164,6 +167,51 @@ export class ProductsController {
     });
     return { product: toSummary(product) };
   }
+
+  /**
+   * «ارسال توضیح از تلگرام»: open a ten-minute, single-use capture request for this product,
+   * and read it back while the administrator sends the description to the bot. Both charge
+   * `catalog.edit` in `ProductDescriptionCaptureService`; a request is readable only by the
+   * administrator who opened it. The request changes nothing on the product: the page fills
+   * its field and the administrator presses the ordinary Save.
+   */
+  @Post('products/:id/description-captures')
+  async openDescriptionCapture(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ProductDescriptionCaptureResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const command = openProductDescriptionCaptureRequestSchema.parse(body);
+    return toCaptureView(
+      await this.container.productDescriptionCapture.open(scope, actor, {
+        idempotencyKey: command.idempotencyKey,
+        productId: id,
+      }),
+    );
+  }
+
+  @Get('products/:id/description-captures/:captureId')
+  async descriptionCapture(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Param('captureId') captureId: string,
+  ): Promise<ProductDescriptionCaptureResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return toCaptureView(
+      await this.container.productDescriptionCapture.read(scope, actor, id, captureId),
+    );
+  }
+}
+
+function toCaptureView(view: DescriptionCaptureView): ProductDescriptionCaptureResponse {
+  return {
+    captureId: view.captureId,
+    state: view.state,
+    expiresAt: view.expiresAt.toISOString(),
+    bots: view.bots.map((bot) => ({ username: bot.username, chatUrl: bot.chatUrl })),
+    description: view.description,
+  };
 }
 
 /**

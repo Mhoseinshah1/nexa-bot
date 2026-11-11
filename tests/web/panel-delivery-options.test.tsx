@@ -87,6 +87,57 @@ describe('the panel delivery options card', () => {
     expect(api.calls).toHaveLength(0);
   });
 
+  it('profile name: shown only for a sing-box kind, with a one-line preview', () => {
+    stubApi([]);
+    renderPage(<PanelDeliveryOptionsCard panel={as('rickpanel')} mayEdit />);
+    expect(screen.queryByLabelText(t('web.singbox_name_label'))).toBeNull();
+    fireEvent.change(kindSelect() as HTMLElement, { target: { value: 'SINGBOX' } });
+    const mode = screen.getByLabelText(t('web.singbox_name_label')) as HTMLSelectElement;
+    expect(mode.value).toBe('DEFAULT');
+    expect(screen.getByTestId('singbox-name-preview').textContent).toContain(
+      t('web.singbox_name_preview_default'),
+    );
+    fireEvent.change(mode, { target: { value: 'USERNAME' } });
+    expect(screen.getByTestId('singbox-name-preview').textContent).toContain('nx7k2m9q');
+    fireEvent.change(kindSelect() as HTMLElement, { target: { value: 'SUB_LINK' } });
+    expect(screen.queryByLabelText(t('web.singbox_name_label'))).toBeNull();
+  });
+
+  it('profile name: a custom text previews with {username} and is sent trimmed', async () => {
+    const api = stubApi([
+      { url: `/panels/${ID}`, method: 'POST', body: { panel: as('rickpanel') } },
+    ]);
+    renderPage(<PanelDeliveryOptionsCard panel={as('rickpanel', { qrKind: 'BOTH' })} mayEdit />);
+    fireEvent.change(screen.getByLabelText(t('web.singbox_name_label')), {
+      target: { value: 'CUSTOM' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.singbox_name_custom_label')), {
+      target: { value: '  اشتراک {username}  ' },
+    });
+    expect(screen.getByTestId('singbox-name-preview').textContent).toContain('اشتراک nx7k2m9q');
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => expect(api.calls.some((call) => call.method === 'POST')).toBe(true));
+    expect(api.calls.find((call) => call.method === 'POST')?.body).toMatchObject({
+      singboxNameMode: 'CUSTOM',
+      singboxNameCustom: 'اشتراک {username}',
+    });
+  });
+
+  it('profile name: a line break or more than 64 characters blocks the save', () => {
+    const api = stubApi([]);
+    renderPage(<PanelDeliveryOptionsCard panel={as('rickpanel', { qrKind: 'BOTH' })} mayEdit />);
+    fireEvent.change(screen.getByLabelText(t('web.singbox_name_label')), {
+      target: { value: 'CUSTOM' },
+    });
+    for (const bad of ['x'.repeat(65), 'a\u2028b']) {
+      fireEvent.change(screen.getByLabelText(t('web.singbox_name_custom_label')), {
+        target: { value: bad },
+      });
+      expect(screen.getByRole('button', { name: t('web.save') })).toBeDisabled();
+    }
+    expect(api.calls).toHaveLength(0);
+  });
+
   it('read-only without panels.edit: no save button, controls disabled', () => {
     stubApi([]);
     renderPage(<PanelDeliveryOptionsCard panel={as('rickpanel')} mayEdit={false} />);

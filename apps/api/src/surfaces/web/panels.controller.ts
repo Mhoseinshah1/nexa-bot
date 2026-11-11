@@ -335,6 +335,8 @@ export class PanelsController {
       filesOnlyDelivery: view.panel.filesOnlyDelivery,
       qrKind: view.panel.qrKind,
       singboxIntervalMinutes: view.panel.singboxIntervalMinutes,
+      singboxNameMode: view.panel.singboxNameMode,
+      singboxNameCustom: view.panel.singboxNameCustom,
       createdAt: view.panel.createdAt.toISOString(),
       updatedAt: view.panel.updatedAt.toISOString(),
     };

@@ -3,6 +3,7 @@ import type {
   PanelActivation,
   PanelHealthState,
   PanelQrKind,
+  SingboxNameMode,
   PanelStatus,
   ProviderAnnounceableCapability,
   ProviderFailureKind,
@@ -84,6 +85,9 @@ export interface PanelRecord {
   /** R11 A4: «نوع بارکد» and the sing-box refresh interval (minutes). Read by delivery. */
   readonly qrKind: PanelQrKind;
   readonly singboxIntervalMinutes: number;
+  /** «نام پروفایل در sing-box»; the custom text is already trimmed, at most 64 characters. */
+  readonly singboxNameMode: SingboxNameMode;
+  readonly singboxNameCustom: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -249,6 +253,9 @@ export interface UpdatePanelInput {
   /** R11 A4: absent leaves them. */
   readonly qrKind?: PanelQrKind;
   readonly singboxIntervalMinutes?: number;
+  readonly singboxNameMode?: SingboxNameMode;
+  /** `null` clears the text; absent leaves it. */
+  readonly singboxNameCustom?: string | null;
 }
 
 /**
