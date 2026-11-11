@@ -279,6 +279,13 @@ export const TENANT_TABLES: readonly string[] = [
   'reseller_web_devices',
   'reseller_web_totp_factors',
   'reseller_web_preferences',
+  // reseller-web-selling.ts (PR-5)
+  'reseller_clients',
+  'reseller_client_services',
+  'reseller_purchase_batches',
+  'reseller_purchase_batch_orders',
+  'reseller_web_daily_reports',
+  'reseller_tier_targets',
   // service-lifecycle.ts
   'trial_resets',
   'trial_limit_overrides',
