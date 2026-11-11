@@ -71,7 +71,8 @@ export const NEVER_TABLES: Readonly<Record<string, string>> = {
   tenant_data_exports:
     'data-export requests: a file on THIS server and a 24 h link mean nothing on another one',
   reseller_web_login_tokens: 'ten-minute one-time reseller panel links; a live one must not travel',
-  reseller_web_sessions: 'live reseller panel sessions; a restore anywhere signs every reseller out',
+  reseller_web_sessions:
+    'live reseller panel sessions; a restore anywhere signs every reseller out',
   reseller_web_file_fetches: 'a ten-minute fetch counter; nothing after a restore',
 };
 

@@ -365,9 +365,7 @@ export const resellerConnectionFileSchema = z.object({
 export const resellerConnectionFilesResponseSchema = z.object({
   files: z.array(resellerConnectionFileSchema),
 });
-export type ResellerConnectionFilesResponse = z.infer<
-  typeof resellerConnectionFilesResponseSchema
->;
+export type ResellerConnectionFilesResponse = z.infer<typeof resellerConnectionFilesResponseSchema>;
 
 /** What a Telegram send answered: how many messages / files went, or a Persian refusal code. */
 export const resellerSendResultSchema = z.object({
