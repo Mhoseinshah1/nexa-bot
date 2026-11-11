@@ -34,6 +34,12 @@ import {
   type UpdateIncidentRequest,
 } from '@nexa/contracts';
 import {
+  RESELLER_WEB_ADMIN_ROUTES,
+  resellerWebForceLogoutResponseSchema,
+  resellerWebPanelSummarySchema,
+  type ResellerWebPanelSummary,
+} from '@nexa/contracts';
+import {
   RESELLER_REQUEST_ROUTES,
   resellerRequestDetailResponseSchema,
   resellerRequestListResponseSchema,
@@ -958,7 +964,7 @@ export class ApiError extends Error {
   readonly correlationId: string | null;
 }
 
-function toApiError(status: number, payload: unknown): ApiError {
+export function toApiError(status: number, payload: unknown): ApiError {
   const parsed = errorResponseSchema.safeParse(payload);
   if (parsed.success) {
     return new ApiError(
@@ -6313,5 +6319,33 @@ export function cancelTenantRestore(
     restorePath(HOSTED_BACKUP_ROUTES.cancel, restoreId),
     body,
     hostingShape<TenantRestoreView>(),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The reseller drawer's «پنل وب» card (reseller web panel, PR-4)
+// ---------------------------------------------------------------------------
+
+function webPanelPath(template: string, customerId: string): string {
+  return template.replace(':customerId', encodeURIComponent(customerId));
+}
+
+/** Last sign-in, open sessions and 2FA of one reseller's web panel (`resellers.view`). */
+export function fetchResellerWebPanel(customerId: string): Promise<ResellerWebPanelSummary> {
+  return authedGet(
+    webPanelPath(RESELLER_WEB_ADMIN_ROUTES.summary, customerId),
+    resellerWebPanelSummarySchema,
+  );
+}
+
+/** Ends every web-panel session of one reseller (`resellers.edit`, a reason is required, audited). */
+export function forceLogoutResellerWebPanel(
+  customerId: string,
+  body: { reason: string; idempotencyKey: string },
+): Promise<{ ended: number }> {
+  return post(
+    webPanelPath(RESELLER_WEB_ADMIN_ROUTES.forceLogout, customerId),
+    body,
+    resellerWebForceLogoutResponseSchema,
   );
 }

@@ -31,6 +31,7 @@ import { WEB_FA_HOSTING } from './web.fa/hosting';
 import { WEB_FA_HOSTING_BACKUP } from './web.fa/hosting-backup';
 import { WEB_FA_DATA_EXPORT } from './web.fa/data-export';
 import { WEB_FA_REDESIGN_KIT } from './web.fa/redesign-kit';
+import { WEB_FA_RESELLER_PANEL } from './web.fa/reseller-panel';
 
 /*
  * The catalogue is split by page group under `./web.fa/`; this object merges the
@@ -61,6 +62,7 @@ export const WEB_FA = {
   ...WEB_FA_HOSTING_BACKUP,
   ...WEB_FA_DATA_EXPORT,
   ...WEB_FA_REDESIGN_KIT,
+  ...WEB_FA_RESELLER_PANEL,
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;
