@@ -41,6 +41,8 @@ import {
   BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
   BACKUP_ARCHIVE_KEEP_DAYS_MAX,
   BACKUP_ARCHIVE_KEEP_DAYS_MIN,
+  BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT,
+  BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
   BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
   BACKUP_DAILY_TIME_PATTERN,
   BACKUP_INTERVAL_MINUTES_MAX,
@@ -897,6 +899,28 @@ export const SETTINGS = [
       'backup.archive_keep_count.',
     schema: z.number().int().min(BACKUP_ARCHIVE_KEEP_DAYS_MIN).max(BACKUP_ARCHIVE_KEEP_DAYS_MAX),
     defaultValue: BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  /**
+   * Owner, 2026-11-11: «بدون نگهداری». Off, the host keeps no archive once Telegram holds it in
+   * full; on (the default), the two keys above apply as before. See the constant's comment.
+   */
+  {
+    key: BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
+    description:
+      'Whether a backup archive stays on the server after it reached the Telegram backup ' +
+      'destination. On (the default): the archive retention keys apply as before. Off: a ' +
+      'verified backup whose delivery is confirmed (every part has a Telegram message id) is ' +
+      'removed from the server at once, its working directory with it, and each removal is ' +
+      'written to the operations log. A backup still running, unverified, or whose delivery ' +
+      'failed, is partial or unknown, or that an unfinished recovery names, is never removed by ' +
+      'this rule. Read on the installation tenant only.',
+    schema: z.boolean(),
+    defaultValue: BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT,
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
