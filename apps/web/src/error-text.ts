@@ -558,7 +558,6 @@ export const ERROR_TEXT = {
   'reseller_web.link_invalid': 'web.err_reseller_web_link_invalid',
   'reseller_web.link_used': 'web.err_reseller_web_link_used',
   'reseller_web.link_expired': 'web.err_reseller_web_link_expired',
-  'reseller_web.link_rate_limited': 'web.err_reseller_web_link_rate_limited',
   'reseller_web.session_invalid': 'web.err_reseller_web_session_invalid',
   'reseller_web.second_factor_required': 'web.err_reseller_web_second_factor_required',
   'reseller_web.second_factor_invalid': 'web.err_reseller_web_second_factor_invalid',

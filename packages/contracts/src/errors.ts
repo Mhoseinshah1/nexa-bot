@@ -1883,8 +1883,6 @@ export const RESELLER_WEB_ERROR_CODES = {
   LINK_USED: 'reseller_web.link_used',
   /** The link's ten minutes are over. */
   LINK_EXPIRED: 'reseller_web.link_expired',
-  /** More than five links in an hour for this reseller. */
-  LINK_RATE_LIMITED: 'reseller_web.link_rate_limited',
   /** No usable session: none, unknown, ended, expired, or the reseller is no longer ACTIVE. */
   SESSION_INVALID: 'reseller_web.session_invalid',
   /** The session waits for its second-factor code and may do nothing else yet. */

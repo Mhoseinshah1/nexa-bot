@@ -103,8 +103,6 @@ export const WEB_FA_ERRORS = {
     'این لینک قبلاً باز شده است و دوباره کار نمی‌کند. برای ورود دوباره از ربات لینک تازه بگیرید.',
   'web.err_reseller_web_link_expired':
     'مهلت ده‌دقیقه‌ای این لینک تمام شده است. از ربات لینک تازه بگیرید.',
-  'web.err_reseller_web_link_rate_limited':
-    'در یک ساعت گذشته چند لینک ورود گرفته‌اید؛ کمی بعد دوباره امتحان کنید.',
   'web.err_reseller_web_session_invalid':
     'نشست شما تمام شده یا بسته شده است. از ربات دوباره لینک ورود بگیرید.',
   'web.err_reseller_web_second_factor_required': 'کد ورود دومرحله‌ای را وارد کنید.',
