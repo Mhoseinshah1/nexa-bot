@@ -108,6 +108,8 @@ export type ResellerWebAuditAction =
  */
 export const RESELLER_WEB_ACTIVITY_ACTIONS = [
   RESELLER_WEB_AUDIT_ACTIONS.LOGIN,
+  RESELLER_WEB_AUDIT_ACTIONS.LOGIN_REFUSED,
+  RESELLER_WEB_AUDIT_ACTIONS.SECOND_FACTOR,
   RESELLER_WEB_AUDIT_ACTIONS.LOGOUT,
   RESELLER_WEB_AUDIT_ACTIONS.SESSION_REVOKED,
   RESELLER_WEB_AUDIT_ACTIONS.SESSIONS_REVOKED_ALL,
@@ -117,8 +119,16 @@ export const RESELLER_WEB_ACTIVITY_ACTIONS = [
   RESELLER_WEB_AUDIT_ACTIONS.PREFERENCES,
   RESELLER_WEB_AUDIT_ACTIONS.FILES_FETCHED,
   RESELLER_WEB_AUDIT_ACTIONS.FILES_SENT,
+  RESELLER_WEB_AUDIT_ACTIONS.CONNECTION_SENT,
+  // Purchases, renewals and add-ons (the order's confirmation and its wallet settlement).
+  'order.confirm',
+  'payment.wallet_settle',
+  'payment.topup_request',
+  // Auto-renew changes and the sweep's runs.
+  'service.auto_renew_on',
+  'service.auto_renew_off',
+  'service.auto_renew_run',
   'service.customer_note',
-  'service.auto_renew',
 ] as const;
 
 /** The routes, relative to `RESELLER_API_PREFIX`. Literal paths only. */
@@ -153,6 +163,8 @@ export const RESELLER_PANEL_ROUTES = {
   walletEntries: '/wallet/entries',
   walletTopupQuote: '/wallet/topup/quote',
   walletTopup: '/wallet/topup',
+  paymentTransferSent: '/payments/:paymentId/transfer-sent',
+  paymentReceipt: '/payments/:paymentId/receipt',
   prices: '/prices',
   ticketCategories: '/ticket-categories',
   tickets: '/tickets',
