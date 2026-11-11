@@ -1489,17 +1489,17 @@ describe('the payment diagnostics (§21)', () => {
     const headers = within(table)
       .getAllByRole('columnheader')
       .map((cell) => cell.textContent);
-    // Redesign PR-2: the gateway shares the «روش» column with the method (the table fits at
-    // 1440 without a sideways scroll); who paid, the external reference and updated-at
-    // are the row's detail, one toggle away on the same row. PR-C: the payment's uuid is no
-    // longer a column — the tracking code is the payment's name, the uuid is «کپی شناسه».
+    // Demo parity: «درگاه» is a column of its own again; who paid, the external reference and
+    // updated-at are the row's detail, one toggle away on the same row. PR-C: the payment's
+    // uuid is no longer a column — the tracking code is the payment's name, the uuid is
+    // «کپی شناسه».
     expect(headers).not.toContain('شناسهٔ پرداخت');
     expect(headers).toContain(t('web.payment_method'));
-    expect(headers).not.toContain('درگاه');
-    // The gateway still prints, in the method cell, under the method.
-    expect(table.querySelector('.pay-route-cell')?.textContent).toContain(
-      t('web.payment_gateway_provider_manual_transfer'),
-    );
+    expect(headers).toContain(t('web.payment_gateway'));
+    const gatewayAt = headers.indexOf(t('web.payment_gateway'));
+    expect(
+      within(table).getAllByRole('row')[1]?.querySelectorAll('td')[gatewayAt]?.textContent,
+    ).toContain(t('web.payment_gateway_provider_manual_transfer'));
     fireEvent.click(within(table).getByRole('button', { name: t('web.payment_row_detail') }));
     const terms = within(table)
       .getAllByRole('term')
@@ -2035,11 +2035,14 @@ describe('rows imported from Mirza', () => {
  * permission and confirm stay where they were.
  */
 describe('the redesigned payments list (PR-2)', () => {
-  it('draws the queue as quick-filter chips, and no per-row open button', async () => {
+  it('keeps the queue in the «فیلترها» panel (no chip row), and no per-row open button', async () => {
     stubApi(list([payment()]));
     renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('a1b2c3d4e5f60718');
-    const chips = screen.getByRole('group', { name: t('web.payment_ops_queue') });
+    // Demo parity: no always-visible queue chip row over the table.
+    expect(screen.queryByRole('group', { name: t('web.payment_ops_queue') })).toBeNull();
+    const panel = openFilterPanel();
+    const chips = within(panel).getByRole('group', { name: t('web.payment_ops_queue') });
     expect(
       within(chips).getByRole('button', { name: t('web.payment_ops_queue_all') }),
     ).toHaveAttribute('aria-pressed', 'true');
@@ -2053,16 +2056,16 @@ describe('the redesigned payments list (PR-2)', () => {
     expect(screen.queryByText('باز کردن')).toBeNull();
   });
 
-  it('draws the selection bar only while rows are ticked', async () => {
+  it('draws the export row always, and the clear button only while rows are ticked', async () => {
     stubApi(list([payment()]));
     renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('a1b2c3d4e5f60718');
-    expect(screen.queryByRole('region', { name: t('web.kit_selection_bar') })).toBeNull();
-    fireEvent.click(screen.getByLabelText(t('web.export_select_row')));
-    const bar = screen.getByRole('region', { name: t('web.kit_selection_bar') });
+    const bar = screen.getByRole('group', { name: t('web.export_bar') });
     expect(within(bar).getByRole('button', { name: t('web.export_csv') })).toBeEnabled();
+    expect(within(bar).queryByRole('button', { name: t('web.kit_selection_clear') })).toBeNull();
+    fireEvent.click(screen.getByLabelText(t('web.export_select_row')));
     fireEvent.click(within(bar).getByRole('button', { name: t('web.kit_selection_clear') }));
-    expect(screen.queryByRole('region', { name: t('web.kit_selection_bar') })).toBeNull();
+    expect(within(bar).queryByRole('button', { name: t('web.kit_selection_clear') })).toBeNull();
   });
 });
 
@@ -2081,36 +2084,38 @@ describe('the redesigned payment detail (PR-2)', () => {
     );
   };
 
-  it('puts the state, the route and the meta links in a header card and the amount in a KPI row', async () => {
+  it('puts the state in the title, the route and the meta links in a header card and the amount in a KPI row', async () => {
     const view = renderWith({ state: 'CONFIRMED', amount: '250000' });
     await screen.findByText('تأیید شده');
+    // Demo parity: the state badge is part of the h1, not a chip in the header card.
+    const title = screen.getByRole('heading', { level: 1 });
+    expect(title.textContent).toContain('تأیید شده');
     const head = view.container.querySelector('.pay-head') as HTMLElement;
-    expect(within(head).getByText('تأیید شده')).toBeInTheDocument();
+    expect(within(head).queryByText('تأیید شده')).toBeNull();
+    expect(within(head).getByText(t('web.payment_method'))).toBeInTheDocument();
     expect(within(head).getByText(t('web.payment_order'))).toBeInTheDocument();
     const kpi = view.container.querySelector('.kpi-row') as HTMLElement;
     expect(within(kpi).getByText(t('web.payment_amount'))).toBeInTheDocument();
     expect(kpi.textContent).toMatch(/۲۵۰٬۰۰۰|250,000/u);
   });
 
-  it('offers the receipt-review jump only to a reviewer, and jumps to the review card', async () => {
+  it('offers the receipt-review jump (the attention strip) only to a reviewer, and jumps to the review card', async () => {
     const scroll = vi.fn();
     Element.prototype.scrollIntoView = scroll;
     renderWith(
       { state: 'PENDING', method: 'MANUAL_TRANSFER' },
       { mayReviewReceipts: true, mayViewRefunds: true, mayIssueRefunds: true },
     );
-    const jump = await screen.findByRole('button', { name: t('web.pay_qa_review') });
+    const jump = await screen.findByRole('button', { name: t('web.pay_attn_review') });
     fireEvent.click(jump);
     expect(scroll).toHaveBeenCalledTimes(1);
     expect((scroll.mock.contexts[0] as HTMLElement).id).toBe('pay-card-review');
-    // The refund jump is a dangerous action: red, and it ends in «…».
-    const refund = screen.getByRole('button', { name: `${t('web.pay_qa_refund')}…` });
-    expect(refund.className).toContain('danger');
+    // Demo parity: there is no quick-action strip with a refund jump any more.
+    expect(screen.queryByRole('toolbar')).toBeNull();
     cleanup();
     renderWith({ state: 'PENDING', method: 'MANUAL_TRANSFER' }, { mayViewRefunds: true });
-    await screen.findByText(t('web.payment_detail'));
-    expect(screen.queryByRole('button', { name: t('web.pay_qa_review') })).toBeNull();
-    expect(screen.queryByRole('button', { name: `${t('web.pay_qa_refund')}…` })).toBeNull();
+    await screen.findAllByText(t('web.payment_method'));
+    expect(screen.queryByRole('button', { name: t('web.pay_attn_review') })).toBeNull();
   });
 
   it('draws the yellow attention strip for an UNKNOWN payment, and none for a confirmed one', async () => {

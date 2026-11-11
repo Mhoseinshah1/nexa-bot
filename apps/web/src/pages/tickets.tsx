@@ -59,7 +59,6 @@ import { SourceBadge } from '../ui/source-badge';
 import {
   Badge,
   Banner,
-  Button,
   Card,
   CellMain,
   ChipDivider,
@@ -84,17 +83,11 @@ import {
 } from '../ui/kit';
 import { ListFreshness, listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { Icon } from '../ui/icons';
-import {
-  AttentionStrip,
-  CardRows,
-  KpiRow,
-  QuickAction,
-  QuickActionBar,
-  QuickFilters,
-} from '../ui/redesign';
+import { AttentionStrip, CardRows, KpiRow, QuickAction } from '../ui/redesign';
 import { DateField } from '../ui/date-field';
 import { FilePicker } from '../ui/file-picker';
 import { ListFilterBar } from '../ui/filter-bar';
+import { ActionPanel } from '../ui/action-panel';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type SavedViewsRegistration } from '../ui/saved-views';
 import { dayRangeLabel } from '../ops-list-filters';
@@ -425,9 +418,6 @@ export function TicketsPage({
   });
 
   const rows = tickets.data?.tickets ?? [];
-  const [categoriesOpen, setCategoriesOpen] = useState(false);
-  const quickStatus: TicketStatus | 'ALL' | 'AWAITING' =
-    status !== null ? status : awaiting === 'support' ? 'AWAITING' : 'ALL';
   const nextCursor = tickets.data?.nextCursor ?? null;
   const filtering = searchSignature !== '{}';
   const dateProblem =
@@ -474,16 +464,16 @@ export function TicketsPage({
       ),
     },
     { key: 'category', header: t('web.ticket_category'), render: (row) => row.categoryTitle },
+    // Demo parity: «وضعیت» and «اولویت» are columns of their own again.
     {
-      /* Status and priority share one cell (two columns before). */
       key: 'status',
-      header: `${t('web.status')}${t('web.list_separator')}${t('web.ticket_priority')}`,
-      render: (row) => (
-        <span className="tickets-state-cell">
-          <StatusBadge status={row.status} />
-          <PriorityBadge priority={row.priority} />
-        </span>
-      ),
+      header: t('web.status'),
+      render: (row) => <StatusBadge status={row.status} />,
+    },
+    {
+      key: 'priority',
+      header: t('web.ticket_priority'),
+      render: (row) => <PriorityBadge priority={row.priority} />,
     },
     {
       key: 'customer',
@@ -508,15 +498,15 @@ export function TicketsPage({
         ),
     },
     {
-      /* The last message and, under it, when the ticket was opened (two columns before). */
+      // Demo parity: «آخرین پیام» and «زمان ثبت» are columns of their own again.
       key: 'last',
-      header: `${t('web.ticket_last_message')}${t('web.list_separator')}${t('web.ticket_created_at')}`,
-      render: (row) => (
-        <span className="tickets-time-cell">
-          <span className="nowrap">{formatTimestamp(row.lastMessageAt)}</span>
-          <span className="nowrap muted small">{formatTimestamp(row.createdAt)}</span>
-        </span>
-      ),
+      header: t('web.ticket_last_message'),
+      render: (row) => <span className="nowrap">{formatTimestamp(row.lastMessageAt)}</span>,
+    },
+    {
+      key: 'created',
+      header: t('web.ticket_created_at'),
+      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
     },
   ];
 
@@ -559,47 +549,10 @@ export function TicketsPage({
     <>
       <PageHead
         title={t('web.tickets_title')}
-        actions={
-          <>
-            <ListFreshness query={tickets} hidden={!requestable} labelled />
-            {!denied && (
-              <Button
-                size="sm"
-                aria-expanded={categoriesOpen}
-                onClick={() => setCategoriesOpen((open) => !open)}
-              >
-                {t(categoriesOpen ? 'web.tickets_categories_hide' : 'web.tickets_categories_show')}
-              </Button>
-            )}
-          </>
-        }
+        actions={<ListFreshness query={tickets} hidden={!requestable} labelled />}
       />
 
       <Card>
-        {requestable && (
-          /* The status as chips over the table; no counts — the queue has no server total per
-             status. The same facet is still in the filters panel. */
-          <div className="tickets-quick">
-            <QuickFilters
-              label={t('web.status')}
-              value={quickStatus}
-              onChange={(next) =>
-                setQueries(route, [
-                  ['status', next === 'ALL' || next === 'AWAITING' ? null : next],
-                  ['awaiting', next === 'AWAITING' ? 'support' : null],
-                ])
-              }
-              items={[
-                { key: 'ALL' as const, label: t('web.ticket_filter_all') },
-                { key: 'AWAITING' as const, label: t('web.ticket_filter_awaiting_support') },
-                ...TICKET_STATUSES.map((value) => ({
-                  key: value,
-                  label: t(TICKET_STATUS_LABELS[value]),
-                })),
-              ]}
-            />
-          </div>
-        )}
         {requestable && (
           <ListFilterBar
             label={t('web.tickets_title')}
@@ -843,7 +796,8 @@ export function TicketsPage({
         </Disclosure>
       </Card>
 
-      {!denied && categoriesOpen && (
+      {/* Demo parity: the categories table is part of the page, not behind a button. */}
+      {!denied && (
         <TicketCategoriesCard
           categories={categories.data?.categories ?? []}
           query={categories}
@@ -875,9 +829,11 @@ function TicketCategoriesCard({
   // W3: the create form and the two row editors open in drawers, one at a time.
   const [drawer, setDrawer] = useState<
     | { readonly kind: 'create' }
-    | { readonly kind: 'rename' | 'reorder'; readonly category: TicketCategoryView }
+    | { readonly kind: 'rename'; readonly category: TicketCategoryView }
     | null
   >(null);
+  // Demo parity: the display order is edited in the table and saved with ONE «ذخیرهٔ ترتیب».
+  const [orders, setOrders] = useState<Readonly<Record<string, string>>>({});
   const refresh = () => void queries.invalidateQueries({ queryKey: ['ticket-categories'] });
 
   const create = useMutation({
@@ -907,6 +863,39 @@ function TicketCategoriesCard({
     onError: (error) => notify({ tone: 'danger', message: ticketFault(error), error }),
   });
 
+  /*
+   * The rows whose typed order differs from the stored one and is valid. Each goes through the
+   * SAME `updateTicketCategory({ id, sortOrder })` the per-row order drawer sent; nothing else.
+   */
+  const orderChanges = categories.flatMap((category) => {
+    const typed = orders[category.id];
+    if (typed === undefined) return [];
+    const next = sortOrderOf(typed === '' ? '0' : typed);
+    return next === null || next === category.sortOrder
+      ? []
+      : [{ id: category.id, sortOrder: next }];
+  });
+  const orderInvalid = categories.some(
+    (category) =>
+      orders[category.id] !== undefined &&
+      sortOrderOf(orders[category.id] === '' ? '0' : (orders[category.id] as string)) === null,
+  );
+  useUnsavedChanges(mayEdit && orderChanges.length > 0);
+  const saveOrder = useMutation({
+    mutationFn: async (changes: readonly { id: string; sortOrder: number }[]) => {
+      for (const change of changes) await updateTicketCategory(change);
+    },
+    onSuccess: () => {
+      setOrders({});
+      notify({ tone: 'ok', message: t('web.ticket_category_saved') });
+      refresh();
+    },
+    onError: (error) => {
+      refresh();
+      notify({ tone: 'danger', message: ticketFault(error), error });
+    },
+  });
+
   const normalized = normalizeTicketCategoryTitle(title);
   const sortOrder = sortOrderOf(order === '' ? '0' : order);
 
@@ -919,7 +908,22 @@ function TicketCategoriesCard({
     {
       key: 'order',
       header: t('web.ticket_category_order'),
-      render: (row) => row.sortOrder,
+      render: (row) =>
+        mayEdit ? (
+          <input
+            className="input sm tickets-order"
+            inputMode="numeric"
+            aria-label={`${t('web.ticket_category_order')} — ${row.title}`}
+            value={orders[row.id] ?? String(row.sortOrder)}
+            /* Locked while a save runs: its success clears every draft, so an edit made now would be lost. */
+            disabled={saveOrder.isPending}
+            onChange={(event) =>
+              setOrders((current) => ({ ...current, [row.id]: event.target.value }))
+            }
+          />
+        ) : (
+          row.sortOrder
+        ),
     },
     {
       key: 'active',
@@ -944,13 +948,6 @@ function TicketCategoriesCard({
                 >
                   <Icon name="edit" size={13} />
                   {t('web.ticket_category_rename')}
-                </button>
-                <button
-                  type="button"
-                  className="btn sm ghost"
-                  onClick={() => setDrawer({ kind: 'reorder', category: row })}
-                >
-                  {t('web.ticket_category_reorder')}
                 </button>
                 <button
                   type="button"
@@ -993,6 +990,18 @@ function TicketCategoriesCard({
           rows={categories}
           rowKey={(row) => row.id}
         />
+        {mayEdit && categories.length > 0 && (
+          <div className="form-actions">
+            <button
+              type="button"
+              className="btn primary sm"
+              disabled={saveOrder.isPending || orderChanges.length === 0 || orderInvalid}
+              onClick={() => saveOrder.mutate(orderChanges)}
+            >
+              {t('web.ticket_category_reorder')}
+            </button>
+          </div>
+        )}
       </StateSwitch>
       {mayEdit && (
         <OpsActionDrawer
@@ -1062,14 +1071,6 @@ function TicketCategoriesCard({
           onClose={() => setDrawer(null)}
         />
       )}
-      {mayEdit && drawer !== null && drawer.kind === 'reorder' && (
-        <CategoryOrderEditor
-          category={drawer.category}
-          pending={update.isPending}
-          onSave={(input) => update.mutate(input)}
-          onClose={() => setDrawer(null)}
-        />
-      )}
     </Card>
   );
 }
@@ -1123,64 +1124,6 @@ function CategoryTitleEditor({
             disabled={pending || normalized === null || normalized === category.title}
           >
             {t('web.ticket_category_rename')}
-          </button>
-        </div>
-      </form>
-    </OpsActionDrawer>
-  );
-}
-
-/**
- * The display order of an existing category, through the same update the title uses.
- * Persian and Arabic digits are read as the create form reads them; anything else keeps
- * the button disabled rather than being reinterpreted.
- */
-function CategoryOrderEditor({
-  category,
-  pending,
-  onSave,
-  onClose,
-}: {
-  category: TicketCategoryView;
-  pending: boolean;
-  onSave: (input: { id: string; sortOrder: number }) => void;
-  onClose: () => void;
-}) {
-  const [value, setValue] = useState(String(category.sortOrder));
-  const sortOrder = sortOrderOf(value);
-  return (
-    <OpsActionDrawer
-      open
-      title={`${t('web.ticket_category_reorder')} — ${category.title}`}
-      dirty={value !== String(category.sortOrder)}
-      onClose={onClose}
-    >
-      <form
-        className="stack"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (sortOrder !== null && sortOrder !== category.sortOrder) {
-            onSave({ id: category.id, sortOrder });
-          }
-        }}
-      >
-        <Field label={t('web.ticket_category_order')} htmlFor="ticket-category-reorder">
-          <input
-            id="ticket-category-reorder"
-            className="input tickets-order"
-            inputMode="numeric"
-            value={value}
-            aria-invalid={sortOrder === null}
-            onChange={(event) => setValue(event.target.value)}
-          />
-        </Field>
-        <div className="ops-row-actions">
-          <button
-            type="submit"
-            className="btn primary"
-            disabled={pending || sortOrder === null || sortOrder === category.sortOrder}
-          >
-            {t('web.ticket_category_reorder')}
           </button>
         </div>
       </form>
@@ -1607,27 +1550,28 @@ function TicketActionsBar({
 
   return (
     <>
-      <QuickActionBar
-        label={t('web.ticket_actions')}
+      {/* Demo parity (A1): the ticket-management box is a framed box of titled groups, not a loose strip.
+          The buttons, their handlers and the `mayClose` / `mayAssign` gates are unchanged. */}
+      <ActionPanel
+        title={t('web.ticket_actions')}
         groups={[
           {
             key: 'status',
-            label: t('web.status'),
+            title: t('web.status'),
             actions: !mayClose
               ? []
               : targets.map((to) =>
                   // Closing keeps today's behaviour — one press, no confirm — so it is red but
                   // does not claim a «…» dialog it does not open.
                   to === 'CLOSED' ? (
-                    <button
+                    <QuickAction
                       key={to}
-                      type="button"
-                      className="qa danger"
+                      danger
+                      ellipsis={false}
+                      label={t(STATUS_ACTIONS[to])}
                       disabled={status.isPending}
                       onClick={() => status.mutate(to)}
-                    >
-                      {t(STATUS_ACTIONS[to])}
-                    </button>
+                    />
                   ) : (
                     <QuickAction
                       key={to}
@@ -1644,7 +1588,7 @@ function TicketActionsBar({
           },
           {
             key: 'manage',
-            label: t('web.ticket_actions'),
+            title: t('web.ticket_actions_group_assign'),
             actions: !mayAssign
               ? []
               : [

@@ -236,10 +236,9 @@ describe('the list → a provider → back', () => {
     go('/payment-gateways');
     const first = renderPage(<App />);
     const table = await screen.findByRole('table');
-    // Redesign PR-2: the route opens from its NAME link — the «مدیریت» column is gone.
-    expect(within(table).queryByRole('link', { name: t('web.payment_method_open') })).toBeNull();
+    // Demo parity: the route opens from the «مدیریت» button of its «عملیات» column.
     const open = within(table)
-      .getAllByRole('link')
+      .getAllByRole('link', { name: t('web.payment_method_open') })
       .find((link) => link.getAttribute('href') === '/payment-gateways/nowpayments') as HTMLElement;
     act(() => {
       fireEvent.click(open);

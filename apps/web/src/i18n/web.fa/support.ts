@@ -39,7 +39,6 @@ export const WEB_FA_SUPPORT = {
     'سوالات متداولی که ربات به مشتری نشان می‌دهد، به همان ترتیب، و راه ارتباط با پشتیبانی.',
   'web.support_faq_hint':
     'فقط پرسش‌های فعال به مشتری نشان داده می‌شوند، به ترتیب عدد «ترتیب». بار اول نه پرسش پیش‌فرض ساخته می‌شود؛ از آن پس فهرست مال شماست و خودبه‌خود پر نمی‌شود.',
-  'web.support_destination_title': 'راه ارتباط با پشتیبانی',
   'web.support_destination_note':
     'دکمهٔ «ارسال پیام به پشتیبانی» به نخستین حساب فهرست «حساب‌های پشتیبانی» می‌رود. آن فهرست در صفحهٔ تنظیمات ویرایش می‌شود، نه این‌جا؛ اگر خالی باشد به مشتری گفته می‌شود راه ارتباطی تنظیم نشده است.',
   'web.support_destination_link': 'رفتن به تنظیمات',
@@ -73,8 +72,6 @@ export const WEB_FA_SUPPORT = {
   'web.support_faq_empty_hint': 'با «افزودن پرسش» نخستین پرسش را بسازید.',
   'web.tickets_title': 'تیکت‌های پشتیبانی',
   'web.tickets_about_fold': 'دربارهٔ این فهرست',
-  'web.tickets_categories_show': 'دسته‌های تیکت',
-  'web.tickets_categories_hide': 'پنهان کردن دسته‌ها',
   'web.ticket_attn_waiting_support': 'این تیکت منتظر پاسخ پشتیبانی است',
   'web.ticket_attn_unassigned': 'مسئول پاسخ تعیین نشده است',
   'web.bchats_title': 'گفتگوهای تلگرام بیزینس',
@@ -206,6 +203,8 @@ export const WEB_FA_SUPPORT = {
   'web.bchat_connection_connected_at': 'زمان اتصال',
   'web.bchat_connection_confirmed_at': 'آخرین تأیید',
   'web.bchat_detail': 'گفتگوی بیزینس',
+  'web.bchat_detail_title': 'گفتگوی بیزینس، {name}',
+  'web.bchat_last_preview': 'آخرین پیام',
   'web.bchat_control': 'کنترل گفتگو',
   'web.bchat_takeover_reason': 'دلیل در اختیار گرفتن',
   'web.bchat_handoff_reason': 'دلیل سپردن به پشتیبان',
@@ -450,6 +449,7 @@ export const WEB_FA_SUPPORT = {
   'web.tickets_view_mine': 'تیکت‌های من',
   'web.tickets_view_unassigned': 'بدون مسئول',
   'web.ticket_assignee_change': 'مسئول پاسخ…',
+  'web.ticket_actions_group_assign': 'مسئول و اولویت',
   'web.ticket_priority_change': 'اولویت…',
   'web.bchat_fc_reply_stale': 'پاسخ هوش مصنوعی دیگر به‌روز نبود',
   'web.bchat_fc_notice_stale': 'پیام اعلام دیگر لازم نبود',
