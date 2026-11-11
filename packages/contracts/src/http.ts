@@ -21,6 +21,7 @@ import {
 import { paymentAccountInputSchema } from './payment-accounts.js';
 import {
   PANEL_QR_KINDS,
+  normalizeSingboxCustomName,
   SINGBOX_INTERVAL_MAX_MINUTES,
   SINGBOX_NAME_MODES,
   SINGBOX_INTERVAL_MIN_MINUTES,
@@ -1987,7 +1988,14 @@ export const updatePanelRequestSchema = z.object({
    * empty clears it (the default behaviour).
    */
   singboxNameMode: z.enum(SINGBOX_NAME_MODES).optional(),
-  singboxNameCustom: z.string().max(400).nullable().optional(),
+  singboxNameCustom: z
+    .string()
+    .max(400)
+    .refine((text) => normalizeSingboxCustomName(text) !== undefined, {
+      message: 'singbox_name_custom_invalid',
+    })
+    .nullable()
+    .optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type UpdatePanelRequest = z.infer<typeof updatePanelRequestSchema>;
