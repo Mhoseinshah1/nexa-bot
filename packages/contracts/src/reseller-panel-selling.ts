@@ -195,7 +195,7 @@ export type ResellerPurchaseItemStatus = (typeof RESELLER_PURCHASE_ITEM_STATUSES
 export const resellerPurchaseItemSchema = z.object({
   index: z.number().int(),
   orderId: z.string(),
-  orderCode: z.string(),
+  orderCode: z.string().nullable(),
   status: z.enum(RESELLER_PURCHASE_ITEM_STATUSES),
   /** An error code (`commerce.*`, `reseller_web.*`) or the order's end state; null when fine. */
   reason: z.string().nullable(),
