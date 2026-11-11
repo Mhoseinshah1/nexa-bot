@@ -30,6 +30,33 @@ export const START_CAPTCHA_MAX_ATTEMPTS_MAX = 10;
 export const START_CAPTCHA_COOLDOWN_SECONDS_MIN = 60;
 export const START_CAPTCHA_COOLDOWN_SECONDS_MAX = 86_400;
 
+/**
+ * The kinds of question a `/start` captcha can ask. `MATH` is the original (a sum of two
+ * digits) and the default of the setting `captcha.kind`; `IMAGE_NUMBER` is a PNG with a
+ * 4-digit number the customer types; `EMOJI` names one of 20 fixed fruit and animals;
+ * `WORD_NUMBER` writes a number from 10 to 99 in Persian words.
+ */
+export const START_CAPTCHA_QUESTION_KINDS = [
+  'MATH',
+  'IMAGE_NUMBER',
+  'EMOJI',
+  'WORD_NUMBER',
+] as const;
+export type StartCaptchaQuestionKind = (typeof START_CAPTCHA_QUESTION_KINDS)[number];
+
+/**
+ * What the setting `captcha.kind` may hold: one of the four kinds, or `RANDOM`, which picks
+ * one of the four for each NEW question. A question already pending keeps the kind it was
+ * asked with, whatever the setting says afterwards.
+ */
+export const START_CAPTCHA_KINDS = [...START_CAPTCHA_QUESTION_KINDS, 'RANDOM'] as const;
+export type StartCaptchaKind = (typeof START_CAPTCHA_KINDS)[number];
+
+/** `IMAGE_NUMBER`: the number on the picture has this many digits. */
+export const START_CAPTCHA_IMAGE_DIGITS = 4;
+/** `IMAGE_NUMBER`: how many times one question may be swapped for a new picture. */
+export const START_CAPTCHA_IMAGE_REFRESH_MAX = 3;
+
 // --- (b) The referral-gift guard -----------------------------------------------------
 
 /**
