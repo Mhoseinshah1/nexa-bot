@@ -74,6 +74,8 @@ its own document with its **own recorded outcome and Telegram `message_id`**
 `backup.local_copies_keep` such runs (default **1**, **0** allowed). A run delivered in part,
 not at all, or whose answer was lost is never removed by this rule; the older
 `backup.archive_keep_count` / `backup.archive_keep_days` retention still applies to it.
+With «نگه داشتن نسخه روی سرور» off (`backup.archive_keep_on_host`, § Archive retention ›
+Keeping no copy on the server) the count is read as 0 and the copy goes at once.
 
 **Disk.** The plaintext dump is removed right after the seal, before verification decrypts a
 second copy, so an uncompressed dump and its verification copy are never on disk together.
@@ -259,7 +261,8 @@ followed by a copy anywhere else, and nothing resends automatically.
 **Delivery never fails the backup.** A destination that cannot be resolved, a group
 that is unusable, a channel that throws — each is recorded on the run's delivery
 columns, and the run stays `SUCCEEDED` with its verified archive retained on the
-server.
+server — also with «نگه داشتن نسخه روی سرور» off, which removes only a CONFIRMED delivery's
+archive (§ Archive retention › Keeping no copy on the server).
 
 **Above 45 MiB** the archive is delivered in parts (§ The archive, above). The old
 "retained on the server" notice is gone: nothing above the ceiling stays home any more.
@@ -635,6 +638,40 @@ that cut over — its row lives in the displaced database) is never removed
 automatically; delete it by hand once you are sure.
 
 Copies elsewhere (Telegram, a laptop) are yours to manage.
+
+### Keeping no copy on the server (owner, 2026-11-11)
+
+«بکاپ و بازیابی» → «زمان‌بندی بکاپ خودکار» → **«نگه داشتن نسخه روی سرور»**, the registry key
+`backup.archive_keep_on_host` (boolean, default **on**, read on the installation tenant only;
+the ordinary settings write — versioned, idempotent and audited as `settings.set`). The old
+comment «There is no zero: "keep nothing" is not a policy» changed ON PURPOSE: the two keys
+above still have no zero, and keeping nothing is this switch.
+
+- **On** (default): exactly the rules above and `backup.local_copies_keep`. Nothing changes.
+- **Off**: once a run's Telegram delivery is **confirmed** — the run SUCCEEDED and verified,
+  its delivery is `SUCCEEDED` and every recorded part carries a Telegram message id
+  (`deliveredCopyPruneCandidates` with a keep of 0) — its archive and its whole working
+  directory are removed right after the run (`BackupHousekeeping.afterRun`, called by the run's
+  `afterSuccess`), then the row is stamped `archive_pruned_at`. Every removal writes ONE
+  operations line naming the run, `backup.archive_removed_after_delivery` (BACKUPS topic).
+- **Never removed by this rule:** a delivery that FAILED, is partial or `OUTCOME_UNKNOWN`; a
+  run still in flight; a run whose verification did not pass; a run an unfinished recovery
+  names; and a hosted bot's archive (hosted archives keep their own policy). Those keep the
+  keep-count / keep-days pruning. A recovery's emergency `PRE_RESTORE` backup is never removed
+  right after its run, because its recovery names it only once the run has returned; the
+  housekeeping pass decides it later, while the recovery protects it by id.
+- **"The newest verified archive is never pruned" is lifted in this mode only, and only for a
+  confirmed-delivered archive** — the group holds that copy. Every other archive keeps the
+  clause.
+- Switching it back on restores nothing already removed.
+
+Turning it off asks first: «بعد از رسیدن بکاپ به گروه تلگرام، فایل از روی سرور پاک می‌شود.
+برای بازیابی باید فایل را از گروه تلگرام دانلود و در صفحهٔ بازیابی بارگذاری کنید.» While it
+is off the card draws `keepCount` / `keepDays` greyed, with one line saying they now apply only
+to backups whose delivery failed or is unknown. **A restore then starts from the file:** download
+it (every part) from the group and upload it on the Recovery page — the same verify, confirm and
+restore path as any other upload (§ Restoring from the Web Admin). When the newest page of the
+history shows no archive on the host, the Recovery page leads with «بارگذاری فایل بکاپ».
 
 **Plaintext debris.** A run abandoned mid-dump keeps its plaintext by design (its
 process may still be writing), and a killed CLI `verify`/`restore` leaves a
