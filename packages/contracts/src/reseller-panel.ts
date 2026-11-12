@@ -163,6 +163,12 @@ export const RESELLER_PANEL_ROUTES = {
   walletEntries: '/wallet/entries',
   walletTopupQuote: '/wallet/topup/quote',
   walletTopup: '/wallet/topup',
+  /**
+   * One of the reseller's own payments, as the mini app's `MINIAPP_ROUTES.payment` reads it
+   * (`miniAppPaymentStatusSchema`): the screen re-reads a gateway attempt until the worker has
+   * made its invoice, because the top-up answers before the payment link exists.
+   */
+  payment: '/payments/:paymentId',
   paymentTransferSent: '/payments/:paymentId/transfer-sent',
   paymentReceipt: '/payments/:paymentId/receipt',
   prices: '/prices',
