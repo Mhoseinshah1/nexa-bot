@@ -20,6 +20,7 @@ import {
 } from './route';
 import { AccountPage } from './pages/account';
 import { DashboardPage } from './pages/dashboard';
+import { OwnBotPage } from './pages/own-bot';
 import { PricesPage } from './pages/prices';
 import { ServicesPage } from './pages/services';
 import { SupportPage } from './pages/support';
@@ -144,9 +145,10 @@ function Screen({
       return <SupportPage />;
     case 'settings':
       return <AccountPage me={me} />;
+    case 'bot':
+      return <OwnBotPage />;
     case 'buy':
     case 'clients':
-    case 'bot':
       return <UnavailableScreen screen={screen} />;
   }
 }

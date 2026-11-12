@@ -208,7 +208,6 @@ describe('the shell', () => {
   it.each([
     ['/r/buy', 'web.rp_unavailable_buy_title'],
     ['/r/clients', 'web.rp_unavailable_clients_title'],
-    ['/r/bot', 'web.rp_unavailable_bot_title'],
   ] as const)(
     '%s shows the standard unavailable state and no invented content',
     async (path, key) => {

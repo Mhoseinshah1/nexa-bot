@@ -64,7 +64,7 @@ export class ResellerOwnBotController {
     });
   }
 
-  /** «پرداخت و فعال‌سازی دوباره»: the due period from the wallet now; no credit, never negative. */
+  /** Pay-and-reactivate: the due period from the wallet now; no credit, never negative. */
   @Post(RESELLER_PANEL_ROUTES.ownBotPay)
   @HttpCode(200)
   async pay(
