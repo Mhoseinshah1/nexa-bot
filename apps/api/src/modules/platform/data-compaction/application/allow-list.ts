@@ -312,6 +312,14 @@ export const CUSTOMER_NOTIFICATION_COMPACTION: Readonly<
     compact: 'NEVER',
     reason: 'The only delivery record of the answer to a reseller request; one per request.',
   },
+  HOSTED_BOT_ACTIVATION_LINK: {
+    compact: 'NEVER',
+    reason: 'PR-6: the only record that a reseller was sent their dedicated bot’s link; rare.',
+  },
+  HOSTED_BOT_FEE_SHORT: {
+    compact: 'NEVER',
+    reason: 'PR-6: the only record a reseller was warned before their dedicated bot stopped.',
+  },
   RESELLER_WEB_NEW_DEVICE: {
     compact: 'RESOLVED',
     reason:

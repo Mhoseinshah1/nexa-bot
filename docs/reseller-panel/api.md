@@ -21,9 +21,10 @@ decimal strings, instants ISO-8601 UTC.
 - **Writes** (POST/PUT) must come from the page's own origin (`Origin` checked) and most carry an
   `idempotency-key` header (`resellerIdempotencyKeySchema`: 16–64 of `[A-Za-z0-9-]`, e.g. a UUID).
   Required on: `rotate-link`, `quote`, `pay-wallet`, `wallet/topup`, `transfer-sent`, `receipt`,
-  `tickets` (create), `tickets/:id/replies`, and (PR-5) `purchases/quote` (the header IS the
-  batch key: re-send the same key to re-read the same quote), `purchases/:id/confirm`,
-  `clients/:id/renew-all`, `services/:id/auto-renew` (PUT), `trial` (POST). Harmless elsewhere.
+  `tickets` (create), `tickets/:id/replies`, `own-bot/requests` and its `cancel` / `pay`, and
+  (PR-5) `purchases/quote` (the header IS the batch key: re-send the same key to re-read the
+  same quote), `purchases/:id/confirm`, `clients/:id/renew-all`, `services/:id/auto-renew`
+  (PUT), `trial` (POST). Harmless elsewhere.
 - **Errors:** `{ error: { code, message, details? } }`. Show `web.err_<code with dots → _>`
   (`apps/web/src/error-text.ts` already maps every `reseller_web.*` code to Persian).
 
@@ -127,6 +128,29 @@ cache a file or a response in the service worker; download via a normal navigati
 | `GET /tickets` · `GET /tickets/:id` | the mini app's ticket summary / `MiniAppTicketDetail`                                                                                                                                                                    |
 | `POST /tickets`                     | `{ categoryId, text }` → `MiniAppTicketDetail`                                                                                                                                                                           |
 | `POST /tickets/:id/replies`         | `{ text }` → `MiniAppTicketDetail`; replies also arrive in the bot                                                                                                                                                       |
+
+## Dedicated bot («ربات اختصاصی», PR-6)
+
+Shapes in `packages/contracts/src/reseller-hosted-bot.ts`. Every route calls
+`ResellerBotRequestService` (`offer`, `listOwn`, `submit`, `cancel`, `payAndReactivate`) — the same
+service the bot uses; ownership, the fee and the wallet are decided there. The three writes need
+the `idempotency-key` header.
+
+| Method & path                       | Body                                               | Response                                                                                                                                     |
+| ----------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /own-bot`                      | —                                                  | `ResellerOwnBotResponse` `{ offer: { offered, fee, graceDays, canRequest }, requests: ResellerBotRequestView[] }`, newest first              |
+| `POST /own-bot/requests`            | `ResellerOwnBotSubmitBody` `{ botToken, domain? }` | 201 `ResellerBotRequestView`; the token is checked with Telegram (`getMe`) and sealed, and only `tokenMasked` is ever returned               |
+| `POST /own-bot/requests/:id/cancel` | —                                                  | `ResellerBotRequestView`; only while `PENDING`, else 409 `reseller_bot.state_conflict`. Charges nothing                                      |
+| `POST /own-bot/requests/:id/pay`    | —                                                  | `ResellerBotRequestView` — «پرداخت و فعال‌سازی دوباره»; 409 `reseller_bot.insufficient_funds` (nothing charged) / `reseller_bot.nothing_due` |
+
+- `offer.offered = false` (the fee setting `hosting.reseller_bot_monthly_fee` is unset, or the
+  tenant is not the installation): the screen says «فعلاً ارائه نمی‌شود» and shows no request form;
+  a submit answers 409 `reseller_bot.not_offered`.
+- Another reseller's request, an unknown id and a malformed id are the same 404
+  `reseller_bot.request_not_found`; another reseller's requests are never listed.
+- Other refusals: `reseller_bot.request_open` (one request waits already), `token_malformed`,
+  `token_rejected`, `token_unreachable`, `token_in_use`, `domain_invalid`; all mapped in
+  `apps/web/src/error-text.ts`.
 
 ## Web Admin (reseller drawer)
 

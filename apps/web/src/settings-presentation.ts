@@ -6,6 +6,8 @@ import {
   type LatePaymentPolicy,
   LATE_CREDIT_WINDOW_SETTING_KEY,
   PANEL_SETTING_KEYS,
+  RESELLER_BOT_GRACE_DAYS_SETTING_KEY,
+  RESELLER_BOT_MONTHLY_FEE_SETTING_KEY,
   TONPAYS_PACING_BURST_SETTING_KEY,
   TONPAYS_PACING_SETTING_KEYS,
   isSettingKey,
@@ -139,6 +141,10 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   CARD_SWITCH_SETTING_KEYS.COOLDOWN_SECONDS,
   CARD_SWITCH_SETTING_KEYS.MAX_DISTINCT_CARDS,
   'bot.main_menu',
+  // Reseller-phase PR-6: the dedicated bot's fee and grace days, on «میزبانی‌ها» →
+  // «درخواست‌های نماینده‌ها», beside the requests they price.
+  RESELLER_BOT_MONTHLY_FEE_SETTING_KEY,
+  RESELLER_BOT_GRACE_DAYS_SETTING_KEY,
   // R8-C3: the service screen's button layout, on the same page («چیدمان صفحهٔ سرویس»).
   'bot.service_card_layout',
   // Owner spec §6: the inline buttons' styles, on the same page («دکمه‌های شیشه‌ای ربات»).
@@ -733,6 +739,19 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.setting_reminders_quiet_hours_end_desc',
     group: 'reminders',
     control: { kind: 'text' },
+  },
+  // Reseller-phase PR-6. Drawn on «میزبانی‌ها» (`SETTINGS_MANAGED_ELSEWHERE`).
+  [RESELLER_BOT_MONTHLY_FEE_SETTING_KEY]: {
+    title: 'web.setting_reseller_bot_monthly_fee',
+    description: 'web.setting_reseller_bot_monthly_fee_desc',
+    group: 'sales',
+    control: { kind: 'money' },
+  },
+  [RESELLER_BOT_GRACE_DAYS_SETTING_KEY]: {
+    title: 'web.setting_reseller_bot_grace_days',
+    description: 'web.setting_reseller_bot_grace_days_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_days' },
   },
   'wallet.low_balance.threshold': {
     title: 'web.setting_wallet_low_balance_threshold',

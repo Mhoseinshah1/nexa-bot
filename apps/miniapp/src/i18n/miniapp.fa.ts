@@ -376,6 +376,7 @@ export const MINIAPP_FA = {
   'miniapp.wallet_reason_transfer_in': 'انتقال موجودی از حساب دیگر',
   'miniapp.wallet_reason_reseller_settlement': 'تسویهٔ نمایندگی',
   'miniapp.wallet_reason_reseller_fee': 'حق عضویت نمایندگی',
+  'miniapp.wallet_reason_hosted_bot_fee': 'هزینهٔ ماهانهٔ ربات اختصاصی',
   'miniapp.wallet_reason_opening': 'موجودی اولیه',
   'miniapp.wallet_reason_chargeback': 'برگشت تراکنش بانکی',
   'miniapp.wallet_reason_correction': 'اصلاح موجودی',

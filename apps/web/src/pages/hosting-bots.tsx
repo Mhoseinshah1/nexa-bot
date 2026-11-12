@@ -453,11 +453,27 @@ function LimitRow({
 // Dialogs
 // ---------------------------------------------------------------------------------------
 
-function CreateDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+/**
+ * The creator's «ساخت ربات» form. Reseller-phase PR-6: «درخواست‌های نماینده‌ها» opens the same
+ * form pre-filled from a reseller's approved request, and the new bot is linked to it.
+ */
+export function CreateDialog({
+  onClose,
+  onDone,
+  prefill,
+}: {
+  onClose: () => void;
+  onDone: () => void;
+  prefill?: {
+    readonly resellerBotRequestId: string;
+    readonly slug: string;
+    readonly displayName: string;
+  };
+}) {
   const id = useId();
   const [form, setForm] = useState({
-    slug: '',
-    displayName: '',
+    slug: prefill?.slug ?? '',
+    displayName: prefill?.displayName ?? '',
     adminUsername: '',
     adminDisplayName: '',
     adminPassword: '',
@@ -488,6 +504,7 @@ function CreateDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
           adminDisplayName: form.adminDisplayName.trim(),
           adminPassword: form.adminPassword,
           expiresAt: fromLocalInput(form.expires),
+          ...(prefill === undefined ? {} : { resellerBotRequestId: prefill.resellerBotRequestId }),
         })
       }
       onClose={onClose}

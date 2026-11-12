@@ -2416,6 +2416,13 @@
       "when": 1794461329431,
       "tag": "0344_reseller_panel_selling",
       "breakpoints": true
+    },
+    {
+      "idx": 345,
+      "version": "7",
+      "when": 1794462652562,
+      "tag": "0345_reseller_bots",
+      "breakpoints": true
     }
   ]
 }

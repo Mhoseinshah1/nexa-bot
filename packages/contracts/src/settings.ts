@@ -10,6 +10,12 @@ import {
 } from './provisioning.js';
 import { CUSTOMER_NOTICES_PAUSE_SETTING_KEY } from './customer-notifications.js';
 import {
+  RESELLER_BOT_GRACE_DAYS_DEFAULT,
+  RESELLER_BOT_GRACE_DAYS_MAX,
+  RESELLER_BOT_GRACE_DAYS_SETTING_KEY,
+  RESELLER_BOT_MONTHLY_FEE_SETTING_KEY,
+} from './reseller-hosted-bot-keys.js';
+import {
   EXPIRY_EARLY_REMINDER_DAYS_MIN,
   EXPIRY_REMINDER_DAYS_MAX,
   EXPIRY_REMINDER_DAYS_MIN,
@@ -531,6 +537,10 @@ export const OWNER_ONLY_SETTING_KEYS: readonly string[] = [
   BULK_READ_SETTING_KEYS.perCall,
   BULK_READ_SETTING_KEYS.perWindow,
   BULK_READ_SETTING_KEYS.windowMinutes,
+  // Reseller-phase PR-6: what the installation charges resellers for a dedicated bot, and how
+  // long a short wallet is carried before the bot stops — the owner's decision, money-bearing.
+  RESELLER_BOT_MONTHLY_FEE_SETTING_KEY,
+  RESELLER_BOT_GRACE_DAYS_SETTING_KEY,
 ];
 
 /**
@@ -3032,6 +3042,47 @@ export const SETTINGS = [
     defaultValue: LEGACY_IMPORT_ADOPTION_CONCURRENCY_DEFAULT,
     configures: null,
     zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  // Reseller-phase PR-6 (§5.9): a dedicated hosted bot for a reseller, paid monthly from the
+  // wallet. Read on the INSTALLATION tenant only; owner-only to write (`OWNER_ONLY_SETTING_KEYS`).
+  {
+    key: RESELLER_BOT_MONTHLY_FEE_SETTING_KEY,
+    description:
+      'The monthly fee a reseller pays from their wallet for a dedicated hosted bot, as an ' +
+      'explicit amount and currency. Zero (the default) means the dedicated bot is not offered: ' +
+      'the reseller screen says so and no request can be filed. A request snapshots the fee when ' +
+      'it is filed and is charged that figure, at approval and at every renewal. Read on the ' +
+      'installation tenant only.',
+    schema: moneySchema
+      .refine(
+        (money) => BigInt(money.amountMinor) >= 0n,
+        'A monthly fee cannot be negative; zero means the dedicated bot is not offered.',
+      )
+      .refine(
+        (money) => BigInt(money.amountMinor) <= PAYMENT_AMOUNT_MAX_MINOR,
+        `A monthly fee must be at most ${PAYMENT_AMOUNT_MAX_MINOR.toString()} minor units.`,
+      ),
+    defaultValue: { amountMinor: '0', currency: 'IRT' },
+    configures: null,
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: RESELLER_BOT_GRACE_DAYS_SETTING_KEY,
+    description:
+      'How many days a dedicated bot keeps running after its monthly fee falls due while the ' +
+      'reseller wallet cannot cover it. The reseller is told once a day; when the days end ' +
+      'unpaid the hosted bot is stopped (its data is kept) and resumes when the fee is paid. ' +
+      `Zero stops it on the first unpaid run. Between 0 and ${String(RESELLER_BOT_GRACE_DAYS_MAX)}.`,
+    schema: z.number().int().min(0).max(RESELLER_BOT_GRACE_DAYS_MAX),
+    defaultValue: RESELLER_BOT_GRACE_DAYS_DEFAULT,
+    configures: null,
+    zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',

@@ -32,6 +32,7 @@ export const LEDGER_REASON_KEY: Readonly<Record<LedgerReason, MiniAppKey>> = {
   ACCOUNT_TRANSFER_IN: 'miniapp.wallet_reason_transfer_in',
   RESELLER_SETTLEMENT: 'miniapp.wallet_reason_reseller_settlement',
   RESELLER_MEMBERSHIP_FEE: 'miniapp.wallet_reason_reseller_fee',
+  HOSTED_BOT_FEE: 'miniapp.wallet_reason_hosted_bot_fee',
   MIGRATION_OPENING_BALANCE: 'miniapp.wallet_reason_opening',
   CHARGEBACK: 'miniapp.wallet_reason_chargeback',
   CORRECTION: 'miniapp.wallet_reason_correction',

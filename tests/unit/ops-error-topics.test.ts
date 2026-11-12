@@ -156,6 +156,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'capacity.worker_lag_ok': 'SYSTEM',
   // Phase 6A PR-3: the creator panel's expiry sweep, beside them.
   'hosting.bot_expired': 'SYSTEM',
+  // Reseller-phase PR-6: a reseller's dedicated bot (approval, fee, stop, resume).
+  'hosting.reseller_bot.': 'SYSTEM',
   // PR #411: a vanished non-primary cached tenant, the owner's group only.
   'tenancy.cached_tenant_vanished': 'SYSTEM',
 };

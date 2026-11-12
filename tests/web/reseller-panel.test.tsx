@@ -204,15 +204,6 @@ describe('the shell', () => {
     renderPage(<PanelShell />);
     expect(await screen.findByText(t('web.rp_gate_unavailable_title'))).toBeInTheDocument();
   });
-
-  it('/r/bot shows the standard unavailable state and no invented content', async () => {
-    visit('/r/bot');
-    const api = stubApi(signedIn());
-    renderPage(<PanelShell />);
-    expect(await screen.findByText(t('web.rp_unavailable_bot_title'))).toBeInTheDocument();
-    // Only `/me` was asked: this screen has no data of its own yet.
-    expect(api.calls.map((call) => call.url)).toEqual([`${API}/me`]);
-  });
 });
 
 describe('the dashboard', () => {

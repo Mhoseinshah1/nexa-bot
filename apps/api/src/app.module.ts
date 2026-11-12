@@ -49,6 +49,7 @@ import { HostingController } from './surfaces/web/hosting.controller.js';
 import { HostedBackupController } from './surfaces/web/hosted-backup.controller.js';
 import { DataExportController } from './surfaces/web/data-export.controller.js';
 import { HostingActivationController } from './surfaces/web/hosting-activation.controller.js';
+import { ResellerBotAdminController } from './surfaces/web/reseller-bot-admin.controller.js';
 import {
   HostedActivationController,
   HostedDomainCheckController,
@@ -90,6 +91,7 @@ import { MiniAppStaticController } from './surfaces/miniapp/static.controller.js
 import { ResellerAccessController } from './surfaces/reseller/access.controller.js';
 import { ResellerServicesController } from './surfaces/reseller/services.controller.js';
 import { ResellerAccountController } from './surfaces/reseller/account.controller.js';
+import { ResellerOwnBotController } from './surfaces/reseller/own-bot.controller.js';
 import { ResellerSellingController } from './surfaces/reseller/selling.controller.js';
 import { ResellerClientsController } from './surfaces/reseller/clients.controller.js';
 import { ResellerExtrasController } from './surfaces/reseller/extras.controller.js';
@@ -183,6 +185,7 @@ export class AppModule implements NestModule {
         HostedBackupController as never,
         DataExportController as never,
         HostingActivationController as never,
+        ResellerBotAdminController as never,
         HostedActivationController as never,
         HostedDomainCheckController as never,
         SupportFaqController as never,
@@ -265,6 +268,7 @@ export class AppModule implements NestModule {
       ResellerAccessController as never,
       ResellerServicesController as never,
       ResellerAccountController as never,
+      ResellerOwnBotController as never,
       // PR-5: «خرید» (the bot's catalogue and checkout), the clients book, auto-renew, trials.
       ResellerSellingController as never,
       ResellerClientsController as never,
