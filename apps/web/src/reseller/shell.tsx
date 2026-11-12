@@ -19,12 +19,13 @@ import {
   type PanelScreen,
 } from './route';
 import { AccountPage } from './pages/account';
+import { BuyPage } from './pages/buy';
+import { ClientsPage } from './pages/clients';
 import { DashboardPage } from './pages/dashboard';
 import { OwnBotPage } from './pages/own-bot';
 import { PricesPage } from './pages/prices';
 import { ServicesPage } from './pages/services';
 import { SupportPage } from './pages/support';
-import { UnavailableScreen } from './pages/unavailable';
 import { WalletPage } from './pages/wallet';
 
 const SCREEN_TITLES: Readonly<Record<PanelScreen, { title: WebKey; sub: WebKey }>> = {
@@ -148,8 +149,9 @@ function Screen({
     case 'bot':
       return <OwnBotPage />;
     case 'buy':
+      return <BuyPage search={search} />;
     case 'clients':
-      return <UnavailableScreen screen={screen} />;
+      return <ClientsPage />;
   }
 }
 

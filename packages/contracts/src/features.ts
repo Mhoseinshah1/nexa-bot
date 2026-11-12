@@ -341,15 +341,20 @@ export const FEATURE_FLAGS = [
   {
     key: 'start_captcha',
     description:
-      'R10 D5 (a): ask every NEW customer a simple question in the chat (a sum, four answer ' +
-      'buttons) before the bot serves them. Only customers who first arrive while it is on ' +
+      'R10 D5 (a): ask every NEW customer a simple question in the chat (a sum by default, or ' +
+      'a number in a picture, an emoji, a number in words: `captcha.kind`) before the bot serves them. Only customers who first arrive while it is on ' +
       'are asked; existing customers never are, and turning it off lets everybody waiting ' +
       'through at once. A wrong answer costs an attempt and, at the limit, a cooldown — ' +
       'never a block. Administrators are never asked. No third-party service is involved.',
     defaultEnabled: false,
     // TENANT_WIDE: it stands in front of every new customer of the tenant.
     blastRadius: 'TENANT_WIDE',
-    configuredBy: ['captcha.expiry_seconds', 'captcha.max_attempts', 'captcha.cooldown_seconds'],
+    configuredBy: [
+      'captcha.kind',
+      'captcha.expiry_seconds',
+      'captcha.max_attempts',
+      'captcha.cooldown_seconds',
+    ],
   },
   {
     key: 'panel_auto_balancing',
@@ -805,6 +810,18 @@ export const FEATURE_FLAGS = [
     defaultEnabled: false,
     // TENANT_WIDE: turning it on offers every active reseller of the tenant a second way in.
     blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
+    key: 'reseller_tier_progress',
+    description:
+      'PR-5: «پیشرفت تا سطح بعد» \u2014 the reseller web panel\u2019s dashboard shows, for a tier with ' +
+      'a next-tier target (a monthly count of services or a monthly sales amount), how far this ' +
+      'month\u2019s sales are from it, read from the existing monthly reseller sales tracking. ' +
+      'Display only: no tier ever changes because of it. Off by default.',
+    defaultEnabled: false,
+    // LOCAL: a card on the reseller panel; nothing else reads it.
+    blastRadius: 'LOCAL',
     configuredBy: [],
   },
 ] as const satisfies readonly FeatureFlagDefinition[];

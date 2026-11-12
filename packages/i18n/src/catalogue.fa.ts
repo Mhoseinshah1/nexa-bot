@@ -197,6 +197,27 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.captcha.locked':
     '{icon:warning} تعداد پاسخ‌های نادرست به حد مجاز رسید.\nلطفاً {minutes} دقیقهٔ دیگر دوباره /start را بفرستید تا سؤال تازه‌ای برایتان بیاید.',
   'bot.captcha.option_button': '{answer}',
+  // `captcha.kind`: the picture, emoji and number-in-words questions. Same promise: never "blocked".
+  'bot.captcha.image_challenge':
+    '{icon:info} برای شروع، عدد 4 رقمی داخل تصویر را بنویسید و بفرستید.',
+  'bot.captcha.image_wrong':
+    '{icon:warning} پاسخ درست نبود. {remaining} فرصت دیگر دارید.\n\nتصویر تازه: عدد 4 رقمی داخل آن را بنویسید و بفرستید.',
+  'bot.captcha.image_expired':
+    '{icon:info} زمان پاسخ به تصویر قبلی تمام شده بود.\n\nتصویر تازه: عدد 4 رقمی داخل آن را بنویسید و بفرستید.',
+  'bot.captcha.refresh_button': '🔄 تصویر جدید',
+  'bot.captcha.emoji_challenge':
+    '{icon:info} برای شروع، به این سؤال ساده پاسخ دهید:\n\nروی {name} بزنید.\n\nپاسخ درست را از دکمه‌های زیر انتخاب کنید.',
+  'bot.captcha.emoji_wrong':
+    '{icon:warning} پاسخ درست نبود. {remaining} فرصت دیگر دارید.\n\nسؤال تازه:\nروی {name} بزنید.',
+  'bot.captcha.emoji_expired':
+    '{icon:info} زمان پاسخ به سؤال قبلی تمام شده بود.\n\nسؤال تازه:\nروی {name} بزنید.',
+  'bot.captcha.emoji_option_button': '{emoji}',
+  'bot.captcha.word_challenge':
+    '{icon:info} برای شروع، به این سؤال ساده پاسخ دهید:\n\nعدد «{words}» کدام است؟\n\nپاسخ درست را از دکمه‌های زیر انتخاب کنید.',
+  'bot.captcha.word_wrong':
+    '{icon:warning} پاسخ درست نبود. {remaining} فرصت دیگر دارید.\n\nسؤال تازه:\nعدد «{words}» کدام است؟',
+  'bot.captcha.word_expired':
+    '{icon:info} زمان پاسخ به سؤال قبلی تمام شده بود.\n\nسؤال تازه:\nعدد «{words}» کدام است؟',
   // WP20, brief §3.5: the owner's sentence, word for word.
   'bot.blocked_spam':
     'کاربر گرامی، شما به دلیل ارسال پیام‌های سریع و مکرر (اسپم) از ربات مسدود شده‌اید. برای پیگیری با پشتیبانی در ارتباط باشید.',
@@ -1795,6 +1816,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.reseller_web.link_rate_limited':
     '{icon:time} در یک ساعت گذشته چند لینک ورود گرفته‌اید. کمی بعد دوباره امتحان کنید.',
   'bot.reseller_web.unavailable': 'پنل وب نماینده در حال حاضر در دسترس نیست.',
+  'bot.reseller_web.expiring_digest':
+    '{icon:time} سرویس‌های رو به اتمام شما ({count} سرویس)\n\n{list}\n\nبرای تمدید، پنل نماینده یا بخش «سرویس‌های من» را باز کنید.',
+  'bot.reseller_web.daily_sales': '📊 گزارش فروش {date}\n\nتعداد فروش: {count}\nمجموع: {amount}',
   'bot.reseller_web.new_device':
     '🔔 ورود تازه به پنل نماینده از یک دستگاه یا مرورگر جدید انجام شد.\nاگر این ورود کار شما نبود، از بخش «امنیت» پنل یا با پشتیبانی همهٔ ورودها را ببندید.',
   'bot.reseller_request.already_reseller': 'شما هم‌اکنون نماینده هستید و نیازی به درخواست نیست.',

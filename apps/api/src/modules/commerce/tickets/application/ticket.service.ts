@@ -143,6 +143,14 @@ export interface TicketServiceDeps {
   readonly admins: Pick<AdminRepository, 'findById' | 'list'>;
   readonly permissions: Pick<PermissionResolver, 'resolve'>;
   readonly notifier: Pick<CustomerNotifier, 'notifyThrough'>;
+  /**
+   * PR-5 (reseller web panel «پاسخ تیکت»): whether this customer wants the reply notice in the
+   * bot. False only for an ACTIVE reseller who switched it off — they read the reply in the
+   * panel. Absent, every reply is told, as before.
+   */
+  readonly replyNotices?: {
+    wanted(scope: TenantContext, customerId: UserId, tx: unknown): Promise<boolean>;
+  };
   readonly outbox: OutboxWriter;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
@@ -979,15 +987,18 @@ export class TicketService {
          * the earlier UUIDv7 — is handed to the dispatcher before the file.
          */
         const enqueuedAt = this.deps.clock.now();
-        await this.deps.notifier.notifyThrough(
-          scope,
-          ticket.customerId,
-          ticket.botInstanceId,
-          'TICKET_REPLY',
-          posted.message.id,
-          enqueuedAt,
-          tx,
-        );
+        const told = await this.replyNoticeWanted(scope, ticket.customerId, tx);
+        if (told) {
+          await this.deps.notifier.notifyThrough(
+            scope,
+            ticket.customerId,
+            ticket.botInstanceId,
+            'TICKET_REPLY',
+            posted.message.id,
+            enqueuedAt,
+            tx,
+          );
+        }
         /*
          * HF-A7: support's file, staged beside the message it belongs to, and its OWN lane
          * row, enqueued after the text's so the text leaves first. Both commit with the
@@ -1010,15 +1021,17 @@ export class TicketService {
             },
             tx,
           );
-          await this.deps.notifier.notifyThrough(
-            scope,
-            ticket.customerId,
-            ticket.botInstanceId,
-            'TICKET_REPLY_ATTACHMENT',
-            posted.message.id,
-            enqueuedAt,
-            tx,
-          );
+          if (told) {
+            await this.deps.notifier.notifyThrough(
+              scope,
+              ticket.customerId,
+              ticket.botInstanceId,
+              'TICKET_REPLY_ATTACHMENT',
+              posted.message.id,
+              enqueuedAt,
+              tx,
+            );
+          }
         }
         return posted;
       },
@@ -1091,16 +1104,29 @@ export class TicketService {
       requestHash,
       audit: 'ticket.ai_reply',
     });
-    await this.deps.notifier.notifyThrough(
-      scope,
-      ticket.customerId,
-      ticket.botInstanceId,
-      'TICKET_REPLY',
-      posted.message.id,
-      input.now,
-      scoped,
-    );
+    if (await this.replyNoticeWanted(scope, ticket.customerId, scoped)) {
+      await this.deps.notifier.notifyThrough(
+        scope,
+        ticket.customerId,
+        ticket.botInstanceId,
+        'TICKET_REPLY',
+        posted.message.id,
+        input.now,
+        scoped,
+      );
+    }
     return { outcome: 'POSTED', message: posted.message, replayed: false };
+  }
+
+  /** PR-5: a reseller's «پاسخ تیکت» preference; everyone else is always told. */
+  private async replyNoticeWanted(
+    scope: TenantContext,
+    customerId: UserId,
+    tx: unknown,
+  ): Promise<boolean> {
+    return this.deps.replyNotices === undefined
+      ? true
+      : this.deps.replyNotices.wanted(scope, customerId, tx);
   }
 
   /** Close, reopen or triage: the target status, on the one edge the machine declares. */

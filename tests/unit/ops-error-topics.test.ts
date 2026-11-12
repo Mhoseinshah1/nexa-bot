@@ -126,6 +126,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'backup.delivery_partial_ok': 'ERRORS',
   'backup.cleanup_failed': 'BACKUPS',
   'backup.cleanup_ok': 'BACKUPS',
+  // Owner 2026-11-11: an archive removed from the host once the group holds it in full.
+  'backup.archive_removed_after_delivery': 'BACKUPS',
   'backup.disk_threshold_exceeded': 'BACKUPS',
   'backup.disk_threshold_ok': 'BACKUPS',
   'backup.interval_exceeded': 'BACKUPS',

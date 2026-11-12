@@ -1061,13 +1061,19 @@ export class CommercialActionService {
     actor: ActorContext,
     customerId: UserId,
     serviceId: string,
+    /**
+     * PR-5 (OQ-R10-D1-01): an IMPORTED service's plan to renew into, as the RENEW draft names
+     * it. Re-decided against the panel's current plans and the reseller's entitlement; absent,
+     * an imported service is refused as before.
+     */
+    planId: string | null = null,
   ): Promise<{ readonly total: Money; readonly productId: ProductId }> {
     await this.deps.guard.check(scope, actor, COMMERCIAL_ACTION_PERMISSION);
     const now = this.deps.clock.now();
     return this.deps.uow.run(scope, async (tx) => {
       const service = await this.ownedService(scope, customerId, serviceId, tx);
       assertExtendable(service);
-      if (renewsFromPanelPlans(service)) {
+      if (renewsFromPanelPlans(service) && planId === null) {
         throw errors.conflict(
           COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
           'An imported service renews from a plan the customer chooses.',
@@ -1075,7 +1081,13 @@ export class CommercialActionService {
       }
       this.assertLifecycleAllows('RENEW', service);
       await this.assertPanelCanPerform(scope, service, 'RENEW', tx);
-      const priced = await this.quoteRenewal(scope, service, null, now, tx);
+      const priced = await this.quoteRenewal(
+        scope,
+        service,
+        renewsFromPanelPlans(service) ? planId : null,
+        now,
+        tx,
+      );
       const standing = await this.deps.resellers.standing(scope, customerId, tx);
       if (standing !== null) {
         await this.deps.resellers.assertEntitled(

@@ -314,6 +314,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   // R10 D5: the two numbers of the captcha's sum.
   first: 'عدد اول سؤال',
   second: 'عدد دوم سؤال',
+  words: 'عدد به حروف فارسی',
   app: 'نام برنامه (با نماد، اگر تعیین شده باشد)',
   at: 'زمان',
   expiredAt: 'زمان پایان مهلت پرداخت',
@@ -346,6 +347,8 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   cooldownHours: 'فاصلهٔ مجاز (ساعت)',
   correlationId: 'شناسهٔ پیگیری',
   count: 'تعداد',
+  // PR-5: the reseller's daily digest, one line per service.
+  list: 'فهرست',
   creditedAmount: 'مبلغ واریزشده به کیف پول',
   current: 'مقدار فعلی',
   currentLimit: 'تعداد کاربر / دستگاه مجاز فعلی',
@@ -826,6 +829,9 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.captcha.wrong': { remaining: 'تعداد فرصت باقی‌مانده' },
   'bot.captcha.locked': { minutes: 'دقیقه‌های باقی‌مانده تا سؤال تازه' },
   'bot.captcha.option_button': { answer: 'عدد پیشنهادی' },
+  'bot.captcha.image_wrong': { remaining: 'تعداد فرصت باقی‌مانده' },
+  'bot.captcha.emoji_wrong': { remaining: 'تعداد فرصت باقی‌مانده' },
+  'bot.captcha.word_wrong': { remaining: 'تعداد فرصت باقی‌مانده' },
   'bot.order.preinvoice_devices': { unitPrice: 'قیمت هر کاربر اضافه' },
   'bot.service.renew_option_button': { title: 'نام محصول' },
   // R2: the renewal result names the renewed account, not the customer's Telegram username.
@@ -1091,6 +1097,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.reseller_web.unavailable': [
     'پنل وب در دسترس نیست',
     'وقتی پنل وب خاموش است، نماینده فعال نیست یا نشانی وب ربات تنظیم نشده است.',
+  ],
+  'bot.reseller_web.expiring_digest': [
+    'گزارش روزانهٔ سرویس‌های رو به اتمام نماینده',
+    'روزی یک بار، فهرست سرویس‌های خود نماینده که ۷ روز یا ۱۰٪ حجم یا کمتر مانده است (اگر «سرویس رو به اتمام» در پنل روشن باشد).',
+  ],
+  'bot.reseller_web.daily_sales': [
+    'گزارش روزانهٔ فروش نماینده',
+    'روزی یک بار، تعداد و جمع فروش دیروز نماینده (اگر «گزارش روزانهٔ فروش» در پنل روشن باشد).',
   ],
   'bot.reseller_web.new_device': [
     'اعلان ورود از دستگاه جدید',
@@ -1360,6 +1374,51 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'پس از پاسخ‌های نادرست بیش از حد مجاز؛ کاربر چند دقیقه صبر می‌کند و دوباره /start می‌فرستد. حساب مسدود نمی‌شود.',
   ],
   'bot.captcha.option_button': ['دکمهٔ گزینهٔ سؤال امنیتی', 'هر یک از چهار عدد پیشنهادی زیر سؤال.'],
+  // `captcha.kind`.
+  'bot.captcha.image_challenge': [
+    'سؤال امنیتی با تصویر',
+    'وقتی نوع سؤال «عدد در تصویر» است، تصویری با یک عدد 4 رقمی فرستاده می‌شود و این متن زیر آن می‌آید. کاربر عدد را تایپ می‌کند.',
+  ],
+  'bot.captcha.image_wrong': [
+    'پاسخ نادرست به سؤال تصویری',
+    'تعداد فرصت باقی‌مانده و یک تصویر تازه با این متن فرستاده می‌شود. این پیام نباید از مسدود شدن حرف بزند.',
+  ],
+  'bot.captcha.image_expired': [
+    'زمان سؤال تصویری تمام شده',
+    'پاسخ به سؤالی که زمانش گذشته شمرده نمی‌شود و تصویر تازه‌ای با این متن فرستاده می‌شود.',
+  ],
+  'bot.captcha.refresh_button': [
+    'دکمهٔ تصویر جدید',
+    'دکمه‌ای زیر تصویر سؤال امنیتی که آن را با تصویر دیگری عوض می‌کند. فرصت پاسخ را کم نمی‌کند و برای هر سؤال سه بار ممکن است.',
+  ],
+  'bot.captcha.emoji_challenge': [
+    'سؤال امنیتی با ایموجی',
+    'وقتی نوع سؤال «ایموجی» است، نام یک میوه یا حیوان در متن می‌آید و کاربر ایموجی درست را از چهار دکمه می‌زند.',
+  ],
+  'bot.captcha.emoji_wrong': [
+    'پاسخ نادرست به سؤال ایموجی',
+    'تعداد فرصت باقی‌مانده و یک سؤال ایموجی تازه. این پیام نباید از مسدود شدن حرف بزند.',
+  ],
+  'bot.captcha.emoji_expired': [
+    'زمان سؤال ایموجی تمام شده',
+    'پاسخ به سؤالی که زمانش گذشته شمرده نمی‌شود و پیام به یک سؤال تازه ویرایش می‌شود.',
+  ],
+  'bot.captcha.emoji_option_button': [
+    'دکمهٔ گزینهٔ ایموجی',
+    'هر یک از چهار ایموجی پیشنهادی زیر سؤال.',
+  ],
+  'bot.captcha.word_challenge': [
+    'سؤال امنیتی با عدد حروفی',
+    'وقتی نوع سؤال «عدد حروفی» است، عددی از 10 تا 99 با حروف فارسی نوشته می‌شود و کاربر آن را از چهار دکمهٔ رقمی انتخاب می‌کند.',
+  ],
+  'bot.captcha.word_wrong': [
+    'پاسخ نادرست به سؤال عدد حروفی',
+    'تعداد فرصت باقی‌مانده و یک سؤال تازه. این پیام نباید از مسدود شدن حرف بزند.',
+  ],
+  'bot.captcha.word_expired': [
+    'زمان سؤال عدد حروفی تمام شده',
+    'پاسخ به سؤالی که زمانش گذشته شمرده نمی‌شود و پیام به یک سؤال تازه ویرایش می‌شود.',
+  ],
   'bot.channels.join_private_button': [
     'دکمهٔ عضویت در کانال خصوصی',
     'دکمهٔ عضویت برای کانال اجباری بدون آیدی عمومی که با لینک دعوت باز می‌شود؛ با شمارهٔ کانال در فهرست.',

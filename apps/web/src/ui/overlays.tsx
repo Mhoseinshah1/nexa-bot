@@ -278,7 +278,9 @@ export type MenuItem =
 /**
  * A menu button: a trigger with `aria-haspopup`, and a list of items that the
  * arrow keys move through. Escape and a click outside close it and hand focus
- * back to the trigger. Not a portal — it hangs off its trigger.
+ * back to the trigger. By default it hangs off its trigger; `portal` renders the list in
+ * `document.body`, placed under the trigger by anchor positioning (`kit.css`), for a trigger
+ * inside a clipping container (a stacked table cell, a scrolling table wrapper).
  */
 export function Menu({
   label,
@@ -286,6 +288,7 @@ export function Menu({
   items,
   triggerClassName = 'btn ghost',
   placement = 'down',
+  portal = false,
 }: {
   /** The trigger's accessible name. */
   label: string;
@@ -294,6 +297,7 @@ export function Menu({
   items: readonly MenuItem[];
   triggerClassName?: string;
   placement?: 'down' | 'up';
+  portal?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -304,12 +308,17 @@ export function Menu({
   useEffect(() => {
     if (!open) return undefined;
     const onDown = (event: MouseEvent) => {
-      if (wrap.current !== null && !wrap.current.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (wrap.current?.contains(target) === true || list.current?.contains(target) === true)
+        return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', onDown);
     list.current?.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus();
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
+
+  const place = (node: ReactNode) => (portal ? createPortal(node, document.body) : node);
 
   const close = (refocus: boolean) => {
     setOpen(false);
@@ -331,7 +340,7 @@ export function Menu({
       <button
         ref={button}
         type="button"
-        className={triggerClassName}
+        className={portal ? `${triggerClassName} menu-anchor` : triggerClassName}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -340,58 +349,60 @@ export function Menu({
       >
         {trigger}
       </button>
-      {open && (
-        <div
-          ref={list}
-          id={menuId}
-          className={`menu${placement === 'up' ? ' up' : ''}`}
-          role="menu"
-          aria-label={label}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.preventDefault();
-              close(true);
-            } else if (event.key === 'ArrowDown') {
-              event.preventDefault();
-              moveFocus(1);
-            } else if (event.key === 'ArrowUp') {
-              event.preventDefault();
-              moveFocus(-1);
-            } else if (event.key === 'Tab') {
-              close(false);
-            }
-          }}
-        >
-          {items.map((item) => {
-            if ('separator' in item) return <div key={item.key} className="sep" role="separator" />;
-            if ('heading' in item)
+      {open &&
+        place(
+          <div
+            ref={list}
+            id={menuId}
+            className={`menu${placement === 'up' ? ' up' : ''}${portal ? ' portal' : ''}`}
+            role="menu"
+            aria-label={label}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                close(true);
+              } else if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                moveFocus(1);
+              } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                moveFocus(-1);
+              } else if (event.key === 'Tab') {
+                close(false);
+              }
+            }}
+          >
+            {items.map((item) => {
+              if ('separator' in item)
+                return <div key={item.key} className="sep" role="separator" />;
+              if ('heading' in item)
+                return (
+                  <div key={item.key} className="head" role="presentation">
+                    {item.heading}
+                  </div>
+                );
               return (
-                <div key={item.key} className="head" role="presentation">
-                  {item.heading}
-                </div>
+                <button
+                  key={item.key}
+                  type="button"
+                  role={item.checked === undefined ? 'menuitem' : 'menuitemradio'}
+                  {...(item.checked === undefined ? {} : { 'aria-checked': item.checked })}
+                  className={item.danger === true ? 'danger' : undefined}
+                  disabled={item.disabled === true}
+                  tabIndex={-1}
+                  onClick={() => {
+                    close(true);
+                    item.onSelect();
+                  }}
+                >
+                  {item.icon !== undefined && <Icon name={item.icon} size={14} />}
+                  {item.label}
+                  {item.checked === true && <Icon name="check" size={13} className="end" />}
+                </button>
               );
-            return (
-              <button
-                key={item.key}
-                type="button"
-                role={item.checked === undefined ? 'menuitem' : 'menuitemradio'}
-                {...(item.checked === undefined ? {} : { 'aria-checked': item.checked })}
-                className={item.danger === true ? 'danger' : undefined}
-                disabled={item.disabled === true}
-                tabIndex={-1}
-                onClick={() => {
-                  close(true);
-                  item.onSelect();
-                }}
-              >
-                {item.icon !== undefined && <Icon name={item.icon} size={14} />}
-                {item.label}
-                {item.checked === true && <Icon name="check" size={13} className="end" />}
-              </button>
-            );
-          })}
-        </div>
-      )}
+            })}
+          </div>,
+        )}
     </div>
   );
 }

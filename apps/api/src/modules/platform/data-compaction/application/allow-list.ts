@@ -326,6 +326,18 @@ export const CUSTOMER_NOTIFICATION_COMPACTION: Readonly<
       'PR-4: one per new device fingerprint of a reseller web panel sign-in; the fingerprint ' +
       'row, not this notice, is what stops a second alert.',
   },
+  RESELLER_WEB_EXPIRING_DIGEST: {
+    compact: 'RESOLVED',
+    reason:
+      'PR-5: one per reseller per day; the day\u2019s report row, not this notice, is what stops ' +
+      'a second digest the same day.',
+  },
+  RESELLER_WEB_DAILY_SALES: {
+    compact: 'RESOLVED',
+    reason:
+      'PR-5: one per reseller per day; the day\u2019s report row, not this notice, is what stops ' +
+      'a second report the same day.',
+  },
 };
 
 /** The resolved states a row may be removed in. PENDING and UNCONFIRMED never. */

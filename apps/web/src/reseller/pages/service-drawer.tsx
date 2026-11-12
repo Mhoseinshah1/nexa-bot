@@ -12,6 +12,7 @@ import {
   Empty,
   Field,
   Input,
+  Select,
   Skeleton,
   TabPanel,
   Tabs,
@@ -20,6 +21,8 @@ import {
 import { Drawer } from '../../ui/overlays';
 import { queryState } from '../../view-state';
 import {
+  assignServiceClient,
+  fetchClients,
   fetchConnectionFiles,
   fetchOffer,
   fetchServiceDetail,
@@ -37,7 +40,7 @@ import {
 import { SCREEN_PATHS, goTo } from '../route';
 import { Expiry, StateBadge, Usage } from '../view';
 
-export type DrawerTab = 'link' | 'renew' | 'traffic';
+export type DrawerTab = 'link' | 'renew' | 'traffic' | 'client';
 
 /**
  * How often an open drawer re-reads its service while a change is in flight (`working`: a
@@ -96,6 +99,7 @@ export function ServiceDrawer({
   if (detail?.actions.some((action) => action !== 'RENEW') === true) {
     tabs.push({ id: 'traffic', label: t('web.rp_tab_traffic') });
   }
+  tabs.push({ id: 'client', label: t('web.rp_tab_client') });
   const active = tabs.some((one) => one.id === tab) ? tab : 'link';
 
   return (
@@ -142,6 +146,7 @@ export function ServiceDrawer({
                 )}
               />
             )}
+            {active === 'client' && <ClientTab detail={detail} />}
           </TabPanel>
           <NoteEditor detail={detail} />
         </div>
@@ -458,6 +463,64 @@ function OfferPicker({ serviceId, kind }: { serviceId: string; kind: MiniAppServ
         </Button>
       )}
     </section>
+  );
+}
+
+// --- Client (PR-5) ------------------------------------------------------------------------------
+
+/**
+ * «مشتری»: assign the service to one of the reseller's clients, or release it. The clients book
+ * is a label — it never touches pricing or entitlement — and the API refuses a client or a
+ * service that is not this reseller's.
+ */
+function ClientTab({ detail }: { detail: ResellerServiceDetail }) {
+  const toast = useToast();
+  const refresh = useRefreshPanelData();
+  const clients = useQuery({
+    queryKey: ['reseller', 'clients', 'active'],
+    queryFn: () => fetchClients(),
+  });
+  const [value, setValue] = useState(detail.clientId ?? '');
+  const save = useMutation({
+    mutationFn: () => assignServiceClient(detail.id, value === '' ? null : value),
+    onSuccess: () => {
+      toast({ tone: 'ok', message: t('web.rp_client_assign_saved') });
+      void refresh();
+    },
+    onError: (error) => toast({ tone: 'danger', message: errorText(error), error }),
+  });
+  const dirty = value !== (detail.clientId ?? '');
+  return (
+    <div className="rp-stack">
+      <Field label={t('web.rp_client_assign_label')} htmlFor="rp-assign-client">
+        <Select
+          id="rp-assign-client"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+        >
+          <option value="">{t('web.rp_client_assign_none')}</option>
+          {detail.clientId != null &&
+            clients.data?.items.every((one) => one.id !== detail.clientId) === true && (
+              <option value={detail.clientId}>{detail.client}</option>
+            )}
+          {clients.data?.items.map((one) => (
+            <option key={one.id} value={one.id}>
+              {one.name}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <div>
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={!dirty || save.isPending}
+          onClick={() => save.mutate()}
+        >
+          {t('web.rp_client_assign_save')}
+        </Button>
+      </div>
+    </div>
   );
 }
 

@@ -524,13 +524,9 @@ function IncidentDetail({
       {incident !== undefined && (
         <>
           {!inDrawer && <PageHead title={incident.title} />}
-          <div className="incident-chips">
-            <StatusBadge status={incident.status} />
-            <Badge tone={SEVERITY_TONES[incident.severity]}>
-              {t(INCIDENT_SEVERITY_LABELS[incident.severity])}
-            </Badge>
-            <Badge tone="neutral">{t(INCIDENT_KIND_LABELS[incident.kind])}</Badge>
-            {inDrawer && (
+          {/* Owner ruling (demo parity): status, severity and kind are rows of the summary box, no head chips. */}
+          {inDrawer && (
+            <div className="incident-chips">
               <a
                 className="incident-open-full small"
                 href={`/incidents/${encodeURIComponent(incident.id)}`}
@@ -538,8 +534,8 @@ function IncidentDetail({
               >
                 {t('web.inc_open_full')}
               </a>
-            )}
-          </div>
+            </div>
+          )}
           {incident.status === 'ACTIVE' && incident.stopSales && (
             <Banner tone="info">{t('web.inc_money_note')}</Banner>
           )}
@@ -624,6 +620,13 @@ function IncidentDetail({
               <KV
                 items={[
                   [t('web.inc_col_status'), <StatusBadge key="s" status={incident.status} />],
+                  [
+                    t('web.inc_col_severity'),
+                    <Badge key="v" tone={SEVERITY_TONES[incident.severity]}>
+                      {t(INCIDENT_SEVERITY_LABELS[incident.severity])}
+                    </Badge>,
+                  ],
+                  [t('web.inc_col_kind'), t(INCIDENT_KIND_LABELS[incident.kind])],
                   [
                     t('web.inc_scheduled_start'),
                     incident.scheduledStartAt === null

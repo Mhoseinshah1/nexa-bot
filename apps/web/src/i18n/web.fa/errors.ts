@@ -117,6 +117,11 @@ export const WEB_FA_ERRORS = {
   'web.err_reseller_web_telegram_undelivered':
     'پیام به تلگرام شما نرسید. مطمئن شوید ربات را مسدود نکرده‌اید و دوباره امتحان کنید.',
   'web.err_reseller_web_rotate_unavailable': 'این سرور امکان ساختن لینک تازه را ندارد.',
+  'web.err_reseller_web_custom_username_single':
+    'نام کاربری دلخواه فقط برای خرید یک سرویس است؛ برای چند سرویس «خودکار» را انتخاب کنید.',
+  'web.err_reseller_web_trial_unavailable':
+    'سرویس تست الان در دسترس نیست یا سهمیهٔ امروز تمام شده است.',
+  'web.err_reseller_web_auto_renew_plan_required': 'برای روشن کردن، پلن تمدید را انتخاب کنید',
   'web.err_miniapp_rate_limited':
     'درخواست‌های مینی‌اپ از حد مجاز گذشته است؛ کمی بعد دوباره امتحان کنید.',
   'web.err_miniapp_receipt_refused':

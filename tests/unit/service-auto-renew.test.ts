@@ -699,6 +699,7 @@ describe('the customer’s switch', () => {
       enabled: false,
       price: IRT(120_000n),
       leadHours: 24,
+      planId: null,
     });
     expect(w.saved).toEqual([]);
     expect(w.events).toEqual([]);

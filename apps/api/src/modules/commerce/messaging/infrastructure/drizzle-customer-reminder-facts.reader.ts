@@ -71,6 +71,16 @@ export class DrizzleCustomerReminderFactsReader {
     if (kind === 'RESELLER_MINIMUM_REMINDER' || kind === 'RESELLER_MINIMUM_ACHIEVED') {
       return resellerMinimumValues(this.db, tenantId, kind, subjectId, now);
     }
+    // PR-5: the reseller's daily reports, from the day's frozen row (ADR 0030 §1).
+    if (kind === 'RESELLER_WEB_EXPIRING_DIGEST' || kind === 'RESELLER_WEB_DAILY_SALES') {
+      const result = await this.db.execute(sql`
+        SELECT kind, facts FROM reseller_web_daily_reports
+        WHERE tenant_id = ${tenantId} AND id = ${subjectId}
+        LIMIT 1`);
+      const row = result.rows[0] as { kind: string; facts: Record<string, unknown> } | undefined;
+      if (row === undefined) return null;
+      return resellerDailyReportValues(kind, row.kind, row.facts);
+    }
     if (kind === 'WALLET_LOW_BALANCE') {
       const result = await this.db.execute(sql`
         SELECT a.currency, a.threshold_amount,
@@ -94,4 +104,34 @@ export class DrizzleCustomerReminderFactsReader {
     }
     return null;
   }
+}
+
+/**
+ * PR-5: what a reseller's daily report renders, from its frozen facts. Null when the row is
+ * not the kind asked about or its facts do not hold what the sentence names.
+ */
+export function resellerDailyReportValues(
+  kind: CustomerNotificationKind,
+  rowKind: string,
+  facts: Record<string, unknown>,
+): TemplateValues | null {
+  if (kind === 'RESELLER_WEB_EXPIRING_DIGEST' && rowKind === 'EXPIRING_DIGEST') {
+    const lines = Array.isArray(facts['lines']) ? facts['lines'].map(String) : null;
+    if (lines === null || lines.length === 0) return null;
+    return { count: Number(facts['count'] ?? lines.length), list: lines.join('\n') };
+  }
+  if (kind === 'RESELLER_WEB_DAILY_SALES' && rowKind === 'DAILY_SALES') {
+    const day = typeof facts['day'] === 'string' ? new Date(facts['day']) : null;
+    const amount = typeof facts['amountMinor'] === 'string' ? facts['amountMinor'] : null;
+    const currency = typeof facts['currency'] === 'string' ? facts['currency'] : null;
+    if (day === null || Number.isNaN(day.getTime()) || amount === null || currency === null) {
+      return null;
+    }
+    return {
+      date: day,
+      count: Number(facts['count'] ?? 0),
+      amount: money(BigInt(amount), currency as CurrencyCode),
+    };
+  }
+  return null;
 }

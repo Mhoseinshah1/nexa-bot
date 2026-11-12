@@ -204,25 +204,10 @@ describe('the shell', () => {
     renderPage(<PanelShell />);
     expect(await screen.findByText(t('web.rp_gate_unavailable_title'))).toBeInTheDocument();
   });
-
-  it.each([
-    ['/r/buy', 'web.rp_unavailable_buy_title'],
-    ['/r/clients', 'web.rp_unavailable_clients_title'],
-  ] as const)(
-    '%s shows the standard unavailable state and no invented content',
-    async (path, key) => {
-      visit(path);
-      const api = stubApi(signedIn());
-      renderPage(<PanelShell />);
-      expect(await screen.findByText(t(key))).toBeInTheDocument();
-      // Only `/me` was asked: these screens have no data of their own yet.
-      expect(api.calls.map((call) => call.url)).toEqual([`${API}/me`]);
-    },
-  );
 });
 
 describe('the dashboard', () => {
-  it('shows what the API returns — balance, active, month sales, expiring — and no trial card', async () => {
+  it('shows what the API returns — balance, active, month sales, expiring — and no trial or progress card without their answers', async () => {
     visit('/r/dashboard');
     stubApi(signedIn([{ url: `${API}/dashboard`, body: dashboard() }]));
     renderPage(<PanelShell />);
@@ -230,7 +215,7 @@ describe('the dashboard', () => {
     expect(screen.getByText('12,450,000 تومان')).toBeInTheDocument();
     expect(screen.getByText('ar_9001')).toBeInTheDocument();
     expect(screen.getByText(t('web.rp_tier_title'))).toBeInTheDocument();
-    // No trial card, no tier-progress card: their endpoints arrive later.
+    // No `/trial` and no `/tier-progress` answer (404 here): neither card is drawn.
     expect(screen.queryByText(/سرویس تست/u)).toBeNull();
     expect(screen.queryByText(/پیشرفت تا سطح/u)).toBeNull();
     // Never the demo's sample badge.
@@ -291,13 +276,12 @@ describe('«سرویس‌های من»', () => {
     ]);
     expect(screen.getByText('ar_1043')).toBeInTheDocument();
     expect(screen.getByText('آلمان')).toBeInTheDocument();
-    // The wire has no client and no auto-renew yet: neither column is drawn.
-    expect(screen.queryByRole('columnheader', { name: t('web.rp_col_client') })).toBeNull();
-    expect(screen.queryByText(/تمدید خودکار/u)).toBeNull();
-    expect(screen.queryByRole('switch')).toBeNull();
+    // PR-5: the client and the auto-renew columns are always drawn.
+    expect(screen.getByRole('columnheader', { name: t('web.rp_col_client') })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: t('web.rp_col_ar') })).toBeInTheDocument();
   });
 
-  it('shows the client column once a row carries a client', async () => {
+  it('shows the client of a row that carries one', async () => {
     visit('/r/services');
     stubApi(
       signedIn([

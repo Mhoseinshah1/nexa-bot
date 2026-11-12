@@ -104,32 +104,26 @@ const PREFERENCE_ROWS: readonly {
   key: keyof ResellerPreferences;
   title: WebKey;
   hint: WebKey;
-  /** Stored and returned, but no lane sends it yet (api.md «Not yet consumed»). */
-  pending: boolean;
 }[] = [
   {
     key: 'newDeviceAlert',
     title: 'web.rp_notif_new_device',
     hint: 'web.rp_notif_new_device_hint',
-    pending: false,
   },
   {
     key: 'expiringDigest',
     title: 'web.rp_notif_expiring',
     hint: 'web.rp_notif_expiring_hint',
-    pending: true,
   },
   {
     key: 'dailySalesReport',
     title: 'web.rp_notif_sales',
     hint: 'web.rp_notif_sales_hint',
-    pending: true,
   },
   {
     key: 'ticketReply',
     title: 'web.rp_notif_ticket',
     hint: 'web.rp_notif_ticket_hint',
-    pending: true,
   },
 ];
 
@@ -156,12 +150,7 @@ function NotificationsCard() {
             <ToggleRow
               key={row.key}
               title={t(row.title)}
-              description={
-                <>
-                  {t(row.hint)}
-                  {row.pending && <span className="muted small"> {t('web.rp_notif_pending')}</span>}
-                </>
-              }
+              description={t(row.hint)}
               checked={prefs[row.key]}
               disabled={save.isPending}
               onChange={(next) => save.mutate({ [row.key]: next })}

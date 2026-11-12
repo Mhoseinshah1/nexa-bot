@@ -2,6 +2,7 @@ import {
   RESELLER_API_PREFIX,
   RESELLER_IDEMPOTENCY_HEADER,
   RESELLER_PANEL_ROUTES,
+  RESELLER_SELLING_ROUTES,
   miniAppOrderSchema,
   miniAppPaymentStatusSchema,
   miniAppReceiptResponseSchema,
@@ -16,6 +17,22 @@ import {
   miniAppWalletPayResponseSchema,
   miniAppWalletResponseSchema,
   resellerActivityResponseSchema,
+  resellerAutoRenewSchema,
+  resellerCategoriesResponseSchema,
+  resellerClientSchema,
+  resellerClientServicesResponseSchema,
+  resellerClientsResponseSchema,
+  resellerCustomOfferSchema,
+  resellerPlansResponseSchema,
+  resellerPurchaseBatchSchema,
+  resellerPurchaseQuoteSchema,
+  resellerRenewAllQuoteSchema,
+  resellerRenewAllResultSchema,
+  resellerSendLinksResponseSchema,
+  resellerServersResponseSchema,
+  resellerTierProgressSchema,
+  resellerTrialIssuedSchema,
+  resellerTrialStatusSchema,
   resellerConnectionFilesResponseSchema,
   resellerDashboardSchema,
   resellerExchangeResponseSchema,
@@ -26,12 +43,15 @@ import {
   resellerPricesResponseSchema,
   resellerSendResultSchema,
   resellerServiceDetailSchema,
-  resellerServicesResponseSchema,
+  resellerSellingServicesResponseSchema,
   resellerSessionsResponseSchema,
   resellerTotpEnrolResponseSchema,
   type MiniAppServiceAction,
   type MoneyWire,
   type ResellerOwnBotSubmitBody,
+  type ResellerClientWrite,
+  type ResellerPurchaseQuoteRequest,
+  type ResellerRenewAllRequest,
   type ResellerPreferences,
   type ResellerServiceFilter,
 } from '@nexa/contracts';
@@ -127,10 +147,19 @@ export const savePreferences = (patch: Partial<ResellerPreferences>) =>
 
 export const fetchDashboard = () => call('GET', R.dashboard, resellerDashboardSchema);
 
-export function fetchServices(input: { filter: ResellerServiceFilter; q: string; page: number }) {
+export function fetchServices(input: {
+  filter: ResellerServiceFilter;
+  q: string;
+  page: number;
+  clientId?: string | null;
+}) {
   const query = new URLSearchParams({ filter: input.filter, page: String(input.page) });
+  if (input.clientId !== undefined && input.clientId !== null) {
+    query.set('clientId', input.clientId);
+  }
   if (input.q.trim() !== '') query.set('q', input.q.trim());
-  return call('GET', `${R.services}?${query.toString()}`, resellerServicesResponseSchema);
+  // PR-5: each row carries its auto-renew switch, so no row reads its own.
+  return call('GET', `${R.services}?${query.toString()}`, resellerSellingServicesResponseSchema);
 }
 export const fetchServiceDetail = (id: string) =>
   call('GET', path(R.service, { serviceId: id }), resellerServiceDetailSchema);
@@ -224,5 +253,93 @@ export const cancelOwnBot = (requestId: string, key: string) =>
   call('POST', path(R.ownBotCancel, { requestId }), resellerBotRequestViewSchema, { key });
 export const payOwnBot = (requestId: string, key: string) =>
   call('POST', path(R.ownBotPay, { requestId }), resellerBotRequestViewSchema, { key });
+
+// --- Buying (PR-5 §5.5) -------------------------------------------------------------------
+
+const S = RESELLER_SELLING_ROUTES;
+
+function withQuery(route: string, params: Readonly<Record<string, string | undefined>>): string {
+  const query = new URLSearchParams();
+  for (const [name, value] of Object.entries(params)) {
+    if (value !== undefined) query.set(name, value);
+  }
+  const text = query.toString();
+  return text === '' ? route : `${route}?${text}`;
+}
+
+export const fetchCatalogueServers = (page = 0) =>
+  call(
+    'GET',
+    withQuery(S.catalogueServers, { page: page === 0 ? undefined : String(page) }),
+    resellerServersResponseSchema,
+  );
+export const fetchCatalogueCategories = (serverId: string | null, page = 0) =>
+  call(
+    'GET',
+    withQuery(S.catalogueCategories, {
+      serverId: serverId ?? undefined,
+      page: page === 0 ? undefined : String(page),
+    }),
+    resellerCategoriesResponseSchema,
+  );
+export const fetchCataloguePlans = (categoryId: string, serverId: string | null, page = 0) =>
+  call(
+    'GET',
+    withQuery(path(S.catalogueCategory, { categoryId }), {
+      serverId: serverId ?? undefined,
+      page: page === 0 ? undefined : String(page),
+    }),
+    resellerPlansResponseSchema,
+  );
+export const fetchCatalogueCustom = () => call('GET', S.catalogueCustom, resellerCustomOfferSchema);
+/** The header IS the batch key: the same key re-reads the same quote. */
+export const quotePurchase = (body: ResellerPurchaseQuoteRequest, key: string) =>
+  call('POST', S.purchaseQuote, resellerPurchaseQuoteSchema, { body, key });
+export const fetchPurchase = (batchId: string) =>
+  call('GET', path(S.purchase, { batchId }), resellerPurchaseBatchSchema);
+export const confirmPurchase = (batchId: string, key: string) =>
+  call('POST', path(S.purchaseConfirm, { batchId }), resellerPurchaseBatchSchema, { key });
+export const sendPurchaseLinks = (batchId: string) =>
+  call('POST', path(S.purchaseSendLinks, { batchId }), resellerSendLinksResponseSchema);
+
+// --- Clients book and auto-renew (PR-5 §5.6) ----------------------------------------------
+
+export const fetchClients = (archived = false) =>
+  call(
+    'GET',
+    withQuery(S.clients, { archived: archived ? 'true' : undefined }),
+    resellerClientsResponseSchema,
+  );
+export const createClient = (body: ResellerClientWrite) =>
+  call('POST', S.clients, resellerClientSchema, { body });
+export const updateClient = (id: string, body: ResellerClientWrite) =>
+  call('PUT', path(S.client, { clientId: id }), resellerClientSchema, { body });
+export const archiveClient = (id: string) =>
+  call('POST', path(S.clientArchive, { clientId: id }), resellerClientSchema);
+export const fetchClientServices = (id: string) =>
+  call('GET', path(S.clientServices, { clientId: id }), resellerClientServicesResponseSchema);
+export const fetchRenewAllQuote = (id: string) =>
+  call('GET', path(S.clientRenewAll, { clientId: id }), resellerRenewAllQuoteSchema);
+/** Renew-all, confirmed: the quote shown (each service and its price) is what is paid. */
+export const renewAll = (id: string, body: ResellerRenewAllRequest, key: string) =>
+  call('POST', path(S.clientRenewAll, { clientId: id }), resellerRenewAllResultSchema, {
+    body,
+    key,
+  });
+export const assignServiceClient = (serviceId: string, clientId: string | null) =>
+  call('PUT', path(S.serviceClient, { serviceId }), okParser, { body: { clientId } });
+export const fetchAutoRenew = (serviceId: string) =>
+  call('GET', path(S.serviceAutoRenew, { serviceId }), resellerAutoRenewSchema);
+export const saveAutoRenew = (
+  serviceId: string,
+  body: { enabled: boolean; expected: MoneyWire | null; planId: string | null },
+  key: string,
+) => call('PUT', path(S.serviceAutoRenew, { serviceId }), resellerAutoRenewSchema, { body, key });
+
+// --- Trials and tier progress (PR-5 §5.7, §5.8) --------------------------------------------
+
+export const fetchTrial = () => call('GET', S.trial, resellerTrialStatusSchema);
+export const makeTrial = (key: string) => call('POST', S.trial, resellerTrialIssuedSchema, { key });
+export const fetchTierProgress = () => call('GET', S.tierProgress, resellerTierProgressSchema);
 
 export { newIdempotencyKey };

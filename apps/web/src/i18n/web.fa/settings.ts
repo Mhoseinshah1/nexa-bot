@@ -265,6 +265,23 @@ export const WEB_FA_SETTINGS = {
   'web.setting_referral_abuse_referrer_daily_commission_cap_desc':
     'بیشترین تعداد پورسانت خرید که هر معرف در یک روز دریافت می‌کند. پورسانت بیش از سقف باطل نمی‌شود؛ در انتظار می‌ماند و از روز بعد به همان قاعدهٔ همیشگی پرداخت می‌شود. خالی یعنی بدون سقف.',
   // R10 D5 (a): the /start captcha for new customers.
+  'web.setting_captcha_kind': 'نوع سؤال کپچای شروع',
+  'web.setting_captcha_kind_desc':
+    'کاربر تازه با کدام سؤال روبه‌رو شود. سؤالی که همین حالا پرسیده شده و منتظر پاسخ است با همان نوعی که پرسیده شده ادامه می‌یابد و فقط سؤال‌های بعدی از نوع تازه می‌شوند.',
+  'web.captcha_kind_math': 'ریاضی',
+  'web.captcha_kind_image_number': 'عدد در تصویر',
+  'web.captcha_kind_emoji': 'ایموجی',
+  'web.captcha_kind_word_number': 'عدد حروفی',
+  'web.captcha_kind_random': 'تصادفی',
+  'web.captcha_preview_title': 'پیش‌نمایش هر نوع سؤال',
+  'web.captcha_preview_math': 'جمع دو عدد: 4 + 7 = ؟ و چهار دکمهٔ عددی.',
+  'web.captcha_preview_emoji': 'روی «سیب» بزنید؛ نام در متن است و چهار ایموجی دکمه هستند.',
+  'web.captcha_preview_word_number': 'عدد «سی و هفت» کدام است؟ چهار دکمهٔ رقمی.',
+  'web.captcha_preview_random': 'هر سؤال تازه یکی از چهار نوع بالا را می‌پرسد.',
+  'web.captcha_preview_image_alt': 'نمونهٔ تصویر سؤال امنیتی',
+  'web.captcha_preview_image_unavailable': 'نمونهٔ تصویر در دسترس نیست.',
+  'web.captcha_preview_refresh': '🔄 تصویر جدید',
+  'web.captcha_preview_new_sample': 'نمونهٔ تازه',
   'web.setting_captcha_expiry_seconds': 'مهلت پاسخ به سؤال امنیتی',
   'web.setting_captcha_expiry_seconds_desc':
     'هر سؤال تا این مدت قابل پاسخ است. پاسخ به سؤالی که مهلتش گذشته شمرده نمی‌شود و سؤال تازه‌ای پرسیده می‌شود.',
@@ -456,7 +473,7 @@ export const WEB_FA_SETTINGS = {
     'هدیهٔ عضویت فقط پس از نخستین خرید پرداخت‌شده و تحویل‌شدهٔ کاربر معرفی‌شده قابل دریافت می‌شود و برای هدیه و پورسانت هر معرف سقف روزانه می‌توان گذاشت. موجودی‌ها و سهم‌های پرداخت‌شده دست نمی‌خورند.',
   'web.feature_start_captcha_title': 'سؤال امنیتی شروع (کپچا)',
   'web.feature_start_captcha_summary':
-    'از هر کاربر تازه پیش از استفاده از ربات یک سؤال ساده (جمع دو عدد با چهار گزینه) پرسیده می‌شود. کاربران فعلی و مدیران هرگز پرسیده نمی‌شوند و پاسخ نادرست به مسدودی نمی‌انجامد.',
+    'از هر کاربر تازه پیش از استفاده از ربات یک سؤال ساده (جمع دو عدد، عدد در تصویر، ایموجی یا عدد حروفی؛ نوع آن در تنظیمات انتخاب می‌شود) پرسیده می‌شود. کاربران فعلی و مدیران هرگز پرسیده نمی‌شوند و پاسخ نادرست به مسدودی نمی‌انجامد.',
   // R11 B7.
   'web.feature_phone_verification_title': 'تأیید شماره تلفن کاربران',
   // NEXA v095 PR-4 A: off or MANDATORY; the gateway rule works on its own either way.
@@ -641,6 +658,12 @@ export const WEB_FA_SETTINGS = {
   'web.flag_service_usage_reminders': 'یادآور مصرف حجم سرویس',
   // WP-A9: the names of the reminder keys and switches this package added.
   'web.setting_reminders_expiry_early_days': 'یادآور هفتگی پیش از انقضا',
+  'web.setting_reseller_trial_daily_quota': 'سرویس تست نماینده در روز',
+  'web.setting_reseller_trial_daily_quota_desc':
+    'هر نمایندهٔ فعال روزانه چند سرویس تست رایگان از پنل وب بسازد (روز تقویم ربات). صفر یعنی خاموش؛ حداکثر 20.',
+  'web.setting_reseller_trial_product': 'تست نماینده (سرور)',
+  'web.setting_reseller_trial_product_desc':
+    'شناسهٔ سروری که تنظیمات تستش برای سرویس تست نماینده ساخته می‌شود. خالی یعنی سرویس تست نماینده ارائه نمی‌شود.',
   'web.setting_reseller_request_cooldown_days': 'فاصلهٔ درخواست مجدد نمایندگی پس از رد',
   // Reseller-phase PR-6: the dedicated bot for resellers.
   'web.setting_reseller_bot_monthly_fee': 'هزینهٔ ماهانهٔ ربات اختصاصی نماینده',
@@ -656,6 +679,11 @@ export const WEB_FA_SETTINGS = {
     'نماینده‌های فعال با دکمهٔ «ورود به پنل وب» در ربات یک لینک یک‌بارمصرف ده‌دقیقه‌ای می‌گیرند و روی نشانی وب همین ربات وارد پنل خود می‌شوند: داشبورد، سرویس‌ها با لینک، QR و فایل‌های اتصال، کیف پول، لیست قیمت و پشتیبانی. همه‌چیز از همان سرویس‌های ربات انجام می‌شود و قاعدهٔ قیمت، کارمزد یا اعتباری اضافه نمی‌شود.',
   'web.feature_reseller_web_panel_off_effect':
     'دکمه از ربات برداشته می‌شود، لینک تازه ساخته نمی‌شود و پنل برای همه بسته است. ورودهای قبلی از درخواست بعدی کار نمی‌کنند و با روشن‌کردن دوباره برمی‌گردند.',
+  'web.feature_reseller_tier_progress_title': 'پیشرفت سطح',
+  'web.feature_reseller_tier_progress_summary':
+    'برای سطحی که «هدف سطح بعد» دارد (تعداد سرویس یا مبلغ فروش ماهانه)، داشبورد پنل وب نماینده نشان می‌دهد فروش این ماه چقدر به آن نزدیک است. فقط نمایش است و سطح هیچ نماینده‌ای خودکار تغییر نمی‌کند.',
+  'web.feature_reseller_tier_progress_off_effect':
+    'کارت پیشرفت از داشبورد نماینده برداشته می‌شود. هدف‌های ثبت‌شده سر جایشان می‌مانند.',
   'web.feature_reseller_requests_title': 'درخواست نمایندگی از ربات',
   'web.feature_reseller_requests_summary':
     'دکمهٔ «درخواست نمایندگی» در منوی ربات نمایش داده می‌شود. مشتری به سؤال‌هایی که شما تعریف کرده‌اید پاسخ می‌دهد و درخواست او در گروه گزارش و در بخش «درخواست‌های نمایندگی» پنل دیده می‌شود. می‌توانید پیش از تصمیم با او گفتگو کنید، سپس با انتخاب سطح نماینده‌اش کنید یا رد کنید.',

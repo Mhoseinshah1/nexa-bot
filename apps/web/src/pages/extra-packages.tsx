@@ -297,26 +297,8 @@ function PackageSection({
     {
       key: 'title',
       header: t('web.extra_devices_rate_title'),
-      render: (row) =>
-        !mayEdit ? (
-          <span className="strong">{row.title}</span>
-        ) : (
-          <button
-            type="button"
-            className="link strong"
-            disabled={busy}
-            title={t('web.extra_devices_edit')}
-            onClick={() =>
-              discard.confirmDiscard(() => {
-                setEditing(row.id);
-                setForm(formOf(row));
-                setOpen(true);
-              })
-            }
-          >
-            {row.title}
-          </button>
-        ),
+      // Demo parity: the title is text; «ویرایش» is the row's own button.
+      render: (row) => <span className="strong">{row.title}</span>,
     },
     {
       key: 'amount',
@@ -376,6 +358,20 @@ function PackageSection({
       render: (row) =>
         !mayEdit ? null : (
           <RowActions>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() =>
+                discard.confirmDiscard(() => {
+                  setEditing(row.id);
+                  setForm(formOf(row));
+                  setOpen(true);
+                })
+              }
+            >
+              {t('web.extra_devices_edit')}
+            </Button>
             <Button
               size="sm"
               variant="ghost"

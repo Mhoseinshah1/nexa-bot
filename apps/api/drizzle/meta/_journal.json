@@ -2399,15 +2399,29 @@
     {
       "idx": 342,
       "version": "7",
-      "when": 1794433998168,
-      "tag": "0342_reseller_web_panel",
+      "when": 1794433594619,
+      "tag": "0342_captcha_kinds",
       "breakpoints": true
     },
     {
       "idx": 343,
       "version": "7",
-      "when": 1794445439585,
-      "tag": "0343_reseller_bots",
+      "when": 1794458616381,
+      "tag": "0343_reseller_web_panel",
+      "breakpoints": true
+    },
+    {
+      "idx": 344,
+      "version": "7",
+      "when": 1794461329431,
+      "tag": "0344_reseller_panel_selling",
+      "breakpoints": true
+    },
+    {
+      "idx": 345,
+      "version": "7",
+      "when": 1794462652562,
+      "tag": "0345_reseller_bots",
       "breakpoints": true
     }
   ]

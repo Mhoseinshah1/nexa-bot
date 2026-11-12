@@ -5,7 +5,7 @@ import { PanelShell } from '../../apps/web/src/reseller/shell';
 import { customerPriceList } from '../../apps/web/src/reseller/pages/prices';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Route } from './harness';
-import { irt, me, prices, problem, serviceRow, signedIn } from './reseller-fixtures';
+import { irt, me, prices, problem, serviceRow, servicesPage, signedIn } from './reseller-fixtures';
 
 /**
  * The wallet, price list, support and «حساب و تنظیمات» screens of the reseller panel.
@@ -680,13 +680,9 @@ describe('a service row with a trial flag', () => {
     mount('/r/services', [
       {
         url: `${API}/services`,
-        body: {
-          items: [serviceRow({ isTrial: true })],
+        body: servicesPage([serviceRow({ isTrial: true })], {
           counts: { ALL: 1, ACTIVE: 1, EXPIRING: 0, EXPIRED: 0, SUSPENDED: 0, OTHER: 0 },
-          page: 0,
-          pages: 1,
-          total: 1,
-        },
+        }),
       },
     ]);
     expect(await screen.findByText(t('web.rp_trial'))).toBeInTheDocument();

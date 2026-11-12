@@ -58,6 +58,7 @@ import { DirtyScope, sameValue, useDirtySet, useReportDirty } from './ops-b-layo
 import { SettingsSection, StickySaveBar } from '../ui/redesign';
 import { ApiErrorReport, ErrorRef, TechnicalDetails } from '../ui/technical-details';
 import { AutoDeletePreview } from './auto-delete-preview';
+import { CaptchaKindPreview } from './captcha-kind-preview';
 
 /**
  * The settings registry's values, built in ONE place for this page and for the sidebar's
@@ -181,7 +182,7 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
               >
                 <SettingsSection
                   title={t(title)}
-                  defaultOpen
+                  collapsible={false}
                   changed={members.filter((member) => dirty.has(member.key)).length}
                 >
                   {/* PR-3: the automatic deletion's preview sits above its own settings. */}
@@ -680,6 +681,7 @@ function SettingRow({
             </ul>
           </Banner>
         )}
+        {setting.key === 'captcha.kind' && <CaptchaKindPreview selected={draft} />}
         {save.isError && <SaveError error={save.error} settingKey={setting.key} />}
         {/* A no-op says so. The legacy screens answer "✅ updated" either way,
             and one of them said it three times while nothing changed. */}

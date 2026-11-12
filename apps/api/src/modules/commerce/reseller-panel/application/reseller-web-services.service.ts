@@ -68,6 +68,19 @@ export interface ResellerWebServicesDeps {
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly ids: Pick<IdGenerator, 'uuid'>;
+  /**
+   * PR-5: the clients book's label of each of the reseller's services (service id → client),
+   * and the batch labels put on services made since. Absent, every row's client is null.
+   */
+  readonly clients?: {
+    labelsOf(context: ResellerWebContext): Promise<ReadonlyMap<string, ClientLabel>>;
+  };
+}
+
+/** PR-5: the client a service is filed under in the reseller's clients book. */
+export interface ClientLabel {
+  readonly id: string;
+  readonly name: string;
 }
 
 /** «رو به اتمام»: an ACTIVE service with ≤ 7 days or ≤ 10 % of a finite allowance left. */
@@ -139,7 +152,13 @@ export class ResellerWebServicesService {
 
   async list(
     context: ResellerWebContext,
-    query: { readonly filter: ResellerServiceFilter; readonly q?: string; readonly page: number },
+    query: {
+      readonly filter: ResellerServiceFilter;
+      readonly q?: string;
+      readonly page: number;
+      /** PR-5: only this client's services. */
+      readonly clientId?: string;
+    },
   ): Promise<ResellerServicesResponse> {
     const now = this.deps.clock.now();
     const { items } = await this.deps.provisioning.listedForCustomer(
@@ -147,10 +166,21 @@ export class ResellerWebServicesService {
       context.customer.id,
       RESELLER_WEB_SERVICES_CAP,
     );
+    const labels = await this.labels(context);
+    const ofClient =
+      query.clientId === undefined
+        ? items
+        : items.filter((service) => labels.get(service.id)?.id === query.clientId);
     const searched =
       query.q === undefined || query.q.length === 0
-        ? items
-        : items.filter((service) => matches(service, query.q as string));
+        ? ofClient
+        : ofClient.filter(
+            (service) =>
+              matches(service, query.q as string) ||
+              (labels.get(service.id)?.name ?? '')
+                .toLowerCase()
+                .includes((query.q as string).toLowerCase()),
+          );
     const counts = Object.fromEntries(RESELLER_SERVICE_FILTERS.map((key) => [key, 0])) as Record<
       ResellerServiceFilter,
       number
@@ -166,9 +196,36 @@ export class ResellerWebServicesService {
     const page = Math.min(query.page, pages - 1);
     const rows: ResellerServiceRow[] = [];
     for (const service of chosen.slice(page * size, page * size + size)) {
-      rows.push(await this.row(context.scope, service, now));
+      rows.push(await this.row(context.scope, service, now, labels));
     }
     return { items: rows, counts, page, pages, total: chosen.length };
+  }
+
+  /** PR-5: the panel's rows for some of the reseller's own services (the clients book). */
+  async rowsOf(
+    context: ResellerWebContext,
+    services: readonly ServiceRecord[],
+  ): Promise<ResellerServiceRow[]> {
+    const now = this.deps.clock.now();
+    const labels = await this.labels(context);
+    const rows: ResellerServiceRow[] = [];
+    for (const service of services) rows.push(await this.row(context.scope, service, now, labels));
+    return rows;
+  }
+
+  /** PR-5: every service of the reseller's own list (the same read as «سرویس‌های من»). */
+  async ownList(context: ResellerWebContext): Promise<readonly ServiceRecord[]> {
+    return (
+      await this.deps.provisioning.listedForCustomer(
+        context.scope,
+        context.customer.id,
+        RESELLER_WEB_SERVICES_CAP,
+      )
+    ).items;
+  }
+
+  private async labels(context: ResellerWebContext): Promise<ReadonlyMap<string, ClientLabel>> {
+    return this.deps.clients === undefined ? new Map() : this.deps.clients.labelsOf(context);
   }
 
   /** The services the dashboard lists under «رو به اتمام», soonest first. */
@@ -193,9 +250,10 @@ export class ResellerWebServicesService {
           (a.expiresAt?.getTime() ?? Number.MAX_SAFE_INTEGER) -
           (b.expiresAt?.getTime() ?? Number.MAX_SAFE_INTEGER),
       );
+    const labels = await this.labels(context);
     const rows: ResellerServiceRow[] = [];
     for (const service of expiring.slice(0, limit))
-      rows.push(await this.row(context.scope, service, now));
+      rows.push(await this.row(context.scope, service, now, labels));
     return {
       count: expiring.length,
       active: items.filter((service) => service.state === 'ACTIVE').length,
@@ -215,7 +273,7 @@ export class ResellerWebServicesService {
     const qr = deliverable ? await this.deps.delivery.qrPayloadsFor(context.scope, service) : [];
     const rotation = await this.deps.provisioning.customerRotationFor(context.scope, service);
     return {
-      ...(await this.row(context.scope, service, now)),
+      ...(await this.row(context.scope, service, now, await this.labels(context))),
       // R11 A4, as the bot and the mini app: on a files-only panel the link is not sent at all.
       subscriptionUrl: deliverable && !filesOnly ? service.subscriptionUrl : null,
       qrKinds: qr.map((payload) => payload.kind),
@@ -450,12 +508,15 @@ export class ResellerWebServicesService {
     scope: TenantContext,
     service: ServiceRecord,
     now: Date,
+    labels: ReadonlyMap<string, ClientLabel>,
   ): Promise<ResellerServiceRow> {
+    const label = labels.get(service.id) ?? null;
     return {
       id: service.id,
       code: service.code,
       username: service.providerUsername,
-      client: null,
+      client: label?.name ?? null,
+      clientId: label?.id ?? null,
       note: service.customerNote,
       product: await this.deps.titleOf(scope, service.orderId),
       location: service.locationLabel,

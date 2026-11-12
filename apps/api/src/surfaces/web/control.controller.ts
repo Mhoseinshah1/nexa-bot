@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/common';
-import type { FastifyRequest } from 'fastify';
+import { Body, Controller, Get, Inject, Param, Post, Query, Req, Res } from '@nestjs/common';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   CONTROL_ERROR_CODES,
@@ -76,6 +76,29 @@ export class ControlController {
     const { scope, actor } = await authenticateAdmin(this.container, request);
     const settings = await this.container.settingsService.list(scope, actor);
     return { settings: settings.map(toSettingResponse) };
+  }
+
+  /**
+   * `captcha.kind`: a freshly generated SAMPLE of the picture question, for the preview on the
+   * «کپچای شروع» card. It belongs to no customer and no question, is drawn on request and never
+   * stored, and is read under the permission that lists the setting (`settings.view`).
+   */
+  @Get('settings/captcha-preview/image')
+  async captchaPreviewImage(
+    @Req() request: FastifyRequest,
+    @Res() reply: FastifyReply,
+  ): Promise<void> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    await this.container.settingsService.get(scope, actor, 'captcha.kind');
+    const png = this.container.startCaptcha.sampleImage();
+    if (png === null) {
+      throw errors.notFound(CONTROL_ERROR_CODES.UNKNOWN_KEY, 'No sample is available.');
+    }
+    await reply
+      .header('Content-Type', 'image/png')
+      .header('Cache-Control', 'no-store, no-cache, max-age=0')
+      .header('Pragma', 'no-cache')
+      .send(Buffer.from(png));
   }
 
   @Post('settings/:key')

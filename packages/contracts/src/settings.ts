@@ -47,6 +47,8 @@ import {
   BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
   BACKUP_ARCHIVE_KEEP_DAYS_MAX,
   BACKUP_ARCHIVE_KEEP_DAYS_MIN,
+  BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT,
+  BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
   BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
   BACKUP_DAILY_TIME_PATTERN,
   BACKUP_INTERVAL_MINUTES_MAX,
@@ -144,6 +146,7 @@ import {
 import { referralSignupGiftShareSchema } from './customer-ux.js';
 import {
   START_CAPTCHA_COOLDOWN_SECONDS_MAX,
+  START_CAPTCHA_KINDS,
   START_CAPTCHA_COOLDOWN_SECONDS_MIN,
   START_CAPTCHA_EXPIRY_SECONDS_MAX,
   START_CAPTCHA_EXPIRY_SECONDS_MIN,
@@ -324,6 +327,9 @@ export interface SettingDefinition<TSchema extends z.ZodType = z.ZodType> {
    */
   readonly scope?: SettingScope;
 }
+
+/** PR-5: `reseller.trial_daily_quota` is 0–20 (the reseller panel's «سرویس تست» per day). */
+export const RESELLER_TRIAL_DAILY_QUOTA_MAX = 20;
 
 const telegramChatIdSchema = z
   .string()
@@ -907,6 +913,28 @@ export const SETTINGS = [
       'backup.archive_keep_count.',
     schema: z.number().int().min(BACKUP_ARCHIVE_KEEP_DAYS_MIN).max(BACKUP_ARCHIVE_KEEP_DAYS_MAX),
     defaultValue: BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  /**
+   * Owner, 2026-11-11: «بدون نگهداری». Off, the host keeps no archive once Telegram holds it in
+   * full; on (the default), the two keys above apply as before. See the constant's comment.
+   */
+  {
+    key: BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
+    description:
+      'Whether a backup archive stays on the server after it reached the Telegram backup ' +
+      'destination. On (the default): the archive retention keys apply as before. Off: a ' +
+      'verified backup whose delivery is confirmed (every part has a Telegram message id) is ' +
+      'removed from the server at once, its working directory with it, and each removal is ' +
+      'written to the operations log. A backup still running, unverified, or whose delivery ' +
+      'failed, is partial or unknown, or that an unfinished recovery names, is never removed by ' +
+      'this rule. Read on the installation tenant only.',
+    schema: z.boolean(),
+    defaultValue: BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT,
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
@@ -1812,6 +1840,40 @@ export const SETTINGS = [
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
   },
+  /*
+   * PR-5 §5.7: reseller trials from the web panel. The quota is per reseller per tenant-local
+   * day; the trial is one of the tenant's trial configurations (since R1 a trial is a panel's
+   * trial configuration, so the value names that PANEL), issued by the trial service.
+   */
+  {
+    key: 'reseller.trial_daily_quota',
+    description:
+      'PR-5: how many free test services («سرویس تست») each active reseller may make from the ' +
+      'reseller web panel per day (the tenant\u2019s calendar day). Zero, the default, is off. ' +
+      'A reseller trial is the trial named by reseller.trial_product, owned by the reseller, ' +
+      'costs nothing and earns no sales credit, referral or cashback. At most twenty.',
+    schema: z.number().int().min(0).max(RESELLER_TRIAL_DAILY_QUOTA_MAX),
+    defaultValue: 0,
+    configures: null,
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'reseller.trial_product',
+    description:
+      'PR-5: which of the tenant\u2019s trials a reseller\u2019s «سرویس تست» is \u2014 the panel whose ' +
+      'trial configuration (enabled, traffic, hours) is issued. Empty, the default, means no ' +
+      'reseller trial is offered whatever the daily quota says.',
+    schema: z.string().uuid().nullable(),
+    defaultValue: null,
+    configures: null,
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
   {
     key: 'reseller_request.cooldown_days',
     description:
@@ -2343,6 +2405,22 @@ export const SETTINGS = [
       .min(START_CAPTCHA_EXPIRY_SECONDS_MIN)
       .max(START_CAPTCHA_EXPIRY_SECONDS_MAX),
     defaultValue: 300,
+    configures: 'start_captcha',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'captcha.kind',
+    description:
+      'Which question a new customer is asked: MATH (a sum of two digits, the original), ' +
+      'IMAGE_NUMBER (a picture with a 4-digit number to type), EMOJI (tap the named fruit or ' +
+      'animal), WORD_NUMBER (a number written in words, four digit buttons) or RANDOM (one ' +
+      'of those four for each new question). A question already pending keeps the kind it ' +
+      'was asked with.',
+    schema: z.enum(START_CAPTCHA_KINDS),
+    defaultValue: 'MATH',
     configures: 'start_captcha',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',

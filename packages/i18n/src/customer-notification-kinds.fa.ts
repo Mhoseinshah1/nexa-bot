@@ -66,4 +66,6 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES_FA: Readonly<
   HOSTED_BOT_ACTIVATION_LINK: 'لینک فعال‌سازی ربات اختصاصی',
   HOSTED_BOT_FEE_SHORT: 'کمبود موجودی برای هزینهٔ ربات اختصاصی',
   RESELLER_WEB_NEW_DEVICE: 'ورود تازه به پنل نماینده',
+  RESELLER_WEB_EXPIRING_DIGEST: 'گزارش روزانهٔ سرویس‌های رو به اتمام نماینده',
+  RESELLER_WEB_DAILY_SALES: 'گزارش روزانهٔ فروش نماینده',
 };

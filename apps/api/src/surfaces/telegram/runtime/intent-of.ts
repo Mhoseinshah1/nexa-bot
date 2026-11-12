@@ -557,14 +557,17 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       if (!version.success) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
       return { intent: 'TERMS_ACCEPT', targetId: version.data, callbackQueryId: id };
     }
-    // R10 D5 (a): `hc:<question uuid>:<0-3>` — a question and a position, nothing else.
+    // R10 D5 (a): `hc:<question uuid>:<0-3>` — a question and a position, nothing else; `:r` asks for a new picture.
     if (data.startsWith(START_CAPTCHA_CALLBACK_PREFIX)) {
-      const answer = /^([0-9a-f-]{36}):([0-3])$/u.exec(
+      const answer = /^([0-9a-f-]{36}):([0-3]|r)$/u.exec(
         data.slice(START_CAPTCHA_CALLBACK_PREFIX.length),
       );
       const question = uuidV7Schema.safeParse(answer?.[1]);
       if (answer === null || !question.success) {
         return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      if (answer[2] === 'r') {
+        return { intent: 'CAPTCHA_REFRESH', targetId: question.data, callbackQueryId: id };
       }
       return {
         intent: 'CAPTCHA_ANSWER',

@@ -1,9 +1,19 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { Client } from 'pg';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
+  BACKUP_ARCHIVE_REMOVED_AFTER_DELIVERY_CODE,
+  BACKUP_PART_MAX_BYTES,
+} from '@nexa/contracts';
+import { BackupService } from '../../apps/api/src/modules/platform/backup/application/backup.service';
+import { planArchiveParts } from '../../apps/api/src/modules/platform/backup/infrastructure/archive-parts';
+import { PostgresDatabaseTools } from '../../apps/api/src/modules/platform/backup/infrastructure/pg-tools';
+import { FilesystemBackupWorkspaces } from '../../apps/api/src/modules/platform/backup/infrastructure/workspace';
 import { type Container } from '../../apps/api/src/container';
 import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
@@ -258,6 +268,120 @@ describe('the recovery executor', () => {
     expect(row?.candidateDatabase).toMatch(/^nexa_candidate_/);
     expect(await databaseExists(row?.candidateDatabase ?? '')).toBe(false);
   });
+
+  it('§3 «بدون نگهداری»: the host keeps no archive, and the file from the group, uploaded, restores end to end', async () => {
+    const owner = adminActorFor(
+      await createAdmin(container, tenantA, { username: 'no-host-owner', roleKeys: ['owner'] }),
+    );
+    await container.settingsService.set(tenantA, owner, {
+      key: BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
+      value: false,
+      expectedVersion: null,
+      idempotencyKey: `keep-on-host-off-${randomBytes(4).toString('hex')}`,
+    });
+    await container.database.db.execute(
+      `INSERT INTO operational_events
+         (id, tenant_id, code, severity, message, occurrence_count, first_seen_at, last_seen_at, correlation_id, dedupe_scope)
+       VALUES ('01900000-0000-7000-8000-0000000000b1', '${tenantA.tenantId}', 'test.marker', 'INFO',
+               'present before the backup', 1, now(), now(), 'exec-test', 'SYSTEM')` as never,
+    );
+
+    // A real backup of the live database whose Telegram delivery is CONFIRMED: what the group
+    // receives is kept here, as the operator would download it from the group.
+    const received: Buffer[] = [];
+    const service = new BackupService({
+      runs: container.backupRuns,
+      tools: new PostgresDatabaseTools({
+        databaseUrl: liveUrl,
+        dumpTimeoutMs: 120_000,
+        restoreTimeoutMs: 120_000,
+        migratorEntrypoint: fileURLToPath(
+          new URL('../../apps/api/src/infrastructure/persistence/migrate.ts', import.meta.url),
+        ),
+      }),
+      archiver: container.backupArchiver,
+      workspaces: new FilesystemBackupWorkspaces(workRoot),
+      delivery: {
+        configured: true,
+        async sendDocument(input) {
+          const whole = await readFile(input.archivePath);
+          received.push(
+            input.range === undefined ? whole : whole.subarray(input.range.start, input.range.end),
+          );
+          return { state: 'SUCCEEDED', detail: null, messageId: 9000 + received.length };
+        },
+        async sendMessage() {
+          return { state: 'SUCCEEDED', detail: null, messageId: 1 };
+        },
+      },
+      clock: container.clock,
+      ids: container.ids,
+      installationId: () => 'integration-installation',
+      opsLog: container.opsLog,
+      quietOpsLog: container.opsLog,
+      scope: () => tenantA,
+      logger: { info() {}, warn() {}, error() {} },
+      leaseOwner: `test:${randomBytes(4).toString('hex')}`,
+      parts: { plan: (input) => planArchiveParts({ ...input, partBytes: BACKUP_PART_MAX_BYTES }) },
+      restoreCommand: 'botctl restore --target <db> <archive>',
+      // The container's own housekeeping, reading the stored setting.
+      afterSuccess: async () => {
+        await container.backupHousekeeping.pruneDeliveredCopies();
+      },
+    });
+    const outcome = await service.run('MANUAL');
+    if (outcome.kind !== 'COMPLETED') throw new Error('expected a completed backup');
+    expect(outcome.run.state).toBe('SUCCEEDED');
+    expect(outcome.run.deliveryState).toBe('SUCCEEDED');
+    // Nothing of it is left on the host.
+    await expect(stat(join(workRoot, outcome.run.id))).rejects.toMatchObject({ code: 'ENOENT' });
+    const removal = await queryLive<{ backup_id: string }>(
+      liveName,
+      `SELECT context->>'backupId' AS backup_id FROM operational_events
+        WHERE code = '${BACKUP_ARCHIVE_REMOVED_AFTER_DELIVERY_CODE}'`,
+    );
+    expect(removal.map((row) => row.backup_id)).toEqual([outcome.run.id]);
+
+    // Written after the backup: the restore must not bring it back.
+    await container.database.db.execute(
+      `INSERT INTO operational_events
+         (id, tenant_id, code, severity, message, occurrence_count, first_seen_at, last_seen_at, correlation_id, dedupe_scope)
+       VALUES ('01900000-0000-7000-8000-0000000000b2', '${tenantA.tenantId}', 'test.marker', 'INFO',
+               'written after the backup', 1, now(), now(), 'exec-test', 'SYSTEM')` as never,
+    );
+
+    // The Recovery page's path: upload the file from the group, verify, confirm, restore.
+    const begun = await container.recoveryService.beginUpload(tenantA, owner, {
+      clientFilename: 'from-the-telegram-group.nxb',
+    });
+    const file = Buffer.concat(received);
+    await writeFile(begun.workspace.archivePath, file);
+    await container.recoveryService.completeUpload(tenantA, begun.request.id, {
+      sizeBytes: file.length,
+      archiveSha256: 'a'.repeat(64),
+    });
+    const tested = await container.recoveryService.verifyAndTest(tenantA, owner, begun.request.id);
+    expect(tested.failureCode).toBeNull();
+    expect(tested.request.state).toBe('RESTORE_TEST_PASSED');
+    expect(tested.request.backupId).toBe(outcome.run.id);
+    const confirmed = await container.recoveryService.confirm(tenantA, owner, begun.request.id, {
+      phrase: 'RESTORE NEXA',
+      artifactChecksum: tested.request.artifactChecksum ?? '',
+    });
+    expect(confirmed.state).toBe('RESTORE_REQUESTED');
+
+    await container.recoveryExecutor.tick();
+
+    const row = await container.recoveryRequests.byIdUnscoped(begun.request.id);
+    expect(row?.failureCode ?? null).toBeNull();
+    expect(row?.state).toBe('SUCCEEDED');
+    created.push(row?.displacedDatabase ?? '');
+    const markers = await queryLive<{ id: string }>(
+      liveName,
+      `SELECT id FROM operational_events WHERE code = 'test.marker' ORDER BY id`,
+    );
+    expect(markers.map((m) => m.id)).toEqual(['01900000-0000-7000-8000-0000000000b1']);
+  }, 300_000);
 
   it('re-asserts its own row into the restored database', async () => {
     // ADR-0028 § 4. The row lives in the database that gets renamed away, and the

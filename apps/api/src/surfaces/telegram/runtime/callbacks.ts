@@ -448,7 +448,8 @@ export const TERMS_ACCEPT_CALLBACK_PREFIX = 'ac:';
 /**
  * R10 D5 (a): `hc:<question uuid>:<0-3>` — one answer under the `/start` captcha. Two
  * letters: `h:` is taken (add time), and `hc:` differs from it at the second character.
- * 41 bytes. The answer itself is never in it, only the question's id and a position.
+ * 41 bytes. The answer itself is never in it, only the question's id and a position; `hc:<id>:r`
+ * (the picture question's «🔄 تصویر جدید») is the same 41 bytes.
  */
 export const START_CAPTCHA_CALLBACK_PREFIX = 'hc:';
 export const TUTORIAL_PLATFORM_CALLBACK_PREFIX = 'to:';

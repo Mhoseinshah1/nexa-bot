@@ -1,96 +1,74 @@
-# Demo parity: final sweep (PR-5)
+# Demo parity: leftovers against the REAL demo (PR-1, reseller-panel phase)
 
-Date: 2026-11-11. Branch `chore/parity-final-sweep`, built on PR-4's head (every PR of the round merged: #459 to #464).
+Date: 2026-11-11. Branch `fix/parity-real-demo-leftovers`, from main `415fa9b7`.
 
-**Demo used: the OLDER `reference/approved-demo.html` (fallback).** The owner's `redesign-demo.html` was never delivered, so every tool run below compares the live app (served with the repo `demo-parity` fixture set) to the older hash-routed demo. Those totals are old-demo noise plus data differences and are NOT the fix list; the fix list is the owner's kit report (baseline section 1: 477 differences after KEEP on 44 routes). Section 2 re-checks every one of those items against the CURRENT app. Once `redesign-demo.html` exists, run `pnpm web:demo-diff` again; that run replaces this file.
+**Demo used: the owner's REAL `reference/redesign-demo.html`** (the earlier round only had the older fallback). The live side is served with the demo's own `#nx-data`, so both sides show the same records. Committed byte-identical (checked with `cmp`). The reseller-panel demo is kept at `docs/reseller-panel/approved-demo.dc.html` (also byte-identical, ignored by prettier).
 
-## 1. Tool runs (fallback demo) against the baseline
+## 1. `pnpm web:demo-diff` (68 routes plus tabs, failed 0)
 
-| Combination | Before KEEP | Suppressed by KEEP | Remaining | Baseline remaining | Change |
-| ----------- | ----------- | ------------------ | --------- | ------------------ | ------ |
-| light 1440  | 2491        | 434                | 2057      | 2102               | -45    |
-| dark 1440   | 2491        | 434                | 2057      | 2102               | -45    |
-| light 390   | 2799        | 436                | 2363      | 2346               | +17    |
-| dark 390    | 2799        | 436                | 2363      | 2346               | +17    |
+| Combination               | Before KEEP | Suppressed | Remaining |
+| ------------------------- | ----------- | ---------- | --------- |
+| light 1440, first run     | 410         | 133        | 277       |
+| dark 1440, first run      | 410         | 133        | 277       |
+| light 390, first run      | 410         | 133        | 277       |
+| dark 390, first run       | 410         | 133        | 277       |
+| light 1440, after this PR | 369         | 153        | 216       |
 
-No route failed in any run (failed 0). The 390 totals rose slightly: the pages now carry the demo's boxes, columns and menus, and at 390 the old demo shows fewer of them, so the old-demo comparison is not meaningful as a regression signal in either direction. The totals stay in the thousands because of noise that cannot be fixed against the old demo: the «دادهٔ نمونه» badge in every title, the demo-only «رخداد قطعی پنل…/جزئیات» banner, detail routes the old demo has no URL for, and tab-label digits.
+The signature is DOM-based, so the four first-run reports are identical line for line; only light 1440 was re-run after the changes. The 216 left are dominated by the items in section 3 (fixture or data gaps, and the per-setting «ذخیره», which repeats on every settings tab).
 
-## 2. Owner's kit report re-checked (44 routes, 477 differences)
+## 2. Owner rulings applied (presentation only; no API, permission or logic change)
 
-Method: each ONLY-DEMO / ONLY-APP item of the kit report was looked up in the app side of the light 1440 run's `sig.json` (same route and field, digits normalised as the tool does). ONLY-DEMO present in the app, or ONLY-APP gone from it, means FIXED. Because the live side uses fixture data, this proves the element exists, not that the owner's data renders identically. Reasons come from the PR "Not done" lists (#459, #460, #462, #464; #461 and #463 carry no «Not done» list).
+- **KEEP list** (`scripts/web-shots/demo-diff.keep.json`) gained: the `/recovery` per-invoice card (heading, search label, empty text); the period chips inside «فیلترها» on `/reports` and `/referrals`. Whole-list server CSV export: NOT wanted, the list «خروجی CSV» keeps exporting the loaded rows (no diff item, so recorded here).
+- `/resellers`, `/reseller-plans`, `/reseller-tiers`: a click, or Enter on the focused row, opens the standing drawer (`DataTable onRowActivate`; a click on a link, button, field or open menu inside the row stays with that control). Names are text. «صفحهٔ مشتری» is an entry of a per-row «بیشتر» menu on `/resellers`.
+- `/reports`: range chips moved into «فیلترها» (default `THIS_MONTH`, same URL keys).
+- `/incidents/:id`: head chips removed; severity and kind are rows of the summary box beside the status.
+- `/notification-center`: the demo's «خوانده‌نشده | همه» pair on the page; «همه را خوانده‌شده کن» is a head button (same condition, same mutation); the «بیشتر» menu keeps the re-read.
+- `/settings`: the section title is a plain heading (`SettingsSection collapsible={false}`), no second button of the tab's name.
+- `/extra-devices` packages tables: title is text, «ویرایش» is the row's button (as the demo).
+- `/content`: the demo's «one table per template» is the variables table of each template's editor (the 367 tables are the demo's hidden per-template panes). The app draws that table for the open template. No change.
 
-Statuses: FIXED = matches the demo now; KEEP = on the owner's KEEP list; NOT DONE = still differs, with its reason; UNVERIFIED = cannot be checked from fixtures.
+## 3. The 33 NOT DONE (previous report) re-checked
 
-| Route                  | Kit | FIXED | KEEP | NOT DONE | UNVERIFIED | Reason (KEEP / NOT DONE / UNVERIFIED)                                                                                                                                          |
-| ---------------------- | --- | ----- | ---- | -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/bot-buttons`         | 10  | 2     | 0    | 0        | 8          | demo menu-preview buttons carry the owner's menu data; fixture menu differs and preview items are not buttons in the fallback DOM                                              |
-| `/bots`                | 3   | 3     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/broadcasts`          | 1   | 1     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/business-chats`      | 12  | 12    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/campaigns`           | 17  | 17    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/content`             | 2   | 1     | 0    | 1        | 0          | one table per template: app keeps its editor list (PR-4)                                                                                                                       |
-| `/custom-service`      | 12  | 12    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/discounts`           | 21  | 21    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/extra-devices`       | 6   | 0     | 0    | 0        | 6          | PR-3 added a per-row «ویرایش» (`extra-devices.tsx:344`, test in `catalog-marketing-parity.test.tsx`); the fallback fixture run did not show it — check on a real install       |
-| `/features`            | 29  | 29    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/gift-cards`          | 1   | 1     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/notification-center` | 5   | 4     | 0    | 1        | 0          | demo button is a chip inside the panel (PR-2 expected leftover)                                                                                                                |
-| `/orders`              | 21  | 21    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/panels`              | 2   | 2     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/payment-gateways`    | 2   | 2     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/payments`            | 27  | 27    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/product-categories`  | 16  | 16    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/products`            | 5   | 5     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/recovery`            | 3   | 0     | 0    | 3        | 0          | per-invoice result card removed on purpose by owner (f9ec6f869); no API (PR-4)                                                                                                 |
-| `/referrals`           | 17  | 17    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/reminders`           | 1   | 1     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/reports`             | 7   | 0     | 0    | 7        | 0          | range chips: not on the owner's KEEP list (that names the dashboard chips only) and no PR moved them; left for the next round                                                  |
-| `/reseller-plans`      | 5   | 1     | 0    | 4        | 0          | tier-name buttons still rendered in rows (PR-4 ~14 leftovers)                                                                                                                  |
-| `/reseller-tiers`      | 6   | 2     | 0    | 4        | 0          | tier-name buttons still rendered in rows (PR-4 ~14 leftovers)                                                                                                                  |
-| `/resellers`           | 21  | 10    | 0    | 11       | 0          | row name button / «صفحهٔ مشتری» kept: only path to the standing drawer (PR-4)                                                                                                  |
-| `/service-locations`   | 17  | 17    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/services`            | 17  | 17    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/settings`            | 44  | 42    | 0    | 1        | 1          | app save bar renders only after an edit; fallback run has no edit; extra duplicate section button next to the tab strip                                                        |
-| `/support`             | 1   | 1     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/support-knowledge`   | 8   | 8     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/support-learning`    | 3   | 3     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/tickets`             | 28  | 28    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/trials`              | 8   | 8     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/users`               | 12  | 12    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/users/:id`           | 33  | 31    | 0    | 0        | 2          | blocked-customer banner needs a blocked customer; fixture one is not (PR-1 test + mutation check cover it); needs a customer with nothing pending; not checkable with fixtures |
-| `/orders/:id`          | 2   | 2     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/payments/:id`        | 5   | 5     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/services/:id`        | 6   | 6     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/products/:id`        | 2   | 2     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/panels/:id`          | 6   | 6     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/broadcasts/:id`      | 19  | 19    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/tickets/:id`         | 1   | 1     | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/business-chats/:id`  | 12  | 12    | 0    | 0        | 0          |                                                                                                                                                                                |
-| `/incidents/:id`       | 1   | 0     | 0    | 1        | 0          | status/severity chips on the detail head (no PR addressed it)                                                                                                                  |
+| Route                                | Items | Status now                                                                                                                                                |
+| ------------------------------------ | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/content`                           | 1     | MATCH (see above)                                                                                                                                         |
+| `/notification-center`               | 1     | FIXED                                                                                                                                                     |
+| `/recovery`                          | 3     | KEEP                                                                                                                                                      |
+| `/reports`                           | 7     | KEEP (owner ruling: chips in «فیلترها»)                                                                                                                   |
+| `/reseller-plans`, `/reseller-tiers` | 8     | FIXED                                                                                                                                                     |
+| `/resellers`                         | 11    | 10 FIXED; 1 differs: the demo's per-row «وضعیت» button. The row click opens the same drawer (owner ruling), so no second button                           |
+| `/settings`                          | 1     | duplicate section button FIXED; the demo's per-setting «ذخیره» still differs: the app shows its save bar after an edit, on purpose (unsaved-changes rule) |
+| `/incidents/:id`                     | 1     | FIXED                                                                                                                                                     |
 
-Totals: 477 items: **FIXED 427, KEEP 0, NOT DONE 33, UNVERIFIED 17.** (Lead correction: `/reports` range chips moved KEEP → NOT DONE; `/extra-devices` moved NOT DONE → UNVERIFIED.)
+## 4. The 17 UNVERIFIED re-checked
 
-Notes on the reasons:
+- `/extra-devices` (6): FIXED, no difference left.
+- `/users/:id` (2): no difference left; the real demo's data shows the banner states.
+- `/settings` (1): see above.
+- `/bot-buttons` (8): still differs. The demo draws the live-menu preview items as buttons; the app draws them as non-interactive chips (same text), and adds the heading «پیش‌نمایش منوی ربات».
 
-- `/reports` range chips: the owner's KEEP list names the DASHBOARD range chips only, so these are NOT DONE: no PR of this round moved them into «فیلترها» (PR-3 did it on `/referrals` only).
-- `/recovery`: the Recovery Kit removal is KEEP, and the owner removed the per-invoice result card on purpose (`f9ec6f869`); it is classed NOT DONE only because no KEEP entry names it.
-- `/resellers`, `/reseller-plans`, `/reseller-tiers`: the leftovers are row-level buttons (the reseller name that opens the standing drawer, «صفحهٔ مشتری», tier names). PR-4 expected about 14 leftovers on its routes.
-- `/extra-devices`: PR-3 restored a per-row «ویرایش» button (`apps/web/src/pages/extra-devices.tsx:344`, asserted in `tests/web/catalog-marketing-parity.test.tsx`), but the fallback fixture run's DOM did not show it; UNVERIFIED until checked on a real install or against the owner's demo.
-- `/incidents/:id`: the status and severity chips on the detail head are not in the owner's demo; no PR handled them. Real gap.
-- `/users/:id`: the blocked banner is covered by a PR-1 test with a mutation check, but not visible in the fixture run (its customer is not blocked).
-- «بیشتر» menus: their contents were restored from the actions each page already had, because the demo HTML was never seen (stated in PRs #460, #462, #464). If the owner's demo shows other entries, that is not visible here.
-- No server export of the whole filtered list (no endpoint; none invented): the list «خروجی CSV» exports the visible page. Elements needing missing API data: this one only.
+## 5. «بیشتر» menus
 
-## 3. Real gaps seen in the fallback runs
+In the real demo, «بیشتر» beside a subtitle is the subtitle's expand toggle (the app's «درباره این صفحه» fold is a KEEP). A row-level «بیشتر» menu does not exist in the demo; the owner's ruling for `/resellers` created it. Page-head menus kept as before (`/payments`, `/campaigns`, `/gift-cards`, `/reminders`, `/audit-log`, `/content`, `/resellers`, `/notification-center`).
 
-Only items that point at the app, not at the old demo:
+## 6. Does NOT match the real demo, and why
 
-- `/extra-devices` and `/incidents/:id`: see above.
-- `/` (dashboard) shows three tables where the old demo has two, plus the heads «صف رسیدگی» and «وضعیت عملیاتی». The dashboard is OK in the owner's kit report, so this is most likely a post-demo addition; it is unverified without the owner's demo.
-- `/reports#tab:صورت مالی` rendered the server-rejected state in the fixture run: the fixture set has no answer for that report. A fixture gap, not an app gap; check the tab against real data.
-- `/payment-gateways/CARD_TO_CARD` renders «روش پرداخت یافت نشد»: the fixture set has no such method. Check it with the real payment methods page.
-- Everything else in the fallback runs (titles with «دادهٔ نمونه», «جزئیات» banner, pagination arrows, digit differences, tab labels) is old-demo noise.
+- `/panels`, `/panel-health`, `/panels/:id`, `/reports` «صورت مالی», `/users/:id` message/notes/history tabs: the app shows the server-rejected state because the demo's data shim has no answer for those endpoints. A data gap, not a layout gap.
+- `/reports`, `/referrals`: the demo shows the period buttons on the page; the app has them in «فیلترها» (owner ruling).
+- `/support-learning`: the demo has three state buttons (در انتظار بازبینی، تأییدشده، ردشده); the app has the «فیلترها» panel.
+- `/product-categories`, `/service-locations`, `/trials`: the app has an extra «فیلترها» button.
+- `/support`: the demo's «رفتن به تنظیمات» button is absent.
+- `/products/:id`: the app has «ارسال توضیح از تلگرام» that the demo lacks (an existing action).
+- `/tickets/:id`: the app has two extra box headings, «وضعیت» and «مسئول و اولویت».
+- `/custom-service`: the demo's «عرضه» button is for a panel that is not yet offered; the live side has no such panel here (the code path exists).
+- `/bot-buttons`: see section 4.
+- `/content`: the tool counts hidden per-template panes (see section 2).
+- Dashboard: `/` shows no difference after KEEP in the real-demo run, so «صف رسیدگی» / «وضعیت عملیاتی» are present in the real demo too. Nothing removed.
 
-## 4. Side-by-side images
+## 7. Date-time picker (section 4 of the phase)
 
-`final-sidebyside/` holds one JPEG per route from the light 1440 run (68 files, 20.7 MB, under the 25 MB limit, tool default quality 80, no re-encoding needed). Demo on the left (the OLD demo), app on the right.
+At 23:55 to 23:59 with no time chosen, tapping today rounds up inside the same day, capped at 23:59 (never 00:00). If that default is outside `min`/`max` it moves to the nearest allowed moment and the field shows it. A time the user chose is still refused outside the range. Tests in `tests/web/date-field.test.tsx`.
+
+## 8. Checks
+
+`pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm check:i18n`, `pnpm check:boundaries`, `pnpm test:web` (3931 passed), the contrast and touch-token unit tests. Mutation checks (each reverted, test failed, restored): rounding cap; min/max clamp; Enter on the row; settings `collapsible`; reports `inFilterPanel`.

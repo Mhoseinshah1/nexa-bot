@@ -39,4 +39,5 @@ export * from './schema/hosted-backups.js';
 export * from './schema/reseller-bots.js';
 export * from './schema/data-export.js';
 export * from './schema/reseller-web.js';
+export * from './schema/reseller-web-selling.js';
 export * from './schema/registry.js';

@@ -349,6 +349,11 @@ export const OWNER_ALERT_DATA_EXPORTED_CODE = 'access.data_exported';
 export const OWNER_ALERT_BULK_READ_CODE = 'access.bulk_read';
 export const BACKUP_OFFSITE_FAILED_CODE = 'backup.offsite_failed';
 export const BACKUP_OFFSITE_OK_CODE = 'backup.offsite_ok';
+/**
+ * Owner 2026-11-11 (`backup.archive_keep_on_host` off): the operations line written once per
+ * archive removed from the host because the Telegram group holds it in full. Names the run.
+ */
+export const BACKUP_ARCHIVE_REMOVED_AFTER_DELIVERY_CODE = 'backup.archive_removed_after_delivery';
 
 /**
  * PR #411: a long-running role's cached tenant no longer exists and was not known to be the
@@ -648,6 +653,9 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   recovery('backup.delivery_partial_ok', 'BACKUPS', 'backup.delivery_partial'),
   failure('backup.cleanup_failed', 'BACKUPS', 'CONDITION'),
   recovery('backup.cleanup_ok', 'BACKUPS', 'backup.cleanup_failed'),
+  // Owner 2026-11-11: an archive removed from the host because the Telegram group holds it
+  // in full (`backup.archive_keep_on_host` off). One line per removal, naming the run.
+  fact(BACKUP_ARCHIVE_REMOVED_AFTER_DELIVERY_CODE, 'BACKUPS', 'PER_OCCURRENCE'),
   failure('backup.disk_threshold_exceeded', 'BACKUPS', 'CONDITION'),
   recovery('backup.disk_threshold_ok', 'BACKUPS', 'backup.disk_threshold_exceeded'),
   failure('backup.interval_exceeded', 'BACKUPS', 'CONDITION'),

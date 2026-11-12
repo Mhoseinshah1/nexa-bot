@@ -455,6 +455,18 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * while the reseller's own preference is on.
    */
   'RESELLER_WEB_NEW_DEVICE',
+  /*
+   * PR-5, «سرویس رو به اتمام»: once per tenant-local day, the reseller's own services that
+   * have ≤ 7 days or ≤ 10 % of their traffic left. `reseller_web_daily_reports.id` is the
+   * subject; its frozen list is what is rendered. Only while the reseller's preference is on.
+   */
+  'RESELLER_WEB_EXPIRING_DIGEST',
+  /*
+   * PR-5, «گزارش روزانهٔ فروش»: once per tenant-local day, yesterday's sales (count and sum)
+   * from the monthly reseller sales tracking. `reseller_web_daily_reports.id` is the subject.
+   * Only while the reseller's preference is on (off by default).
+   */
+  'RESELLER_WEB_DAILY_SALES',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -547,6 +559,9 @@ export const CUSTOMER_NOTIFICATION_AUTOMATED: Readonly<Record<CustomerNotificati
     HOSTED_BOT_FEE_SHORT: true,
     // PR-4: the answer to a sign-in that just happened.
     RESELLER_WEB_NEW_DEVICE: false,
+    // PR-5: the daily sweeps' own clock, nobody acted then.
+    RESELLER_WEB_EXPIRING_DIGEST: true,
+    RESELLER_WEB_DAILY_SALES: true,
   };
 
 /**
@@ -782,6 +797,9 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
   HOSTED_BOT_FEE_SHORT: false,
   // PR-4: a sign-in happened; that stays true.
   RESELLER_WEB_NEW_DEVICE: false,
+  // PR-5: a frozen daily snapshot; it stays the day's report.
+  RESELLER_WEB_EXPIRING_DIGEST: false,
+  RESELLER_WEB_DAILY_SALES: false,
 };
 
 /**
@@ -890,6 +908,9 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   HOSTED_BOT_FEE_SHORT: false,
   // PR-4: a sign-in happened; that stays true.
   RESELLER_WEB_NEW_DEVICE: false,
+  // PR-5: a frozen daily snapshot; it stays the day's report.
+  RESELLER_WEB_EXPIRING_DIGEST: false,
+  RESELLER_WEB_DAILY_SALES: false,
 };
 
 /**
@@ -999,6 +1020,9 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   HOSTED_BOT_FEE_SHORT: 'bot.hosted_bot.fee_short',
   // PR-4: no values; a sign-in from a new device.
   RESELLER_WEB_NEW_DEVICE: 'bot.reseller_web.new_device',
+  // PR-5: values read at send time from the day's report row.
+  RESELLER_WEB_EXPIRING_DIGEST: 'bot.reseller_web.expiring_digest',
+  RESELLER_WEB_DAILY_SALES: 'bot.reseller_web.daily_sales',
 };
 
 /**

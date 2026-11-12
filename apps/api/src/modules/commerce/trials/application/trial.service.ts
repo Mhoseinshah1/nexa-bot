@@ -252,13 +252,24 @@ export class TrialService {
        * one offer is claimed; several come back as `CHOOSE`; none is a remembered refusal.
        */
       readonly panelId?: string;
+      /**
+       * PR-5 §5.7: a reseller's «سرویس تست» from the web panel. Counted against the reseller's
+       * daily quota in `day` (the tenant-local day, half-open) — decided under the same
+       * customer row lock as every claim — and never against their own trial allowance. Still
+       * a zero-total TRIAL order: no money, no sales credit, no referral, no cashback.
+       */
+      readonly reseller?: {
+        readonly quota: number;
+        readonly day: { readonly from: Date; readonly to: Date };
+      };
     },
   ): Promise<TrialClaimResult> {
-    const requestHash = hashRequest(
-      input.panelId === undefined
-        ? { customerId, kind: 'TRIAL' }
-        : { customerId, kind: 'TRIAL', panelId: input.panelId },
-    );
+    const requestHash = hashRequest({
+      customerId,
+      kind: 'TRIAL',
+      ...(input.panelId === undefined ? {} : { panelId: input.panelId }),
+      ...(input.reseller === undefined ? {} : { reseller: true }),
+    });
     const denial = { action: 'trial.claim', entityType: 'Customer', entityId: customerId };
     await this.authorize(scope, actor, denial);
 
@@ -297,7 +308,10 @@ export class TrialService {
           const already = await this.replay(scope, input.idempotencyKey, requestHash);
           if (already !== null) return already;
 
-          const refusal = await this.refusalBeforeWriting(scope, customerId, tx);
+          const refusal =
+            input.reseller === undefined
+              ? await this.refusalBeforeWriting(scope, customerId, tx)
+              : await this.resellerRefusal(scope, customerId, input.reseller, tx);
           if (refusal !== null) return { outcome: 'REFUSED', reason: refusal } as const;
           /*
            * The chosen panel's trial, read inside the transaction: a trial switched off, or
@@ -440,6 +454,7 @@ export class TrialService {
               productId: null,
               serviceId: service.id,
               now,
+              resellerTrial: input.reseller !== undefined,
             },
             tx,
           );
@@ -473,6 +488,7 @@ export class TrialService {
                 panelId: config.panelId,
                 durationHours: config.durationHours,
                 trafficBytes: config.trafficBytes.toString(),
+                resellerTrial: input.reseller !== undefined,
               },
               result: 'SUCCESS',
             },
@@ -545,6 +561,26 @@ export class TrialService {
     const allowance = await trialAllowanceFor(this.deps, scope, customerId, tx);
     if (allowance.used >= allowance.effectiveLimit) return 'LIMIT_REACHED';
     return null;
+  }
+
+  /**
+   * PR-5: a reseller panel trial's refusal — the customer not blocked, and today's quota not
+   * spent. Read under the customer's row lock the claim took first, so two at once count each
+   * other (the quota lock). The customer's own trial allowance is not consulted.
+   */
+  private async resellerRefusal(
+    scope: TenantContext,
+    customerId: UserId,
+    reseller: { readonly quota: number; readonly day: { readonly from: Date; readonly to: Date } },
+    tx: TransactionScope,
+  ): Promise<TrialRejection | null> {
+    const customer = await this.deps.customers.findById(scope, customerId, tx);
+    if (customer === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+    }
+    if (customer.status === 'BLOCKED') return 'CUSTOMER_BLOCKED';
+    const used = await this.deps.grants.countResellerTrials(scope, customerId, reseller.day, tx);
+    return used >= reseller.quota ? 'LIMIT_REACHED' : null;
   }
 
   /**

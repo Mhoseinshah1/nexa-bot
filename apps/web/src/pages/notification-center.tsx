@@ -33,6 +33,7 @@ import {
   Empty,
   FilterChip,
   FilterChips,
+  Pills,
   KV,
   PageHead,
   Select,
@@ -584,32 +585,27 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
       <PageHead
         title={t('web.nc_title')}
         actions={
-          <PageMoreMenu
-            items={[
-              // The mark-all that was a page-head button, behind the same condition and the
-              // same mutation.
-              ...(categories.length > 0 && inboxFeed
-                ? [
-                    {
-                      key: 'mark-all',
-                      label: t('web.nc_mark_all'),
-                      icon: 'check' as const,
-                      disabled: markAll.isPending,
-                      onSelect: () => markAll.mutate(),
-                    },
-                  ]
-                : []),
-              {
-                key: 'reread',
-                label: t('web.nc_reread'),
-                icon: 'refresh' as const,
-                onSelect: () => {
-                  refresh();
-                  void queries.invalidateQueries({ queryKey: ['ops-log'] });
+          <>
+            {/* The real demo draws mark-all-read as a head button; same condition, same mutation. */}
+            {categories.length > 0 && inboxFeed && (
+              <Button size="sm" disabled={markAll.isPending} onClick={() => markAll.mutate()}>
+                {t('web.nc_mark_all')}
+              </Button>
+            )}
+            <PageMoreMenu
+              items={[
+                {
+                  key: 'reread',
+                  label: t('web.nc_reread'),
+                  icon: 'refresh' as const,
+                  onSelect: () => {
+                    refresh();
+                    void queries.invalidateQueries({ queryKey: ['ops-log'] });
+                  },
                 },
-              },
-            ]}
-          />
+              ]}
+            />
+          </>
         }
       />
       <Disclosure size="sm" summary={t('web.nc_about_fold')}>
@@ -632,6 +628,18 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
       <div className="nc-toolbar">
         <ListFilterBar
           label={t('web.nc_title')}
+          // Owner ruling (demo parity): the demo's «خوانده‌نشده | همه» pair is on the page, in the
+          // bar's second line; the alert feeds stay in the «فیلترها» panel.
+          search={
+            <Pills<Filter>
+              value={filter}
+              onChange={setFilter}
+              items={[
+                { id: 'UNREAD', label: t('web.nc_filter_unread') },
+                { id: 'ALL', label: t('web.nc_filter_all') },
+              ]}
+            />
+          }
           filters={[
             {
               key: 'feed',

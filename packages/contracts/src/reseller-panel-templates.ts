@@ -52,4 +52,21 @@ export const RESELLER_PANEL_TEMPLATES = [
     'bot.reseller_web.new_device',
     'Reseller panel: sent once per new device or browser that signs in to the reseller panel (when «اعلان ورود جدید» is on).',
   ),
+  tpl(
+    'bot.reseller_web.expiring_digest',
+    'Reseller panel (PR-5): the daily «سرویس رو به اتمام» digest — the reseller\u2019s own services with at most 7 days or 10 % of traffic left. Sent once a day while the preference is on.',
+    [
+      ph('count', 'NUMBER', 'How many of the reseller\u2019s services are running out.'),
+      ph('list', 'STRING', 'One line per service: its username and what is left.'),
+    ],
+  ),
+  tpl(
+    'bot.reseller_web.daily_sales',
+    'Reseller panel (PR-5): the daily «گزارش روزانهٔ فروش» — yesterday\u2019s sales count and sum. Sent once a day while the preference is on.',
+    [
+      ph('date', 'DATE', 'The day the report is about (the tenant\u2019s calendar).'),
+      ph('count', 'NUMBER', 'How many sales that day.'),
+      ph('amount', 'MONEY', 'Their sum.'),
+    ],
+  ),
 ] as const;
