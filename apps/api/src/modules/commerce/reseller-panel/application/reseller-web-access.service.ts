@@ -16,6 +16,8 @@ import {
   resellerPreferencesWriteSchema,
   resellerTotpCodeRequestSchema,
   resellerWebForceLogoutRequestSchema,
+  RESELLER_SELLING_AUDIT_ACTIONS,
+  resellerTotpResetRequestSchema,
   type ActorContext,
   type AuditWriter,
   type BotInstanceId,
@@ -1064,6 +1066,59 @@ export class ResellerWebAccessService {
         tx,
       );
       return { ended };
+    });
+  }
+
+  /**
+   * PR-5 (carried): «بازنشانی ورود دومرحله‌ای» from the reseller drawer — `resellers.edit`, a
+   * reason, audited. Removes the reseller's TOTP factor (active or pending) and ends every
+   * live session, so the next sign-in is a fresh one-time link without the code step.
+   * Idempotent by its nature, as the forced sign-out: a repeat finds no factor and no session.
+   */
+  async adminResetSecondFactor(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: string,
+    input: unknown,
+  ): Promise<{ readonly reset: boolean; readonly ended: number }> {
+    await this.deps.guard.check(scope, actor, 'resellers.edit');
+    const command = resellerTotpResetRequestSchema.parse(input);
+    const tenant: TenantContext = { tenantId: scope.tenantId, botInstanceId: null };
+    return this.deps.uow.run(tenant, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(tenant, tx))) {
+        throw errors.conflict(
+          RESELLER_WEB_ERROR_CODES.UNAVAILABLE,
+          'This tenant has stopped accepting work.',
+        );
+      }
+      if (!(await this.deps.repository.lockReseller(tenant, customerId, tx))) {
+        throw errors.notFound(RESELLER_WEB_ERROR_CODES.NOT_FOUND, 'No such reseller.');
+      }
+      const reset = await this.deps.repository.deleteFactor(tenant, customerId, tx);
+      const ended = await this.deps.repository.endSessionsOf(
+        tenant,
+        { customerId, reason: 'ADMIN_FORCE_LOGOUT', now: this.deps.clock.now(), keep: null },
+        tx,
+      );
+      await this.deps.audit.record(
+        tenant,
+        actor,
+        {
+          action: RESELLER_SELLING_AUDIT_ACTIONS.TOTP_RESET,
+          entityType: 'Customer',
+          entityId: customerId,
+          before: { secondFactor: reset },
+          after: {
+            secondFactor: false,
+            ended,
+            reason: command.reason,
+            key: command.idempotencyKey,
+          },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      return { reset, ended };
     });
   }
 

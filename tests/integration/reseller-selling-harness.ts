@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
 import {
+  API_PREFIX,
   EMPTY_PRODUCT_DISPLAY,
   RESELLER_API_PREFIX,
+  SESSION_COOKIE_NAME,
   RESELLER_SESSION_COOKIE_NAME,
   money,
   type ActorContext,
@@ -83,6 +85,12 @@ export interface SellingHarness {
     key?: string,
   ): Promise<{ statusCode: number; body: string; json: () => unknown }>;
   delivered(who: UserId, productId?: ProductId): Promise<ServiceRecord>;
+  /** A Web Admin call as the owner, with a fresh admin session. */
+  admin(
+    method: string,
+    path: string,
+    payload?: unknown,
+  ): Promise<{ statusCode: number; body: string; json: () => unknown }>;
 }
 
 export const codeOf = (response: { json: () => unknown }): string | undefined =>
@@ -141,9 +149,11 @@ export function useSellingHarness(tag: string): () => SellingHarness {
     api.container.setInstallationTenant(tenantA.tenantId);
     const products = new DrizzleProductRepository(db());
     const services = new DrizzleServiceRepository(db());
-    const owner = adminActorFor(
-      await createAdmin(api.container, tenantA, { username: `${tag}-owner`, roleKeys: ['owner'] }),
-    );
+    const ownerAdmin = await createAdmin(api.container, tenantA, {
+      username: `${tag}-owner`,
+      roleKeys: ['owner'],
+    });
+    const owner = adminActorFor(ownerAdmin);
     const inject = (options: Record<string, unknown>) =>
       api.app
         .getHttpAdapter()
@@ -323,7 +333,33 @@ export function useSellingHarness(tag: string): () => SellingHarness {
       return service;
     }
 
+    let adminCookie: string | null = null;
+    async function admin(
+      method: string,
+      path: string,
+      payload?: unknown,
+    ): Promise<{ statusCode: number; body: string; json: () => unknown }> {
+      if (adminCookie === null) {
+        const login = await inject({
+          method: 'POST',
+          url: `${API_PREFIX}/auth/login`,
+          headers: { origin: ORIGIN },
+          payload: { username: ownerAdmin.username, password: ownerAdmin.password },
+        });
+        adminCookie = `${SESSION_COOKIE_NAME}=${
+          /nexa_admin_session=([^;]+)/u.exec(String(login.headers['set-cookie']))?.[1] as string
+        }`;
+      }
+      return inject({
+        method,
+        url: `${API_PREFIX}${path}`,
+        headers: { origin: ORIGIN, cookie: adminCookie },
+        ...(payload === undefined ? {} : { payload }),
+      }) as never;
+    }
+
     current = {
+      admin,
       api,
       sent,
       owner,
