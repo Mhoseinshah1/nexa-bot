@@ -176,6 +176,11 @@ export const RESELLER_PANEL_ROUTES = {
   tickets: '/tickets',
   ticket: '/tickets/:ticketId',
   ticketReplies: '/tickets/:ticketId/replies',
+  /** PR-6 «ربات اختصاصی»: the offer and the reseller's own requests (`reseller-hosted-bot.ts`). */
+  ownBot: '/own-bot',
+  ownBotRequests: '/own-bot/requests',
+  ownBotCancel: '/own-bot/requests/:requestId/cancel',
+  ownBotPay: '/own-bot/requests/:requestId/pay',
 } as const;
 
 /** `/api/admin/v1` routes of the reseller drawer (Web Admin). */

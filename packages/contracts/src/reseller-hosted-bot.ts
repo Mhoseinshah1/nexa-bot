@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { secondFactorProofSchema } from './admin-security.js';
-import type { MoneyWire } from './money.js';
-import type { HostedBotState } from './hosting.js';
+import { moneySchema, type MoneyWire } from './money.js';
+import { HOSTED_BOT_STATES, type HostedBotState } from './hosting.js';
 export * from './reseller-hosted-bot-keys.js';
 import {
   RESELLER_BOT_REJECT_REASON_MAX,
@@ -218,3 +218,61 @@ export interface ResellerBotRequestAdminResponse {
   readonly request: ResellerBotRequestAdminView;
   readonly replayed: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// HTTP (reseller side, the reseller web panel's «ربات اختصاصی»)
+// ---------------------------------------------------------------------------
+
+/**
+ * The reseller panel's request body. The idempotency key travels in the panel's
+ * `idempotency-key` header (`RESELLER_IDEMPOTENCY_HEADER`), never in the body.
+ */
+export const resellerOwnBotSubmitBodySchema = resellerBotSubmitRequestSchema.omit({
+  idempotencyKey: true,
+});
+export type ResellerOwnBotSubmitBody = z.infer<typeof resellerOwnBotSubmitBodySchema>;
+
+const isoInstant = z.string();
+
+export const resellerBotTimelineEntrySchema = z.object({
+  event: z.enum(RESELLER_BOT_TIMELINE_EVENTS),
+  at: isoInstant,
+  amount: moneySchema.nullable(),
+  period: z.number().int().nullable(),
+});
+
+/** `ResellerBotRequestView` on the wire, for the panel to parse every answer by. */
+export const resellerBotRequestViewSchema = z.object({
+  id: z.string(),
+  number: z.string(),
+  state: z.enum(RESELLER_BOT_REQUEST_STATES),
+  botUsername: z.string(),
+  tokenMasked: z.string(),
+  domain: z.string().nullable(),
+  fee: moneySchema,
+  createdAt: isoInstant,
+  decidedAt: isoInstant.nullable(),
+  rejectReason: z.string().nullable(),
+  cancelledAt: isoInstant.nullable(),
+  hostedBot: z.object({ linked: z.boolean(), state: z.enum(HOSTED_BOT_STATES).nullable() }),
+  billing: z.object({
+    state: z.enum(RESELLER_BOT_BILLING_STATES),
+    paidThrough: isoInstant.nullable(),
+    stopsAt: isoInstant.nullable(),
+  }),
+  timeline: z.array(resellerBotTimelineEntrySchema),
+});
+
+export const resellerBotOfferViewSchema = z.object({
+  offered: z.boolean(),
+  fee: moneySchema.nullable(),
+  graceDays: z.number().int(),
+  canRequest: z.boolean(),
+});
+
+/** `GET own-bot`: the offer and the reseller's own requests, newest first. */
+export const resellerOwnBotResponseSchema = z.object({
+  offer: resellerBotOfferViewSchema,
+  requests: z.array(resellerBotRequestViewSchema),
+});
+export type ResellerOwnBotResponse = z.infer<typeof resellerOwnBotResponseSchema>;
