@@ -19,6 +19,7 @@ import {
   type TenantContext,
   type UnitOfWork,
   type UserId,
+  type ProviderSubscriptionFile,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type {
@@ -148,6 +149,20 @@ export type SubscriptionFilesResult =
   | { readonly outcome: 'NOT_FOUND' };
 
 /**
+ * PR-4: what `fetch` answers — the files themselves, in memory, for one response; or the same
+ * refusals `send` answers before anything is sent.
+ */
+export type SubscriptionFilesFetch =
+  | {
+      readonly outcome: 'FILES';
+      readonly files: readonly ProviderSubscriptionFile[];
+      readonly failed: number;
+    }
+  | { readonly outcome: 'RATE_LIMITED'; readonly retryAfterSeconds: number }
+  | { readonly outcome: 'UNAVAILABLE' }
+  | { readonly outcome: 'NOT_FOUND' };
+
+/**
  * Whether the panel hands over files NOW: its type declares them and, for a type whose
  * files are announced per panel, its latest health check announced them.
  */
@@ -260,6 +275,35 @@ export class SubscriptionFileService {
     return this.fetchAndSend(scope, service, input.chatId, input.botInstanceId);
   }
 
+  /**
+   * PR-4 (reseller web panel, «دانلود» / «دانلود همه»): the files of one of the customer's own
+   * services, fetched NOW through exactly the rules `send` applies — the permission, the
+   * ownership by `getForCustomer`, the state, the panel's operability and URL policy, the
+   * adapter's capability, the operator's per-panel switch and the tenant's probe budget — and
+   * handed to the caller IN MEMORY, for one HTTP response. Nothing here stores them: not a row,
+   * an audit entry, an event, a log line or a file. The caller holds the bytes only while it
+   * writes the response.
+   */
+  async filesInMemory(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly customerId: UserId; readonly serviceId: string },
+  ): Promise<SubscriptionFilesFetch> {
+    await this.deps.guard.check(scope, actor, SUBSCRIPTION_FILES_PERMISSION);
+    let service: ServiceRecord;
+    try {
+      service = await this.deps.services.getForCustomer(scope, input.customerId, input.serviceId);
+    } catch (error) {
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
+        return { outcome: 'NOT_FOUND' };
+      }
+      throw error;
+    }
+    const fetched = await this.fetchFiles(scope, service);
+    if (fetched.outcome !== 'FILES') return fetched;
+    return { outcome: 'FILES', files: fetched.files, failed: fetched.failed };
+  }
+
   /** The shared half of `send` and `sendAfterDelivery`: decide, read, send. */
   private async fetchAndSend(
     scope: TenantContext,
@@ -267,8 +311,86 @@ export class SubscriptionFileService {
     chatId: string,
     botInstanceId: BotInstanceId,
   ): Promise<SubscriptionFilesResult> {
-    if (!SUBSCRIPTION_FILE_STATES.includes(service.state)) return { outcome: 'UNAVAILABLE' };
+    const fetched = await this.fetchFiles(scope, service);
+    if (fetched.outcome !== 'FILES') return fetched;
+    const view = fetched.view;
+    /*
+     * Round N (F2): the files as ALBUMS, in the panel's order, each with the panel's own
+     * caption. `planMediaBatches` cuts the list into the fewest consecutive albums Telegram
+     * accepts (every file here is a document, so one album class; at most 10 per album); a
+     * batch of one — the only thing that cannot be an album — goes by `sendFile`, in its
+     * place. The first batch Telegram does not certainly accept stops the delivery: nothing
+     * after it is sent and nothing is retried, exactly as the one-by-one loop did.
+     */
+    const files = fetched.files;
+    /*
+     * R11 A4: the captions' link variables ({sub_link}, {subscription_url}) read a service's
+     * `subscriptionUrl`. On a «فقط فایل، بدون لینک ساب» panel the caption is built from a
+     * service WITHOUT it, so a template that names the link renders that line absent — the
+     * renderer drops a line made only of absent facts — and a caption can never carry it.
+     */
+    const captionService: ServiceRecord =
+      view?.panel.filesOnlyDelivery === true ? { ...service, subscriptionUrl: null } : service;
+    const captionFor = await this.captionPlan(scope, captionService, files);
+    const kinds = files.map(() => 'DOCUMENT' as const);
+    let sent = 0;
+    for (const batch of planMediaBatches(kinds)) {
+      const items = batch.map((index) => {
+        const file = files[index] as (typeof files)[number];
+        return {
+          kind: 'DOCUMENT' as const,
+          source: {
+            kind: 'BYTES' as const,
+            bytes: file.bytes,
+            fileName: file.fileName,
+            mimeType: file.mediaType,
+          },
+          ...captionFor(index, file),
+        };
+      });
+      const sendMediaGroup = this.deps.messenger.sendMediaGroup;
+      const first = items[0];
+      let result: CustomerSendResult;
+      if (items.length > 1 && sendMediaGroup !== undefined) {
+        result = await sendMediaGroup.call(this.deps.messenger, scope, {
+          chatId,
+          botInstanceId,
+          items,
+        });
+      } else if (items.length === 1 && first !== undefined) {
+        result = await this.deps.messenger.sendFile(scope, { chatId, botInstanceId, ...first });
+      } else {
+        // A stand-in with no album method: the same files, one by one, in the same order.
+        result = { outcome: 'DELIVERED' };
+        for (const item of items) {
+          result = await this.deps.messenger.sendFile(scope, { chatId, botInstanceId, ...item });
+          if (result.outcome !== 'DELIVERED') break;
+          sent += 1;
+        }
+        if (result.outcome !== 'DELIVERED') return { outcome: 'STOPPED', sent };
+        continue;
+      }
+      // Telegram declining, or answering nobody knows what: stop, and retry nothing.
+      if (result.outcome !== 'DELIVERED') return { outcome: 'STOPPED', sent };
+      sent += items.length;
+    }
+    return { outcome: 'SENT', sent, failed: fetched.failed };
+  }
 
+  /** The rules both halves share, then the panel's answer, in memory. */
+  private async fetchFiles(
+    scope: TenantContext,
+    service: ServiceRecord,
+  ): Promise<
+    | Exclude<SubscriptionFilesResult, { readonly outcome: 'SENT' | 'STOPPED' }>
+    | {
+        readonly outcome: 'FILES';
+        readonly files: readonly ProviderSubscriptionFile[];
+        readonly failed: number;
+        readonly view: NonNullable<Awaited<ReturnType<SubscriptionFileDeps['panels']['find']>>>;
+      }
+  > {
+    if (!SUBSCRIPTION_FILE_STATES.includes(service.state)) return { outcome: 'UNAVAILABLE' };
     const view = await this.deps.panels.find(scope, service.panelId);
     const operable = decideOperability({
       panel:
@@ -333,68 +455,7 @@ export class SubscriptionFileService {
       return { outcome: 'UNAVAILABLE' };
     }
     if (!fetched.found || fetched.files.length === 0) return { outcome: 'UNAVAILABLE' };
-
-    /*
-     * Round N (F2): the files as ALBUMS, in the panel's order, each with the panel's own
-     * caption. `planMediaBatches` cuts the list into the fewest consecutive albums Telegram
-     * accepts (every file here is a document, so one album class; at most 10 per album); a
-     * batch of one — the only thing that cannot be an album — goes by `sendFile`, in its
-     * place. The first batch Telegram does not certainly accept stops the delivery: nothing
-     * after it is sent and nothing is retried, exactly as the one-by-one loop did.
-     */
-    const files = fetched.files;
-    /*
-     * R11 A4: the captions' link variables ({sub_link}, {subscription_url}) read a service's
-     * `subscriptionUrl`. On a «فقط فایل، بدون لینک ساب» panel the caption is built from a
-     * service WITHOUT it, so a template that names the link renders that line absent — the
-     * renderer drops a line made only of absent facts — and a caption can never carry it.
-     */
-    const captionService: ServiceRecord =
-      view?.panel.filesOnlyDelivery === true ? { ...service, subscriptionUrl: null } : service;
-    const captionFor = await this.captionPlan(scope, captionService, files);
-    const kinds = files.map(() => 'DOCUMENT' as const);
-    let sent = 0;
-    for (const batch of planMediaBatches(kinds)) {
-      const items = batch.map((index) => {
-        const file = files[index] as (typeof files)[number];
-        return {
-          kind: 'DOCUMENT' as const,
-          source: {
-            kind: 'BYTES' as const,
-            bytes: file.bytes,
-            fileName: file.fileName,
-            mimeType: file.mediaType,
-          },
-          ...captionFor(index, file),
-        };
-      });
-      const sendMediaGroup = this.deps.messenger.sendMediaGroup;
-      const first = items[0];
-      let result: CustomerSendResult;
-      if (items.length > 1 && sendMediaGroup !== undefined) {
-        result = await sendMediaGroup.call(this.deps.messenger, scope, {
-          chatId,
-          botInstanceId,
-          items,
-        });
-      } else if (items.length === 1 && first !== undefined) {
-        result = await this.deps.messenger.sendFile(scope, { chatId, botInstanceId, ...first });
-      } else {
-        // A stand-in with no album method: the same files, one by one, in the same order.
-        result = { outcome: 'DELIVERED' };
-        for (const item of items) {
-          result = await this.deps.messenger.sendFile(scope, { chatId, botInstanceId, ...item });
-          if (result.outcome !== 'DELIVERED') break;
-          sent += 1;
-        }
-        if (result.outcome !== 'DELIVERED') return { outcome: 'STOPPED', sent };
-        continue;
-      }
-      // Telegram declining, or answering nobody knows what: stop, and retry nothing.
-      if (result.outcome !== 'DELIVERED') return { outcome: 'STOPPED', sent };
-      sent += items.length;
-    }
-    return { outcome: 'SENT', sent, failed: fetched.failed };
+    return { outcome: 'FILES', files: fetched.files, failed: fetched.failed, view };
   }
 
   /**

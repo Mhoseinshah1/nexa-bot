@@ -88,6 +88,9 @@ import { MiniAppServicesController } from './surfaces/miniapp/services.controlle
 import { MiniAppAccountController } from './surfaces/miniapp/account.controller.js';
 import { MiniAppNotificationsController } from './surfaces/miniapp/notifications.controller.js';
 import { MiniAppStaticController } from './surfaces/miniapp/static.controller.js';
+import { ResellerAccessController } from './surfaces/reseller/access.controller.js';
+import { ResellerServicesController } from './surfaces/reseller/services.controller.js';
+import { ResellerAccountController } from './surfaces/reseller/account.controller.js';
 import { CorrelationMiddleware } from './surfaces/web/correlation.middleware.js';
 import { securityHeaders } from './surfaces/web/security-headers.middleware.js';
 import { DomainErrorFilter } from './surfaces/web/error.filter.js';
@@ -249,6 +252,18 @@ export class AppModule implements NestModule {
       MiniAppAccountController as never,
       MiniAppNotificationsController as never,
       MiniAppStaticController as never,
+    );
+
+    /*
+     * PR-4: the reseller web panel's API (`/api/reseller/v1`). Always registered and inert
+     * while the tenant's `reseller_web_panel` flag is off: every route then answers
+     * `reseller_web.unavailable` (404) before a session is looked at. Its own cookie, never
+     * the Web Admin's.
+     */
+    controllers.push(
+      ResellerAccessController as never,
+      ResellerServicesController as never,
+      ResellerAccountController as never,
     );
 
     return {

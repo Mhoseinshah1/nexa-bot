@@ -167,6 +167,7 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES: Readonly<Record<CustomerNotificat
     RESELLER_REQUEST_DECISION: 'web.pay_notice_reseller_request_decision',
     HOSTED_BOT_ACTIVATION_LINK: 'web.pay_notice_hosted_bot_activation_link',
     HOSTED_BOT_FEE_SHORT: 'web.pay_notice_hosted_bot_fee_short',
+    RESELLER_WEB_NEW_DEVICE: 'web.pay_notice_reseller_web_new_device',
   };
 
 /**

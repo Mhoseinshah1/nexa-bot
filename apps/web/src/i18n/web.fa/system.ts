@@ -273,6 +273,7 @@ export const WEB_FA_SYSTEM = {
   'web.secret_purpose_backup_password': 'رمز بکاپ',
   'web.secret_purpose_gift_card_export': 'کلید خروجی کارت هدیه',
   'web.secret_purpose_hosting_totp': 'رمز ورود دومرحله‌ای پنل سازندگان',
+  'web.secret_purpose_reseller_web_totp': 'رمز ورود دومرحله‌ای پنل وب نماینده',
   'web.secret_purpose_hosted_archive_password': 'رمز بکاپ ربات‌های میزبانی‌شده',
   'web.secret_purpose_reseller_bot_token': 'توکن ربات اختصاصی نماینده‌ها',
   'web.secret_purpose_reseller_activation_link': 'لینک فعال‌سازی ربات اختصاصی نماینده‌ها',

@@ -166,6 +166,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
     label: 'ربات اختصاصی نماینده',
     prefixes: ['bot.hosted_bot.'],
   },
+  // PR-4: «پنل نماینده».
+  { id: 'reseller_web', label: 'پنل وب نماینده', prefixes: ['bot.reseller_web.'] },
   {
     id: 'admin',
     label: 'مدیریت در تلگرام — عمومی',
@@ -1072,6 +1074,27 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.reseller_request.submitted': [
     'درخواست نمایندگی ثبت شد',
     'پس از زدن «ارسال»: «درخواست شما ثبت شد».',
+  ],
+  'bot.reseller_web.open_button': [
+    'دکمهٔ ورود به پنل وب',
+    'زیر پیام بخش نمایندگی و کیف پول نمایندهٔ فعال، وقتی پنل وب نماینده روشن است.',
+  ],
+  'bot.reseller_web.link': [
+    'لینک یک‌بارمصرف ورود به پنل وب',
+    'پس از زدن «ورود به پنل وب»؛ لینک ده دقیقه و فقط یک بار باز می‌شود.',
+  ],
+  'bot.reseller_web.link_button': ['دکمهٔ بازکردن پنل وب', 'دکمهٔ لینک زیر پیام لینک یک‌بارمصرف.'],
+  'bot.reseller_web.link_rate_limited': [
+    'محدودیت دریافت لینک ورود',
+    'وقتی نماینده در یک ساعت بیش از پنج لینک ورود خواسته است؛ لینکی ساخته نمی‌شود.',
+  ],
+  'bot.reseller_web.unavailable': [
+    'پنل وب در دسترس نیست',
+    'وقتی پنل وب خاموش است، نماینده فعال نیست یا نشانی وب ربات تنظیم نشده است.',
+  ],
+  'bot.reseller_web.new_device': [
+    'اعلان ورود از دستگاه جدید',
+    'یک بار برای هر دستگاه یا مرورگر تازه‌ای که وارد پنل وب نماینده می‌شود (اگر «اعلان ورود جدید» روشن باشد).',
   ],
   'bot.reseller_request.already_reseller': [
     'مشتری از قبل نماینده است',

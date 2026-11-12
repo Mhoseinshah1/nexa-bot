@@ -40,6 +40,7 @@ import {
   type ResellerTierProductPricesWriteResponse,
   type ResellerTierResponse,
   type ResellerTierSummaryResponse,
+  type ResellerWebPanelSummary,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { authenticateAdmin } from './authenticated-request.js';
@@ -257,6 +258,27 @@ export class ResellersController {
       },
     });
     return { reseller: toResellerSummary(reseller) };
+  }
+
+  /** PR-4: the drawer's web-panel last sign-in line (`resellers.view`). */
+  @Get('resellers/:customerId/web-panel')
+  async webPanel(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+  ): Promise<ResellerWebPanelSummary> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.resellerWeb.access.adminSummary(scope, actor, customerId);
+  }
+
+  /** PR-4: the drawer's forced sign-out of every device — `resellers.edit`, a reason, audited. */
+  @Post('resellers/:customerId/web-panel/force-logout')
+  async webPanelForceLogout(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+    @Body() body: unknown,
+  ): Promise<{ ended: number }> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.resellerWeb.access.adminForceLogout(scope, actor, customerId, body);
   }
 
   @Get('reseller-tiers/:id/history')

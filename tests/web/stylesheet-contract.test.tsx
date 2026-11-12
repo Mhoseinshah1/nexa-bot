@@ -98,6 +98,7 @@ describe('the split stylesheet', () => {
       './styles/pages/demo-bot.css',
       './styles/pages/hosting.css',
       './styles/pages/data-export.css',
+      './styles/pages/reseller.css',
       './styles/print.css',
     ]);
     expect(CSS).not.toMatch(/@import/);

@@ -565,6 +565,7 @@ export const WEB_FA_PAYMENTS_2 = {
   'web.pay_notice_reseller_request_decision': 'نتیجهٔ درخواست نمایندگی',
   'web.pay_notice_hosted_bot_activation_link': 'لینک فعال‌سازی ربات اختصاصی',
   'web.pay_notice_hosted_bot_fee_short': 'کمبود موجودی برای هزینهٔ ربات اختصاصی',
+  'web.pay_notice_reseller_web_new_device': 'ورود تازه به پنل نماینده',
   'web.pay_provider_pending': 'در انتظار',
   'web.pay_provider_processing': 'در حال پردازش',
   'web.pay_provider_completed': 'تکمیل‌شده',

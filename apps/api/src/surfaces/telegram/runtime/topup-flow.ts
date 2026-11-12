@@ -1,5 +1,6 @@
 // The wallet screen and topping it up.
 // Moved verbatim out of bot-runtime.ts; BotRuntime keeps a forwarder for every one a router calls.
+import { openButton } from './reseller-web-flow.js';
 import {
   type ActorContext,
   type BotInstanceId,
@@ -261,6 +262,8 @@ export async function walletBalance(
           ]
         : []),
       ...(giftCards ? [{ ...inlineLabel('wallet.gift_card'), data: GIFT_CARD_CALLBACK_DATA }] : []),
+      // PR-4: an ACTIVE reseller's «ورود به پنل وب», while the panel is switched on.
+      ...(reseller === null ? [] : await openButton(rt, scope, customer)),
       /*
        * NEXA v095 PR-4 F (owner): neither «📱 تأیید شماره تلفن» nor «📜 تراکنش‌ها» is on this
        * page any more. The wallet history itself stays (`walletHistory`, its `wh:` pages); a

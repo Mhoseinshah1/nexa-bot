@@ -102,6 +102,9 @@ export * from './tickets.js';
 export * from './reseller-requests.js';
 export * from './reseller-hosted-bot.js';
 export * from './miniapp.js';
+// PR-4: the reseller web panel (`/r/…`, `/api/reseller/v1`).
+export * from './reseller-panel.js';
+export * from './reseller-panel-templates.js';
 // Round N, C1: campaigns composing the pricing rules, the audience and the mass actions.
 export * from './campaigns.js';
 export * from './payment-receipts.js';

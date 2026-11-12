@@ -122,6 +122,8 @@ export const TEMPLATE_CATEGORY_PREFIXES: Readonly<Record<TemplateCategory, reado
     'bot.reseller_request.',
     // Reseller-phase PR-6: the dedicated bot's activation link and its fee notice.
     'bot.hosted_bot.',
+    // PR-4: the reseller web panel's way in and its new-device notice.
+    'bot.reseller_web.',
     'bot.incident.',
     'bot.broadcast.',
     'bot.marketing.',

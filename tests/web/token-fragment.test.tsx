@@ -70,6 +70,61 @@ describe('the address fragment at module load', () => {
   });
 });
 
+describe('the reseller panel’s one-time link', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+  afterEach(() => {
+    visit('/');
+  });
+
+  const LINK_TOKEN = 'r'.repeat(43);
+
+  it('/r/login#token= is captured at start-up even after the router has rewritten the address', async () => {
+    visit(`/r/login#token=${LINK_TOKEN}`);
+    await import('../../apps/web/src/initial-fragment');
+    // Importing the root pulls in the whole app (router included), as the browser does.
+    const { takeToken } = await import('../../apps/web/src/root');
+    window.history.replaceState(null, '', '/r/login');
+    expect(takeToken()).toEqual({ token: LINK_TOKEN, alreadyOpened: false });
+    expect(window.location.hash).toBe('');
+    expect(JSON.stringify(window.history.state)).not.toContain(LINK_TOKEN);
+  });
+
+  it('a refresh of /r/login after the link was read says it was already opened', async () => {
+    visit('/r/login', { nexaIndex: 0, nexaFragmentTaken: true });
+    await import('../../apps/web/src/initial-fragment');
+    const { takeToken } = await import('../../apps/web/src/root');
+    expect(takeToken()).toEqual({ token: null, alreadyOpened: true });
+  });
+
+  it('Root hands the panel its login page for /r/login and never the Web Admin', async () => {
+    visit(`/r/login#token=${LINK_TOKEN}`);
+    await import('../../apps/web/src/initial-fragment');
+    const { Root } = await import('../../apps/web/src/root');
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ state: 'ACTIVE', expiresAt: 'x' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <Root />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/api/reseller/v1/auth/exchange');
+    expect(JSON.parse(String(init.body))).toEqual({ token: LINK_TOKEN });
+    vi.unstubAllGlobals();
+  });
+});
+
 describe('the pages for an opened link', () => {
   function wrap(node: React.ReactNode) {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

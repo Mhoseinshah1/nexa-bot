@@ -2399,8 +2399,15 @@
     {
       "idx": 342,
       "version": "7",
-      "when": 1794437713515,
-      "tag": "0342_reseller_bots",
+      "when": 1794433998168,
+      "tag": "0342_reseller_web_panel",
+      "breakpoints": true
+    },
+    {
+      "idx": 343,
+      "version": "7",
+      "when": 1794445439585,
+      "tag": "0343_reseller_bots",
       "breakpoints": true
     }
   ]

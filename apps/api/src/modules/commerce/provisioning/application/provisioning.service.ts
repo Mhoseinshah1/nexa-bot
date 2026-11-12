@@ -820,6 +820,22 @@ export class ProvisioningService {
   }
 
   /**
+   * PR-4 (reseller web panel, «سرویس‌های من»): every service the customer's own list shows —
+   * the SAME `listedForCustomer` predicate as the bot's pages and their count — newest first,
+   * up to `cap`. The panel filters, searches and pages these itself; ownership is the query's.
+   */
+  async listedForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    cap: number,
+  ): Promise<{ readonly items: readonly ServiceRecord[]; readonly count: number }> {
+    return this.deps.services.pageForCustomer(scope, customerId, {
+      number: 1,
+      size: Math.max(1, Math.trunc(cap)),
+    });
+  }
+
+  /**
    * R6 item 3: the receiving customer's own serving count and nearest deadline, for the
    * /start greeting. Read at send time for the customer the update came from — never for
    * anybody else — and never stored.

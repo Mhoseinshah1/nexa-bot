@@ -85,6 +85,11 @@
  * `hosted_bot_backup_policies` row in the INSTALLATION tenant (never in the hosted tenant's
  * own `backup_archive_passwords`, which its owner's backup page writes); the entity is the
  * policy row's id. Never returned by any response once stored.
+ *
+ * `reseller_web.totp_secret` is a reseller's optional RFC 6238 secret for the reseller web
+ * panel (PR-4, `reseller_web_totp_factors`), separate from both admin factors so a secret moved
+ * between the tables fails authentication; the entity is the factor row's id. Declared with its
+ * producer, `ResellerWebAccessService.enrolTotp`.
  */
 export const SECRET_PURPOSES = [
   'bot_instance.token',
@@ -107,6 +112,7 @@ export const SECRET_PURPOSES = [
   // issued for it, held only so the notification lane can send it to the reseller.
   'hosting.reseller_bot_token',
   'hosting.reseller_activation_link',
+  'reseller_web.totp_secret',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 

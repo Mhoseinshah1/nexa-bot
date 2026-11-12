@@ -260,6 +260,21 @@ export default tseslint.config(
     },
   },
 
+  // PR-4: the reseller panel's service worker, served as written (no build step), so it is a
+  // classic script in the worker's own global scope rather than a module of the page.
+  {
+    files: ['apps/web/public/**/*.js'],
+    languageOptions: {
+      sourceType: 'script',
+      globals: {
+        self: 'readonly',
+        caches: 'readonly',
+        fetch: 'readonly',
+        URL: 'readonly',
+      },
+    },
+  },
+
   {
     files: ['apps/web/**/*.{ts,tsx}'],
     languageOptions: {
