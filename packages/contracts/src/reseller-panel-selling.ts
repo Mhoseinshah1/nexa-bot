@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { moneySchema } from './money.js';
 import { miniAppProductSchema } from './miniapp.js';
-import { resellerServiceRowSchema } from './reseller-panel.js';
+import { resellerServiceRowSchema, resellerServicesResponseSchema } from './reseller-panel.js';
 
 /**
  * The reseller web panel's selling half (phase «پنل نماینده», PR-5 §5.5–§5.8): buying one or
@@ -290,6 +290,15 @@ export const resellerClientServicesResponseSchema = z.object({
 });
 export type ResellerClientServicesResponse = z.infer<typeof resellerClientServicesResponseSchema>;
 
+/**
+ * PR-5: «سرویس‌های من» as the selling half answers it — each row with its auto-renew switch, so
+ * the page reads no switch per row. A superset of PR-4's `resellerServicesResponseSchema`.
+ */
+export const resellerSellingServicesResponseSchema = resellerServicesResponseSchema.extend({
+  items: z.array(resellerServiceRowSchema.extend({ autoRenew: resellerAutoRenewSchema })),
+});
+export type ResellerSellingServicesResponse = z.infer<typeof resellerSellingServicesResponseSchema>;
+
 export const resellerServiceClientWriteSchema = z.object({ clientId: uuid.nullable() });
 
 export const resellerRenewAllQuoteSchema = z.object({
@@ -309,6 +318,16 @@ export const resellerRenewAllQuoteSchema = z.object({
   ),
 });
 export type ResellerRenewAllQuote = z.infer<typeof resellerRenewAllQuoteSchema>;
+/**
+ * «تمدید همه», confirmed: the quote the reseller agreed to — each service renewed and the price
+ * it was shown at. A quote is honoured, never re-priced: if the set of services or any price
+ * differs when the renewals are drafted, nothing is paid (`commerce.reseller_terms_changed`).
+ * At most the panel's services cap (`RESELLER_WEB_SERVICES_CAP`, 5000).
+ */
+export const resellerRenewAllRequestSchema = z.object({
+  items: z.array(z.object({ serviceId: z.string().min(1), price: moneySchema })).max(5000),
+});
+export type ResellerRenewAllRequest = z.infer<typeof resellerRenewAllRequestSchema>;
 export const RESELLER_RENEW_ITEM_STATUSES = ['RENEWED', 'FAILED', 'SKIPPED'] as const;
 export const resellerRenewAllResultSchema = z.object({
   items: z.array(
