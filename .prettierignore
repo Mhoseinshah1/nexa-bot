@@ -13,3 +13,6 @@ docs/design/mini-app/project
 scripts/claude/fixtures/renumber-migration
 # The owner-approved v0.9.5 demo, kept byte for byte (2026-11-02)
 docs/web-redesign/v095/approved-demo.html
+
+# The owner-approved reseller-panel demo, kept byte for byte (2026-11-11)
+docs/reseller-panel/approved-demo.dc.html

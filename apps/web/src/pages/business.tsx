@@ -915,7 +915,8 @@ export function ReportsPage({
       <Card className="report-range-card">
         {/* The intro is one muted line over the range, no longer a subtitle under the title. */}
         <p className="muted small">{t('web.report_page_intro')}</p>
-        <RangePicker route={route} selection={selection} />
+        {/* Owner ruling (demo parity): the period lives in the filters panel, as on /referrals and the dashboard. */}
+        <RangePicker route={route} selection={selection} inFilterPanel="THIS_MONTH" />
       </Card>
       <Tabs
         value={tab}

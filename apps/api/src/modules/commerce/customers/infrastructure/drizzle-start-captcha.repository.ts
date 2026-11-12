@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import type { StartCaptchaState, TenantContext } from '@nexa/contracts';
+import type { StartCaptchaQuestionKind, StartCaptchaState, TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -19,10 +19,14 @@ function toRecord(row: typeof customerCaptchas.$inferSelect): StartCaptchaRecord
     customerId: row.customerId,
     state: row.state as StartCaptchaState,
     challengeId: row.challengeId,
+    kind: row.kind as StartCaptchaQuestionKind,
     operandA: row.operandA,
     operandB: row.operandB,
     options: row.options,
     answerIndex: row.answerIndex,
+    answerText: row.answerText,
+    renderSeed: row.renderSeed,
+    refreshes: row.refreshes,
     attempts: row.attempts,
     issuedAt: row.issuedAt,
     expiresAt: row.expiresAt,
@@ -34,6 +38,9 @@ function toRecord(row: typeof customerCaptchas.$inferSelect): StartCaptchaRecord
 function challengeColumns(challenge: StartCaptchaChallenge) {
   return {
     challengeId: challenge.challengeId,
+    kind: challenge.kind,
+    answerText: challenge.answerText,
+    renderSeed: challenge.renderSeed,
     operandA: challenge.operandA,
     operandB: challenge.operandB,
     options: [...challenge.options],
@@ -125,6 +132,7 @@ export class DrizzleStartCaptchaRepository implements StartCaptchaRepository {
       .set({
         ...challengeColumns(next.challenge),
         attempts: next.attempts,
+        refreshes: next.refreshes,
         issuedAt: next.issuedAt,
         expiresAt: next.expiresAt,
         lockedUntil: next.lockedUntil,

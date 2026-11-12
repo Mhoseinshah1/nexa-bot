@@ -9,6 +9,7 @@ import { CLIENT_APP_PLATFORMS } from './client-apps.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
 import { GIFT_CARD_CODE_INPUT_MAX_LENGTH } from './gift-cards.js';
 import { QR_PAYLOAD_KINDS } from './panel-qr.js';
+import { START_CAPTCHA_QUESTION_KINDS } from './anti-abuse.js';
 
 /**
  * The customer's Telegram Mini App (Round 9, C5): its paths, its wire shapes and its bounds.
@@ -90,6 +91,14 @@ export const MINIAPP_ROUTES = {
   me: '/me',
   gateCheck: '/gate/check',
   termsAccept: '/terms/accept',
+  /**
+   * `captcha.kind` IMAGE_NUMBER: the PNG of the session's pending question (`GET`, never
+   * cached, refused without a session), the typed answer, and a new picture. The other kinds
+   * are answered in the chat.
+   */
+  captchaImage: '/captcha/image',
+  captchaAnswer: '/captcha/answer',
+  captchaRefresh: '/captcha/refresh',
   /**
    * V099 «انتخاب سرور در خرید»: the servers (panels) a customer may buy on, and whether the
    * mini app draws the server step at all (`sales.server_selection`).
@@ -232,7 +241,21 @@ export const miniAppMeResponseSchema = z.object({
   gate: z
     .discriminatedUnion('kind', [
       z.object({ kind: z.literal('BLOCKED') }),
-      z.object({ kind: z.literal('CAPTCHA') }),
+      z.object({
+        kind: z.literal('CAPTCHA'),
+        /**
+         * The pending question, so the mini app can draw a picture question's image and digit
+         * input; absent from a server that predates it. `EXPIRED` is renewed by the next
+         * `captchaRefresh`; `LOCKED` is a cooldown. Only `IMAGE_NUMBER` is answered here.
+         */
+        question: z
+          .object({
+            kind: z.enum(START_CAPTCHA_QUESTION_KINDS),
+            state: z.enum(['CURRENT', 'EXPIRED', 'LOCKED']),
+            refreshesLeft: z.number().int().nonnegative(),
+          })
+          .optional(),
+      }),
       z.object({ kind: z.literal('CHANNELS'), channels: z.array(channelSchema) }),
       z.object({ kind: z.literal('TERMS'), terms: termsSchema }),
       z.object({ kind: z.literal('PHONE') }),
@@ -270,6 +293,25 @@ export const miniAppMeResponseSchema = z.object({
   notifications: z.object({ unreadCount: z.number().int().nonnegative() }).nullable().default(null),
 });
 export type MiniAppMeResponse = z.infer<typeof miniAppMeResponseSchema>;
+
+/** A typed answer to the picture question: the digits as the customer wrote them. */
+export const miniAppCaptchaAnswerRequestSchema = z.object({ text: z.string().min(1).max(64) });
+export type MiniAppCaptchaAnswerRequest = z.infer<typeof miniAppCaptchaAnswerRequestSchema>;
+
+/**
+ * What an answer or a new-picture request did, with the customer's state after it: `PASSED`
+ * (the gate no longer holds them), `WRONG` (an attempt was spent, a new picture is asked),
+ * `RENEWED` (the question had expired), `REFRESHED` (a new picture, nothing spent), `LOCKED`
+ * (a cooldown of `minutes`), `CURRENT` (nothing changed: not an answer, a stale request, or no
+ * swap left) or `FREE`. `remaining` is the wrong answers still allowed.
+ */
+export const miniAppCaptchaResultSchema = z.object({
+  result: z.enum(['PASSED', 'WRONG', 'RENEWED', 'REFRESHED', 'LOCKED', 'CURRENT', 'FREE']),
+  remaining: z.number().int().nonnegative().nullable(),
+  minutes: z.number().int().positive().nullable(),
+  me: miniAppMeResponseSchema,
+});
+export type MiniAppCaptchaResult = z.infer<typeof miniAppCaptchaResultSchema>;
 
 /**
  * Round 11, B6: the customer's own expiry / volume reminder switch.

@@ -4679,7 +4679,10 @@ money and sends no customer message; the owner decides otherwise.
 - **OQ-D5-05 — captcha difficulty and accessibility.** A sum of two digits with four answer
   buttons, Latin digits (the owner's R6 rule keeps Persian digits to the two greetings), defaults
   300 s / 3 answers / 600 s cooldown, no third-party service. Whether a harder or a different
-  challenge is wanted is the owner's call.
+  challenge is wanted is the owner's call. Settled for the kinds: `captcha.kind` (MATH default,
+  IMAGE_NUMBER, EMOJI, WORD_NUMBER, RANDOM). Decisions taken: typed text under a picture that is not
+  four digits once Persian/Arabic-Indic digits and spaces are normalised is not an answer and spends
+  no attempt; the mini app answers only IMAGE_NUMBER (the other kinds point to the chat).
 - **OQ-D5-06 — a held customer's referral attribution, and a manual "pass".** Default: the
   attribution is written at registration as always (the money is guarded by (b)); no operator
   tool passes one customer — turning `start_captcha` off frees everybody waiting.

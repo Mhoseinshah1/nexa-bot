@@ -180,6 +180,119 @@ export function RecoveryPage({
 
   const runs = history.data?.runs ?? [];
   const nextCursor = history.data?.nextCursor ?? null;
+  /*
+   * Owner 2026-11-11: with «نگه داشتن نسخه روی سرور» off the host keeps no archive, and a
+   * restore starts from a file downloaded from the Telegram group. When the newest page of
+   * the history shows no archive on this host, «بارگذاری فایل بکاپ» is the visible default:
+   * the restore card moves up under the status, titled for the upload. Asked of page one
+   * only — a later page says nothing about what is on the host now.
+   *
+   * Decided ONCE per visit: the card holds the upload in progress and the recovery it
+   * follows, and moving it would remount it and lose both — which is exactly what a
+   * recovery's own pre-restore backup, appearing on the host mid-restore, would cause.
+   */
+  const [uploadFirst, setUploadFirst] = useState<boolean | null>(null);
+  const hostHasNoArchive =
+    history.isSuccess && cursor === undefined ? !runs.some((run) => run.archiveAvailable) : null;
+  useEffect(() => {
+    if (uploadFirst === null && hostHasNoArchive !== null) setUploadFirst(hostHasNoArchive);
+  }, [uploadFirst, hostHasNoArchive]);
+
+  const operationsCard = (
+    <Card
+      key="operations"
+      title={t('web.recovery_operations_title')}
+      hint={t('web.recovery_upload_hint')}
+      className="recovery-operations rcv-inline-head"
+    >
+      {/*
+        A Mirza restore is authorised by `legacy.migration.*`, not by `backup.view` (Codex
+        review on #278): an administrator holding only the migration permissions gets the
+        Mirza half of this card, without the NEXA capabilities they may not read.
+      */}
+      {!mayView && mirza.mayView ? (
+        <RecoveryOperations
+          nexaAllowed={false}
+          uploadEnabled={false}
+          maxUploadBytes={0}
+          mayRestore={false}
+          mirza={mirza}
+          onChanged={refreshAll}
+        />
+      ) : (
+        <StateSwitch query={capabilities} denied={!mayView}>
+          <RecoveryOperations
+            nexaAllowed
+            uploadEnabled={capabilities.data?.uploadEnabled ?? false}
+            maxUploadBytes={capabilities.data?.maxUploadBytes ?? 0}
+            mayRestore={mayRestore}
+            mirza={mirza}
+            onChanged={refreshAll}
+            uploadFirst={uploadFirst === true}
+          />
+        </StateSwitch>
+      )}
+    </Card>
+  );
+
+  const backupCards = [
+    // Spec 13.2: the automatic schedule, where its backups are.
+    <Card
+      key="schedule"
+      title={t('web.backup_schedule_title')}
+      hint={t('web.backup_schedule_hint')}
+      className="rcv-inline-head"
+    >
+      <StateSwitch query={status} denied={!mayView}>
+        {status.data !== undefined && (
+          <BackupScheduleCard status={status.data} permissions={permissions} />
+        )}
+      </StateSwitch>
+    </Card>,
+    // E4: the password every 7-Zip backup is sealed with. Owner only to set.
+    <Card
+      key="password"
+      title={t('web.backup_password_title')}
+      hint={t('web.backup_password_card_hint')}
+    >
+      <StateSwitch query={status} denied={!mayView}>
+        {status.data !== undefined && (
+          <BackupPasswordCard status={status.data} mayEdit={mayDownload} />
+        )}
+      </StateSwitch>
+    </Card>,
+    <Card key="last-success" title={t('web.recovery_last_success_title')}>
+      <StateSwitch query={history} denied={!mayView}>
+        <LastSuccess runs={runs} mayDownload={mayDownload} />
+      </StateSwitch>
+    </Card>,
+    <Card key="history" title={t('web.recovery_history_title')} className="rcv-history">
+      <StateSwitch
+        query={history}
+        denied={!mayView}
+        isEmpty={runs.length === 0}
+        empty={
+          <Empty title={t('web.recovery_no_backups')} hint={t('web.recovery_no_backups_hint')} />
+        }
+      >
+        <DataTable
+          columns={historyColumns(mayDownload)}
+          rows={runs}
+          rowKey={(run) => run.id}
+          caption={t('web.recovery_history_title')}
+          dense
+        />
+        <CursorPager
+          order="newest-first"
+          onPrevious={() => setQuery(route, 'cursor', null)}
+          onNext={() => setQuery(route, 'cursor', nextCursor)}
+          hasPrevious={cursor !== undefined}
+          hasNext={nextCursor !== null}
+          shown={runs.length}
+        />
+      </StateSwitch>
+    </Card>,
+  ];
 
   return (
     <>
@@ -204,93 +317,11 @@ export function RecoveryPage({
         </StateSwitch>
       </Card>
 
-      {/* Spec 13.2: the automatic schedule, where its backups are. */}
-      <Card
-        title={t('web.backup_schedule_title')}
-        hint={t('web.backup_schedule_hint')}
-        className="rcv-inline-head"
-      >
-        <StateSwitch query={status} denied={!mayView}>
-          {status.data !== undefined && (
-            <BackupScheduleCard status={status.data} permissions={permissions} />
-          )}
-        </StateSwitch>
-      </Card>
-
-      {/* E4: the password every 7-Zip backup is sealed with. Owner only to set. */}
-      <Card title={t('web.backup_password_title')} hint={t('web.backup_password_card_hint')}>
-        <StateSwitch query={status} denied={!mayView}>
-          {status.data !== undefined && (
-            <BackupPasswordCard status={status.data} mayEdit={mayDownload} />
-          )}
-        </StateSwitch>
-      </Card>
-
-      <Card title={t('web.recovery_last_success_title')}>
-        <StateSwitch query={history} denied={!mayView}>
-          <LastSuccess runs={runs} mayDownload={mayDownload} />
-        </StateSwitch>
-      </Card>
-
-      <Card title={t('web.recovery_history_title')} className="rcv-history">
-        <StateSwitch
-          query={history}
-          denied={!mayView}
-          isEmpty={runs.length === 0}
-          empty={
-            <Empty title={t('web.recovery_no_backups')} hint={t('web.recovery_no_backups_hint')} />
-          }
-        >
-          <DataTable
-            columns={historyColumns(mayDownload)}
-            rows={runs}
-            rowKey={(run) => run.id}
-            caption={t('web.recovery_history_title')}
-            dense
-          />
-          <CursorPager
-            order="newest-first"
-            onPrevious={() => setQuery(route, 'cursor', null)}
-            onNext={() => setQuery(route, 'cursor', nextCursor)}
-            hasPrevious={cursor !== undefined}
-            hasNext={nextCursor !== null}
-            shown={runs.length}
-          />
-        </StateSwitch>
-      </Card>
-
-      <Card
-        title={t('web.recovery_operations_title')}
-        hint={t('web.recovery_upload_hint')}
-        className="recovery-operations rcv-inline-head"
-      >
-        {/*
-          A Mirza restore is authorised by `legacy.migration.*`, not by `backup.view` (Codex
-          review on #278): an administrator holding only the migration permissions gets the
-          Mirza half of this card, without the NEXA capabilities they may not read.
-        */}
-        {!mayView && mirza.mayView ? (
-          <RecoveryOperations
-            nexaAllowed={false}
-            uploadEnabled={false}
-            maxUploadBytes={0}
-            mayRestore={false}
-            mirza={mirza}
-            onChanged={refreshAll}
-          />
-        ) : (
-          <StateSwitch query={capabilities} denied={!mayView}>
-            <RecoveryOperations
-              nexaAllowed
-              uploadEnabled={capabilities.data?.uploadEnabled ?? false}
-              maxUploadBytes={capabilities.data?.maxUploadBytes ?? 0}
-              mayRestore={mayRestore}
-              mirza={mirza}
-              onChanged={refreshAll}
-            />
-          </StateSwitch>
-        )}
-      </Card>
+      {/*
+        Keyed siblings of ONE array, so moving the restore card up (`uploadFirst`) moves it
+        rather than remounting it: it holds the upload and the recovery being followed.
+      */}
+      {uploadFirst === true ? [operationsCard, ...backupCards] : [...backupCards, operationsCard]}
 
       {/* E1: compacting the imported legacy data, for a reader of the migration. */}
       {mirza.mayView && (
@@ -580,9 +611,12 @@ function RecoveryOperations({
   mayRestore,
   mirza,
   onChanged,
+  uploadFirst = false,
 }: {
   /** False for an actor without `backup.view`: the card is their Mirza restore only. */
   nexaAllowed: boolean;
+  /** The host holds no archive: the upload is the default way in, and says where the file is. */
+  uploadFirst?: boolean;
   uploadEnabled: boolean;
   maxUploadBytes: number;
   mayRestore: boolean;
@@ -740,7 +774,10 @@ function RecoveryOperations({
       {nexaAllowed && !uploadEnabled && (
         <Banner tone="neutral">{t('web.recovery_upload_disabled')}</Banner>
       )}
-      <h3 className="card-subtitle">{t('web.recovery_upload_title')}</h3>
+      <h3 className="card-subtitle">
+        {uploadFirst ? t('web.recovery_upload_default_title') : t('web.recovery_upload_title')}
+      </h3>
+      {uploadFirst && <p className="muted small">{t('web.recovery_upload_default_hint')}</p>}
       <form onSubmit={onSubmit} className="stack">
         <div className="field">
           <span className="field-label">{t('web.recovery_upload_choose')}</span>

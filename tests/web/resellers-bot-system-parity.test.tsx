@@ -212,7 +212,13 @@ describe('/resellers', () => {
     stubApi(resellerRoutes);
     renderResellers();
     await screen.findByText('Reza Reseller');
-    expect(screen.getByRole('button', { name: t('web.page_more_menu') })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: t('web.page_more_menu') }).length).toBeGreaterThan(
+      0,
+    );
+    // The page head's menu is the first one; the rows carry their own below it.
+    expect(
+      screen.getAllByRole('button', { name: t('web.page_more_menu') })[0]?.closest('tr'),
+    ).toBeNull();
     // No always-visible status chip outside the filters panel.
     expect(screen.queryByRole('button', { name: 'معلق' })).toBeNull();
     const panel = openFilterPanel();

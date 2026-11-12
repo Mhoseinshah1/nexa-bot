@@ -22,14 +22,14 @@ export async function openSettingsGroupOf(key: SettingKey): Promise<void> {
     return found;
   });
   if (tab.getAttribute('aria-selected') !== 'true') fireEvent.click(tab);
-  const head = await waitFor(() => {
-    const found = [
-      ...document.querySelectorAll<HTMLButtonElement>('.settings-section-head button'),
-    ].find((one) => (one.textContent ?? '').startsWith(title));
+  // Owner ruling (demo parity): the section's title is a plain heading, not a second button
+  // beside the tab strip, and its body is always open.
+  await waitFor(() => {
+    const found = [...document.querySelectorAll<HTMLElement>('.settings-section-head')].find(
+      (one) => (one.textContent ?? '').startsWith(title),
+    );
     if (found === undefined) throw new Error(`no settings section for ${key}`);
-    return found;
   });
-  if (head.getAttribute('aria-expanded') !== 'true') fireEvent.click(head);
   // R11: each setting is an accordion (the first starts open). A test that reads rows opens
   // them, as an operator would, before it looks inside one.
   for (const fold of document.querySelectorAll<HTMLDetailsElement>('details.set-fold')) {
@@ -41,9 +41,9 @@ export async function openSettingsGroupOf(key: SettingKey): Promise<void> {
 export async function settingsTabs(): Promise<HTMLElement[]> {
   await screen.findByRole('heading', { name: t('web.settings_title') });
   await waitFor(() => {
-    if (document.querySelectorAll('.settings-section-head button').length === 0) {
+    if (document.querySelectorAll('.settings-section-head').length === 0) {
       throw new Error('no settings section yet');
     }
   });
-  return [...document.querySelectorAll<HTMLElement>('.settings-section-head button')];
+  return [...document.querySelectorAll<HTMLElement>('.settings-section-head')];
 }

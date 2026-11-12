@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { ListFilterBar } from '../ui/filter-bar';
-import { Drawer, Modal } from '../ui/overlays';
+import { Drawer, Menu, Modal } from '../ui/overlays';
 import { PageMoreMenu } from '../ui/page-more-menu';
 import { chipFilter } from './money-filters';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -28,7 +28,7 @@ import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { CopyIdButton } from '../ui/record-ref';
-import { setQueries, useLinkHandler, type Route } from '../router';
+import { navigate, setQueries, useLinkHandler, type Route } from '../router';
 import { ResellerTrialSettingsCard } from './reseller-trial-settings';
 import { messageFor } from './settings';
 import {
@@ -179,11 +179,11 @@ export function limitWire(limit: { amount: string; currency: CurrencyCode }): Mo
 /** The name an operator recognises, falling back to the Telegram id that always exists. */
 export function ResellerCell({
   reseller,
-  onOpen,
+  inList = false,
 }: {
   reseller: ResellerSummaryResponse;
-  /** On the list: the name opens the standing; the customer page is a link beside the actions. */
-  onOpen?: () => void;
+  /** On the list the row opens the standing and the name is plain text; elsewhere it links to the customer. */
+  inList?: boolean;
 }) {
   const onLink = useLinkHandler();
   const name = reseller.displayName ?? <Ltr>{reseller.telegramUserId}</Ltr>;
@@ -193,7 +193,7 @@ export function ResellerCell({
         {initialOf(reseller)}
       </span>
       <div>
-        {onOpen === undefined ? (
+        {!inList ? (
           <a
             href={`/users/${encodeURIComponent(reseller.customerId)}`}
             onClick={onLink}
@@ -202,9 +202,8 @@ export function ResellerCell({
             {name}
           </a>
         ) : (
-          <button type="button" className="link strong" onClick={onOpen}>
-            {name}
-          </button>
+          // On the list the row opens the standing (DataTable onRowActivate): the name is text.
+          <strong>{name}</strong>
         )}
         {reseller.displayName !== null && (
           <div className="muted small">
@@ -402,7 +401,7 @@ export function ResellersPage({
     {
       key: 'reseller',
       header: t('web.reseller_customer'),
-      render: (row) => <ResellerCell reseller={row} onOpen={() => openStanding(row)} />,
+      render: (row) => <ResellerCell reseller={row} inList />,
     },
     {
       key: 'tier',
@@ -442,14 +441,6 @@ export function ResellersPage({
       // Nothing for a reader. The header stays, so two operators describe one table.
       render: (row) => (
         <RowActions>
-          <a
-            className="btn sm ghost"
-            href={`/users/${encodeURIComponent(row.customerId)}`}
-            onClick={onLink}
-          >
-            <Icon name="user" size={14} />
-            {t('web.reseller_customer_page')}
-          </a>
           {mayEdit && (
             <Button
               size="sm"
@@ -468,6 +459,26 @@ export function ResellersPage({
               {t('web.rule_edit')}
             </Button>
           )}
+          {/* Owner ruling: the customer-page link lives in the row's more-menu. */}
+          <Menu
+            portal
+            label={t('web.page_more_menu')}
+            triggerClassName="btn sm ghost"
+            trigger={
+              <>
+                {t('web.page_more_menu')}
+                <Icon name="chevron" size={14} />
+              </>
+            }
+            items={[
+              {
+                key: 'customer',
+                label: t('web.reseller_customer_page'),
+                icon: 'user' as const,
+                onSelect: () => navigate(`/users/${encodeURIComponent(row.customerId)}`),
+              },
+            ]}
+          />
         </RowActions>
       ),
     },
@@ -667,6 +678,7 @@ export function ResellersPage({
             rows={rows}
             rowKey={(row) => row.customerId}
             rowClassName={(row) => (row.customerId === viewing ? 'selected' : undefined)}
+            onRowActivate={openStanding}
           />
           {/* `GET /resellers` pages newest to oldest. */}
           <CursorPager
