@@ -306,7 +306,7 @@ export class ServiceAutoRenewService {
         enabled: true,
         price: preference.consented,
         leadHours,
-        planId: preference.renewProductId,
+        planId: preference.renewProductId ?? null,
       };
     }
     const quote = await this.offerQuote(scope, actor, customerId, service);
@@ -533,7 +533,7 @@ export class ServiceAutoRenewService {
                     customerId: before.customerId,
                     consentedTotalMinor: before.consented?.amountMinor.toString() ?? null,
                     currency: before.consented?.currency ?? null,
-                    renewProductId: before.renewProductId,
+                    renewProductId: before.renewProductId ?? null,
                   },
             after: {
               enabled: input.enabled,

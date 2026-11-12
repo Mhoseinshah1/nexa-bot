@@ -21,9 +21,9 @@ export interface AutoRenewPreference {
   readonly updatedAt: Date;
   /**
    * PR-5 (OQ-R10-D1-01, owner decision): an imported service's plan to renew into, chosen by a
-   * reseller at opt-in; null for a native service.
+   * reseller at opt-in; null (or absent) for a native service.
    */
-  readonly renewProductId: string | null;
+  readonly renewProductId?: string | null;
 }
 
 /** One period of one service, as the sweep holds it. */

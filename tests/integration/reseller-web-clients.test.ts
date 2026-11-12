@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import type {
-  ResellerAutoRenew,
-  ResellerClient,
-  ResellerPurchaseQuote,
-  ResellerRenewAllResult,
-  UserId,
+import {
+  money,
+  type ResellerAutoRenew,
+  type ResellerClient,
+  type ResellerPurchaseQuote,
+  type ResellerRenewAllResult,
+  type UserId,
 } from '@nexa/contracts';
 import { tenantA } from './harness';
 import { codeOf, useSellingHarness } from './reseller-selling-harness';
@@ -313,7 +314,7 @@ describe('the reseller web panel — clients book and auto-renew (PR-5)', () => 
         {
           serviceId: service.id,
           enabled: true,
-          expected: { amountMinor: 10_000_000n, currency: 'IRT' },
+          expected: money(10_000_000n, 'IRT'),
           planId: plan,
           idempotencyKey: randomUUID(),
         },
