@@ -85,6 +85,14 @@ export const LEDGER_REASONS = [
   // Reseller
   'RESELLER_SETTLEMENT',
   'RESELLER_MEMBERSHIP_FEE',
+  // Reseller-phase PR-6: a reseller's monthly fee for a dedicated hosted bot, taken from their
+  // wallet — the first month when the owner approves the request, then once per period by the
+  // renewal job. A DEBIT that names no order, payment, reversal or administrator: no order
+  // stands behind it and no operator decided the amount (the request snapshotted it). Its own
+  // reason rather than `PURCHASE` (no order) or `ADMIN_DEBIT` (no operator's hand), so the
+  // hosting income is reported apart. One per (request, period), under
+  // `hosted-bot-fee:<requestId>:<period>`, and a CHECK pins the reason and the prefix together.
+  'HOSTED_BOT_FEE',
   // Legacy migration (Migration P2, `docs/migration-opening-balance.md`): the ONE entry that
   // carries a customer's legacy wallet balance into this ledger, at import time. Its own
   // reason because it is none of the others: not a top-up (no money arrived), not an
@@ -158,6 +166,17 @@ export function migrationOpeningReference(telegramUserId: string): string {
  */
 export const GIFT_CARD_REFERENCE_PREFIX = 'giftcard:' as const;
 
+/**
+ * Reseller-phase PR-6: the reference a hosted-bot fee debit is written under.
+ *
+ * DERIVED from the request (which is one hosted bot) and the period number, so an approval
+ * replay, a renewal re-run, two replicas and «پرداخت و فعال‌سازی دوباره» racing the job all
+ * compute the same reference for one period, and `wallet_entries_tenant_reference_key` lets at
+ * most one debit exist per period whoever writes it. The prefix is reserved for
+ * `HOSTED_BOT_FEE` by a CHECK in both directions.
+ */
+export const HOSTED_BOT_FEE_REFERENCE_PREFIX = 'hosted-bot-fee:' as const;
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /** Throws for anything that is not a lower-case uuid: the reference names a real code row. */
@@ -166,4 +185,12 @@ export function giftCardReference(codeId: string): string {
     throw new Error('A gift card reference needs the code row id.');
   }
   return `${GIFT_CARD_REFERENCE_PREFIX}${codeId}`;
+}
+
+/** Throws unless the request id is a lower-case uuid and the period a positive integer. */
+export function hostedBotFeeReference(requestId: string, period: number): string {
+  if (!UUID_PATTERN.test(requestId) || !Number.isSafeInteger(period) || period < 1) {
+    throw new Error('A hosted-bot fee reference needs the request id and a period from 1.');
+  }
+  return `${HOSTED_BOT_FEE_REFERENCE_PREFIX}${requestId}:${String(period)}`;
 }

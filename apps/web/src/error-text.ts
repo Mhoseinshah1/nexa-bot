@@ -36,6 +36,7 @@ import type {
   SUPPORT_KNOWLEDGE_ERROR_CODES,
   TERMS_ERROR_CODES,
   RESELLER_REQUEST_ERROR_CODES,
+  RESELLER_BOT_ERROR_CODES,
   TICKET_ERROR_CODES,
   TONPAYS_ERROR_CODES,
   TONPAYS_TELEGRAM_ERROR_CODES,
@@ -99,6 +100,7 @@ export type ContractErrorCode =
   | CodesOf<typeof SUPPORT_KNOWLEDGE_ERROR_CODES>
   | CodesOf<typeof TERMS_ERROR_CODES>
   | CodesOf<typeof RESELLER_REQUEST_ERROR_CODES>
+  | CodesOf<typeof RESELLER_BOT_ERROR_CODES>
   | CodesOf<typeof TICKET_ERROR_CODES>
   | CodesOf<typeof TONPAYS_ERROR_CODES>
   | CodesOf<typeof TONPAYS_TELEGRAM_ERROR_CODES>
@@ -665,6 +667,20 @@ export const ERROR_TEXT = {
   'ticket.attachment_refused': 'web.err_ticket_attachment_refused',
   'ticket.attachment_storage_full': 'web.err_ticket_attachment_storage_full',
   'ticket.attachment_unavailable': 'web.err_ticket_attachment_unavailable',
+  'reseller_bot.not_offered': 'web.err_reseller_bot_not_offered',
+  'reseller_bot.not_reseller': 'web.err_reseller_bot_not_reseller',
+  'reseller_bot.request_not_found': 'web.err_reseller_bot_request_not_found',
+  'reseller_bot.request_open': 'web.err_reseller_bot_request_open',
+  'reseller_bot.state_conflict': 'web.err_reseller_bot_state_conflict',
+  'reseller_bot.token_malformed': 'web.err_reseller_bot_token_malformed',
+  'reseller_bot.token_rejected': 'web.err_reseller_bot_token_rejected',
+  'reseller_bot.token_unreachable': 'web.err_reseller_bot_token_unreachable',
+  'reseller_bot.token_in_use': 'web.err_reseller_bot_token_in_use',
+  'reseller_bot.domain_invalid': 'web.err_reseller_bot_domain_invalid',
+  'reseller_bot.insufficient_funds': 'web.err_reseller_bot_insufficient_funds',
+  'reseller_bot.not_linked': 'web.err_reseller_bot_not_linked',
+  'reseller_bot.already_linked': 'web.err_reseller_bot_already_linked',
+  'reseller_bot.nothing_due': 'web.err_reseller_bot_nothing_due',
   'reseller_request.not_found': 'web.err_rr_not_found',
   'reseller_request.unavailable': 'web.err_rr_unavailable',
   'reseller_request.already_reseller': 'web.err_rr_already_reseller',

@@ -100,6 +100,7 @@ export * from './auto-delete.js';
 export * from './tickets.js';
 // Owner batch 1, PR-2: «درخواست نمایندگی».
 export * from './reseller-requests.js';
+export * from './reseller-hosted-bot.js';
 export * from './miniapp.js';
 // PR-4: the reseller web panel (`/r/…`, `/api/reseller/v1`).
 export * from './reseller-panel.js';

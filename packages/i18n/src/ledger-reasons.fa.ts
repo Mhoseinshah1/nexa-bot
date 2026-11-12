@@ -39,6 +39,7 @@ export const LEDGER_REASON_LABELS_FA: Readonly<Record<LedgerReason, string>> = {
   ACCOUNT_TRANSFER_IN: 'انتقال حساب',
   RESELLER_SETTLEMENT: 'تسویه نمایندگی',
   RESELLER_MEMBERSHIP_FEE: 'حق عضویت نمایندگی',
+  HOSTED_BOT_FEE: 'هزینهٔ ماهانهٔ ربات اختصاصی',
   MIGRATION_OPENING_BALANCE: 'موجودی اولیه',
   CHARGEBACK: 'بازگشت پرداخت',
   CORRECTION: 'اصلاح موجودی',

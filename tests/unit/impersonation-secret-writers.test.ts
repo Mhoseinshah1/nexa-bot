@@ -51,6 +51,10 @@ const WRITERS: Readonly<Record<SecretPurpose, string>> = {
   'gift_card.batch_export': 'modules/commerce/gift-cards/application/gift-card-admin.service.ts',
   'hosting.totp_secret': 'modules/platform/hosting/application/hosting-section.service.ts',
   'hosting.archive_password': 'modules/platform/hosting/application/hosted-backup.service.ts',
+  'hosting.reseller_bot_token':
+    'modules/commerce/reseller-bots/application/reseller-bot-request.service.ts',
+  'hosting.reseller_activation_link':
+    'modules/commerce/reseller-bots/application/reseller-bot-request.service.ts',
   'reseller_web.totp_secret':
     'modules/commerce/reseller-panel/application/reseller-web-access.service.ts',
 };
@@ -70,6 +74,8 @@ const ENCRYPT_SITES: Readonly<Record<string, string>> = {
   'modules/platform/panels/infrastructure/drizzle-panel-credentials.ts':
     'reached from panel.service.ts create / setCredentials (refuse)',
   'modules/platform/hosting/application/hosting-section.service.ts': 'writer: hosting.totp_secret',
+  'modules/commerce/reseller-bots/application/reseller-bot-request.service.ts':
+    'writer: hosting.reseller_bot_token (submit) and hosting.reseller_activation_link (the issued link)',
   'modules/commerce/reseller-panel/application/reseller-web-access.service.ts':
     'writer: reseller_web.totp_secret',
   'modules/platform/hosting/application/hosted-backup.service.ts':

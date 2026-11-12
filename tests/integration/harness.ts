@@ -234,6 +234,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- PR-2: the reseller requests, their thread and drafts, before the customers, admins,
        -- bots and tiers they name.
        reseller_request_messages, reseller_requests, reseller_request_drafts,
+       -- Reseller-phase PR-6: the dedicated-bot requests, their debits and notices.
+       reseller_bot_fee_notices, reseller_bot_fee_charges, reseller_bot_requests,
        reseller_request_questions,
        customer_text_captures, referral_signup_gifts, support_faqs, support_faq_seeds,
        -- R10 D5: the /start captcha rows, before the customers they name.

@@ -50,6 +50,11 @@ export const INSTALLATION_TABLES: Readonly<Record<string, string>> = {
   backup_archive_passwords: "the installation's own archive password",
   tenant_restores: "the owner's record of tenant restores into this installation",
   hosted_bot_backup_policies: "the owner's schedule and password for a hosted bot's archives",
+  reseller_bot_requests:
+    "the owner's register of resellers' dedicated-bot requests; holds a token sealed under this server's keyring",
+  reseller_bot_fee_charges: "the owner's record of dedicated-bot fee debits (installation only)",
+  reseller_bot_fee_notices:
+    "the owner's short-wallet notices for dedicated bots (installation only)",
 };
 
 /**

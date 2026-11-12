@@ -2,6 +2,7 @@ import { APPEARANCE_SLOTS, appearanceMarkersIn, isAppearanceSlot } from './appea
 import { CURRENCY_CODES, currencyCodeSchema, money, type Money } from './money.js';
 import { OPS_LOG_TEMPLATES } from './ops-log-types.js';
 import { RESELLER_REQUEST_TEMPLATES } from './reseller-requests.js';
+import { RESELLER_BOT_TEMPLATES } from './reseller-hosted-bot-keys.js';
 import { RESELLER_PANEL_TEMPLATES } from './reseller-panel-templates.js';
 import { TERMS_BODY_MAX_LENGTH, TERMS_TITLE_MAX_LENGTH } from './terms.js';
 
@@ -15116,6 +15117,8 @@ export const TEMPLATES = [
   // Round 4 PR-D: the operations log group's messages, one definition each.
   ...OPS_LOG_TEMPLATES,
   ...RESELLER_REQUEST_TEMPLATES,
+  // Reseller-phase PR-6: the dedicated bot's activation link and its fee notice.
+  ...RESELLER_BOT_TEMPLATES,
   // PR-4 (reseller web panel): the bot's way in and the new-device notice.
   ...RESELLER_PANEL_TEMPLATES,
 ] as const satisfies readonly TemplateDefinition[];

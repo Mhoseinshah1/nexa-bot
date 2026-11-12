@@ -37,6 +37,8 @@ import {
   resellerDashboardSchema,
   resellerExchangeResponseSchema,
   resellerMeResponseSchema,
+  resellerBotRequestViewSchema,
+  resellerOwnBotResponseSchema,
   resellerPreferencesSchema,
   resellerPricesResponseSchema,
   resellerSendResultSchema,
@@ -46,6 +48,7 @@ import {
   resellerTotpEnrolResponseSchema,
   type MiniAppServiceAction,
   type MoneyWire,
+  type ResellerOwnBotSubmitBody,
   type ResellerClientWrite,
   type ResellerPurchaseQuoteRequest,
   type ResellerRenewAllRequest,
@@ -238,6 +241,18 @@ export const replyToTicket = (id: string, text: string, key: string) =>
     body: { text },
     key,
   });
+
+// --- Dedicated bot («ربات اختصاصی») ----------------------------------------------------------
+
+/** The query key the offer and the reseller's own requests are cached under. */
+export const OWN_BOT_KEY = ['reseller', 'own-bot'] as const;
+export const fetchOwnBot = () => call('GET', R.ownBot, resellerOwnBotResponseSchema);
+export const submitOwnBot = (body: ResellerOwnBotSubmitBody, key: string) =>
+  call('POST', R.ownBotRequests, resellerBotRequestViewSchema, { body, key });
+export const cancelOwnBot = (requestId: string, key: string) =>
+  call('POST', path(R.ownBotCancel, { requestId }), resellerBotRequestViewSchema, { key });
+export const payOwnBot = (requestId: string, key: string) =>
+  call('POST', path(R.ownBotPay, { requestId }), resellerBotRequestViewSchema, { key });
 
 // --- Buying (PR-5 §5.5) -------------------------------------------------------------------
 

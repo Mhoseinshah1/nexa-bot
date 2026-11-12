@@ -76,6 +76,20 @@ export interface HostingServiceDeps {
   readonly diskPaths: readonly string[];
   /** The production create gate (`domain/create-gate.ts`), evaluated per request. */
   readonly createRefusal: () => HostingCreateRefusal | null;
+  /**
+   * Reseller-phase PR-6: links a bot created for a reseller's APPROVED request to it, inside
+   * the create's transaction. Absent, a create naming a request is refused.
+   */
+  readonly resellerBots?: {
+    linkCreated(
+      installation: TenantContext,
+      actor: ActorContext,
+      requestId: string,
+      hostedTenantId: string,
+      now: Date,
+      tx: TransactionScope,
+    ): Promise<void>;
+  };
 }
 
 /**
@@ -156,7 +170,17 @@ export class HostingService {
       adminUsername: command.adminUsername,
       adminDisplayName: command.adminDisplayName,
       expiresAt: expiresAt?.toISOString() ?? null,
+      // In the hash only when set, so a key from before the field replays as itself.
+      ...(command.resellerBotRequestId === undefined
+        ? {}
+        : { resellerBotRequestId: command.resellerBotRequestId }),
     });
+    if (command.resellerBotRequestId !== undefined && this.deps.resellerBots === undefined) {
+      throw errors.preconditionFailed(
+        HOSTING_ERROR_CODES.CREATE_DISABLED,
+        'Creating a bot for a reseller request is not wired in this process.',
+      );
+    }
     const replay = await this.deps.idempotency.find<{ hostedTenantId: string }>(
       installation,
       actor.surface,
@@ -216,6 +240,16 @@ export class HostingService {
             },
             tx,
           );
+          if (command.resellerBotRequestId !== undefined) {
+            await this.deps.resellerBots?.linkCreated(
+              installation,
+              actor,
+              command.resellerBotRequestId,
+              hostedTenantId,
+              now,
+              tx,
+            );
+          }
           await this.deps.audit.record(
             installation,
             actor,
@@ -231,6 +265,7 @@ export class HostingService {
                 state: 'ACTIVE',
                 expiresAt: expiresAt?.toISOString() ?? null,
                 webAdminUsername: command.adminUsername,
+                resellerBotRequestId: command.resellerBotRequestId ?? null,
                 proof: method,
               },
               result: 'SUCCESS',

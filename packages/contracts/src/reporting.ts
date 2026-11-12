@@ -221,6 +221,8 @@ export const WALLET_REPORT_GROUP_OF: Readonly<Record<LedgerReason, WalletReportG
   MIGRATION_OPENING_BALANCE: 'OPENING_BALANCE',
   RESELLER_SETTLEMENT: 'OTHER',
   RESELLER_MEMBERSHIP_FEE: 'OTHER',
+  // PR-6: wallet money spent on a dedicated hosted bot's monthly fee.
+  HOSTED_BOT_FEE: 'SPENDING',
   CHARGEBACK: 'OTHER',
   OTHER: 'OTHER',
 };

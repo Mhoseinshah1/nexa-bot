@@ -24,7 +24,7 @@ import {
   HostingSectionService,
   type HostingSectionDeps,
 } from '../application/hosting-section.service.js';
-import { HostingService } from '../application/hosting.service.js';
+import { HostingService, type HostingServiceDeps } from '../application/hosting.service.js';
 import { DrizzleHostedActivationRepository } from './drizzle-hosted-activation.repository.js';
 import { HostedBotExpiryService } from '../application/hosted-bot-expiry.service.js';
 import {
@@ -73,6 +73,8 @@ export function buildHosting(deps: {
   readonly installationTenantId: () => string | null;
   /** Phase 6B «ورود به پنل»: built before the authentication service, which asks it too. */
   readonly enter: DrizzleHostingEnterRepository;
+  /** Reseller-phase PR-6: links a bot created for a reseller's request (late-bound). */
+  readonly resellerBots?: HostingServiceDeps['resellerBots'];
 }): {
   readonly hostingSection: HostingSectionService;
   readonly hosting: HostingService;
@@ -80,6 +82,8 @@ export function buildHosting(deps: {
   /** Phase 6A PR-4: what the activation's builder reuses. */
   readonly hostingRepository: DrizzleHostingRepository;
   readonly hostingOwner: HostingOwnerGuard;
+  /** Reseller-phase PR-6: the dedicated-bot renewal stops and resumes through it. */
+  readonly hostingSystemPath: DrizzleHostedTenantSystemPath;
 } {
   const repository = new DrizzleHostingRepository(deps.db);
   const system = new DrizzleHostedTenantSystemPath(deps.db, {
@@ -131,6 +135,7 @@ export function buildHosting(deps: {
         flagEnabled: deps.config.HOSTED_BOTS_CREATE_ENABLED,
         releaseMarker: HOSTED_BOTS_PRODUCTION_RELEASE_MARKER,
       }),
+    ...(deps.resellerBots === undefined ? {} : { resellerBots: deps.resellerBots }),
   });
   const hostedBotExpiry = new HostedBotExpiryService({
     repository,
@@ -149,5 +154,6 @@ export function buildHosting(deps: {
     hostedBotExpiry,
     hostingRepository: repository,
     hostingOwner: owner,
+    hostingSystemPath: system,
   };
 }
