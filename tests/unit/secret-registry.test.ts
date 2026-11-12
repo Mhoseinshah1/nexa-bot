@@ -61,6 +61,23 @@ describe('the secret column registry', () => {
     for (const purpose of purposes) expect(SECRET_PURPOSES).toContain(purpose);
   });
 
+  it('covers every ciphertext column of every TABLE, not only every column name', () => {
+    // A physical name like `totp_secret_ciphertext` is shared by several factor tables, so the
+    // name-level check above passes while one of them is unregistered. PR-4 review: the
+    // reseller panel's factor is pinned here by its table.
+    const pairs: string[] = [];
+    for (const block of schema.split(/pgTable\(\s*'/u).slice(1)) {
+      const table = block.slice(0, block.indexOf("'"));
+      const body = block.slice(0, block.search(/\n\s*\(table\)\s*=>|\n\);/u));
+      for (const column of declaredCiphertextColumns(body)) pairs.push(`${table}.${column}`);
+    }
+    const registered = new Set(
+      SECRET_COLUMNS.map((column) => `${column.table}.${column.ciphertextColumn}`),
+    );
+    expect(pairs).toContain('reseller_web_totp_factors.totp_secret_ciphertext');
+    for (const pair of pairs) expect(registered, `${pair} is not registered`).toContain(pair);
+  });
+
   it('declares no purpose that nothing stores', () => {
     // A purpose with no producer is a name that reads as permission — the same
     // rule the error-code check enforces in `check-boundaries.sh`.

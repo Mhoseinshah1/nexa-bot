@@ -281,6 +281,17 @@ export const MINIAPP_FA = {
   'miniapp.gate_captcha':
     'برای شروع، ابتدا در گفتگو با ربات به سؤال امنیتی ساده پاسخ دهید؛ سپس به مینی‌اپ برگردید.',
   'miniapp.gate_captcha_open_bot': 'رفتن به ربات',
+  // `captcha.kind` IMAGE_NUMBER: answered here, by typing the number in the picture.
+  'miniapp.gate_captcha_image_title': 'سؤال امنیتی',
+  'miniapp.gate_captcha_image': 'عدد 4 رقمی داخل تصویر را بنویسید.',
+  'miniapp.gate_captcha_alt': 'تصویر سؤال امنیتی',
+  'miniapp.gate_captcha_input': 'عدد داخل تصویر',
+  'miniapp.gate_captcha_submit': 'تأیید',
+  'miniapp.gate_captcha_refresh': '🔄 تصویر جدید',
+  'miniapp.gate_captcha_wrong': 'پاسخ درست نبود. {remaining} فرصت دیگر دارید.',
+  'miniapp.gate_captcha_locked':
+    'تعداد پاسخ‌های نادرست به حد مجاز رسید. کمی بعد دوباره امتحان کنید.',
+  'miniapp.gate_captcha_image_failed': 'تصویر بارگذاری نشد. دوباره امتحان کنید.',
   'miniapp.gate_channels': 'برای ادامه، در کانال‌های زیر عضو شوید.',
   'miniapp.gate_channel_private': 'کانال {number}',
   'miniapp.gate_join': 'عضویت',

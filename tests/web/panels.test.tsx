@@ -609,7 +609,13 @@ describe('the panel detail', () => {
       fireEvent.change(screen.getByLabelText(t('web.panel_username_template')), {
         target: { value: '{telegram_id}_{random6}' },
       });
-      const verdict = await screen.findByText((text) => text.includes('23') && text.includes('20'));
+      // Only the policy notice: a page clock line («… 20 آبان …، 23:45») must not match too.
+      const verdict = await screen.findByText(
+        (text, element) =>
+          element?.classList.contains('notice') === true &&
+          text.includes('23') &&
+          text.includes('20'),
+      );
       expect(verdict.textContent).toContain(t('web.panel_username_issue_TOO_LONG'));
     });
 

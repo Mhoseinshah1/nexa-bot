@@ -155,8 +155,14 @@ export interface BackupServiceDeps {
    * Round 8 B2: runs after a run finished SUCCEEDED (and only then), to prune archives. Its
    * failure is logged and never changes the run's outcome. The retention rules themselves —
    * the newest verified archive is never removed — live in the run repository's query.
+   * It is told which run just landed and why it ran, so a `PRE_RESTORE` run — whose recovery
+   * names it only once this returns — is never the one removed here
+   * (`BackupHousekeeping.afterRun`).
    */
-  readonly afterSuccess?: () => Promise<void>;
+  readonly afterSuccess?: (run: {
+    readonly id: string;
+    readonly trigger: BackupTrigger;
+  }) => Promise<void>;
   /**
    * Phase 7 (review M2): the RECORDER ALONE, without the projection to Telegram — the raw
    * operational-event writer. A `deliver: false` run (the Mirza restore's backups: "a restore
@@ -713,7 +719,7 @@ export class BackupService {
         summaryDeliveryState,
       });
       succeeded = true;
-      await this.pruneAfterSuccess(id);
+      await this.pruneAfterSuccess(id, trigger);
     } catch (error) {
       const failureCode = error instanceof NexaError ? error.code : 'backup.failed';
       const failureMessage = error instanceof Error ? error.message : String(error);
@@ -1335,10 +1341,10 @@ export class BackupService {
    * run is already recorded SUCCEEDED, so the newest verified archive is this one and the
    * repository's query protects it; a failure here is logged and nothing else.
    */
-  private async pruneAfterSuccess(id: string): Promise<void> {
+  private async pruneAfterSuccess(id: string, trigger: BackupTrigger): Promise<void> {
     if (this.deps.afterSuccess === undefined) return;
     try {
-      await this.deps.afterSuccess();
+      await this.deps.afterSuccess({ id, trigger });
     } catch (error) {
       this.deps.logger.error(
         { backupId: id, err: error instanceof Error ? error.message : String(error) },

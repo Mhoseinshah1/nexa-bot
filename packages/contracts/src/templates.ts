@@ -2,6 +2,7 @@ import { APPEARANCE_SLOTS, appearanceMarkersIn, isAppearanceSlot } from './appea
 import { CURRENCY_CODES, currencyCodeSchema, money, type Money } from './money.js';
 import { OPS_LOG_TEMPLATES } from './ops-log-types.js';
 import { RESELLER_REQUEST_TEMPLATES } from './reseller-requests.js';
+import { RESELLER_PANEL_TEMPLATES } from './reseller-panel-templates.js';
 import { TERMS_BODY_MAX_LENGTH, TERMS_TITLE_MAX_LENGTH } from './terms.js';
 
 /**
@@ -1185,6 +1186,167 @@ export const TEMPLATES = [
         token: 'answer',
         type: 'NUMBER',
         description: 'One of the four offered answers.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
+   * `captcha.kind` (the second and later kinds of the `/start` captcha). IMAGE_NUMBER is sent
+   * as a PHOTO whose caption is the key below; the answer is TYPED, so there are no answer
+   * buttons, only «🔄 تصویر جدید». EMOJI names one item in the text and offers four emoji
+   * buttons; WORD_NUMBER writes a number in Persian words and offers four Latin-digit buttons.
+   * As above, no reply says the customer is blocked.
+   */
+  {
+    key: 'bot.captcha.image_challenge',
+    description:
+      'The caption of the captcha picture: tell the customer to type the 4-digit number they see. Sent instead of whatever they asked for; it must not say that action was performed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.captcha.image_wrong',
+    description:
+      'A wrong typed answer to the picture question: how many answers are left, and a NEW picture under this caption.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'remaining',
+        type: 'NUMBER',
+        description: 'Wrong answers still allowed before the cooldown, at least 1.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.captcha.image_expired',
+    description:
+      'A typed answer to a picture question whose time ran out. Not counted as a wrong answer; a NEW picture is sent under this caption.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.captcha.refresh_button',
+    description:
+      'The button under the captcha picture that swaps it for a new one. It is not an answer and spends no attempt; a question may be swapped three times.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.captcha.emoji_challenge',
+    description:
+      'The emoji question: it names one fruit or animal in words and the customer taps the matching emoji among four buttons.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'name',
+        type: 'STRING',
+        description: 'The Persian name of the emoji to tap, for example «سیب».',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.captcha.emoji_wrong',
+    description:
+      'A wrong emoji. The question message is edited into this: how many answers are left, and a NEW emoji question with its own four buttons.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'remaining',
+        type: 'NUMBER',
+        description: 'Wrong answers still allowed before the cooldown, at least 1.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'name',
+        type: 'STRING',
+        description: 'The new question’s emoji name.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.captcha.emoji_expired',
+    description:
+      'An answer to an emoji question whose time ran out. Not counted; the message is edited into a NEW emoji question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'name',
+        type: 'STRING',
+        description: 'The new question’s emoji name.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.captcha.emoji_option_button',
+    description: 'One answer button under the emoji question: the emoji itself.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'emoji',
+        type: 'STRING',
+        description: 'One of the four offered emoji.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.captcha.word_challenge',
+    description:
+      'The number-in-words question: a number from 10 to 99 written in Persian words, to be chosen among four digit buttons.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'words',
+        type: 'STRING',
+        description: 'The number in Persian words, for example «سی و هفت».',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.captcha.word_wrong',
+    description:
+      'A wrong number. The question message is edited into this: how many answers are left, and a NEW number-in-words question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'remaining',
+        type: 'NUMBER',
+        description: 'Wrong answers still allowed before the cooldown, at least 1.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'words',
+        type: 'STRING',
+        description: 'The new question’s number in Persian words.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.captcha.word_expired',
+    description:
+      'An answer to a number-in-words question whose time ran out. Not counted; the message is edited into a NEW question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'words',
+        type: 'STRING',
+        description: 'The new question’s number in Persian words.',
         required: true,
         repeatable: false,
       },
@@ -14954,6 +15116,8 @@ export const TEMPLATES = [
   // Round 4 PR-D: the operations log group's messages, one definition each.
   ...OPS_LOG_TEMPLATES,
   ...RESELLER_REQUEST_TEMPLATES,
+  // PR-4 (reseller web panel): the bot's way in and the new-device notice.
+  ...RESELLER_PANEL_TEMPLATES,
 ] as const satisfies readonly TemplateDefinition[];
 
 export type TemplateKey = (typeof TEMPLATES)[number]['key'];

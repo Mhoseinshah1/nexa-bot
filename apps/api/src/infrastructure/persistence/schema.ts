@@ -37,4 +37,6 @@ export * from './schema/legacy-history.js';
 export * from './schema/hosting.js';
 export * from './schema/hosted-backups.js';
 export * from './schema/data-export.js';
+export * from './schema/reseller-web.js';
+export * from './schema/reseller-web-selling.js';
 export * from './schema/registry.js';

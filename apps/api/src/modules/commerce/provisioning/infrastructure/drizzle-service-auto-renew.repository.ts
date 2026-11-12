@@ -93,7 +93,7 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
     const [row] = await this.rows(
       tx,
       sql`SELECT service_id, customer_id, enabled, consented_total_minor, consented_currency,
-                 source, updated_at
+                 source, updated_at, renew_product_id
             FROM service_auto_renew_preferences
            WHERE tenant_id = ${tenantId} AND service_id = ${serviceId}`,
     );
@@ -105,6 +105,7 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
       consented: moneyOf(row['consented_total_minor'], row['consented_currency']),
       source: String(row['source']) as AutoRenewPreferenceSource,
       updatedAt: dateOf(row['updated_at']),
+      renewProductId: row['renew_product_id'] === null ? null : String(row['renew_product_id']),
     };
   }
 
@@ -117,12 +118,15 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
       readonly consented: Money | null;
       readonly source: AutoRenewPreferenceSource;
       readonly now: Date;
+      readonly renewProductId?: string | null;
     },
     tx: TransactionScope,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const amount = input.enabled ? (input.consented?.amountMinor ?? null) : null;
     const currency = input.enabled ? (input.consented?.currency ?? null) : null;
+    // PR-5: an imported service's plan travels with the consent and goes when it is off.
+    const plan = input.enabled ? (input.renewProductId ?? null) : null;
     /*
      * The write happens only when something CHANGES: the owner, the switch or the total. A
      * repeated tap is no write, so `changed` (and the event that follows it) is honest.
@@ -131,22 +135,25 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
       tx,
       sql`INSERT INTO service_auto_renew_preferences
             (tenant_id, service_id, customer_id, enabled, consented_total_minor,
-             consented_currency, source, created_at, updated_at)
+             consented_currency, source, created_at, updated_at, renew_product_id)
           VALUES (${tenantId}, ${input.serviceId}, ${input.customerId}, ${input.enabled},
-                  ${amount}, ${currency}, ${input.source}, ${input.now}, ${input.now})
+                  ${amount}, ${currency}, ${input.source}, ${input.now}, ${input.now}, ${plan})
           ON CONFLICT (tenant_id, service_id) DO UPDATE
              SET customer_id = EXCLUDED.customer_id,
                  enabled = EXCLUDED.enabled,
                  consented_total_minor = EXCLUDED.consented_total_minor,
                  consented_currency = EXCLUDED.consented_currency,
                  source = EXCLUDED.source,
-                 updated_at = EXCLUDED.updated_at
+                 updated_at = EXCLUDED.updated_at,
+                 renew_product_id = EXCLUDED.renew_product_id
            WHERE service_auto_renew_preferences.customer_id IS DISTINCT FROM EXCLUDED.customer_id
               OR service_auto_renew_preferences.enabled IS DISTINCT FROM EXCLUDED.enabled
               OR service_auto_renew_preferences.consented_total_minor
                    IS DISTINCT FROM EXCLUDED.consented_total_minor
               OR service_auto_renew_preferences.consented_currency
                    IS DISTINCT FROM EXCLUDED.consented_currency
+              OR service_auto_renew_preferences.renew_product_id
+                   IS DISTINCT FROM EXCLUDED.renew_product_id
           RETURNING service_id`,
     );
     return rows.length === 1;
@@ -193,9 +200,10 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
            WHERE p.tenant_id = ${tenantId}
              AND p.enabled
              AND s.state = 'ACTIVE'
-             -- An imported service renews from a panel plan the customer chooses (OQ-R10-D1-01).
-             AND s.source <> 'MIRZA'
-             AND s.product_id IS NOT NULL
+             -- An imported service renews from a panel plan the customer chooses (OQ-R10-D1-01):
+             -- only with the plan a RESELLER chose at opt-in (PR-5, the owner's decision).
+             AND ((s.source <> 'MIRZA' AND s.product_id IS NOT NULL)
+                  OR (s.source = 'MIRZA' AND p.renew_product_id IS NOT NULL))
              AND s.expires_at IS NOT NULL
              AND s.expires_at > ${bounds.now}
              AND s.expires_at <= ${bounds.dueBefore}

@@ -374,6 +374,18 @@ answer costs an attempt and, at the limit, a cooldown — never a block, never a
 status change. It is the first check of the bot's gate chain and a mini-app
 gate (`CAPTCHA`). Open points: OQ-D5-05..07.
 
+The question's kind is the setting `captcha.kind` (owner decision, reseller-panel
+phase): `MATH` (default, exactly the old sum), `IMAGE_NUMBER` (a server-drawn PNG,
+about 320x120, of a 4-digit number the customer TYPES; pure-JS rasteriser and
+`pngjs`, never on disk), `EMOJI` (named in the text, four of twenty fixed
+emoji), `WORD_NUMBER` (10-99 in Persian words, four Latin-digit buttons) or
+`RANDOM` (one of the four per new question). A PENDING question keeps the kind it
+was asked with. The picture's answer lives only in the row's `answer_text`; callback
+data is `hc:<question>:<0-3|r>` and never holds it. «🔄 تصویر جدید» is a new question,
+not a spent attempt, three per question. Attempts, expiry, cooldown, who is asked and
+the gate order are unchanged. The mini app answers `IMAGE_NUMBER` itself (image
+endpoint, digit input, refresh); the other kinds are answered in the chat.
+
 Four reseller rules, each a way to sell below cost or on credit nobody granted:
 
 - A reseller is a customer with an **ACTIVE** reseller row; SUSPENDED is an
@@ -771,6 +783,18 @@ looks like a backup and is not:
   replicas is normal on every rolling update. A stale lease is taken over by
   FAILING the abandoned run, never by adopting it: its files belong to a process
   that may still be writing them.
+- **No copies on the server (owner, 2026-11-11, «بدون نگهداری»).** The switch
+  «نگه داشتن نسخه روی سرور» (`backup.archive_keep_on_host`, default on, installation tenant
+  only, audited) — the old «There is no zero: "keep nothing" is not a policy» changed on
+  purpose. Off: a run's archive and working directory are removed right after its Telegram
+  delivery is CONFIRMED (SUCCEEDED, verified, every part with a message id), with one
+  `backup.archive_removed_after_delivery` operations line naming the run. NEVER for a delivery
+  that FAILED, is partial or UNKNOWN, a run in flight, an unverified run, an archive an
+  unfinished recovery names (nor a `PRE_RESTORE` run right after it finishes), or a hosted
+  bot's archive; those keep `keepCount` / `keepDays`. "The newest verified archive is never
+  pruned" is lifted only in this mode and only for confirmed-delivered archives. Switching back
+  restores nothing. A restore then uploads the file from the group (`docs/backup.md` § Keeping
+  no copy on the server).
 
 ## Cleanup after a Mirza import (v0.9.7)
 

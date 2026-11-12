@@ -272,6 +272,28 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   },
   // PR-2. Off withdraws the offer only: the button goes, a request already sent stays
   // decidable and its conversation continues.
+  // PR-4: off, the bot draws no «ورود به پنل وب» and every /api/reseller route answers 404.
+  reseller_web_panel: {
+    title: 'web.feature_reseller_web_panel_title',
+    summary: 'web.feature_reseller_web_panel_summary',
+    category: 'sales',
+    where: ['bot', 'web_admin'],
+    offEffect: 'web.feature_reseller_web_panel_off_effect',
+    related: { path: '/resellers', label: 'web.nav_resellers' },
+    disableEffect: null,
+    confirmEnable: null,
+  },
+  // PR-5 §5.8: off hides the reseller panel's «پیشرفت تا سطح بعد» card; it never changed a tier.
+  reseller_tier_progress: {
+    title: 'web.feature_reseller_tier_progress_title',
+    summary: 'web.feature_reseller_tier_progress_summary',
+    category: 'sales',
+    where: ['web_admin'],
+    offEffect: 'web.feature_reseller_tier_progress_off_effect',
+    related: { path: '/resellers', label: 'web.nav_resellers' },
+    disableEffect: null,
+    confirmEnable: null,
+  },
   reseller_requests: {
     title: 'web.feature_reseller_requests_title',
     summary: 'web.feature_reseller_requests_summary',

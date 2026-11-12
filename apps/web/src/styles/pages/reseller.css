@@ -1,0 +1,805 @@
+/*
+ * The reseller web panel (`/r/…`, PR-4) — its own layout over the Web Admin's tokens.
+ *
+ * Page-scoped classes only (`rp-`). Every colour and size is a token, every logical property is
+ * inline-start/end, and nothing relies on a `style=` attribute (the CSP forbids them): continuous
+ * values are SVG attributes in the kit's `Progress`. Controls are the kit's, so they pick up the
+ * 44px coarse-pointer sizes from `tokens.css`.
+ */
+
+.rp {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding: 16px 20px;
+  max-width: 1440px;
+  margin-inline: auto;
+  min-height: 100%;
+  box-sizing: border-box;
+}
+
+/* --- sidebar -------------------------------------------------------------------------- */
+.rp-side {
+  flex: 1 1 232px;
+  max-width: 252px;
+  min-width: 212px;
+  align-self: flex-start;
+  position: sticky;
+  inset-block-start: 20px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--gshadow);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rp-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-block-end: 10px;
+  border-block-end: 1px solid var(--line);
+}
+.rp-brand-plain {
+  border-block-end: 0;
+  padding-block-end: 0;
+}
+.rp-brand strong {
+  display: block;
+  font-size: 15px;
+}
+.rp-brand span:not(.rp-logo) {
+  font-size: 12px;
+  color: var(--fg-3);
+}
+.rp-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: var(--fg);
+  color: var(--bg-0);
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 17px;
+  flex: none;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+.rp-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.rp-nav a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding-inline: 12px;
+  border-radius: var(--radius-ctl);
+  color: var(--fg-2);
+  font-weight: 500;
+  text-decoration: none;
+}
+.rp-nav a:hover {
+  background: var(--accent-soft);
+  text-decoration: none;
+}
+.rp-nav a.on {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.rp-mini {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rp-mini small {
+  color: var(--fg-3);
+  font-size: 12px;
+}
+.rp-mini strong {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+/* --- main column ---------------------------------------------------------------------- */
+.rp-main {
+  flex: 999 1 560px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.rp-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.rp-top h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+.rp-top p {
+  margin: 4px 0 0;
+  color: var(--fg-3);
+  font-size: 13px;
+}
+.rp-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--gshadow);
+  padding: 18px;
+  min-width: 0;
+}
+.rp-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-block-end: 14px;
+}
+.rp-card-head h2 {
+  margin: 0 0 2px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.rp-card-head p {
+  margin: 0;
+}
+.rp-grid4 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+.rp-grid2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.rp-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rp-stat small {
+  color: var(--fg-3);
+  font-size: 12.5px;
+}
+.rp-stat strong {
+  font-size: 22px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.rp-stat em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+.rp-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: flex-start;
+}
+.rp-split.rp-stretch {
+  align-items: stretch;
+}
+.rp-split > .rp-grow {
+  flex: 999 1 420px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.rp-split > .rp-aside {
+  flex: 1 1 300px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.rp-wallet-form > .rp-card,
+.rp-wallet-history > .rp-card {
+  flex: 1;
+}
+
+/* --- small parts ---------------------------------------------------------------------- */
+.rp-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rp-stack h3,
+.rp-price-group h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.rp-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.rp-between {
+  justify-content: space-between;
+}
+.rp-gap {
+  margin-block-start: 14px;
+}
+.rp-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.75px;
+  unicode-bidi: isolate;
+}
+.rp-end {
+  text-align: end;
+}
+.rp-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 110px;
+}
+.rp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rp-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 6px;
+  border-block-end: 1px solid var(--line);
+}
+.rp-list li:last-child {
+  border-block-end: 0;
+}
+.rp-list li > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.rp-list-inline li > div {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+}
+.rp-more,
+.rp-pager {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-block-start: 12px;
+}
+.rp-kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 14px;
+  margin: 0;
+}
+.rp-kv dt {
+  color: var(--fg-3);
+}
+.rp-kv dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rp-struck {
+  text-decoration: line-through;
+}
+.rp-link-btn {
+  all: unset;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+  min-height: var(--ctl-h);
+  display: inline-flex;
+  align-items: center;
+}
+.rp-link-btn:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+}
+
+/* --- tables --------------------------------------------------------------------------- */
+.rp-table-wrap {
+  /* The containing block of the screen-reader-only header cell, so it cannot escape the scroller. */
+  position: relative;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.rp-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+}
+.rp-table th {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-3);
+  text-align: start;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border-block-end: 1px solid var(--line);
+  white-space: nowrap;
+}
+.rp-table td {
+  padding: 10px 12px;
+  border-block-end: 1px solid var(--line);
+  vertical-align: middle;
+}
+.rp-table tr:last-child td {
+  border-block-end: 0;
+}
+.rp-price-group + .rp-price-group {
+  margin-block-start: 18px;
+}
+.rp-price-group h3 {
+  margin-block-end: 8px;
+}
+
+/* --- chips and options ---------------------------------------------------------------- */
+.rp-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-block-end: 14px;
+}
+.rp-toolbar .search {
+  flex: 0 1 280px;
+  min-width: 200px;
+}
+.rp-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rp-chip {
+  all: unset;
+  cursor: pointer;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--ctl-h);
+  padding-inline: 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-2);
+  font-size: 12.75px;
+  font-weight: 600;
+  color: var(--fg-2);
+}
+.rp-chip:hover {
+  background: var(--accent-soft);
+}
+.rp-chip.on {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+.rp-chip b {
+  font-weight: 700;
+  opacity: 0.7;
+}
+.rp-chip:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+}
+.rp-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rp-option {
+  all: unset;
+  cursor: pointer;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+}
+.rp-option > span {
+  display: flex;
+  flex-direction: column;
+}
+.rp-option:hover {
+  background: var(--bg-2);
+}
+.rp-option.on {
+  border: 2px solid var(--accent);
+  padding: 5px 13px;
+}
+.rp-option[disabled],
+.rp-option[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rp-option:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+}
+
+/* --- service drawer ------------------------------------------------------------------- */
+.rp-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.rp-drawer-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rp-qr-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.rp-qr {
+  width: 180px;
+  height: 180px;
+  border-radius: 16px;
+  border: 1px solid var(--line-2);
+  /* A QR must keep its white quiet zone in both themes. */
+  background: #fff;
+  object-fit: contain;
+}
+.rp-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  padding: 4px 8px;
+  background: var(--bg-2);
+  min-width: 0;
+}
+.rp-link .rp-mono {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rp-files {
+  gap: 10px;
+}
+.rp-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-block-start: 1px solid var(--line);
+  padding-block-start: 8px;
+}
+.rp-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- support thread ------------------------------------------------------------------- */
+.rp-thread {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rp-msg {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px 14px;
+  background: var(--bg-2);
+}
+.rp-msg.CUSTOMER {
+  background: var(--accent-soft);
+}
+.rp-msg p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* --- gates and login ------------------------------------------------------------------ */
+.rp-gate,
+.rp-login {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  box-sizing: border-box;
+}
+.rp-gate-card,
+.rp-login-card {
+  width: min(460px, 100%);
+}
+.rp-login-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.rp-login-title {
+  margin: 0;
+  font-size: 18px;
+}
+.rp-steps {
+  margin: 0;
+  padding-inline-start: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--fg-2);
+  line-height: 1.8;
+}
+
+/* --- buying, clients, auto-renew (PR-5) ------------------------------------------------ */
+.rp-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px 16px;
+  align-items: start;
+}
+.rp-tabs-gap {
+  margin-block-end: 14px;
+}
+.rp-chip[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rp-pgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+.rp-plan {
+  all: unset;
+  cursor: pointer;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 44px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+}
+.rp-plan:hover {
+  background: var(--bg-2);
+}
+.rp-plan.on {
+  border: 2px solid var(--accent);
+  padding: 11px 13px;
+}
+.rp-plan:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+}
+.rp-plan-price {
+  font-size: 17px;
+}
+.rp-stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.rp-stepper button {
+  all: unset;
+  cursor: pointer;
+  box-sizing: border-box;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+.rp-stepper button:hover:not([disabled]) {
+  background: var(--bg-2);
+}
+.rp-stepper button[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.rp-stepper button:focus-visible,
+.rp-stepper-value:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: -2px;
+}
+.rp-stepper-value {
+  all: unset;
+  box-sizing: border-box;
+  width: 56px;
+  min-height: 44px;
+  text-align: center;
+  font-weight: 700;
+}
+.rp-sum .rp-kv dd {
+  justify-content: flex-end;
+  text-align: end;
+  white-space: nowrap;
+}
+.rp-sum {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rp-review {
+  max-width: 640px;
+}
+.rp-clip {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.rp-client-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rp-client {
+  all: unset;
+  cursor: pointer;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+}
+.rp-client:hover {
+  background: var(--bg-2);
+}
+.rp-client.on {
+  border: 2px solid var(--accent);
+  padding: 7px 11px;
+}
+.rp-client:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+}
+.rp-client-id {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.rp-client-id > span:last-child {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.rp-client-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.rp-initial {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  background: var(--bg-2);
+}
+.rp-split > .rp-clients-list {
+  flex: 1 1 340px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.rp-split > .rp-clients-detail {
+  flex: 1.7 1 480px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.rp-ar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: 180px;
+}
+.rp-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-block-start: 14px;
+}
+
+/* --- phone ---------------------------------------------------------------------------- */
+@media (max-width: 760px) {
+  .rp {
+    padding: 12px;
+    gap: 12px;
+  }
+  .rp-side {
+    flex-basis: 100%;
+    max-width: none;
+    position: static;
+    max-height: none;
+  }
+  /* The menu is one swipeable strip of tabs instead of nine stacked rows. */
+  .rp-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-block-end: 4px;
+  }
+  .rp-nav a {
+    flex: none;
+    white-space: nowrap;
+  }
+  .rp-card {
+    padding: 14px;
+  }
+  .rp-mini {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+@media (pointer: coarse) and (hover: none) {
+  .rp-nav a {
+    min-height: 44px;
+  }
+}
+.rp-progress .progress rect {
+  fill: var(--violet);
+}

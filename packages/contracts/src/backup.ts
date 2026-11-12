@@ -335,8 +335,11 @@ export const BACKUP_DAILY_TIME_ZONE = 'Asia/Tehran';
  * never removes something the other still protects. Whatever the values, the
  * newest verified archive, a run still in flight, an archive whose delivery
  * outcome is unknown, and one an in-progress recovery refers to are never
- * pruned. There is no zero: "keep nothing" is not a policy a backup feature
- * offers.
+ * pruned. Neither key has a zero.
+ *
+ * "Keep nothing on the host" IS a policy since the owner's decision of 2026-11-11,
+ * deliberately, and it is not a zero here: it is its own switch,
+ * `BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY`, below.
  */
 export const BACKUP_ARCHIVE_RETENTION_SETTING_KEYS = {
   keepCount: 'backup.archive_keep_count',
@@ -348,6 +351,26 @@ export const BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT = 3;
 export const BACKUP_ARCHIVE_KEEP_DAYS_MIN = 1;
 export const BACKUP_ARCHIVE_KEEP_DAYS_MAX = 3650;
 export const BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT = 3;
+
+/**
+ * Whether a backup archive stays on the host once Telegram holds it (owner, 2026-11-11:
+ * «بدون نگهداری»). Read on the INSTALLATION tenant only; hosted-bot archives keep their own
+ * policy. Default `true`: today's behaviour, the two keys above and
+ * `BACKUP_LOCAL_COPIES_SETTING_KEY`.
+ *
+ * `false` removes a run's archive and its whole working directory right after its Telegram
+ * delivery is CONFIRMED — a verified, SUCCEEDED installation run whose delivery is SUCCEEDED
+ * and every recorded part of which carries a Telegram message id — and writes one operations
+ * line per removal naming the run (`BACKUP_ARCHIVE_REMOVED_AFTER_DELIVERY_CODE`). It never
+ * removes a run still in flight, an unverified one, one whose delivery FAILED, is partial or
+ * is `OUTCOME_UNKNOWN`, or one an unfinished recovery names: those keep the keep-count /
+ * keep-days pruning above. The rule "the newest verified archive is never pruned" is lifted
+ * in this mode, and only for confirmed-delivered archives — the group holds that copy. A
+ * restore then starts from a file downloaded from the group and uploaded on the Recovery page.
+ * Switching back to `true` restores nothing already removed.
+ */
+export const BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY = 'backup.archive_keep_on_host';
+export const BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT = true;
 
 /**
  * The CPU the backup's compress, encrypt and verify tools may use together, as a percentage

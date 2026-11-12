@@ -341,15 +341,20 @@ export const FEATURE_FLAGS = [
   {
     key: 'start_captcha',
     description:
-      'R10 D5 (a): ask every NEW customer a simple question in the chat (a sum, four answer ' +
-      'buttons) before the bot serves them. Only customers who first arrive while it is on ' +
+      'R10 D5 (a): ask every NEW customer a simple question in the chat (a sum by default, or ' +
+      'a number in a picture, an emoji, a number in words: `captcha.kind`) before the bot serves them. Only customers who first arrive while it is on ' +
       'are asked; existing customers never are, and turning it off lets everybody waiting ' +
       'through at once. A wrong answer costs an attempt and, at the limit, a cooldown — ' +
       'never a block. Administrators are never asked. No third-party service is involved.',
     defaultEnabled: false,
     // TENANT_WIDE: it stands in front of every new customer of the tenant.
     blastRadius: 'TENANT_WIDE',
-    configuredBy: ['captcha.expiry_seconds', 'captcha.max_attempts', 'captcha.cooldown_seconds'],
+    configuredBy: [
+      'captcha.kind',
+      'captcha.expiry_seconds',
+      'captcha.max_attempts',
+      'captcha.cooldown_seconds',
+    ],
   },
   {
     key: 'panel_auto_balancing',
@@ -789,6 +794,33 @@ export const FEATURE_FLAGS = [
       'not the menu and are unaffected.',
     defaultEnabled: false,
     // LOCAL: how one keyboard is drawn; no customer, price or message is changed by it.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
+    key: 'reseller_web_panel',
+    description:
+      'PR-4: «پنل نماینده» \u2014 an ACTIVE reseller opens a web panel on the tenant\u2019s own web ' +
+      'address from a one-time link the bot sends (button «ورود به پنل وب», ten minutes, once). ' +
+      'The panel shows the reseller\u2019s dashboard, services with their link, QR and connection ' +
+      'files, wallet, prices and tickets, through the same services the bot uses: no new price, ' +
+      'fee or credit rule. Off by default. While it is off the bot shows no button, no link is ' +
+      'issued, and every panel route answers as if it did not exist; sessions opened while it ' +
+      'was on stop working at their next request and work again if it is turned back on.',
+    defaultEnabled: false,
+    // TENANT_WIDE: turning it on offers every active reseller of the tenant a second way in.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
+    key: 'reseller_tier_progress',
+    description:
+      'PR-5: «پیشرفت تا سطح بعد» \u2014 the reseller web panel\u2019s dashboard shows, for a tier with ' +
+      'a next-tier target (a monthly count of services or a monthly sales amount), how far this ' +
+      'month\u2019s sales are from it, read from the existing monthly reseller sales tracking. ' +
+      'Display only: no tier ever changes because of it. Off by default.',
+    defaultEnabled: false,
+    // LOCAL: a card on the reseller panel; nothing else reads it.
     blastRadius: 'LOCAL',
     configuredBy: [],
   },

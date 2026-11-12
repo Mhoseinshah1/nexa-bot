@@ -31,6 +31,8 @@ import {
   BACKUP_CPU_LIMIT_SETTING_KEY,
   BACKUP_LOCAL_COPIES_DEFAULT,
   BACKUP_LOCAL_COPIES_SETTING_KEY,
+  BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT,
+  BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
   LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS,
   LEGACY_IMPORT_ADOPTION_CONCURRENCY_SETTING_KEY,
@@ -377,6 +379,7 @@ import {
 } from './modules/control/media/application/qr-template.service.js';
 import { ReferralSignupGiftService } from './modules/commerce/referrals/application/referral-signup-gift.service.js';
 import { StartCaptchaService } from './modules/commerce/customers/application/start-captcha.service.js';
+import { PNG_CAPTCHA_IMAGE_RENDERER } from './modules/commerce/customers/infrastructure/captcha-image.js';
 import { DrizzleStartCaptchaRepository } from './modules/commerce/customers/infrastructure/drizzle-start-captcha.repository.js';
 import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
 import { TenantReferralDayCalendar } from './modules/commerce/referrals/infrastructure/tenant-referral-day.calendar.js';
@@ -775,7 +778,10 @@ import { DefaultReportExportWriter } from './infrastructure/export/report-export
 import { DefaultAuditLogExportWriter } from './infrastructure/export/audit-log-export-writer.js';
 import { DrizzleAuditLogReader } from './modules/platform/audit/infrastructure/drizzle-audit-log.reader.js';
 import { AuditLogService } from './modules/platform/audit/application/audit-log.service.js';
-import { IntlReportPeriodResolver } from './infrastructure/time/report-calendar.js';
+import {
+  IntlReportPeriodResolver,
+  resolveReportPeriod,
+} from './infrastructure/time/report-calendar.js';
 import {
   PaymentOperationsService,
   type PaymentAttentionReader,
@@ -793,6 +799,20 @@ import { ResellerAdminService } from './modules/commerce/resellers/application/r
 import { ResellerMinimumService } from './modules/commerce/resellers/application/reseller-minimum.service.js';
 import { ResellerExpiryService } from './modules/commerce/resellers/application/reseller-expiry.service.js';
 import { TenantMonthlyPeriods } from './infrastructure/time/monthly-period.js';
+import { ResellerWebAccessService } from './modules/commerce/reseller-panel/application/reseller-web-access.service.js';
+import { ResellerWebServicesService } from './modules/commerce/reseller-panel/application/reseller-web-services.service.js';
+import { ResellerWebDashboardService } from './modules/commerce/reseller-panel/application/reseller-web-dashboard.service.js';
+import { ResellerWebLoginRateLimiter } from './modules/commerce/reseller-panel/application/reseller-web-rate-limiter.js';
+import { DrizzleResellerWebRepository } from './modules/commerce/reseller-panel/infrastructure/drizzle-reseller-web.repository.js';
+import { DrizzleResellerSellingRepository } from './modules/commerce/reseller-panel/infrastructure/drizzle-reseller-selling.repository.js';
+import { ResellerWebPurchaseService } from './modules/commerce/reseller-panel/application/reseller-web-purchase.service.js';
+import { ResellerWebClientsService } from './modules/commerce/reseller-panel/application/reseller-web-clients.service.js';
+import {
+  ResellerWebDailyReportsService,
+  localDate,
+} from './modules/commerce/reseller-panel/application/reseller-web-daily-reports.service.js';
+import { ResellerWebTrialsService } from './modules/commerce/reseller-panel/application/reseller-web-trials.service.js';
+import { ResellerWebTierProgressService } from './modules/commerce/reseller-panel/application/reseller-web-tier-progress.service.js';
 import { DrizzleAuditHistoryReader } from './modules/platform/audit/infrastructure/drizzle-audit-history.reader.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
 // Round N, C1: campaigns.
@@ -1700,6 +1720,27 @@ export interface Container {
    * and the bot's runtime hold, so there is one instance of each.
    */
   readonly miniApp: MiniAppSurfaceDeps;
+  /**
+   * PR-4: the reseller web panel — its access and sessions, the reseller's own services and
+   * connection files, and its dashboard and price list. Every other service the panel reaches
+   * is the one the bot and the mini app hold.
+   */
+  readonly resellerWeb: {
+    readonly access: ResellerWebAccessService;
+    readonly services: ResellerWebServicesService;
+    readonly dashboard: ResellerWebDashboardService;
+    readonly loginLimiter: ResellerWebLoginRateLimiter;
+    /** PR-5: «خرید» — N ordinary orders, one wallet pre-check. */
+    readonly purchases: ResellerWebPurchaseService;
+    /** PR-5: «مشتری‌ها», a client's «تمدید همه», and the auto-renew switch. */
+    readonly clients: ResellerWebClientsService;
+    /** PR-5: the reseller's daily digest and sales report (the reminder loop runs it). */
+    readonly dailyReports: ResellerWebDailyReportsService;
+    /** PR-5: «سرویس تست» — the trial service's own claim, a daily quota. */
+    readonly trials: ResellerWebTrialsService;
+    /** PR-5: «پیشرفت تا سطح بعد» — display only. */
+    readonly tierProgress: ResellerWebTierProgressService;
+  };
   /** WP20: counts every Telegram interaction, including the `/ping` the runtime never sees. */
   readonly antiSpam: Pick<AntiSpamService, 'observe'>;
 
@@ -3003,6 +3044,7 @@ export function createContainer(
     idempotency,
     clock,
     ids,
+    images: PNG_CAPTCHA_IMAGE_RENDERER,
   });
   const customerService = new CustomerService({
     newCustomers: newCustomerGate,
@@ -5533,6 +5575,8 @@ export function createContainer(
   const serviceAutoRenewService = new ServiceAutoRenewService({
     repository: new DrizzleServiceAutoRenewRepository(database.db),
     services: serviceRepository,
+    // PR-5 (OQ-R10-D1-01): only an ACTIVE reseller may auto-renew an imported service.
+    resellers: resellerService,
     commercial: commercialActionService,
     orders: orderService,
     payments: paymentService,
@@ -5572,6 +5616,35 @@ export function createContainer(
     ids,
     logger,
   });
+  /*
+   * PR-5 (carried from PR-4): the reseller's two daily reports, read from their own panel
+   * preferences. A closure reaches the panel's access service, built further down.
+   */
+  const resellerWebDailyReports = new ResellerWebDailyReportsService({
+    resellers: resellerRepository,
+    preferences: (scope, customerId) => resellerWebAccess.preferencesIn(scope, customerId),
+    services: provisioningService,
+    sales: new DrizzleReportingRepository(database.db),
+    days: (now, presentation) => {
+      const day = (range: 'TODAY' | 'YESTERDAY') => {
+        const { current } = resolveReportPeriod({ range }, now, presentation);
+        return {
+          start: current.start,
+          end: current.end,
+          date: localDate(current.start, presentation.timezone),
+        };
+      };
+      return { today: day('TODAY'), yesterday: day('YESTERDAY') };
+    },
+    presentation: new CachedTenantPresentationReader(tenants, clock),
+    sellingCurrency: (scope) => settingsResolver.valueOf(scope, 'sales.currency'),
+    repository: new DrizzleResellerSellingRepository(database.db),
+    notifier: customerNotifier,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+  });
   const customerReminderLoop = new CustomerReminderLoop(
     [
       {
@@ -5593,6 +5666,12 @@ export function createContainer(
         name: 'reseller-monthly-minimum',
         everyMs: SERVICE_REMINDER_INTERVAL_MS,
         runOnce: async (scope) => resellerMinimumService.runOnce(scope),
+      },
+      {
+        // PR-5: once per reseller per tenant-local day; the day's row is the guard.
+        name: 'reseller-web-daily-reports',
+        everyMs: SERVICE_REMINDER_INTERVAL_MS,
+        runOnce: async (scope) => resellerWebDailyReports.runOnce(scope),
       },
       {
         // Round 11, C2: an expiry date is a deadline; checked on every pass.
@@ -6076,6 +6155,15 @@ export function createContainer(
   // Phase 4 PR-4: the support AI's ticket trigger, bound once the support AI is built below.
   const ticketAiRef: { current: SupportTicketAiTrigger | null } = { current: null };
   const ticketService = new TicketService({
+    /*
+     * PR-5 (reseller web panel «پاسخ تیکت»): an ACTIVE reseller who switched it off reads the
+     * reply in the panel instead. A closure: the panel's access service is built further down.
+     */
+    replyNotices: {
+      wanted: async (scope, customerId, tx) =>
+        (await resellerService.standing(scope, customerId, tx)) === null ||
+        (await resellerWebAccess.preferencesIn(scope, customerId, tx)).ticketReply,
+    },
     supportAi: {
       customerMessagePosted: async (scope, input, tx) => {
         await ticketAiRef.current?.customerMessagePosted(scope, input, tx);
@@ -8617,11 +8705,11 @@ export function createContainer(
         ? null
         : { freeBytes: state.freeBytes, requiredBytes: state.requiredBytes };
     },
-    afterSuccess: async () => {
+    afterSuccess: async (run) => {
       // Like the housekeeping pass: no file is deleted beside a recovery.
       if (await recoveryQuiesced()) return;
-      await backupHousekeeping.pruneArchives();
-      await backupHousekeeping.pruneDeliveredCopies();
+      // The archive rules, then the delivered copies — never a recovery's emergency backup's.
+      await backupHousekeeping.afterRun(run);
     },
     // Round 4 PR-D (L31): the caption is the operator's template, short and in Persian, with
     // the time of the next automatic backup when one is scheduled.
@@ -9347,6 +9435,15 @@ export function createContainer(
             { tenantId: installationTenantId, botInstanceId: null },
             BACKUP_LOCAL_COPIES_SETTING_KEY,
           ),
+    // Owner 2026-11-11: off, the host keeps no copy of a backup the group holds in full. Read
+    // on the INSTALLATION tenant only; a hosted tenant's value changes nothing here.
+    keepOnHost: async () =>
+      installationTenantId === null
+        ? BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT
+        : settingsResolver.valueOf<boolean>(
+            { tenantId: installationTenantId, botInstanceId: null },
+            BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
+          ),
     protectedByRecovery: () => recoveryRequests.backupIdsInUse(),
     // Longer than any dump plus any restore can take, plus the lease window: a
     // file untouched for that long has no live writer.
@@ -9534,6 +9631,151 @@ export function createContainer(
     payments: paymentService,
     screens: customerScreens,
   });
+  // PR-4: the reseller web panel.
+  const resellerWebRepository = new DrizzleResellerWebRepository(database.db);
+  const hostedActivationReader = new DrizzleHostedActivationRepository(database.db);
+  const resellerWebAccess = new ResellerWebAccessService({
+    repository: resellerWebRepository,
+    resellers: resellerService,
+    customers: customerRepository,
+    features: featureFlagResolver,
+    guard,
+    audit,
+    uow,
+    scopeActivity: tenants,
+    notifier: customerNotifier,
+    cipher,
+    qr: new PngQrCodeEncoder(),
+    clock,
+    ids,
+    /*
+     * The tenant's own web address: the installation's admin origin, or a hosted tenant's
+     * domain once its DNS and TLS are verified. Only `https://` — the link travels as a
+     * Telegram URL button, which carries nothing else.
+     */
+    webOrigin: async (scope) => {
+      const installation = installationTenantId;
+      if (installation === null) return null;
+      if (scope.tenantId === installation) {
+        const origin = config.WEB_ADMIN_ORIGINS[0] ?? null;
+        return origin !== null && origin.startsWith('https://') ? origin : null;
+      }
+      const activation = await hostedActivationReader.find(
+        { tenantId: installation, botInstanceId: null },
+        scope.tenantId,
+      );
+      if (
+        activation === null ||
+        activation.domain === null ||
+        activation.dnsVerifiedAt === null ||
+        activation.tlsVerifiedAt === null
+      ) {
+        return null;
+      }
+      return `https://${activation.domain}`;
+    },
+  });
+  const resellerWebServices = new ResellerWebServicesService({
+    provisioning: provisioningService,
+    delivery: deliveryService,
+    files: subscriptionFileService,
+    commercial: commercialActionService,
+    titleOf: async (scope, orderId) =>
+      (await orderRepository.findById(scope, orderId as never))?.line.title ?? null,
+    repository: resellerWebRepository,
+    audit,
+    uow,
+    clock,
+    ids,
+    // PR-5: the clients book's labels (built below; read only once a request arrives).
+    clients: { labelsOf: (context) => resellerWebClients.labelsOf(context) },
+  });
+  // PR-5: the selling half.
+  const resellerSellingRepository = new DrizzleResellerSellingRepository(database.db);
+  const resellerWebPurchases = new ResellerWebPurchaseService({
+    orders: orderService,
+    custom: customServiceFlowService,
+    checkout: checkoutService,
+    wallet: walletRepository,
+    listPriceOf: async (scope, productId) =>
+      (await productRepository.findById(scope, productId as never))?.price ?? null,
+    services: serviceRepository,
+    provisioning: provisioningService,
+    delivery: deliveryService,
+    files: subscriptionFileService,
+    repository: resellerSellingRepository,
+    audit,
+    uow,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const resellerPresentation = new CachedTenantPresentationReader(tenants, clock);
+  const resellerWebClients: ResellerWebClientsService = new ResellerWebClientsService({
+    repository: resellerSellingRepository,
+    services: resellerWebServices,
+    purchases: resellerWebPurchases,
+    autoRenew: serviceAutoRenewService,
+    commercial: commercialActionService,
+    orders: orderService,
+    checkout: checkoutService,
+    wallet: walletRepository,
+    audit,
+    uow,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const resellerWeb = {
+    access: resellerWebAccess,
+    purchases: resellerWebPurchases,
+    clients: resellerWebClients,
+    dailyReports: resellerWebDailyReports,
+    trials: new ResellerWebTrialsService({
+      trials: trialService,
+      settings: settingsResolver,
+      trialEnabled: async (scope, panelId) =>
+        (await panelTrialConfigRepository.find(scope, panelId as never))?.enabled === true,
+      count: (scope, customerId, window) =>
+        trialGrantRepository.countResellerTrials(scope, customerId, window),
+      today: async (scope) => {
+        const presentation = await resellerPresentation.presentationFor(scope);
+        const { current } = resolveReportPeriod({ range: 'TODAY' }, clock.now(), presentation);
+        return { from: current.start, to: current.end };
+      },
+      guard,
+      audit,
+    }),
+    tierProgress: new ResellerWebTierProgressService({
+      repository: resellerSellingRepository,
+      tiers: resellerRepository,
+      features: featureFlagResolver,
+      sales: new DrizzleReportingRepository(database.db),
+      periods: new TenantMonthlyPeriods(),
+      presentation: resellerPresentation,
+      guard,
+      audit,
+      uow,
+      scopeActivity: tenants,
+      clock,
+    }),
+    loginLimiter: new ResellerWebLoginRateLimiter({
+      // The mini app's store under its own subject key: no second Redis connection to close.
+      counter: miniAppCounter,
+      clock,
+      ids,
+    }),
+    services: resellerWebServices,
+    dashboard: new ResellerWebDashboardService({
+      wallet: walletService,
+      services: resellerWebServices,
+      products: productService,
+      sales: new DrizzleReportingRepository(database.db),
+      periods: new TenantMonthlyPeriods(),
+      presentation: new CachedTenantPresentationReader(tenants, clock),
+      clock,
+    }),
+  };
   const miniApp: MiniAppSurfaceDeps = {
     sessions: miniAppSessions,
     rateLimit: new MiniAppRateLimiter({ counter: miniAppCounter, clock, ids }),
@@ -9824,7 +10066,10 @@ export function createContainer(
     }),
     antiSpam,
     miniApp,
+    resellerWeb,
     botRuntime: new BotRuntime({
+      // PR-4: «ورود به پنل وب».
+      resellerWeb: resellerWebAccess,
       // R5C-1 item 4: «نمایش زمان اضافه داخل تمدید هم» (flag `addon_time_in_renew_menu`).
       renewMenuShowsTime: (scope) =>
         featureFlagResolver.isEnabled(scope, 'addon_time_in_renew_menu'),

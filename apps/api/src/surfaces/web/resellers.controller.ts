@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Put, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
@@ -40,6 +40,9 @@ import {
   type ResellerTierProductPricesWriteResponse,
   type ResellerTierResponse,
   type ResellerTierSummaryResponse,
+  type ResellerWebPanelSummary,
+  type ResellerAdminTrials,
+  type ResellerTierTarget,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { authenticateAdmin } from './authenticated-request.js';
@@ -257,6 +260,69 @@ export class ResellersController {
       },
     });
     return { reseller: toResellerSummary(reseller) };
+  }
+
+  /** PR-4: the drawer's web-panel last sign-in line (`resellers.view`). */
+  @Get('resellers/:customerId/web-panel')
+  async webPanel(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+  ): Promise<ResellerWebPanelSummary> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.resellerWeb.access.adminSummary(scope, actor, customerId);
+  }
+
+  /** PR-4: the drawer's forced sign-out of every device — `resellers.edit`, a reason, audited. */
+  @Post('resellers/:customerId/web-panel/force-logout')
+  async webPanelForceLogout(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+    @Body() body: unknown,
+  ): Promise<{ ended: number }> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.resellerWeb.access.adminForceLogout(scope, actor, customerId, body);
+  }
+
+  /** PR-5: the drawer's two-step sign-in reset — `resellers.edit`, a reason, audited. */
+  @Post('resellers/:customerId/web-panel/totp-reset')
+  async webPanelTotpReset(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+    @Body() body: unknown,
+  ): Promise<{ reset: boolean; ended: number }> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.resellerWeb.access.adminResetSecondFactor(scope, actor, customerId, body);
+  }
+
+  /** PR-5: the drawer's reseller trial count (`resellers.view`). */
+  @Get('resellers/:customerId/web-panel/trials')
+  async webPanelTrials(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+  ): Promise<ResellerAdminTrials> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.resellerWeb.trials.adminTrials(scope, actor, customerId);
+  }
+
+  /** PR-5: a tier's next-tier target (`resellers.view`). Display only. */
+  @Get('reseller-tiers/:id/next-target')
+  async tierTarget(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<{ target: ResellerTierTarget | null }> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.resellerWeb.tierProgress.adminTarget(scope, actor, id);
+  }
+
+  /** PR-5: set or clear a tier's next-tier target (`resellers.edit`, audited). Changes no tier. */
+  @Put('reseller-tiers/:id/next-target')
+  async setTierTarget(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<{ target: ResellerTierTarget | null }> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.resellerWeb.tierProgress.adminSetTarget(scope, actor, id, body);
   }
 
   @Get('reseller-tiers/:id/history')

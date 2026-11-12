@@ -96,6 +96,32 @@ export const WEB_FA_ERRORS = {
   'web.err_miniapp_init_data_replayed':
     'با این اطلاعات ورود مینی‌اپ قبلاً یک نشست ساخته شده است و نشست دوم ساخته نمی‌شود.',
   'web.err_miniapp_not_found': 'این مورد پیدا نشد یا متعلق به این مشتری نیست.',
+  'web.err_reseller_web_unavailable': 'پنل نماینده در دسترس نیست.',
+  'web.err_reseller_web_link_invalid':
+    'این لینک ورود معتبر نیست. از ربات، دکمهٔ «ورود به پنل وب» را بزنید و لینک تازه بگیرید.',
+  'web.err_reseller_web_link_used':
+    'این لینک قبلاً باز شده است و دوباره کار نمی‌کند. برای ورود دوباره از ربات لینک تازه بگیرید.',
+  'web.err_reseller_web_link_expired':
+    'مهلت ده‌دقیقه‌ای این لینک تمام شده است. از ربات لینک تازه بگیرید.',
+  'web.err_reseller_web_session_invalid':
+    'نشست شما تمام شده یا بسته شده است. از ربات دوباره لینک ورود بگیرید.',
+  'web.err_reseller_web_second_factor_required': 'کد ورود دومرحله‌ای را وارد کنید.',
+  'web.err_reseller_web_second_factor_invalid': 'کد واردشده درست نیست یا قبلاً استفاده شده است.',
+  'web.err_reseller_web_second_factor_state':
+    'وضعیت ورود دومرحله‌ای با این درخواست هم‌خوان نیست؛ صفحه را تازه کنید.',
+  'web.err_reseller_web_rate_limited': 'درخواست‌ها زیاد بوده است؛ کمی بعد دوباره امتحان کنید.',
+  'web.err_reseller_web_request_invalid': 'درخواست با قالب مورد انتظار هم‌خوان نیست.',
+  'web.err_reseller_web_not_found': 'این مورد پیدا نشد.',
+  'web.err_reseller_web_files_unavailable':
+    'فایل‌های اتصال این سرویس الان در دسترس نیست: سرور پاسخ نمی‌دهد یا در این وضعیت فایلی ندارد.',
+  'web.err_reseller_web_telegram_undelivered':
+    'پیام به تلگرام شما نرسید. مطمئن شوید ربات را مسدود نکرده‌اید و دوباره امتحان کنید.',
+  'web.err_reseller_web_rotate_unavailable': 'این سرور امکان ساختن لینک تازه را ندارد.',
+  'web.err_reseller_web_custom_username_single':
+    'نام کاربری دلخواه فقط برای خرید یک سرویس است؛ برای چند سرویس «خودکار» را انتخاب کنید.',
+  'web.err_reseller_web_trial_unavailable':
+    'سرویس تست الان در دسترس نیست یا سهمیهٔ امروز تمام شده است.',
+  'web.err_reseller_web_auto_renew_plan_required': 'برای روشن کردن، پلن تمدید را انتخاب کنید',
   'web.err_miniapp_rate_limited':
     'درخواست‌های مینی‌اپ از حد مجاز گذشته است؛ کمی بعد دوباره امتحان کنید.',
   'web.err_miniapp_receipt_refused':

@@ -1,5 +1,6 @@
 // Reading the intent out of a Telegram update.
 // Moved verbatim out of bot-runtime.ts, which still re-exports every name it exported.
+import { RESELLER_WEB_CALLBACK } from '@nexa/contracts';
 import {
   ADMIN_MENU_COMMAND,
   BROADCAST_ACTIONS,
@@ -556,14 +557,17 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       if (!version.success) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
       return { intent: 'TERMS_ACCEPT', targetId: version.data, callbackQueryId: id };
     }
-    // R10 D5 (a): `hc:<question uuid>:<0-3>` — a question and a position, nothing else.
+    // R10 D5 (a): `hc:<question uuid>:<0-3>` — a question and a position, nothing else; `:r` asks for a new picture.
     if (data.startsWith(START_CAPTCHA_CALLBACK_PREFIX)) {
-      const answer = /^([0-9a-f-]{36}):([0-3])$/u.exec(
+      const answer = /^([0-9a-f-]{36}):([0-3]|r)$/u.exec(
         data.slice(START_CAPTCHA_CALLBACK_PREFIX.length),
       );
       const question = uuidV7Schema.safeParse(answer?.[1]);
       if (answer === null || !question.success) {
         return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      if (answer[2] === 'r') {
+        return { intent: 'CAPTCHA_REFRESH', targetId: question.data, callbackQueryId: id };
       }
       return {
         intent: 'CAPTCHA_ANSWER',
@@ -775,6 +779,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      */
     if (data === TOPUP_MENU_CALLBACK_PREFIX) {
       return { intent: 'TOPUP_MENU', targetId: null, callbackQueryId: id };
+    }
+    if (data === RESELLER_WEB_CALLBACK) {
+      return { intent: 'RESELLER_WEB_LINK', targetId: null, callbackQueryId: id };
     }
     if (data === GIFT_CARD_CALLBACK_DATA) {
       return { intent: 'GIFT_CARD', targetId: null, callbackQueryId: id };

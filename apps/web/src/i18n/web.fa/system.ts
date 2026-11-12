@@ -101,6 +101,16 @@ export const WEB_FA_SYSTEM = {
   'web.backup_schedule_reset_interval': 'بازگشت فاصله به پیش‌فرض نصب',
   'web.backup_schedule_saved': 'ذخیره شد. از نوبت بعدی بررسی زمان‌بندی اعمال می‌شود.',
   'web.backup_schedule_read_only': 'برای تغییر زمان‌بندی، دسترسی ویرایش تنظیمات لازم است.',
+  // Owner 2026-11-11: «بدون نگهداری» — backup.archive_keep_on_host on the schedule card.
+  'web.backup_keep_on_host': 'نگه داشتن نسخه روی سرور',
+  'web.backup_keep_on_host_hint':
+    'روشن: فایل بکاپ طبق تعداد و مدت نگهداری روی سرور می‌ماند. خاموش: هر بکاپی که کامل به گروه تلگرام رسید، همان لحظه از روی سرور پاک می‌شود.',
+  'web.backup_keep_on_host_confirm':
+    'بعد از رسیدن بکاپ به گروه تلگرام، فایل از روی سرور پاک می‌شود. برای بازیابی باید فایل را از گروه تلگرام دانلود و در صفحهٔ بازیابی بارگذاری کنید.',
+  'web.backup_keep_on_host_confirm_yes': 'بله، خاموش شود',
+  'web.backup_keep_on_host_cancel': 'انصراف',
+  'web.backup_keep_on_host_off_retention':
+    'نگه داشتن نسخه روی سرور خاموش است؛ این دو عدد فقط برای بکاپ‌هایی به کار می‌روند که ارسالشان به گروه تلگرام ناموفق یا نامعلوم مانده است.',
   'web.backup_source_setting': 'تنظیم‌شده در پنل',
   'web.backup_source_environment': 'پیش‌فرض نصب',
   'web.backup_schedule_technical':
@@ -162,6 +172,9 @@ export const WEB_FA_SYSTEM = {
 
   // Upload and verification
   'web.recovery_upload_title': 'بارگذاری آرشیو',
+  'web.recovery_upload_default_title': 'بارگذاری فایل بکاپ',
+  'web.recovery_upload_default_hint':
+    'روی این سرور فایل بکاپی نمانده است. فایل بکاپ را از گروه تلگرام دانلود کنید و همین‌جا بارگذاری کنید.',
   'web.recovery_upload_hint':
     'آرشیو رمزشده‌ی همین نصب، یا بکاپ هر سروری که با «رمز فایل بکاپ» ساخته شده (فقط فایل و رمز لازم است). فایل روی سرور رمزگشایی و راستی‌آزمایی می‌شود؛ کلید هرگز به مرورگر نمی‌آید.',
   'web.recovery_upload_choose': 'انتخاب فایل',
@@ -273,6 +286,7 @@ export const WEB_FA_SYSTEM = {
   'web.secret_purpose_backup_password': 'رمز بکاپ',
   'web.secret_purpose_gift_card_export': 'کلید خروجی کارت هدیه',
   'web.secret_purpose_hosting_totp': 'رمز ورود دومرحله‌ای پنل سازندگان',
+  'web.secret_purpose_reseller_web_totp': 'رمز ورود دومرحله‌ای پنل وب نماینده',
   'web.secret_purpose_hosted_archive_password': 'رمز بکاپ ربات‌های میزبانی‌شده',
   'web.secret_unreadable_title':
     'بخشی از اطلاعات محرمانهٔ این بکاپ با کلیدهای این سرور خوانده نمی‌شود',

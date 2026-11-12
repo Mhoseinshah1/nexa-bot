@@ -34,6 +34,18 @@ import {
   type UpdateIncidentRequest,
 } from '@nexa/contracts';
 import {
+  RESELLER_SELLING_ADMIN_ROUTES,
+  RESELLER_WEB_ADMIN_ROUTES,
+  resellerAdminTrialsSchema,
+  resellerTierTargetResponseSchema,
+  resellerTotpResetResponseSchema,
+  resellerWebForceLogoutResponseSchema,
+  resellerWebPanelSummarySchema,
+  type ResellerAdminTrials,
+  type ResellerTierTarget,
+  type ResellerWebPanelSummary,
+} from '@nexa/contracts';
+import {
   RESELLER_REQUEST_ROUTES,
   resellerRequestDetailResponseSchema,
   resellerRequestListResponseSchema,
@@ -958,7 +970,7 @@ export class ApiError extends Error {
   readonly correlationId: string | null;
 }
 
-function toApiError(status: number, payload: unknown): ApiError {
+export function toApiError(status: number, payload: unknown): ApiError {
   const parsed = errorResponseSchema.safeParse(payload);
   if (parsed.success) {
     return new ApiError(
@@ -6313,5 +6325,72 @@ export function cancelTenantRestore(
     restorePath(HOSTED_BACKUP_ROUTES.cancel, restoreId),
     body,
     hostingShape<TenantRestoreView>(),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The reseller drawer's «پنل وب» card (reseller web panel, PR-4)
+// ---------------------------------------------------------------------------
+
+function webPanelPath(template: string, customerId: string): string {
+  return template.replace(':customerId', encodeURIComponent(customerId));
+}
+
+/** Last sign-in, open sessions and 2FA of one reseller's web panel (`resellers.view`). */
+export function fetchResellerWebPanel(customerId: string): Promise<ResellerWebPanelSummary> {
+  return authedGet(
+    webPanelPath(RESELLER_WEB_ADMIN_ROUTES.summary, customerId),
+    resellerWebPanelSummarySchema,
+  );
+}
+
+/** PR-5: today's, the quota and the lifetime count of the reseller's panel trials. */
+export function fetchResellerWebTrials(customerId: string): Promise<ResellerAdminTrials> {
+  return authedGet(
+    webPanelPath(RESELLER_SELLING_ADMIN_ROUTES.trials, customerId),
+    resellerAdminTrialsSchema,
+  );
+}
+
+/** PR-5: removes the reseller's two-step sign-in (`resellers.edit`, a reason, audited). */
+export function resetResellerWebTotp(
+  customerId: string,
+  body: { reason: string; idempotencyKey: string },
+): Promise<{ reset: boolean; ended: number }> {
+  return post(
+    webPanelPath(RESELLER_SELLING_ADMIN_ROUTES.totpReset, customerId),
+    body,
+    resellerTotpResetResponseSchema,
+  );
+}
+
+function tierTargetPath(tierId: string): string {
+  return RESELLER_SELLING_ADMIN_ROUTES.tierTarget.replace(':tierId', encodeURIComponent(tierId));
+}
+
+/** PR-5: a tier's next-tier target (`resellers.view`); null when none is set. */
+export function fetchResellerTierTarget(
+  tierId: string,
+): Promise<{ target: ResellerTierTarget | null }> {
+  return authedGet(tierTargetPath(tierId), resellerTierTargetResponseSchema);
+}
+
+/** PR-5: sets or clears it (`resellers.edit`). Display only: no tier changes because of it. */
+export function saveResellerTierTarget(
+  tierId: string,
+  body: { target: ResellerTierTarget | null; idempotencyKey: string },
+): Promise<{ target: ResellerTierTarget | null }> {
+  return put(tierTargetPath(tierId), body, resellerTierTargetResponseSchema);
+}
+
+/** Ends every web-panel session of one reseller (`resellers.edit`, a reason is required, audited). */
+export function forceLogoutResellerWebPanel(
+  customerId: string,
+  body: { reason: string; idempotencyKey: string },
+): Promise<{ ended: number }> {
+  return post(
+    webPanelPath(RESELLER_WEB_ADMIN_ROUTES.forceLogout, customerId),
+    body,
+    resellerWebForceLogoutResponseSchema,
   );
 }

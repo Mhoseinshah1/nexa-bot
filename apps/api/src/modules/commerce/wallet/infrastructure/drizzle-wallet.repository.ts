@@ -526,6 +526,7 @@ export class DrizzleWalletRepository implements WalletRepository {
     limit: number,
     cursor: WalletCursor | null,
     tx?: unknown,
+    direction?: 'CREDIT' | 'DEBIT',
   ): Promise<WalletEntryPage> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
@@ -535,6 +536,7 @@ export class DrizzleWalletRepository implements WalletRepository {
         and(
           eq(walletEntries.tenantId, tenantId),
           eq(walletEntries.customerId, customerId),
+          ...(direction === undefined ? [] : [eq(walletEntries.direction, direction)]),
           // The SAME predicate `balanceOf` applies. Without it this page listed entries
           // in every currency under a balance computed from one of them, so a tenant
           // that changed `sales.currency` showed «موجودی: ۰» above a table of movements.

@@ -792,9 +792,20 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * one instruction — "send /start again" — is answered on this head.
        */
       'bot.captcha.challenge',
+      'bot.captcha.emoji_challenge',
+      'bot.captcha.emoji_expired',
+      'bot.captcha.emoji_option_button',
+      'bot.captcha.emoji_wrong',
       'bot.captcha.expired',
+      'bot.captcha.image_challenge',
+      'bot.captcha.image_expired',
+      'bot.captcha.image_wrong',
       'bot.captcha.locked',
       'bot.captcha.option_button',
+      'bot.captcha.refresh_button',
+      'bot.captcha.word_challenge',
+      'bot.captcha.word_expired',
+      'bot.captcha.word_wrong',
       'bot.captcha.wrong',
       'bot.catalog.back_to_categories_button',
       /*
@@ -1140,6 +1151,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.reseller_request.summary',
       'bot.reseller_request.thread_closed',
       'bot.reseller_request.unavailable',
+      // PR-4: «ورود به پنل وب» — the button, the one-time link and its URL button, and the two
+      // answers when no link is issued. Reviewed: the link message promises ten minutes and
+      // one use, which `ResellerWebAccessService.issueLink` / `exchange` enforce.
+      'bot.reseller_web.link',
+      'bot.reseller_web.link_button',
+      'bot.reseller_web.link_rate_limited',
+      'bot.reseller_web.open_button',
+      'bot.reseller_web.unavailable',
       'bot.service.action_in_progress',
       'bot.service.action_not_allowed',
       'bot.service.action_requested',

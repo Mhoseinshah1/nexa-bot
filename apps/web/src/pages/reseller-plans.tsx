@@ -286,12 +286,8 @@ export function ResellerPlansPage({
     {
       key: 'name',
       header: t('web.reseller_tier_name'),
-      // The name is the way in: the tier's products and permissions drawer.
-      render: (row) => (
-        <button type="button" className="link strong" onClick={() => setGrantsId(row.id)}>
-          {row.name}
-        </button>
-      ),
+      // The row is the way in (onRowActivate): the tier's products and permissions drawer.
+      render: (row) => <strong>{row.name}</strong>,
     },
     {
       key: 'products',
@@ -410,6 +406,7 @@ export function ResellerPlansPage({
             rowClassName={(row) =>
               row.id === grantsId || row.id === minimumId ? 'selected' : undefined
             }
+            onRowActivate={(row) => setGrantsId(row.id)}
           />
           {tierPage.pager}
         </StateSwitch>

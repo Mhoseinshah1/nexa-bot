@@ -1,0 +1,1100 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>پنل نماینده</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{opacity:.8}
+.rp{--bg-0:#f4f4f5;--bg-1:#fff;--bg-2:#f6f7fc;--bg-3:#eef0f7;--line:#1e285a17;--line-2:#1e285a29;--fg:#09090b;--fg-2:#3f3f46;--fg-3:#5c5c66;--accent:#09090b;--accent-fg:#fff;--accent-soft:#09090b12;--ok:#137236;--ok-soft:#1372361a;--warn:#8c5300;--warn-soft:#be78001f;--danger:#ba2932;--danger-soft:#ba293217;--violet:#6d3fd0;--violet-soft:#6d3fd017;--shadow:0 24px 48px -28px #28326e59,0 2px 6px -3px #28326e24;--mesh:linear-gradient(180deg,#f7f7f8,#f1f1f3);font-family:Vazirmatn,system-ui,sans-serif;font-size:14.5px;color:var(--fg);background:var(--mesh);min-height:100vh;direction:rtl}
+.rp.dark{--bg-0:#0a0a0b;--bg-1:#121213;--bg-2:#161618;--bg-3:#1c1c1f;--line:#ffffff14;--line-2:#ffffff26;--fg:#f4f4f5;--fg-2:#b8b8bd;--fg-3:#a2a2a9;--accent:#f4f4f5;--accent-fg:#0a0a0b;--accent-soft:#ffffff1a;--ok:#6ee7a8;--ok-soft:#6ee7a826;--warn:#f5c56b;--warn-soft:#f5c56b29;--danger:#f8848c;--danger-soft:#f8848c29;--violet:#c4b5fd;--violet-soft:#c4b5fd24;--shadow:0 30px 60px -30px #000000d9,0 2px 8px -2px #0006;--mesh:linear-gradient(180deg,#0e0e10,#0a0a0b 70%)}
+.rp *{box-sizing:border-box}
+.rp button,.rp input,.rp select,.rp textarea{font-family:inherit;font-size:13.5px;color:inherit}
+.shell{display:flex;flex-wrap:wrap;gap:20px;padding:20px;max-width:1440px;margin:0 auto}
+.side{flex:1 1 240px;max-width:260px;min-width:220px;background:var(--bg-1);border:1px solid var(--line);border-radius:20px;padding:18px;display:flex;flex-direction:column;gap:14px;box-shadow:var(--shadow);align-self:flex-start}
+.main{flex:999 1 560px;min-width:0;display:flex;flex-direction:column;gap:18px}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 4px 10px;border-bottom:1px solid var(--line)}
+.logo{width:38px;height:38px;border-radius:12px;background:var(--accent);color:var(--accent-fg);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px}
+.brand b{display:block;font-size:15px}.brand span{font-size:12px;color:var(--fg-3)}
+.nav{display:flex;flex-direction:column;gap:4px}
+.nav button{all:unset;cursor:pointer;display:flex;align-items:center;gap:10px;padding:0 12px;min-height:44px;border-radius:12px;color:var(--fg-2);font-weight:500}
+.nav button:hover{background:var(--accent-soft)}
+.nav button.on{background:var(--accent);color:var(--accent-fg)}
+.nav svg,.ic{width:18px;height:18px;flex:none}
+.mini{background:var(--bg-2);border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:6px}
+.mini small{color:var(--fg-3);font-size:12px}.mini strong{font-size:18px}
+.top{display:flex;flex-wrap:wrap;align-items:center;gap:12px;justify-content:space-between}
+.top h1{margin:0;font-size:22px;font-weight:700}
+.top p{margin:4px 0 0;color:var(--fg-3);font-size:13px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.btn{all:unset;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:12px;font-weight:600;font-size:13.5px;border:1px solid var(--line-2);background:var(--bg-1);color:var(--fg);white-space:nowrap}
+.btn:hover{background:var(--bg-3)}
+.btn.pri{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.btn.pri:hover{opacity:.9}
+.btn.sm{min-height:36px;padding:0 12px;font-size:12.75px;border-radius:10px}
+.btn.dis{opacity:.45;pointer-events:none}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn:focus-visible,.nav button:focus-visible,.chip:focus-visible,.pcard:focus-visible{outline:2px solid var(--violet);outline-offset:2px}
+.card{background:var(--bg-1);border:1px solid var(--line);border-radius:20px;padding:20px;box-shadow:var(--shadow)}
+.card h2{margin:0 0 4px;font-size:16px;font-weight:700}
+.card .sub{margin:0 0 14px;color:var(--fg-3);font-size:12.75px}
+.grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;align-items:stretch}
+.stat{display:flex;flex-direction:column;gap:6px}
+.stat small{color:var(--fg-3);font-size:12.75px}
+.stat strong{font-size:24px;font-weight:800;letter-spacing:-.3px}
+.stat em{font-style:normal;font-size:12px;color:var(--fg-3)}
+.tag{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:var(--accent-soft);color:var(--fg-2);white-space:nowrap}
+.tag.ok{background:var(--ok-soft);color:var(--ok)}.tag.warn{background:var(--warn-soft);color:var(--warn)}.tag.bad{background:var(--danger-soft);color:var(--danger)}.tag.vi{background:var(--violet-soft);color:var(--violet)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:14px}
+table{width:100%;border-collapse:collapse;min-width:720px}
+th{font-size:12px;font-weight:600;color:var(--fg-3);text-align:right;padding:10px 12px;background:var(--bg-2);border-bottom:1px solid var(--line)}
+td{padding:12px;border-bottom:1px solid var(--line);font-size:13.5px;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.75px;direction:ltr;unicode-bidi:isolate}
+.muted{color:var(--fg-3);font-size:12.75px}
+.bar{height:6px;border-radius:99px;background:var(--bg-3);overflow:hidden;min-width:110px}
+.bar i{display:block;height:100%;border-radius:99px;background:var(--fg-2)}
+.bar i.warn{background:var(--warn)}.bar i.bad{background:var(--danger)}
+.chip{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 14px;border-radius:999px;border:1px solid var(--line-2);font-size:12.75px;font-weight:600;color:var(--fg-2)}
+.chip.on{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.chip b{font-weight:700;opacity:.7}
+.box{border:1px solid var(--line);border-radius:16px;padding:6px;display:inline-flex;flex-wrap:wrap;gap:6px;background:var(--bg-2)}
+.inp{display:flex;flex-direction:column;gap:6px;flex:1 1 200px}
+.inp label{font-size:12.75px;font-weight:600;color:var(--fg-2)}
+.inp input,.inp select,.inp textarea{min-height:44px;border:1px solid var(--line-2);border-radius:12px;background:var(--bg-1);padding:0 12px;outline:none}
+.inp textarea{padding:10px 12px;min-height:90px;resize:vertical}
+.inp input:focus,.inp select:focus,.inp textarea:focus{border-color:var(--fg-3)}
+.inp small{font-size:12px;color:var(--fg-3)}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.pcard{all:unset;cursor:pointer;box-sizing:border-box;border:1px solid var(--line-2);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:8px;background:var(--bg-1)}
+.pcard:hover{border-color:var(--fg-3)}
+.pcard.on{border:2px solid var(--accent);padding:15px;background:var(--bg-2)}
+.pcard b{font-size:15px}.pcard .old{text-decoration:line-through;color:var(--fg-3);font-size:12.75px}.pcard .new{font-size:18px;font-weight:800}
+.sum{display:flex;flex-direction:column;gap:10px}
+.sum .l{display:flex;justify-content:space-between;gap:12px;font-size:13.5px}
+.sum .l span{color:var(--fg-3)}
+.sum .tot{border-top:1px dashed var(--line-2);padding-top:12px;font-size:16px;font-weight:800}
+.stepper{display:inline-flex;align-items:center;border:1px solid var(--line-2);border-radius:12px;overflow:hidden}
+.stepper button{all:unset;cursor:pointer;width:44px;height:44px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.stepper button:hover{background:var(--bg-3)}
+.stepper span{min-width:48px;text-align:center;font-weight:700}
+.alert{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:14px;font-size:13px;line-height:1.7}
+.alert.warn{background:var(--warn-soft);color:var(--warn)}.alert.ok{background:var(--ok-soft);color:var(--ok)}.alert.info{background:var(--accent-soft);color:var(--fg-2)}
+.shade{position:fixed;inset:0;background:#0000004d;display:flex;justify-content:flex-start;z-index:20}
+.drawer{width:min(460px,100%);height:100%;overflow:auto;background:var(--bg-1);border-left:1px solid var(--line);padding:22px;display:flex;flex-direction:column;gap:16px;box-shadow:var(--shadow)}
+.qr{width:180px;height:180px;border-radius:16px;border:1px dashed var(--line-2);display:flex;align-items:center;justify-content:center;color:var(--fg-3);font-size:12.75px;text-align:center;align-self:center;background:var(--bg-2)}
+.link{display:flex;gap:8px;align-items:center;border:1px solid var(--line-2);border-radius:12px;padding:6px 6px 6px 12px;background:var(--bg-2)}
+.link .mono{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.opt{all:unset;cursor:pointer;box-sizing:border-box;display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:52px;padding:0 14px;border:1px solid var(--line-2);border-radius:14px}
+.opt:hover{background:var(--bg-2)}
+.opt.on{border:2px solid var(--accent);padding:0 13px}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--accent);color:var(--accent-fg);padding:12px 20px;border-radius:16px;font-weight:600;z-index:30;box-shadow:var(--shadow)}
+.login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.login .card{width:min(440px,100%);display:flex;flex-direction:column;gap:16px}
+.steps{margin:0;padding:0 18px 0 0;display:flex;flex-direction:column;gap:8px;color:var(--fg-2);line-height:1.8}
+.sw{all:unset;cursor:pointer;width:44px;height:26px;border-radius:99px;background:var(--bg-3);border:1px solid var(--line-2);position:relative;flex:none}
+.sw i{position:absolute;top:3px;right:3px;width:18px;height:18px;border-radius:50%;background:var(--fg-3);transition:right .15s}
+.sw.on{background:var(--accent)}.sw.on i{right:21px;background:var(--accent-fg)}
+.setrow{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid var(--line)}
+.setrow:last-child{border-bottom:0}
+.setrow b{display:block;font-size:13.5px}.setrow span{font-size:12.75px;color:var(--fg-3)}
+.split{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start}
+.split > .grow{flex:999 1 520px;min-width:0;display:flex;flex-direction:column;gap:18px}
+.split > .aside{flex:1 1 300px;min-width:0;display:flex;flex-direction:column;gap:18px}
+@media (max-width:760px){.side{max-width:none}.shell{padding:12px}}
+</style>
+</helmet>
+
+<div class="{{rootClass}}">
+
+<sc-if value="{{showLogin}}" hint-placeholder-val="{{false}}">
+<div class="login">
+  <div class="card">
+    <div class="brand" style="border:0;padding:0">
+      <div class="logo">N</div>
+      <div><b>پنل نماینده</b><span>ورود به پنل فروش</span></div>
+    </div>
+    <h2 style="margin:0;font-size:18px">ورود با لینک یک‌بارمصرف</h2>
+    <ol class="steps">
+      <li>در ربات، دکمهٔ «👨‍💻 پنل نمایندگی» و بعد «ورود به پنل وب» را بزنید.</li>
+      <li>ربات یک لینک یک‌بارمصرف می‌فرستد که 10 دقیقه اعتبار دارد.</li>
+      <li>لینک را در همین مرورگر باز کنید؛ بدون نام کاربری و رمز وارد می‌شوید.</li>
+    </ol>
+    <div class="alert info">لینک فقط یک بار کار می‌کند و به حساب تلگرام شما گره خورده است. اگر کسی دیگر آن را باز کند، وارد نمی‌شود.</div>
+    <button class="btn pri" onClick="{{login}}">باز کردن لینک نمونه و ورود</button>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{showApp}}" hint-placeholder-val="{{true}}">
+<div class="shell">
+
+  <aside class="side" aria-label="منوی پنل">
+    <div class="brand">
+      <div class="logo">N</div>
+      <div><b>{{storeName}}</b><span>نماینده • {{tierName}}</span></div>
+    </div>
+    <nav class="nav">
+      <sc-for list="{{navItems}}" as="item" hint-placeholder-count="7">
+        <button class="{{item.cls}}" onClick="{{item.go}}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{item.icon}}"></path></svg>
+          <span>{{item.label}}</span>
+        </button>
+      </sc-for>
+    </nav>
+    <div class="mini">
+      <small>موجودی کیف پول</small>
+      <strong>{{balanceText}} <span style="font-size:12px;font-weight:500">تومان</span></strong>
+      <button class="btn sm" onClick="{{goWallet}}">شارژ کیف پول</button>
+    </div>
+    <button class="btn ghost sm" onClick="{{logout}}">خروج از پنل</button>
+  </aside>
+
+  <main class="main">
+    <div class="top">
+      <div>
+        <h1>{{screenTitle}}</h1>
+        <p>{{screenSub}}</p>
+      </div>
+      <div class="row">
+        <span class="tag vi">دادهٔ نمونه</span>
+        <button class="btn sm" onClick="{{toggleTheme}}" aria-label="تغییر تم">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path></svg>
+          {{themeLabel}}
+        </button>
+        <button class="btn pri sm" onClick="{{goBuy}}">+ خرید سرویس</button>
+      </div>
+    </div>
+
+    <!-- ============ DASHBOARD ============ -->
+    <sc-if value="{{isDash}}" hint-placeholder-val="{{true}}">
+      <div class="grid4">
+        <div class="card stat"><small>موجودی کیف پول</small><strong>{{balanceText}}</strong><em>تومان • بدون اعتبار و بدهی</em></div>
+        <div class="card stat"><small>سرویس‌های فعال</small><strong>{{activeCount}}</strong><em>از {{totalCount}} سرویس شما</em></div>
+        <div class="card stat"><small>فروش این ماه</small><strong>12,450,000</strong><em>تومان • 38 سرویس در آبان</em></div>
+        <div class="card stat"><small>رو به اتمام</small><strong>{{expiringCount}}</strong><em>کمتر از 7 روز یا 10٪ حجم</em></div>
+      </div>
+
+      <div class="split">
+        <div class="grow">
+          <div class="card">
+            <div class="top" style="margin-bottom:12px">
+              <div><h2>سرویس‌های رو به اتمام</h2><p class="muted" style="margin:0">قبل از قطع شدن، برای مشتری تمدید کنید.</p></div>
+              <button class="btn sm" onClick="{{goServicesExpiring}}">همه</button>
+            </div>
+            <div class="tbl">
+              <table>
+                <thead><tr><th>نام کاربری</th><th>یادداشت</th><th>مصرف</th><th>انقضا</th><th></th></tr></thead>
+                <tbody>
+                  <sc-for list="{{expiringRows}}" as="s" hint-placeholder-count="3">
+                    <tr>
+                      <td class="mono">{{s.user}}</td>
+                      <td>{{s.note}}</td>
+                      <td><div class="bar"><i class="{{s.barCls}}" style="width: {{s.pct}}%"></i></div><span class="muted">{{s.usedText}}</span></td>
+                      <td><span class="{{s.expCls}}">{{s.expText}}</span></td>
+                      <td style="text-align:left"><button class="btn sm" onClick="{{s.open}}">تمدید</button></td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="aside">
+          <div class="card">
+            <h2>سطح نمایندگی</h2>
+            <p class="sub">قیمت همهٔ محصولات برای شما طبق این سطح حساب می‌شود.</p>
+            <div class="row" style="justify-content:space-between"><span class="tag vi">{{tierName}}</span><span class="muted">تا 22٪ زیر قیمت عادی</span></div>
+            <div style="margin-top:14px;display:flex;flex-direction:column;gap:6px">
+              <div class="row" style="justify-content:space-between"><b style="font-size:13px">پیشرفت تا سطح 3</b><span class="muted">38 از 50 سرویس این ماه</span></div>
+              <div class="bar" style="height:8px"><i style="width:76%;background:var(--violet)"></i></div>
+              <span class="muted">12 سرویس دیگر تا آخر آبان. (این کارت را مدیر می‌تواند خاموش کند.)</span>
+            </div>
+            <div style="margin-top:14px"><button class="btn sm" onClick="{{goPrices}}">دیدن لیست قیمت</button></div>
+          </div>
+          <div class="card">
+            <h2>سرویس تست</h2>
+            <p class="sub">برای نشان دادن کیفیت به مشتری، رایگان.</p>
+            <div class="row" style="justify-content:space-between"><span class="muted">امروز: {{trialUsed}} از 3 • هر تست 1 گیگ، 1 روزه</span><button class="{{trialBtnCls}}" onClick="{{makeTrial}}">ساخت تست</button></div>
+          </div>
+          <div class="card">
+            <h2>آخرین تراکنش‌ها</h2>
+            <p class="sub">کیف پول نمایندگی</p>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <sc-for list="{{txShort}}" as="t" hint-placeholder-count="4">
+                <div class="row" style="justify-content:space-between;flex-wrap:nowrap">
+                  <div><b style="font-size:13.5px">{{t.title}}</b><div class="muted">{{t.when}}</div></div>
+                  <b class="{{t.amtCls}}" style="direction:ltr">{{t.amt}}</b>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ BUY ============ -->
+    <sc-if value="{{isBuy}}" hint-placeholder-val="{{false}}">
+      <sc-if value="{{buyDone}}" hint-placeholder-val="{{false}}">
+        <div class="card" style="display:flex;flex-direction:column;gap:14px">
+          <div class="alert ok"><b>{{doneCount}} سرویس ساخته شد</b> و {{doneTotal}} تومان از کیف پول کم شد.</div>
+          <div class="tbl">
+            <table>
+              <thead><tr><th>نام کاربری</th><th>سرویس</th><th>لوکیشن</th><th>یادداشت</th><th></th></tr></thead>
+              <tbody>
+                <sc-for list="{{doneRows}}" as="d" hint-placeholder-count="2">
+                  <tr><td class="mono">{{d.user}}</td><td>{{d.product}}</td><td>{{d.loc}}</td><td>{{d.note}}</td><td style="text-align:left"><button class="btn sm" onClick="{{d.open}}">اتصال</button></td></tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+          <div class="row">
+            <button class="btn pri" onClick="{{sendLinksTg}}">ارسال همه در تلگرام (لینک، QR و فایل‌ها)</button>
+            <button class="btn" onClick="{{copyAll}}">کپی همهٔ لینک‌ها</button>
+            <button class="btn ghost" onClick="{{buyAgain}}">خرید دوباره</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{buyForm}}" hint-placeholder-val="{{true}}">
+        <div class="split">
+          <div class="grow">
+            <div class="card">
+              <h2>1. سرور</h2>
+              <p class="sub">همان سرورهایی که در ربات موقع خرید نشان داده می‌شوند (اگر «انتخاب سرور در خرید» روشن باشد).</p>
+              <div class="box">
+                <sc-for list="{{locChips}}" as="l" hint-placeholder-count="3">
+                  <button class="{{l.cls}}" onClick="{{l.pick}}">{{l.label}} <b>{{l.free}}</b></button>
+                </sc-for>
+              </div>
+            </div>
+            <div class="card">
+              <h2>2. دسته‌بندی و پلن</h2>
+              <p class="sub">دسته‌بندی‌ها و پلن‌ها همان‌هایی‌اند که در ربات تعریف کرده‌اید. قیمت خط‌خورده قیمت عادی است؛ قیمت پررنگ، قیمت شما.</p>
+              <div class="box" style="margin-bottom:14px">
+                <sc-for list="{{catTabs}}" as="c" hint-placeholder-count="4">
+                  <button class="{{c.cls}}" onClick="{{c.pick}}">{{c.label}} <b>{{c.count}}</b></button>
+                </sc-for>
+              </div>
+              <sc-if value="{{isPlanCat}}" hint-placeholder-val="{{true}}">
+                <div class="pgrid">
+                  <sc-for list="{{productCards}}" as="p" hint-placeholder-count="4">
+                    <button class="{{p.cls}}" onClick="{{p.pick}}" aria-pressed="{{p.on}}">
+                      <span class="row" style="justify-content:space-between"><b>{{p.name}}</b><span class="tag">{{p.dur}}</span></span>
+                      <span class="muted">{{p.traffic}}</span>
+                      <span class="old">{{p.listText}} تومان</span>
+                      <span class="new">{{p.yourText}} <span style="font-size:12px;font-weight:500">تومان</span></span>
+                    </button>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{isCustomCat}}" hint-placeholder-val="{{false}}">
+                <div class="row" style="align-items:flex-end">
+                  <div class="inp"><label for="cgb">حجم (گیگ)</label><input id="cgb" value="{{customGb}}" onChange="{{setCustomGb}}" dir="ltr" inputmode="numeric"><small>بین 10 و 500</small></div>
+                  <div class="inp"><label for="cdays">مدت (روز)</label><input id="cdays" value="{{customDays}}" onChange="{{setCustomDays}}" dir="ltr" inputmode="numeric"><small>بین 7 و 90</small></div>
+                  <div class="mini" style="flex:1 1 200px"><small>قیمت شما</small><strong>{{customPriceText}} <span style="font-size:12px;font-weight:500">تومان</span></strong><small>هر گیگ 2,600 • هر روز 800 تومان</small></div>
+                </div>
+              </sc-if>
+            </div>
+            <div class="card">
+              <h2>3. تعداد و مشخصات</h2>
+              <p class="sub">برای چند مشتری با هم می‌توانید یک‌جا بخرید.</p>
+              <div class="row" style="align-items:flex-end;gap:16px">
+                <div class="inp" style="flex:0 0 auto">
+                  <label>تعداد</label>
+                  <div class="stepper">
+                    <button onClick="{{dec}}" aria-label="کم کردن">−</button>
+                    <span>{{qty}}</span>
+                    <button onClick="{{inc}}" aria-label="زیاد کردن">+</button>
+                  </div>
+                </div>
+                <div class="inp">
+                  <label>نام کاربری</label>
+                  <div class="box">
+                    <sc-for list="{{userModes}}" as="u" hint-placeholder-count="2">
+                      <button class="{{u.cls}}" onClick="{{u.pick}}">{{u.label}}</button>
+                    </sc-for>
+                  </div>
+                  <sc-if value="{{showCustomUser}}" hint-placeholder-val="{{false}}">
+                    <input value="{{customUser}}" onChange="{{setCustomUser}}" dir="ltr" placeholder="مثلاً reza_home" aria-label="نام کاربری دلخواه">
+                  </sc-if>
+                  <small>{{userHint}}</small>
+                </div>
+                <div class="inp">
+                  <label for="cli">برای مشتری</label>
+                  <select id="cli" onChange="{{setBuyClient}}">
+                    <option value="">بدون مشتری</option>
+                    <sc-for list="{{clientOptions}}" as="c" hint-placeholder-count="4"><option value="{{c.id}}" selected="{{c.sel}}">{{c.name}}</option></sc-for>
+                  </select>
+                  <small>سرویس‌ها در دفترچهٔ این مشتری ثبت می‌شوند.</small>
+                </div>
+                <div class="inp">
+                  <label for="note">یادداشت (برای خودتان)</label>
+                  <input id="note" value="{{note}}" onChange="{{setNote}}" placeholder="مثلاً اسم مشتری">
+                  <small>فقط شما می‌بینید؛ برای پیدا کردن سرویس.</small>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="aside">
+            <div class="card sum">
+              <h2>خلاصهٔ خرید</h2>
+              <div class="l"><span>محصول</span><b>{{selName}}</b></div>
+              <div class="l"><span>سرور</span><b>{{selLoc}}</b></div>
+              <div class="l"><span>قیمت هر سرویس</span><b>{{unitText}} تومان</b></div>
+              <div class="l"><span>تعداد</span><b>{{qty}}</b></div>
+              <div class="l"><span>سود شما نسبت به قیمت عادی</span><b style="color:var(--ok)">{{saveText}} تومان</b></div>
+              <div class="l tot"><span style="color:var(--fg)">جمع</span><b>{{totalText}} تومان</b></div>
+              <div class="l"><span>موجودی بعد از خرید</span><b>{{afterText}} تومان</b></div>
+              <sc-if value="{{insufficient}}" hint-placeholder-val="{{false}}">
+                <div class="alert warn">موجودی کافی نیست. نمایندگی اعتبار و بدهی ندارد؛ اول کیف پول را شارژ کنید.</div>
+                <button class="btn pri" onClick="{{goWallet}}">شارژ کیف پول</button>
+              </sc-if>
+              <sc-if value="{{canBuy}}" hint-placeholder-val="{{true}}">
+                <button class="btn pri" onClick="{{confirmBuy}}">خرید و ساخت {{qty}} سرویس</button>
+              </sc-if>
+              <p class="muted" style="margin:0">پول از کیف پول کم می‌شود و سرویس‌ها همان لحظه روی پنل ساخته می‌شوند.</p>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+    </sc-if>
+
+    <!-- ============ SERVICES ============ -->
+    <sc-if value="{{isServices}}" hint-placeholder-val="{{false}}">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;margin-bottom:14px">
+          <div class="box">
+            <sc-for list="{{filterChips}}" as="f" hint-placeholder-count="4">
+              <button class="{{f.cls}}" onClick="{{f.pick}}">{{f.label}} <b>{{f.count}}</b></button>
+            </sc-for>
+          </div>
+          <div class="inp" style="flex:0 1 280px">
+            <label for="q" style="position:absolute;width:1px;height:1px;overflow:hidden">جستجو</label>
+            <input id="q" value="{{query}}" onChange="{{setQuery}}" placeholder="جستجوی نام کاربری یا یادداشت">
+          </div>
+        </div>
+        <div class="tbl">
+          <table>
+            <thead><tr><th>نام کاربری</th><th>مشتری</th><th>سرویس</th><th>لوکیشن</th><th>مصرف</th><th>انقضا</th><th>وضعیت</th><th>تمدید خودکار</th><th></th></tr></thead>
+            <tbody>
+              <sc-for list="{{serviceRows}}" as="s" hint-placeholder-count="8">
+                <tr>
+                  <td class="mono">{{s.user}}</td>
+                  <td>{{s.client}}</td>
+                  <td>{{s.product}}</td>
+                  <td>{{s.loc}}</td>
+                  <td><div class="bar"><i class="{{s.barCls}}" style="width: {{s.pct}}%"></i></div><span class="muted">{{s.usedText}}</span></td>
+                  <td><span class="{{s.expCls}}">{{s.expText}}</span></td>
+                  <td><span class="{{s.stCls}}"><i class="dot"></i>{{s.stText}}</span></td>
+                  <td><button class="{{s.arCls}}" onClick="{{s.toggleAr}}" role="switch" aria-checked="{{s.arOn}}" aria-label="تمدید خودکار {{s.user}}"><i></i></button></td>
+                  <td style="text-align:left"><button class="btn sm" onClick="{{s.open}}">مدیریت</button></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+        <p class="muted" style="margin:12px 0 0">تمدید خودکار: 24 ساعت قبل از پایان، اگر موجودی کافی باشد، همان سرویس از کیف پول تمدید می‌شود. اگر موجودی کم باشد، یک بار در تلگرام خبر می‌دهیم.</p>
+        <sc-if value="{{noRows}}" hint-placeholder-val="{{false}}">
+          <p class="muted" style="text-align:center;padding:24px 0 6px;margin:0">سرویسی با این مشخصات پیدا نشد.</p>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <!-- ============ CLIENTS ============ -->
+    <sc-if value="{{isClients}}" hint-placeholder-val="{{false}}">
+      <div class="split" style="align-items:stretch">
+        <div class="grow" style="flex:1 1 360px">
+          <div class="card" style="height:100%">
+            <div class="row" style="justify-content:space-between;margin-bottom:12px">
+              <div><h2>مشتری‌ها</h2><p class="muted" style="margin:0">{{clientCount}} مشتری • فقط شما می‌بینید</p></div>
+              <button class="btn sm pri" onClick="{{openAddClient}}">+ مشتری جدید</button>
+            </div>
+            <sc-if value="{{addingClient}}" hint-placeholder-val="{{false}}">
+              <div class="mini" style="margin-bottom:12px">
+                <div class="row">
+                  <div class="inp"><label for="cn">اسم</label><input id="cn" value="{{newClientName}}" onChange="{{setNewClientName}}" placeholder="مثلاً رضا احمدی"></div>
+                  <div class="inp"><label for="ct">تلگرام یا شماره (اختیاری)</label><input id="ct" dir="ltr" placeholder="@username"></div>
+                </div>
+                <div class="row"><button class="btn sm pri" onClick="{{saveClient}}">ذخیره</button><button class="btn sm ghost" onClick="{{cancelClient}}">انصراف</button></div>
+              </div>
+            </sc-if>
+            <div style="display:flex;flex-direction:column">
+              <sc-for list="{{clientRows}}" as="c" hint-placeholder-count="5">
+                <button class="{{c.cls}}" onClick="{{c.pick}}" style="margin-bottom:8px">
+                  <span style="display:flex;gap:12px;align-items:center">
+                    <span class="tag" style="width:36px;height:36px;border-radius:12px;justify-content:center;padding:0;font-weight:800">{{c.initial}}</span>
+                    <span><b style="display:block">{{c.name}}</b><span class="muted">{{c.contact}}</span></span>
+                  </span>
+                  <span style="display:flex;flex-direction:column;align-items:flex-end;gap:4px"><span class="tag">{{c.count}} سرویس</span><span class="{{c.nextCls}}">{{c.next}}</span></span>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+        <div class="grow" style="flex:1.4 1 460px">
+          <div class="card" style="height:100%">
+            <div class="row" style="justify-content:space-between;margin-bottom:12px">
+              <div><h2>{{cl.name}}</h2><p class="muted" style="margin:0">{{cl.contact}} • مشتری از {{cl.since}}</p></div>
+              <div class="row">
+                <button class="btn sm" onClick="{{buyForClient}}">+ سرویس برای این مشتری</button>
+                <button class="btn sm pri" onClick="{{renewClientAll}}">تمدید همهٔ سرویس‌های او</button>
+              </div>
+            </div>
+            <div class="tbl">
+              <table style="min-width:560px">
+                <thead><tr><th>نام کاربری</th><th>سرویس</th><th>مصرف</th><th>انقضا</th><th>تمدید خودکار</th><th></th></tr></thead>
+                <tbody>
+                  <sc-for list="{{clientServices}}" as="s" hint-placeholder-count="2">
+                    <tr>
+                      <td class="mono">{{s.user}}</td>
+                      <td>{{s.product}}</td>
+                      <td><div class="bar"><i class="{{s.barCls}}" style="width: {{s.pct}}%"></i></div><span class="muted">{{s.usedText}}</span></td>
+                      <td><span class="{{s.expCls}}">{{s.expText}}</span></td>
+                      <td><button class="{{s.arCls}}" onClick="{{s.toggleAr}}" role="switch" aria-checked="{{s.arOn}}" aria-label="تمدید خودکار {{s.user}}"><i></i></button></td>
+                      <td style="text-align:left"><button class="btn sm" onClick="{{s.open}}">مدیریت</button></td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+            <div class="inp" style="margin-top:14px"><label for="cnote">یادداشت دربارهٔ این مشتری</label><textarea id="cnote" placeholder="مثلاً: آیفون دارد، هر ماه 5ام تمدید می‌کند"></textarea></div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ OWN BOT ============ -->
+    <sc-if value="{{isBot}}" hint-placeholder-val="{{false}}">
+      <div class="split" style="align-items:stretch">
+        <div class="grow" style="flex:1.3 1 460px">
+          <div class="card" style="height:100%;display:flex;flex-direction:column;gap:14px">
+            <div><h2>ربات فروش اختصاصی</h2><p class="muted" style="margin:0">یک ربات فروش کامل با اسم و توکن خودتان، با پنل مدیریت جدا. مشتری‌های شما مستقیم از ربات خودتان می‌خرند.</p></div>
+            <div class="grid4" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
+              <div class="mini"><small>هزینهٔ ماهانه</small><strong>[قیمت مدیر]</strong><small>از کیف پول، هر ماه</small></div>
+              <div class="mini"><small>راه‌اندازی</small><strong>کمتر از 1 روز</strong><small>بعد از تأیید مدیر</small></div>
+              <div class="mini"><small>قیمت سرویس‌ها</small><strong>سطح شما</strong><small>همان قیمت نمایندگی</small></div>
+            </div>
+            <sc-if value="{{botNotRequested}}" hint-placeholder-val="{{true}}">
+              <div class="inp"><label for="btok">توکن ربات (از BotFather)</label><input id="btok" dir="ltr" placeholder="123456:ABC-..."></div>
+              <div class="inp"><label for="bdom">دامنه (اختیاری)</label><input id="bdom" dir="ltr" placeholder="shop.example.com"><small>اگر ندارید، مدیر یک دامنه برایتان می‌گذارد.</small></div>
+              <div class="alert info">با فرستادن درخواست، هزینهٔ ماه اول <b>بعد از تأیید مدیر</b> از کیف پول کم می‌شود. ماه‌های بعد خودکار تمدید می‌شود؛ اگر موجودی کم باشد، 3 روز مهلت دارید و بعد ربات متوقف می‌شود (اطلاعاتش می‌ماند).</div>
+              <button class="btn pri" onClick="{{requestBot}}">فرستادن درخواست ربات اختصاصی</button>
+            </sc-if>
+            <sc-if value="{{botRequested}}" hint-placeholder-val="{{false}}">
+              <div style="display:flex;flex-direction:column;gap:10px">
+                <div class="setrow"><div><b>درخواست فرستاده شد</b><span>امروز 21:40</span></div><span class="tag ok">انجام شد</span></div>
+                <div class="setrow"><div><b>تأیید مدیر و پرداخت ماه اول</b><span>بعد از تأیید از کیف پول کم می‌شود</span></div><span class="tag warn">در انتظار</span></div>
+                <div class="setrow"><div><b>ساخت ربات و دامنه</b><span>مدیر انجام می‌دهد</span></div><span class="tag">بعدی</span></div>
+                <div class="setrow"><div><b>لینک فعال‌سازی پنل ربات</b><span>در تلگرام برای شما فرستاده می‌شود</span></div><span class="tag">بعدی</span></div>
+              </div>
+              <button class="btn" onClick="{{cancelBot}}">لغو درخواست</button>
+            </sc-if>
+          </div>
+        </div>
+        <div class="grow" style="flex:1 1 300px">
+          <div class="card" style="height:100%">
+            <h2>چه چیزی می‌گیرید</h2>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;line-height:1.8;color:var(--fg-2);font-size:13.5px">
+              <span>• ربات فروش با منو، کیف پول و درگاه‌های خودتان</span>
+              <span>• پنل وب مدیریت جدا برای ربات</span>
+              <span>• بکاپ روزانهٔ جدا</span>
+              <span>• سرویس‌ها از همین سرورها، با قیمت سطح شما</span>
+              <span>• پشتیبانی مدیر</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ WALLET ============ -->
+    <sc-if value="{{isWallet}}" hint-placeholder-val="{{false}}">
+      <div class="split" style="align-items:stretch">
+        <div class="grow" style="flex:1 1 420px">
+          <div class="card" style="height:100%">
+            <h2>شارژ کیف پول</h2>
+            <p class="sub">موجودی فعلی: <b>{{balanceText}} تومان</b></p>
+            <div class="inp" style="margin-bottom:12px">
+              <label>مبلغ</label>
+              <div class="box">
+                <sc-for list="{{amountChips}}" as="a" hint-placeholder-count="4">
+                  <button class="{{a.cls}}" onClick="{{a.pick}}">{{a.label}}</button>
+                </sc-for>
+              </div>
+            </div>
+            <div class="inp" style="margin-bottom:6px"><label>روش پرداخت</label></div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <sc-for list="{{methodOpts}}" as="m" hint-placeholder-count="3">
+                <button class="{{m.cls}}" onClick="{{m.pick}}">
+                  <span><b style="display:block">{{m.label}}</b><span class="muted">{{m.hint}}</span></span>
+                  <span class="tag">{{m.badge}}</span>
+                </button>
+              </sc-for>
+            </div>
+            <div class="sum" style="margin-top:16px">
+              <div class="l"><span>مبلغ شارژ</span><b>{{topupText}} تومان</b></div>
+              <div class="l"><span>کارمزد درگاه</span><b>{{feeText}} تومان</b></div>
+              <div class="l tot"><span style="color:var(--fg)">قابل پرداخت</span><b>{{payText}} تومان</b></div>
+              <button class="btn pri" onClick="{{doTopup}}">{{payLabel}}</button>
+            </div>
+          </div>
+        </div>
+        <div class="grow" style="flex:1 1 380px">
+          <div class="card" style="height:100%;display:flex;flex-direction:column">
+            <div class="row" style="justify-content:space-between;margin-bottom:12px">
+              <div><h2>تاریخچهٔ کیف پول</h2><p class="muted" style="margin:0">همهٔ واریزها و برداشت‌ها</p></div>
+              <div class="box">
+                <sc-for list="{{txChips}}" as="c" hint-placeholder-count="3">
+                  <button class="{{c.cls}}" onClick="{{c.pick}}">{{c.label}}</button>
+                </sc-for>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;flex:1">
+              <sc-for list="{{txList}}" as="t" hint-placeholder-count="6">
+                <div class="setrow" style="align-items:center">
+                  <div style="display:flex;gap:12px;align-items:center;min-width:0">
+                    <span class="{{t.iconCls}}" style="width:36px;height:36px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:none;padding:0">{{t.sign}}</span>
+                    <div style="min-width:0"><b>{{t.title}}</b><span>{{t.when}} • موجودی بعد: {{t.after}}</span></div>
+                  </div>
+                  <b class="{{t.amtCls}}" style="direction:ltr;white-space:nowrap">{{t.amt}}</b>
+                </div>
+              </sc-for>
+            </div>
+            <div class="alert info" style="margin-top:12px">خرید فقط از موجودی است و اعتبار و بدهی وجود ندارد. بازگشت وجه به همین کیف پول برمی‌گردد و رسید کارت‌به‌کارت را مدیر تأیید می‌کند.</div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ PRICES ============ -->
+    <sc-if value="{{isPrices}}" hint-placeholder-val="{{false}}">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;margin-bottom:14px">
+          <div><h2>لیست قیمت شما</h2><p class="muted" style="margin:0">سطح فعلی: {{tierName}}. قیمت‌ها را مدیر تعیین می‌کند.</p></div>
+          <button class="btn sm" onClick="{{copyPrices}}">کپی لیست برای مشتری</button>
+        </div>
+        <div class="tbl">
+          <table>
+            <thead><tr><th>پلن</th><th>دسته‌بندی</th><th>حجم و مدت</th><th>قیمت عادی</th><th>قیمت شما</th><th>تخفیف</th><th></th></tr></thead>
+            <tbody>
+              <sc-for list="{{priceRows}}" as="p" hint-placeholder-count="6">
+                <tr><td><b>{{p.name}}</b></td><td>{{p.dur}}</td><td>{{p.traffic}}</td><td class="muted" style="text-decoration:line-through">{{p.listText}}</td><td><b>{{p.yourText}}</b></td><td><span class="tag ok">{{p.offText}}</span></td><td style="text-align:left"><button class="btn sm" onClick="{{p.buy}}">خرید</button></td></tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ SUPPORT ============ -->
+    <sc-if value="{{isSupport}}" hint-placeholder-val="{{false}}">
+      <div class="split">
+        <div class="grow">
+          <div class="card">
+            <h2>تیکت‌های من</h2>
+            <p class="sub">پاسخ‌ها هم اینجا و هم در ربات می‌آید.</p>
+            <div class="tbl">
+              <table>
+                <thead><tr><th>موضوع</th><th>سرویس</th><th>آخرین پیام</th><th>وضعیت</th></tr></thead>
+                <tbody>
+                  <sc-for list="{{tickets}}" as="t" hint-placeholder-count="3">
+                    <tr><td><b>{{t.title}}</b></td><td class="mono">{{t.svc}}</td><td class="muted">{{t.when}}</td><td><span class="{{t.cls}}">{{t.st}}</span></td></tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="aside">
+          <div class="card" style="display:flex;flex-direction:column;gap:12px">
+            <h2>تیکت جدید</h2>
+            <div class="inp"><label for="tsvc">سرویس (اختیاری)</label><select id="tsvc"><option>بدون سرویس</option><option>ar_1043</option><option>ar_1051</option></select></div>
+            <div class="inp"><label for="tmsg">پیام</label><textarea id="tmsg" placeholder="مشکل را بنویسید"></textarea></div>
+            <button class="btn pri" onClick="{{sendTicket}}">ارسال تیکت</button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ SETTINGS ============ -->
+    <sc-if value="{{isSettings}}" hint-placeholder-val="{{false}}">
+      <div class="grid2">
+        <div class="card">
+          <h2>حساب نمایندگی</h2>
+          <p class="sub">از حساب تلگرام شما خوانده می‌شود.</p>
+          <div class="setrow"><div><b>نام فروشگاه</b><span>در پنل و پیام‌ها</span></div><b>{{storeName}}</b></div>
+          <div class="setrow"><div><b>حساب تلگرام</b><span>ورود فقط از همین حساب</span></div><span class="mono">@arian_store</span></div>
+          <div class="setrow"><div><b>سطح</b><span>با مدیر تغییر می‌کند</span></div><span class="tag vi">{{tierName}}</span></div>
+          <div class="setrow"><div><b>عضو از</b><span></span></div><span>1405/03/12</span></div>
+        </div>
+        <div class="card">
+          <h2>اعلان‌ها</h2>
+          <p class="sub">در ربات برای شما فرستاده می‌شود.</p>
+          <sc-for list="{{notifRows}}" as="n" hint-placeholder-count="3">
+            <div class="setrow"><div><b>{{n.title}}</b><span>{{n.hint}}</span></div><button class="{{n.cls}}" onClick="{{n.toggle}}" role="switch" aria-checked="{{n.on}}" aria-label="{{n.title}}"><i></i></button></div>
+          </sc-for>
+        </div>
+        <div class="card">
+          <h2>امنیت</h2>
+          <p class="sub">برای حساب نمایندگی که پول در آن است.</p>
+          <sc-for list="{{secRows}}" as="n" hint-placeholder-count="2">
+            <div class="setrow"><div><b>{{n.title}}</b><span>{{n.hint}}</span></div><button class="{{n.cls}}" onClick="{{n.toggle}}" role="switch" aria-checked="{{n.on}}" aria-label="{{n.title}}"><i></i></button></div>
+          </sc-for>
+          <h2 style="margin-top:14px">کارهای اخیر روی حساب</h2>
+          <sc-for list="{{activity}}" as="a" hint-placeholder-count="4">
+            <div class="setrow"><div><b>{{a.what}}</b><span>{{a.where}}</span></div><span class="muted">{{a.when}}</span></div>
+          </sc-for>
+        </div>
+        <div class="card">
+          <h2>نصب روی گوشی</h2>
+          <p class="sub">پنل مثل یک اپ روی صفحهٔ اصلی گوشی یا ویندوز نصب می‌شود.</p>
+          <div class="row"><button class="btn pri sm" onClick="{{installPwa}}">نصب اپ پنل</button><span class="muted">آیفون: Safari ← اشتراک‌گذاری ← Add to Home Screen</span></div>
+        </div>
+        <div class="card">
+          <h2>ورودهای فعال</h2>
+          <p class="sub">هر جا وارد شده‌اید. اگر نمی‌شناسید، خارج کنید.</p>
+          <sc-for list="{{sessions}}" as="s" hint-placeholder-count="2">
+            <div class="setrow"><div><b>{{s.dev}}</b><span>{{s.when}}</span></div><sc-if value="{{s.current}}" hint-placeholder-val="{{false}}"><span class="tag ok">همین دستگاه</span></sc-if><sc-if value="{{s.other}}" hint-placeholder-val="{{true}}"><button class="btn sm" onClick="{{s.kill}}">خروج</button></sc-if></div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+  </main>
+</div>
+
+<sc-if value="{{drawerOpen}}" hint-placeholder-val="{{false}}">
+  <div class="shade" onClick="{{closeDrawer}}">
+    <div class="drawer" onClick="{{stop}}" role="dialog" aria-label="مدیریت سرویس">
+      <div class="row" style="justify-content:space-between">
+        <div><h2 style="margin:0;font-size:17px" class="mono">{{dr.user}}</h2><div class="muted">{{dr.product}} • {{dr.loc}} • {{dr.note}}</div></div>
+        <button class="btn sm ghost" onClick="{{closeDrawer}}" aria-label="بستن">✕</button>
+      </div>
+      <div class="row"><span class="{{dr.stCls}}"><i class="dot"></i>{{dr.stText}}</span><span class="{{dr.expCls}}">{{dr.expText}}</span></div>
+      <div><div class="bar"><i class="{{dr.barCls}}" style="width: {{dr.pct}}%"></i></div><div class="muted" style="margin-top:6px">{{dr.usedText}}</div></div>
+
+      <div class="box" style="align-self:flex-start">
+        <sc-for list="{{drTabs}}" as="t" hint-placeholder-count="3">
+          <button class="{{t.cls}}" onClick="{{t.pick}}">{{t.label}}</button>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{tabLink}}" hint-placeholder-val="{{true}}">
+        <sc-if value="{{drHasLink}}" hint-placeholder-val="{{true}}">
+          <div class="qr">QR اشتراک<br>(sing-box)</div>
+          <div class="link"><span class="mono">https://sub.example.com/s/{{dr.user}}-7f3a9c</span><button class="btn sm" onClick="{{copyLink}}">کپی</button></div>
+          <div class="row">
+            <button class="btn sm" onClick="{{sendTg}}">ارسال لینک و QR به تلگرام من</button>
+            <button class="btn sm" onClick="{{rotate}}">لینک تازه</button>
+          </div>
+          <p class="muted" style="margin:0">«لینک تازه» لینک قبلی را باطل می‌کند؛ برای وقتی که لینک دست کس دیگری افتاده.</p>
+        </sc-if>
+        <sc-if value="{{drFilesOnly}}" hint-placeholder-val="{{false}}">
+          <div class="alert info">این سرور فقط «فایل اتصال» می‌دهد و لینک اشتراک ندارد (تنظیم پنل).</div>
+        </sc-if>
+        <div class="mini" style="gap:10px">
+          <div class="row" style="justify-content:space-between"><b style="font-size:14px">فایل‌های اتصال</b><span class="muted">از پنل، همین لحظه</span></div>
+          <sc-for list="{{drFiles}}" as="f" hint-placeholder-count="3">
+            <div class="row" style="justify-content:space-between;flex-wrap:nowrap;border-top:1px solid var(--line);padding-top:8px">
+              <span style="display:flex;gap:10px;align-items:center;min-width:0"><span class="tag" style="padding:0;width:32px;height:32px;justify-content:center;border-radius:10px">{{f.ext}}</span><span class="mono" style="overflow:hidden;text-overflow:ellipsis">{{f.name}}</span></span>
+              <button class="btn sm" onClick="{{f.dl}}">دانلود</button>
+            </div>
+          </sc-for>
+          <div class="row">
+            <button class="btn sm pri" onClick="{{sendFilesTg}}">ارسال فایل‌ها به تلگرام من</button>
+            <button class="btn sm" onClick="{{dlAll}}">دانلود همه (ZIP)</button>
+          </div>
+          <span class="muted">فایل‌ها هر بار از پنل گرفته می‌شوند و جایی ذخیره نمی‌شوند. در تلگرام با همان کپشنی می‌آیند که برای مشتری‌ها تنظیم کرده‌اید.</span>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{tabRenew}}" hint-placeholder-val="{{false}}">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <sc-for list="{{renewOpts}}" as="o" hint-placeholder-count="3">
+            <button class="{{o.cls}}" onClick="{{o.pick}}"><span><b style="display:block">{{o.label}}</b><span class="muted">{{o.hint}}</span></span><b>{{o.priceText}} تومان</b></button>
+          </sc-for>
+        </div>
+        <button class="btn pri" onClick="{{doRenew}}">پرداخت از کیف پول و تمدید</button>
+      </sc-if>
+
+      <sc-if value="{{tabTraffic}}" hint-placeholder-val="{{false}}">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <sc-for list="{{trafficOpts}}" as="o" hint-placeholder-count="3">
+            <button class="{{o.cls}}" onClick="{{o.pick}}"><span><b style="display:block">{{o.label}}</b><span class="muted">{{o.hint}}</span></span><b>{{o.priceText}} تومان</b></button>
+          </sc-for>
+        </div>
+        <button class="btn pri" onClick="{{doTraffic}}">پرداخت از کیف پول و افزودن</button>
+      </sc-if>
+
+      <div class="inp"><label for="dnote">یادداشت</label><input id="dnote" value="{{dr.note}}" onChange="{{noop}}"></div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{hasToast}}" hint-placeholder-val="{{false}}">
+  <div class="toast" role="status">{{toast}}</div>
+</sc-if>
+
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    var products = [
+      { id: 'p1', cat: 'm1', name: '30 گیگ', dur: '1 ماهه', traffic: '30 گیگ • 30 روز', list: 120000, your: 96000 },
+      { id: 'p2', cat: 'm1', name: '50 گیگ', dur: '1 ماهه', traffic: '50 گیگ • 30 روز', list: 170000, your: 136000 },
+      { id: 'p3', cat: 'm1', name: '100 گیگ', dur: '1 ماهه', traffic: '100 گیگ • 30 روز', list: 260000, your: 205000 },
+      { id: 'p6', cat: 'm1', name: 'نامحدود', dur: '1 ماهه', traffic: 'نامحدود (1 کاربر) • 30 روز', list: 320000, your: 250000 },
+      { id: 'p7', cat: 'm2', name: '60 گیگ دوماهه', dur: '2 ماهه', traffic: '60 گیگ • 60 روز', list: 230000, your: 185000 },
+      { id: 'p8', cat: 'm2', name: '100 گیگ دوماهه', dur: '2 ماهه', traffic: '100 گیگ • 60 روز', list: 330000, your: 265000 },
+      { id: 'p4', cat: 'm3', name: '150 گیگ سه‌ماهه', dur: '3 ماهه', traffic: '150 گیگ • 90 روز', list: 450000, your: 355000 },
+      { id: 'p5', cat: 'm3', name: '300 گیگ سه‌ماهه', dur: '3 ماهه', traffic: '300 گیگ • 90 روز', list: 690000, your: 540000 }
+    ];
+    var services = [
+      { user: 'ar_1043', note: 'گوشی', client: 'c1', product: '50 گیگ', loc: 'آلمان', used: 46.2, total: 50, days: 3, st: 'ok', ar: true },
+      { user: 'ar_1044', note: '', client: 'c2', product: '100 گیگ', loc: 'هلند', used: 31, total: 100, days: 18, st: 'ok', ar: false },
+      { user: 'ar_1047', note: 'لپ‌تاپ‌ها', client: 'c3', product: '300 گیگ سه‌ماهه', loc: 'آلمان', used: 120, total: 300, days: 61, st: 'ok', ar: true },
+      { user: 'ar_1048', note: 'مودم', client: 'c3', product: 'نامحدود', loc: 'آلمان', used: 88, total: 0, days: 12, st: 'ok', ar: true },
+      { user: 'ar_1049', note: '', client: 'c4', product: '30 گیگ', loc: 'فنلاند', used: 29.1, total: 30, days: 9, st: 'ok', ar: false },
+      { user: 'ar_1051', note: '', client: 'c2', product: '50 گیگ', loc: 'هلند', used: 12.4, total: 50, days: 5, st: 'ok', ar: false },
+      { user: 'ar_1052', note: '', client: 'c5', product: '60 گیگ دوماهه', loc: 'آلمان', used: 21, total: 60, days: 22, st: 'ok', ar: false },
+      { user: 'ar_1038', note: '', client: 'c4', product: '30 گیگ', loc: 'آلمان', used: 30, total: 30, days: 0, st: 'end', ar: false },
+      { user: 'ar_1031', note: 'تست قدیمی', client: '', product: '50 گیگ', loc: 'هلند', used: 18, total: 50, days: 0, st: 'end', ar: false }
+    ];
+    this.cats = [
+      { id: 'm1', label: '1 ماهه' }, { id: 'm2', label: '2 ماهه' }, { id: 'm3', label: '3 ماهه' }, { id: 'custom', label: 'سرویس دلخواه' }
+    ];
+    var clients = [
+      { id: 'c1', name: 'رضا احمدی', contact: '@reza_ah', since: '1405/04/02' },
+      { id: 'c2', name: 'مریم صالحی', contact: '0912 ••• 4471', since: '1405/05/19' },
+      { id: 'c3', name: 'دفتر شرکت نوین', contact: '@novin_it', since: '1405/03/28' },
+      { id: 'c4', name: 'علی کریمی', contact: '@ali_k', since: '1405/06/10' },
+      { id: 'c5', name: 'آقای رستمی', contact: 'بدون تماس', since: '1405/07/01' }
+    ];
+    this.state = {
+      screen: 'dash', theme: null, loggedIn: true,
+      products: products, services: services, clients: clients, selClient: 'c3', buyClient: '', addingClient: false, newClientName: '',
+      trialUsed: 1, botRequested: false, sec: { twofa: false, alert: true },
+      balance: 4860000,
+      selProduct: 'p2', selLoc: 'آلمان', selCat: 'm1', customGb: '40', customDays: '30', userMode: 'auto', customUser: '', qty: 3, prefix: 'ar_', note: '',
+      buyDone: false, done: [],
+      filter: 'all', query: '',
+      drawer: null, drTab: 'link', renewSel: 'r1', trafficSel: 't2',
+      topup: 2000000, method: 'card',
+      notif: { exp: true, daily: true, ticket: true },
+      sessions: [
+        { id: 's1', dev: 'Chrome — Windows', when: 'الان', current: true },
+        { id: 's2', dev: 'Safari — iPhone', when: 'دیروز 21:14', current: false }
+      ],
+      toast: ''
+    };
+  }
+
+  fmt(n) { return Math.round(n).toLocaleString('en-US'); }
+
+  say(msg) {
+    var self = this;
+    this.setState({ toast: msg });
+    clearTimeout(this._t);
+    this._t = setTimeout(function () { self.setState({ toast: '' }); }, 2400);
+  }
+
+  svcView(s) {
+    var self = this;
+    var unlimited = s.total === 0;
+    var pct = unlimited ? 35 : Math.min(100, Math.round((s.used / s.total) * 100));
+    var left = unlimited ? 1 : (s.total - s.used) / s.total;
+    var ended = s.st === 'end';
+    var soon = !ended && (s.days <= 7 || left <= 0.1);
+    var cl = this.state.clients.filter(function (c) { return c.id === s.client; })[0];
+    return {
+      user: s.user, note: s.note || '—', client: cl ? cl.name : '—', clientId: s.client, product: s.product, loc: s.loc, pct: pct,
+      arOn: s.ar ? 'true' : 'false', arCls: s.ar ? 'sw on' : 'sw',
+      toggleAr: function () {
+        self.setState({ services: self.state.services.map(function (x) { return x.user === s.user ? Object.assign({}, x, { ar: !x.ar }) : x; }) });
+        self.say(s.ar ? 'تمدید خودکار ' + s.user + ' خاموش شد' : 'تمدید خودکار ' + s.user + ' روشن شد');
+      },
+      usedText: unlimited ? (this.fmt(s.used) + ' گیگ مصرف • نامحدود') : (s.used + ' از ' + s.total + ' گیگ'),
+      barCls: pct >= 90 ? 'bad' : (pct >= 75 ? 'warn' : ''),
+      expText: ended ? 'تمام شده' : (s.days + ' روز مانده'),
+      expCls: ended ? 'tag bad' : (s.days <= 7 ? 'tag warn' : 'tag'),
+      stText: ended ? 'منقضی' : (soon ? 'رو به اتمام' : 'فعال'),
+      stCls: ended ? 'tag bad' : (soon ? 'tag warn' : 'tag ok'),
+      soon: soon, ended: ended,
+      open: function () { self.setState({ drawer: s.user, drTab: 'link' }); }
+    };
+  }
+
+  renderVals() {
+    var self = this;
+    var st = this.state;
+    var theme = st.theme || this.props.theme || 'light';
+    var go = function (k) { return function () { self.setState({ screen: k, drawer: null }); }; };
+
+    var nav = [
+      { key: 'dash', label: 'داشبورد', icon: 'M3 12l9-8 9 8M5 10v10h5v-6h4v6h5V10' },
+      { key: 'buy', label: 'خرید سرویس', icon: 'M6 6h15l-1.5 9h-12zM6 6L5 3H2M9 20h.01M18 20h.01' },
+      { key: 'services', label: 'سرویس‌های من', icon: 'M4 6h16M4 12h16M4 18h10' },
+      { key: 'clients', label: 'مشتری‌ها', icon: 'M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM22 19v-1a4 4 0 0 0-3-3.9M16 4.1a3 3 0 0 1 0 5.8' },
+      { key: 'wallet', label: 'کیف پول', icon: 'M3 7h18v12H3zM3 7l3-4h12l3 4M16 13h2' },
+      { key: 'prices', label: 'لیست قیمت', icon: 'M20 12l-8 8-9-9V3h8zM7 7h.01' },
+      { key: 'support', label: 'پشتیبانی', icon: 'M4 5h16v11H8l-4 4z' },
+      { key: 'bot', label: 'ربات اختصاصی', icon: 'M5 8h14v11H5zM12 4v4M9 13h.01M15 13h.01M9 16h6' },
+      { key: 'settings', label: 'حساب و تنظیمات', icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12l2-1-1-3-2 .5-1.5-1.5.5-2-3-1-1 2h-2l-1-2-3 1 .5 2L6 8.5 4 8 3 11l2 1v0l-2 1 1 3 2-.5 1.5 1.5-.5 2 3 1 1-2h2l1 2 3-1-.5-2 1.5-1.5 2 .5 1-3z' }
+    ];
+    var titles = {
+      dash: ['داشبورد', 'خلاصهٔ فروش و سرویس‌های شما'],
+      buy: ['خرید سرویس', 'ساخت سرویس برای مشتری با قیمت نمایندگی'],
+      services: ['سرویس‌های من', 'همهٔ سرویس‌هایی که ساخته‌اید'],
+      wallet: ['کیف پول', 'شارژ و تاریخچهٔ تراکنش‌ها'],
+      prices: ['لیست قیمت', 'قیمت‌های سطح نمایندگی شما'],
+      support: ['پشتیبانی', 'تیکت به مدیر'],
+      clients: ['مشتری‌ها', 'دفترچهٔ مشتری‌ها و سرویس‌های هر کدام'],
+      bot: ['ربات اختصاصی', 'ربات فروش با برند خودتان'],
+      settings: ['حساب و تنظیمات', 'اطلاعات حساب، اعلان‌ها و ورودها']
+    };
+
+    var views = st.services.map(function (s) { return self.svcView(s); });
+    var active = views.filter(function (v) { return !v.ended; });
+    var expiring = views.filter(function (v) { return v.soon; });
+
+    // buy
+    var isCustom = st.selCat === 'custom';
+    var gb = Math.max(0, parseInt(st.customGb, 10) || 0), dd = Math.max(0, parseInt(st.customDays, 10) || 0);
+    var customPrice = gb * 2600 + dd * 800;
+    var prod = isCustom
+      ? { id: 'custom', name: 'سرویس دلخواه', dur: dd + ' روز', traffic: gb + ' گیگ', list: Math.round(customPrice * 1.25), your: customPrice }
+      : (st.products.filter(function (p) { return p.id === st.selProduct && p.cat === st.selCat; })[0] || st.products.filter(function (p) { return p.cat === st.selCat; })[0]);
+    var total = prod.your * st.qty;
+    var insufficient = total > st.balance;
+
+    // filters
+    var q = (st.query || '').trim();
+    var filtered = views.filter(function (v) {
+      if (st.filter === 'active' && v.ended) return false;
+      if (st.filter === 'soon' && !v.soon) return false;
+      if (st.filter === 'ended' && !v.ended) return false;
+      if (q && v.user.indexOf(q) < 0 && v.note.indexOf(q) < 0) return false;
+      return true;
+    });
+    var fdefs = [['all', 'همه', views.length], ['active', 'فعال', active.length], ['soon', 'رو به اتمام', expiring.length], ['ended', 'منقضی', views.length - active.length]];
+
+    // drawer
+    var drRaw = st.services.filter(function (s) { return s.user === st.drawer; })[0];
+    var dr = drRaw ? this.svcView(drRaw) : { user: '', product: '', loc: '', note: '', pct: 0 };
+    var drProd = drRaw ? st.products.filter(function (p) { return p.name === drRaw.product; })[0] : null;
+    var basePrice = drProd ? drProd.your : 0;
+    var renew = [
+      { id: 'r1', label: 'همان سرویس، 1 دوره', hint: (drProd ? drProd.dur + ' • ' + drProd.traffic : ''), price: basePrice },
+      { id: 'r2', label: 'همان سرویس، 2 دوره', hint: 'دو دوره پشت هم', price: basePrice * 2 },
+      { id: 'r3', label: 'فقط 30 روز زمان', hint: 'حجم باقی‌مانده می‌ماند', price: Math.round(basePrice * 0.6 / 1000) * 1000 }
+    ];
+    var traffic = [
+      { id: 't1', label: '+10 گیگ', hint: 'تا پایان همین دوره', price: 22000 },
+      { id: 't2', label: '+20 گیگ', hint: 'تا پایان همین دوره', price: 40000 },
+      { id: 't3', label: '+50 گیگ', hint: 'تا پایان همین دوره', price: 90000 }
+    ];
+
+    var methods = [
+      { id: 'card', label: 'کارت‌به‌کارت', hint: 'واریز و ارسال رسید؛ بعد از تأیید مدیر شارژ می‌شود', badge: 'بدون کارمزد', fee: 0 },
+      { id: 'online', label: 'درگاه آنلاین', hint: 'پرداخت با کارت بانکی؛ شارژ فوری', badge: 'کارمزد 10٪', fee: 0.1 },
+      { id: 'crypto', label: 'ارز دیجیتال (TON / USDT)', hint: 'شارژ بعد از تأیید شبکه', badge: 'کارمزد 10٪', fee: 0.1 }
+    ];
+    var m = methods.filter(function (x) { return x.id === st.method; })[0];
+    var fee = Math.round(st.topup * m.fee);
+
+    var clientViews = st.clients.map(function (c) {
+      var mine = views.filter(function (v) { return v.clientId === c.id; });
+      var live = mine.filter(function (v) { return !v.ended; });
+      var soonOne = live.filter(function (v) { return v.soon; })[0];
+      return {
+        id: c.id, name: c.name, contact: c.contact, since: c.since, initial: c.name.charAt(0), count: mine.length,
+        next: soonOne ? ('رو به اتمام: ' + soonOne.user) : (live.length ? 'همه فعال' : 'سرویس فعال ندارد'),
+        nextCls: soonOne ? 'tag warn' : (live.length ? 'tag ok' : 'tag'),
+        cls: st.selClient === c.id ? 'opt on' : 'opt',
+        pick: function () { self.setState({ selClient: c.id }); },
+        services: mine
+      };
+    });
+    var cl = clientViews.filter(function (c) { return c.id === st.selClient; })[0] || clientViews[0];
+
+    var tx = [
+      { title: 'خرید 3 سرویس نقره', when: '1405/08/20 14:12', amt: '-408,000', after: '4,860,000', st: 'انجام شد', stCls: 'tag ok', neg: true },
+      { title: 'شارژ کارت‌به‌کارت', when: '1405/08/20 11:40', amt: '+2,000,000', after: '5,268,000', st: 'تأیید شد', stCls: 'tag ok', neg: false },
+      { title: 'تمدید ar_1044', when: '1405/08/19 19:03', amt: '-205,000', after: '3,268,000', st: 'انجام شد', stCls: 'tag ok', neg: true },
+      { title: 'بازگشت وجه ar_1029', when: '1405/08/18 10:21', amt: '+96,000', after: '3,473,000', st: 'انجام شد', stCls: 'tag ok', neg: false },
+      { title: 'حجم اضافه ar_1047', when: '1405/08/17 22:47', amt: '-40,000', after: '3,377,000', st: 'انجام شد', stCls: 'tag ok', neg: true },
+      { title: 'شارژ درگاه آنلاین', when: '1405/08/15 09:05', amt: '+1,000,000', after: '3,417,000', st: 'انجام شد', stCls: 'tag ok', neg: false }
+    ].map(function (t) { t.amtCls = t.neg ? '' : 'tag ok'; t.iconCls = t.neg ? 'tag' : 'tag ok'; t.sign = t.neg ? '−' : '+'; return t; });
+    var txF = st.txFilter || 'all';
+    var txList = tx.filter(function (t) { return txF === 'all' || (txF === 'in' ? !t.neg : t.neg); });
+
+    return {
+      rootClass: theme === 'dark' ? 'rp dark' : 'rp',
+      showLogin: !st.loggedIn, showApp: st.loggedIn,
+      login: function () { self.setState({ loggedIn: true, screen: 'dash' }); },
+      logout: function () { self.setState({ loggedIn: false, drawer: null }); },
+      storeName: 'فروشگاه آرین', tierName: 'سطح 2',
+      themeLabel: theme === 'dark' ? 'تم روشن' : 'تم تیره',
+      toggleTheme: function () { self.setState({ theme: theme === 'dark' ? 'light' : 'dark' }); },
+      navItems: nav.map(function (n) { return { label: n.label, icon: n.icon, cls: st.screen === n.key ? 'on' : '', go: go(n.key) }; }),
+      screenTitle: titles[st.screen][0], screenSub: titles[st.screen][1],
+      isDash: st.screen === 'dash', isBuy: st.screen === 'buy', isServices: st.screen === 'services',
+      isWallet: st.screen === 'wallet', isPrices: st.screen === 'prices', isSupport: st.screen === 'support', isSettings: st.screen === 'settings',
+      isClients: st.screen === 'clients', isBot: st.screen === 'bot',
+      clientCount: clientViews.length, clientRows: clientViews, cl: cl, clientServices: cl.services,
+      addingClient: st.addingClient, newClientName: st.newClientName,
+      openAddClient: function () { self.setState({ addingClient: true }); },
+      cancelClient: function () { self.setState({ addingClient: false, newClientName: '' }); },
+      setNewClientName: function (e) { self.setState({ newClientName: e.target.value }); },
+      saveClient: function () {
+        var n = (st.newClientName || '').trim(); if (!n) { self.say('اسم مشتری را بنویسید'); return; }
+        var id = 'c' + (st.clients.length + 1);
+        self.setState({ clients: st.clients.concat([{ id: id, name: n, contact: 'بدون تماس', since: '1405/08/20' }]), selClient: id, addingClient: false, newClientName: '' });
+        self.say('مشتری ذخیره شد');
+      },
+      buyForClient: function () { self.setState({ screen: 'buy', buyClient: cl.id, buyDone: false }); },
+      renewClientAll: function () { self.say('سرویس‌های فعال ' + cl.name + ' تمدید شد'); },
+      clientOptions: st.clients.map(function (c) { return { id: c.id, name: c.name, sel: st.buyClient === c.id }; }),
+      setBuyClient: function (e) { self.setState({ buyClient: e.target.value }); },
+      trialUsed: st.trialUsed, trialBtnCls: st.trialUsed >= 3 ? 'btn sm dis' : 'btn sm',
+      makeTrial: function () { if (st.trialUsed >= 3) return; self.setState({ trialUsed: st.trialUsed + 1 }); self.say('سرویس تست ساخته شد و لینکش در تلگرام آمد'); },
+      botNotRequested: !st.botRequested, botRequested: st.botRequested,
+      requestBot: function () { self.setState({ botRequested: true }); self.say('درخواست برای مدیر فرستاده شد'); },
+      cancelBot: function () { self.setState({ botRequested: false }); self.say('درخواست لغو شد'); },
+      secRows: [['twofa', 'رمز دومرحله‌ای', 'بعد از لینک ورود، کد از اپ Authenticator هم خواسته شود'], ['alert', 'اعلان ورود جدید', 'هر ورود از دستگاه جدید در تلگرام خبر داده شود']].map(function (n) {
+        var on = !!st.sec[n[0]];
+        return { title: n[1], hint: n[2], on: on ? 'true' : 'false', cls: on ? 'sw on' : 'sw', toggle: function () { var x = Object.assign({}, st.sec); x[n[0]] = !on; self.setState({ sec: x }); } };
+      }),
+      activity: [
+        { what: 'خرید 3 سرویس نقره', where: 'Chrome — Windows', when: 'امروز 14:12' },
+        { what: 'روشن کردن تمدید خودکار ar_1043', where: 'Chrome — Windows', when: 'امروز 14:15' },
+        { what: 'ورود به پنل', where: 'Safari — iPhone', when: 'دیروز 21:14' },
+        { what: 'شارژ کارت‌به‌کارت', where: 'ربات تلگرام', when: 'امروز 11:40' }
+      ],
+      installPwa: function () { self.say('پنجرهٔ نصب مرورگر باز می‌شود'); },
+      goBuy: function () { self.setState({ screen: 'buy', buyDone: false, drawer: null }); },
+      goWallet: go('wallet'), goPrices: go('prices'),
+      goServicesExpiring: function () { self.setState({ screen: 'services', filter: 'soon' }); },
+      balanceText: this.fmt(st.balance),
+      activeCount: active.length, totalCount: views.length, expiringCount: expiring.length,
+      expiringRows: expiring,
+      txShort: tx.slice(0, 4), txList: txList,
+      txChips: [['all', 'همه'], ['in', 'واریز'], ['out', 'برداشت']].map(function (c) { return { label: c[1], cls: txF === c[0] ? 'chip on' : 'chip', pick: function () { self.setState({ txFilter: c[0] }); } }; }),
+
+      catTabs: this.cats.map(function (c) {
+        var n = c.id === 'custom' ? '' : st.products.filter(function (p) { return p.cat === c.id; }).length;
+        return { label: c.label, count: n, cls: st.selCat === c.id ? 'chip on' : 'chip', pick: function () {
+          var first = st.products.filter(function (p) { return p.cat === c.id; })[0];
+          self.setState({ selCat: c.id, selProduct: first ? first.id : st.selProduct });
+        } };
+      }),
+      isPlanCat: !isCustom, isCustomCat: isCustom,
+      customGb: st.customGb, customDays: st.customDays, customPriceText: this.fmt(customPrice),
+      setCustomGb: function (e) { self.setState({ customGb: e.target.value }); },
+      setCustomDays: function (e) { self.setState({ customDays: e.target.value }); },
+      userModes: [['auto', 'خودکار'], ['custom', 'دلخواه']].map(function (u) {
+        var dis = u[0] === 'custom' && st.qty > 1;
+        return { label: u[1], cls: (st.userMode === u[0] && !dis) || (u[0] === 'auto' && st.qty > 1) ? 'chip on' : (dis ? 'chip btn dis' : 'chip'), pick: function () { if (!dis) self.setState({ userMode: u[0] }); } };
+      }),
+      showCustomUser: st.userMode === 'custom' && st.qty === 1,
+      customUser: st.customUser, setCustomUser: function (e) { self.setState({ customUser: e.target.value }); },
+      userHint: st.qty > 1 ? 'برای خرید چندتایی، نام‌ها خودکار ساخته می‌شوند (مثل ربات).' : 'مثل ربات: خودکار، یا یک نام دلخواه که آزاد باشد.',
+      productCards: st.products.filter(function (p) { return p.cat === st.selCat; }).map(function (p) {
+        var on = p.id === prod.id;
+        return { name: p.name, dur: p.dur, traffic: p.traffic, listText: self.fmt(p.list), yourText: self.fmt(p.your), on: on ? 'true' : 'false', cls: on ? 'pcard on' : 'pcard', pick: function () { self.setState({ selProduct: p.id }); } };
+      }),
+      locChips: [['آلمان', 'ظرفیت آزاد'], ['هلند', 'ظرفیت آزاد'], ['فنلاند', 'ظرفیت کم']].map(function (l) {
+        return { label: l[0], free: l[1], cls: st.selLoc === l[0] ? 'chip on' : 'chip', pick: function () { self.setState({ selLoc: l[0] }); } };
+      }),
+      qty: st.qty,
+      inc: function () { self.setState({ qty: Math.min(50, st.qty + 1) }); },
+      dec: function () { self.setState({ qty: Math.max(1, st.qty - 1) }); },
+      prefix: st.prefix, note: st.note,
+      prefixSample: (st.prefix || '') + '1053، ' + (st.prefix || '') + '1054، …',
+      setPrefix: function (e) { self.setState({ prefix: e.target.value }); },
+      setNote: function (e) { self.setState({ note: e.target.value }); },
+      selName: prod.name + ' (' + prod.dur + ' • ' + prod.traffic + ')', selLoc: st.selLoc,
+      unitText: this.fmt(prod.your), totalText: this.fmt(total),
+      saveText: this.fmt((prod.list - prod.your) * st.qty),
+      afterText: insufficient ? '—' : this.fmt(st.balance - total),
+      insufficient: insufficient, canBuy: !insufficient,
+      confirmBuy: function () {
+        var made = [];
+        var next = st.services.slice();
+        for (var i = 0; i < st.qty; i++) {
+          var u = (st.qty === 1 && st.userMode === 'custom' && st.customUser) ? st.customUser : ('ar_' + (1053 + i));
+          made.push({ user: u, product: prod.name, loc: st.selLoc, note: st.note || '—' });
+          next.unshift({ user: u, note: st.note, client: st.buyClient, product: prod.name, loc: st.selLoc, used: 0, total: parseInt(prod.traffic, 10) || 0, days: isCustom ? dd : (parseInt(prod.dur, 10) || 1) * 30, st: 'ok', ar: false });
+        }
+        self.setState({ buyDone: true, done: made, services: next, balance: st.balance - total });
+      },
+      buyDone: st.buyDone, buyForm: !st.buyDone,
+      doneCount: st.done.length, doneTotal: this.fmt(st.done.length * prod.your),
+      doneRows: st.done.map(function (d) { return { user: d.user, product: d.product, loc: d.loc, note: d.note, open: function () { self.setState({ drawer: d.user, drTab: 'link' }); } }; }),
+      sendLinksTg: function () { self.say('لینک‌ها در تلگرام برای شما فرستاده شد'); },
+      copyAll: function () { self.say('همهٔ لینک‌ها کپی شد'); },
+      buyAgain: function () { self.setState({ buyDone: false }); },
+
+      filterChips: fdefs.map(function (f) { return { label: f[1], count: f[2], cls: st.filter === f[0] ? 'chip on' : 'chip', pick: function () { self.setState({ filter: f[0] }); } }; }),
+      query: st.query, setQuery: function (e) { self.setState({ query: e.target.value }); },
+      serviceRows: filtered, noRows: filtered.length === 0,
+
+      amountChips: [500000, 1000000, 2000000, 5000000].map(function (a) { return { label: self.fmt(a), cls: st.topup === a ? 'chip on' : 'chip', pick: function () { self.setState({ topup: a }); } }; }),
+      methodOpts: methods.map(function (x) { return { label: x.label, hint: x.hint, badge: x.badge, cls: st.method === x.id ? 'opt on' : 'opt', pick: function () { self.setState({ method: x.id }); } }; }),
+      topupText: this.fmt(st.topup), feeText: this.fmt(fee), payText: this.fmt(st.topup + fee),
+      payLabel: st.method === 'card' ? 'دیدن شمارهٔ کارت و ارسال رسید' : 'رفتن به درگاه پرداخت',
+      doTopup: function () { self.say(st.method === 'card' ? 'شمارهٔ کارت نشان داده شد؛ بعد از واریز رسید را بفرستید' : 'به درگاه پرداخت می‌روید…'); },
+
+      priceRows: st.products.map(function (p) { return { name: p.name, dur: p.dur, traffic: p.traffic, listText: self.fmt(p.list), yourText: self.fmt(p.your), offText: Math.round((1 - p.your / p.list) * 100) + '٪', buy: function () { self.setState({ screen: 'buy', selCat: p.cat, selProduct: p.id, buyDone: false }); } }; }),
+      copyPrices: function () { self.say('لیست قیمت (قیمت عادی) برای ارسال به مشتری کپی شد'); },
+
+      tickets: [
+        { title: 'قطعی لوکیشن فنلاند', svc: 'ar_1049', when: 'امروز 12:30', st: 'پاسخ داده شد', cls: 'tag ok' },
+        { title: 'سؤال دربارهٔ سطح 3', svc: '—', when: 'دیروز 18:02', st: 'در انتظار پاسخ', cls: 'tag warn' },
+        { title: 'بازگشت وجه ar_1029', svc: 'ar_1029', when: '1405/08/18', st: 'بسته شد', cls: 'tag' }
+      ],
+      sendTicket: function () { self.say('تیکت فرستاده شد'); },
+
+      notifRows: [['exp', 'سرویس رو به اتمام', 'هر روز ساعت 10 صبح، فهرست سرویس‌های رو به اتمام'], ['daily', 'گزارش روزانهٔ فروش', 'هر شب، خلاصهٔ خرید و تمدید امروز'], ['ticket', 'پاسخ تیکت', 'وقتی مدیر جواب داد']].map(function (n) {
+        var on = !!st.notif[n[0]];
+        return { title: n[1], hint: n[2], on: on ? 'true' : 'false', cls: on ? 'sw on' : 'sw', toggle: function () { var x = Object.assign({}, st.notif); x[n[0]] = !on; self.setState({ notif: x }); } };
+      }),
+      sessions: st.sessions.map(function (s) { return { dev: s.dev, when: s.when, current: s.current, other: !s.current, kill: function () { self.setState({ sessions: st.sessions.filter(function (x) { return x.id !== s.id; }) }); self.say('از آن دستگاه خارج شد'); } }; }),
+
+      drawerOpen: !!drRaw, dr: dr,
+      closeDrawer: function () { self.setState({ drawer: null }); },
+      stop: function (e) { e.stopPropagation(); },
+      drTabs: [['link', 'اتصال (لینک، QR، فایل)'], ['renew', 'تمدید'], ['traffic', 'حجم اضافه']].map(function (t) { return { label: t[1], cls: st.drTab === t[0] ? 'chip on' : 'chip', pick: function () { self.setState({ drTab: t[0] }); } }; }),
+      tabLink: st.drTab === 'link', tabRenew: st.drTab === 'renew', tabTraffic: st.drTab === 'traffic',
+      drHasLink: !!drRaw && drRaw.loc !== 'فنلاند', drFilesOnly: !!drRaw && drRaw.loc === 'فنلاند',
+      drFiles: drRaw ? [['conf', drRaw.user + '-' + (drRaw.loc === 'هلند' ? 'NL' : drRaw.loc === 'فنلاند' ? 'FI' : 'DE') + '-1.conf'], ['conf', drRaw.user + '-' + (drRaw.loc === 'هلند' ? 'NL' : drRaw.loc === 'فنلاند' ? 'FI' : 'DE') + '-2.conf'], ['json', drRaw.user + '-singbox.json']].map(function (f) {
+        return { ext: f[0], name: f[1], dl: function () { self.say('دانلود ' + f[1]); } };
+      }) : [],
+      sendFilesTg: function () { self.say('فایل‌های اتصال در تلگرام برای شما فرستاده شد'); },
+      dlAll: function () { self.say('فایل ZIP دانلود شد'); },
+      copyLink: function () { self.say('لینک کپی شد'); },
+      sendTg: function () { self.say('لینک و QR در تلگرام فرستاده شد'); },
+      rotate: function () { self.say('لینک تازه ساخته شد؛ لینک قبلی دیگر کار نمی‌کند'); },
+      renewOpts: renew.map(function (o) { return { label: o.label, hint: o.hint, priceText: self.fmt(o.price), cls: st.renewSel === o.id ? 'opt on' : 'opt', pick: function () { self.setState({ renewSel: o.id }); } }; }),
+      trafficOpts: traffic.map(function (o) { return { label: o.label, hint: o.hint, priceText: self.fmt(o.price), cls: st.trafficSel === o.id ? 'opt on' : 'opt', pick: function () { self.setState({ trafficSel: o.id }); } }; }),
+      doRenew: function () { self.say('سرویس تمدید شد'); },
+      doTraffic: function () { self.say('حجم اضافه شد'); },
+      noop: function () {},
+      hasToast: !!st.toast, toast: st.toast
+    };
+  }
+}
+</script>
+</body>
+</html>

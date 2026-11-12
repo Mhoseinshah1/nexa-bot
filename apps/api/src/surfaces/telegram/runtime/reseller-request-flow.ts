@@ -8,6 +8,7 @@ import {
   type ResellerRequestStepAction,
   type TenantContext,
 } from '@nexa/contracts';
+import { openButton } from './reseller-web-flow.js';
 import type { CustomerRecord } from '../../../modules/commerce/customers/application/ports.js';
 import type { CustomerCaptureRecord } from '../../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { InboundReceiptFile } from '../../../modules/commerce/payments/application/receipt-ports.js';
@@ -71,7 +72,10 @@ export async function menuEntry(
       botInstanceId: input.botInstanceId,
       idempotencyKey: input.idempotencyKey,
     });
-    return entryReply(outcome);
+    const reply = entryReply(outcome);
+    // PR-4: the reseller section — an ACTIVE reseller is offered «ورود به پنل وب» here.
+    if (outcome.kind !== 'ALREADY_RESELLER') return reply;
+    return { ...reply, buttons: [...reply.buttons, ...(await openButton(rt, scope, customer))] };
   } catch (error) {
     return refusal(error);
   }

@@ -919,7 +919,10 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     enabled: z.boolean(),
     consentedTotalMinor: z.string().nullable(),
     currency: z.string().nullable(),
-    source: z.enum(['TELEGRAM', 'MINI_APP']),
+    /** PR-5: `RESELLER_WEB` is the reseller web panel's per-service switch. */
+    source: z.enum(['TELEGRAM', 'MINI_APP', 'RESELLER_WEB']),
+    /** PR-5 (OQ-R10-D1-01): an imported service's chosen plan; absent or null otherwise. */
+    renewProductId: z.string().nullable().optional(),
   }),
   /*
    * Round 10, D1: one period's outcome. `orderId` is the renewal order when one was paid

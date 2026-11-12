@@ -30,6 +30,8 @@ import type { SecretRowQueryable, UnreadableSecret } from './secret-trial.js';
  *   current row: deleted.
  * - `admin.totp_secret`, `hosting.totp_secret` — disabling a factor DELETES its row
  *   (`admin_totp_factors` docblock); the item names the ADMIN, who enrols again.
+ * - `reseller_web.totp_secret` — the same for a reseller's panel factor; the item names the
+ *   reseller's CUSTOMER, who enrols again from the panel (signing in needs no code until then).
  * - `payment_gateway.refund_card` — REFUSED. The sealed card exists exactly while a
  *   refund is REQUESTED (a CHECK), so clearing it means changing a refund's state, and a
  *   restore never moves money. The Recovery Kit is the only way through.
@@ -264,6 +266,25 @@ export async function clearUnreadableSecrets(
             entityTable: 'admins',
             entityId: adminId,
             entityKey: table,
+          });
+          break;
+        }
+        case 'reseller_web.totp_secret': {
+          // PR-4: as an admin factor — disabling it DELETES the row; the RESELLER re-enrols.
+          const deleted = await db.query<{ customer_id: string }>(
+            `DELETE FROM reseller_web_totp_factors WHERE id::text = $1 AND tenant_id::text = $2
+              RETURNING customer_id::text AS customer_id`,
+            where,
+          );
+          const customerId = deleted.rows[0]?.customer_id;
+          if (customerId === undefined) break;
+          cleared += 1;
+          items.push({
+            tenantId: row.tenantId,
+            purpose: row.purpose,
+            entityTable: 'customers',
+            entityId: customerId,
+            entityKey: 'reseller_web_totp_factors',
           });
           break;
         }

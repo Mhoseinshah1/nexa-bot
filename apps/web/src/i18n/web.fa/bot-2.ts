@@ -148,6 +148,8 @@ export const WEB_FA_BOT_2 = {
   'web.ib_button_marketing_opt_in': 'فعال‌سازی پیام‌های تبلیغاتی',
   'web.ib_button_reminders_opt_out': 'قطع یادآوری انقضا و حجم',
   'web.ib_button_reminders_opt_in': 'فعال‌سازی یادآوری انقضا و حجم',
+  'web.ib_button_reseller_web_open': 'ورود نماینده به پنل وب',
+  'web.ib_button_reseller_web_link': 'بازکردن لینک ورود پنل نماینده',
   'web.ib_button_reseller_request_start': 'شروع درخواست نمایندگی',
   'web.ib_button_reseller_request_skip': 'رد کردن سؤال اختیاری',
   'web.ib_button_reseller_request_back': 'بازگشت به سؤال قبل',
@@ -175,6 +177,8 @@ export const WEB_FA_BOT_2 = {
   'web.ib_button_terms_accept': 'پذیرش قوانین',
   'web.ib_button_phone_verify': 'تأیید شماره تلفن (حساب کاربری و روش‌های پرداخت)',
   'web.ib_button_captcha_option': 'گزینهٔ پاسخ سؤال امنیتی',
+  'web.ib_button_captcha_emoji_option': 'گزینهٔ ایموجی سؤال امنیتی',
+  'web.ib_button_captcha_refresh': 'تصویر جدید (سؤال امنیتی)',
   // Round P: target, appearance slot, the Telegram command menu and its sync per bot.
   'web.bot_buttons_label_default': 'متن پیش‌فرض:',
   'web.bot_buttons_target': 'مقصد',

@@ -260,6 +260,17 @@ describe('Settings', () => {
     expect(document.querySelector('.settings-section-body')?.hasAttribute('hidden')).toBe(true);
   });
 
+  it('draws a non-collapsible section as a plain heading over an open body', () => {
+    render(
+      <SettingsSection title="عمومی" collapsible={false}>
+        <SettingRow title="نام" control={<input aria-label="نام" />} />
+      </SettingsSection>,
+    );
+    expect(screen.queryByRole('button', { name: /عمومی/ })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'عمومی' })).toBeInTheDocument();
+    expect(document.querySelector('.settings-section-body')?.hasAttribute('hidden')).toBe(false);
+  });
+
   it('the save bar exists only with changes and hands save/cancel back to the page', () => {
     const save = vi.fn();
     const cancel = vi.fn();

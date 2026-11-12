@@ -19,6 +19,11 @@ export interface AutoRenewPreference {
   readonly consented: Money | null;
   readonly source: AutoRenewPreferenceSource;
   readonly updatedAt: Date;
+  /**
+   * PR-5 (OQ-R10-D1-01, owner decision): an imported service's plan to renew into, chosen by a
+   * reseller at opt-in; null (or absent) for a native service.
+   */
+  readonly renewProductId?: string | null;
 }
 
 /** One period of one service, as the sweep holds it. */
@@ -101,6 +106,8 @@ export interface AutoRenewRepository {
       readonly consented: Money | null;
       readonly source: AutoRenewPreferenceSource;
       readonly now: Date;
+      /** PR-5: an imported service's chosen plan (kept only while on). */
+      readonly renewProductId?: string | null;
     },
     tx: TransactionScope,
   ): Promise<boolean>;

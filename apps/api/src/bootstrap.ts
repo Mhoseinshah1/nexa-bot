@@ -15,6 +15,7 @@ import {
   DIRECT_MESSAGE_TEXT_MAX_LENGTH,
   BROADCAST_MEDIA_MAX_BYTES,
   MINIAPP_API_PREFIX,
+  RESELLER_API_PREFIX,
   MINIAPP_BODY_LIMIT_BYTES,
   MINIAPP_RECEIPT_BODY_LIMIT_BYTES,
   type SalesCurrencyCode,
@@ -431,7 +432,8 @@ export async function createApiApp(
      * routes read far less than the authenticated admin's megabyte — 16 KiB — except the
      * receipt upload, which carries one image (at most 5 MB, base64).
      */
-    if (route.url.startsWith(MINIAPP_API_PREFIX)) {
+    if (route.url.startsWith(MINIAPP_API_PREFIX) || route.url.startsWith(RESELLER_API_PREFIX)) {
+      // PR-4: the reseller panel reads what the mini app reads, under the same bounds.
       route.bodyLimit = route.url.endsWith('/receipt')
         ? MINIAPP_RECEIPT_BODY_LIMIT_BYTES
         : MINIAPP_BODY_LIMIT_BYTES;

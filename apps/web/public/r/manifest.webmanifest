@@ -1,0 +1,22 @@
+{
+  "name": "پنل نماینده",
+  "short_name": "پنل نماینده",
+  "description": "پنل وب نمایندگان فروش",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": "/r/login",
+  "scope": "/r/",
+  "display": "standalone",
+  "background_color": "#0a0a0b",
+  "theme_color": "#0a0a0b",
+  "icons": [
+    { "src": "/r/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/r/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    {
+      "src": "/r/icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

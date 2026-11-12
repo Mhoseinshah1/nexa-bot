@@ -1,4 +1,5 @@
 import {
+  BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
   CARD_SWITCH_SETTING_KEYS,
   LATE_CREDIT_SETTING_KEYS,
@@ -14,6 +15,7 @@ import {
   type FxSource,
   type OperationalSeverity,
   type PanelBalancingStrategy,
+  type StartCaptchaKind,
   type PhoneAllowedNumbers,
   type ReferralCommissionScope,
   type ReferralGiftUnlockMode,
@@ -154,6 +156,9 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   BACKUP_SCHEDULE_SETTING_KEYS.enabled,
   BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes,
   BACKUP_SCHEDULE_SETTING_KEYS.dailyTime,
+  // Owner 2026-11-11: «نگه داشتن نسخه روی سرور» is on the same card, where turning it off
+  // asks for the confirmation the owner wrote — a bare switch here would skip it.
+  BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
   // Track 3 §2: PANEL-scoped — one value per panel, on that panel's «فایل‌های اتصال» tab.
   ...PANEL_SETTING_KEYS,
 ];
@@ -224,6 +229,15 @@ export const LATE_PAYMENT_POLICY_LABELS: Readonly<Record<LatePaymentPolicy, WebK
 const BALANCING_STRATEGY_OPTIONS: Readonly<Record<PanelBalancingStrategy, WebKey>> = {
   LEAST_USED: 'web.balancing_strategy_least_used',
   LOWEST_UTILISATION: 'web.balancing_strategy_lowest_utilisation',
+};
+
+/** `captcha.kind`: the five questions a new customer may be asked. */
+const CAPTCHA_KIND_OPTIONS: Readonly<Record<StartCaptchaKind, WebKey>> = {
+  MATH: 'web.captcha_kind_math',
+  IMAGE_NUMBER: 'web.captcha_kind_image_number',
+  EMOJI: 'web.captcha_kind_emoji',
+  WORD_NUMBER: 'web.captcha_kind_word_number',
+  RANDOM: 'web.captcha_kind_random',
 };
 
 const FX_SOURCE_OPTIONS: Readonly<Record<FxSource, WebKey>> = {
@@ -450,6 +464,13 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'ops',
     control: { kind: 'integer', unit: 'web.unit_days' },
   },
+  // Owner 2026-11-11: drawn on «زمان‌بندی بکاپ خودکار» (SETTINGS_MANAGED_ELSEWHERE).
+  'backup.archive_keep_on_host': {
+    title: 'web.backup_keep_on_host',
+    description: 'web.backup_keep_on_host_hint',
+    group: 'ops',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
   // Round 8 B5: CPU share of one core the backup's heavy tools may use.
   'backup.cpu_limit_percent': {
     title: 'web.setting_backup_cpu_limit',
@@ -665,6 +686,19 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.setting_reseller_request_cooldown_days_desc',
     group: 'sales',
     control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  // PR-5 §5.7: reseller trials from the reseller web panel.
+  'reseller.trial_daily_quota': {
+    title: 'web.setting_reseller_trial_daily_quota',
+    description: 'web.setting_reseller_trial_daily_quota_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_times' },
+  },
+  'reseller.trial_product': {
+    title: 'web.setting_reseller_trial_product',
+    description: 'web.setting_reseller_trial_product_desc',
+    group: 'sales',
+    control: { kind: 'text' },
   },
   // Round N, package D.
   'reminders.reseller_minimum_days': {
@@ -882,6 +916,12 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     control: { kind: 'integer', unit: 'web.unit_minutes' },
   },
   // R10 D5 (a): the /start captcha for new customers.
+  'captcha.kind': {
+    title: 'web.setting_captcha_kind',
+    description: 'web.setting_captcha_kind_desc',
+    group: 'sales',
+    control: { kind: 'select', options: options(CAPTCHA_KIND_OPTIONS) },
+  },
   'captcha.expiry_seconds': {
     title: 'web.setting_captcha_expiry_seconds',
     description: 'web.setting_captcha_expiry_seconds_desc',

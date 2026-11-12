@@ -28,6 +28,12 @@ import type { SecretReentryReader } from '../application/secret-reentry.service.
  * Not listed: `legacy_migration.package_key` and `gift_card.batch_export` — nothing can
  * be re-entered for them (a package is imported again; a sealed export expires), so an
  * item could never leave the strip. Their re-entry rows still record the clearing.
+ *
+ * Not listed either, on purpose: `reseller_web.totp_secret` (PR-4). A reseller's panel factor
+ * is re-entered by the RESELLER, from their own panel, never on a Web Admin page, so an item
+ * on the operator's strip would name work the operator cannot do. Its clearing deletes the
+ * factor (the reseller signs in without a code until they enrol again) and the re-entry row
+ * records it, naming the reseller's customer (`secret-clearing.ts`).
  */
 
 const PLACES: Readonly<Partial<Record<SecretPurpose, SecretReentryPlace>>> = {
@@ -42,6 +48,7 @@ const PLACES: Readonly<Partial<Record<SecretPurpose, SecretReentryPlace>>> = {
   'support_ai_provider.api_key': 'support-ai',
   'admin.totp_secret': 'account',
   'hosting.totp_secret': 'hosting',
+  // `reseller_web.totp_secret` is deliberately absent: see the docblock above.
 };
 
 const PANEL_COLUMNS: Readonly<Record<string, readonly [string, string]>> = {

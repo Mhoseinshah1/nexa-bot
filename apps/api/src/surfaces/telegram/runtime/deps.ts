@@ -1,5 +1,6 @@
 // The ports the bot runtime is built from.
 // Moved verbatim out of bot-runtime.ts, which still re-exports every name it exported.
+import type { ResellerWebAccessService } from '../../../modules/commerce/reseller-panel/application/reseller-web-access.service.js';
 import type {
   ActorContext,
   BotInstanceId,
@@ -328,7 +329,10 @@ export interface BotRuntimeDeps {
    * chain. Optional for the reason `membership` is; absent, nobody is ever asked — which is
    * also what every customer sees while `start_captcha` is off.
    */
-  readonly captcha?: Pick<StartCaptchaService, 'present' | 'answer'>;
+  readonly captcha?: Pick<
+    StartCaptchaService,
+    'present' | 'answer' | 'answerText' | 'refresh' | 'renderImage'
+  >;
   /**
    * The terms and rules (program §6). Optional for the reason `membership` is; absent, no
    * customer is asked to accept anything — which is also what a tenant with enforcement off,
@@ -592,6 +596,11 @@ export interface BotRuntimeDeps {
   readonly customMenuButtons?: {
     forTap(scope: TenantContext, id: string, botInstanceId: string): Promise<CustomMenuTap>;
   };
+  /**
+   * PR-4: the reseller web panel's way in («ورود به پنل وب»). Absent, the button is never
+   * drawn and a tap answers that the panel is not available.
+   */
+  readonly resellerWeb?: Pick<ResellerWebAccessService, 'offered' | 'issueLink'>;
   /** PR-2: the reseller request. Absent, the main-menu button answers «not available». */
   readonly resellerRequests?: ResellerRequestService;
   /** WP-A7: the customer's support tickets. Absent, the desk is not offered. */

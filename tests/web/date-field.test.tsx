@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { DateField, type DateFieldMode } from '../../apps/web/src/ui/date-field';
 import { Drawer, Field } from '../../apps/web/src/ui/kit';
 import { ListFilterBar } from '../../apps/web/src/ui/filter-bar';
@@ -231,6 +231,39 @@ describe('date and time', () => {
     expect(seen).toEqual(['2026-10-17T14:35']);
     expect(field()).toHaveTextContent(plainDigits('14:35'));
     expect(field()).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('late in the evening, a tapped today rounds up inside the day, capped at 23:59', () => {
+    // 23:57 would round up to 00:00 — the start of the NEXT day's clock face.
+    vi.setSystemTime(new Date(2026, 9, 16, 23, 57));
+    const seen: string[] = [];
+    render(<Harness mode="datetime" onValue={(value) => seen.push(value)} />);
+    fireEvent.click(field());
+    fireEvent.click(day(24));
+    expect(seen).toEqual(['2026-10-16T23:59']);
+    expect(field()).toHaveTextContent(plainDigits('23:59'));
+  });
+
+  it('a default time outside min is moved to the nearest allowed moment and shown', () => {
+    vi.setSystemTime(new Date(2026, 9, 16, 14, 32));
+    const seen: string[] = [];
+    // The earliest allowed moment is later today than the rounded-up «now» (14:35).
+    render(
+      <Harness mode="datetime" min="2026-10-16T16:20" onValue={(value) => seen.push(value)} />,
+    );
+    fireEvent.click(field());
+    fireEvent.click(day(24));
+    expect(seen).toEqual(['2026-10-16T16:20']);
+    expect(field()).toHaveTextContent(plainDigits('16:20'));
+    // Past max: moved down to it.
+    cleanup();
+    const later: string[] = [];
+    render(
+      <Harness mode="datetime" max="2026-10-16T09:00" onValue={(value) => later.push(value)} />,
+    );
+    fireEvent.click(field());
+    fireEvent.click(day(24));
+    expect(later).toEqual(['2026-10-16T09:00']);
   });
 
   it('a tapped day keeps the value’s own time when there is one', () => {

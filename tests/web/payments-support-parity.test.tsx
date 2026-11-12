@@ -519,7 +519,7 @@ describe('/support-learning and /notification-center (demo parity)', () => {
     ).toBeTruthy();
   });
 
-  it('puts the feed filters in the panel and «علامت‌گذاری همه» in the «بیشتر» menu', async () => {
+  it('puts the alert feeds in the panel, the unread/all pair on the page and the re-read in the «بیشتر» menu', async () => {
     stubApi([
       {
         url: '/notification-center/summary',
@@ -529,12 +529,20 @@ describe('/support-learning and /notification-center (demo parity)', () => {
     ]);
     renderPage(<NotificationCenterPage permissions={['payments.view']} />);
     await screen.findByText(t('web.nc_empty_unread'));
+    // The real demo's «خوانده‌نشده | همه» pair is on the page itself, not only inside the panel.
+    expect(screen.getByRole('button', { name: t('web.nc_filter_unread') })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: t('web.nc_filter_all') })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
     expect(screen.queryByRole('group', { name: t('web.nc_filters_label') })).toBeNull();
     expect(
       within(openFilterPanel()).getByRole('group', { name: t('web.nc_filters_label') }),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: t('web.page_more_menu') }));
-    expect(screen.getByRole('menuitem', { name: t('web.nc_mark_all') })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: t('web.nc_reread') })).toBeTruthy();
   });
 });

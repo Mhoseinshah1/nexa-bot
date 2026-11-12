@@ -109,6 +109,8 @@ export const BOT_INTENTS = [
   'TOPUP_PICK',
   /* R10 D4: start redeeming a gift card. Carries nothing; the feature is read on the tap. */
   'GIFT_CARD',
+  /* PR-4: the reseller web panel's sign-in link. Carries nothing; the flag and the reseller are read on the tap. */
+  'RESELLER_WEB_LINK',
   /*
    * The customer's own referral link (WP9 F12). Carries nothing: whose link, and whether
    * the program is running at all, are decided on the server when the tap arrives.
@@ -293,6 +295,11 @@ export const BOT_INTENTS = [
    * stale button.
    */
   'CAPTCHA_ANSWER',
+  /**
+   * `captcha.kind`: «🔄 تصویر جدید» under the picture question, `hc:<question id>:r`. Decided
+   * by the captcha gate, like `CAPTCHA_ANSWER`: a new picture, never a spent attempt.
+   */
+  'CAPTCHA_REFRESH',
   /*
    * WP-A7 — the customer's support tickets. `TICKETS` is the list (the menu entry, /tickets
    * and its callback), `TICKET_NEW` the category chooser, `TICKET_CATEGORY` opens the window
