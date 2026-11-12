@@ -19,6 +19,8 @@ import {
   type PanelScreen,
 } from './route';
 import { AccountPage } from './pages/account';
+import { BuyPage } from './pages/buy';
+import { ClientsPage } from './pages/clients';
 import { DashboardPage } from './pages/dashboard';
 import { PricesPage } from './pages/prices';
 import { ServicesPage } from './pages/services';
@@ -145,7 +147,9 @@ function Screen({
     case 'settings':
       return <AccountPage me={me} />;
     case 'buy':
+      return <BuyPage search={search} />;
     case 'clients':
+      return <ClientsPage />;
     case 'bot':
       return <UnavailableScreen screen={screen} />;
   }

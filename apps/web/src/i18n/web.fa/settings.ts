@@ -643,7 +643,7 @@ export const WEB_FA_SETTINGS = {
   'web.setting_reminders_expiry_early_days': 'یادآور هفتگی پیش از انقضا',
   'web.setting_reseller_trial_daily_quota': 'سرویس تست نماینده در روز',
   'web.setting_reseller_trial_daily_quota_desc':
-    'هر نمایندهٔ فعال روزانه چند سرویس تست رایگان از پنل وب بسازد (روز تقویم ربات). صفر یعنی خاموش؛ حداکثر ۲۰.',
+    'هر نمایندهٔ فعال روزانه چند سرویس تست رایگان از پنل وب بسازد (روز تقویم ربات). صفر یعنی خاموش؛ حداکثر 20.',
   'web.setting_reseller_trial_product': 'تست نماینده (سرور)',
   'web.setting_reseller_trial_product_desc':
     'شناسهٔ سروری که تنظیمات تستش برای سرویس تست نماینده ساخته می‌شود. خالی یعنی سرویس تست نماینده ارائه نمی‌شود.',
