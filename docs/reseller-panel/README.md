@@ -3,11 +3,8 @@
 An ACTIVE reseller manages selling from a web page under `/r/…`, served by `/api/reseller/v1/…`. The standing
 rules are in `docs/project-status.md` § Reseller web panel; this file is the operator and developer reference.
 
-**State when written: PRs #466–#471 are open and not merged — waiting for the owner.** The route-by-route API
-reference, `docs/reseller-panel/api.md`, lives on the PR-4/5/6 branches (`feat/reseller-panel-core`,
-`feat/reseller-panel-selling`, `feat/reseller-own-bot`) and arrives with them; it is not on `main` yet, so this
-file does not link to a path that does not exist there. `approved-demo.dc.html` (the owner's screen spec) arrives
-with #468.
+PRs #466–#471 are merged on `main`. The route-by-route API reference is [`api.md`](api.md); the owner's screen
+spec is [`approved-demo.dc.html`](approved-demo.dc.html).
 
 ## Flags and settings
 

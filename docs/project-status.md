@@ -665,9 +665,8 @@ ZIP64; restoring a hosted tenant missing from the installation backup inside `mo
 ## Reseller web panel
 
 Built in the reseller-panel phase (PRs #466–#471, #468 and this sweep; round report
-`docs/round-reports/reseller-panel.md`, operator reference `docs/reseller-panel/README.md`). **State when
-this was written: every PR open, none merged — «ادغام نشده (منتظر مالک)».** What is below describes the
-code on those branches; once the PRs land on `main` it is the standing rule.
+`docs/round-reports/reseller-panel.md`, operator reference `docs/reseller-panel/README.md`). All of them are
+merged on `main` (2026-11-12); what is below is the standing rule.
 
 **What exists.** An ACTIVE reseller manages selling from a web panel under `/r/…` with its own sign-in,
 cookie and session, served by `/api/reseller/v1/…`: dashboard, buying (several services at once), «سرویس‌های من»,

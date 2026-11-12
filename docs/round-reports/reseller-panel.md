@@ -2,23 +2,26 @@
 
 Round prompt: the reseller-panel phase (owner, 2026-11-11). Base: `main` at `415fa9b7`.
 
-**No PR of this phase is merged.** The session's merge call was refused by its permission check, so every PR is open
-and waits for the owner. No merge commit exists; none is invented here: «ادغام نشده (منتظر مالک)».
+The session's first merge call was refused by its permission check; the owner then approved the merges in the
+conversation (2026-11-12) and every PR below was merged in order, each on a green CI run of its own merged head.
 
 ## PRs
 
 | PR                                                             | What                                                                                | Merge commit |
 | -------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------ |
-| [#466](https://github.com/Mhoseinshah1/nexa-bot/pull/466) PR-3 | backup «بدون نگهداری»: no archive on the host once Telegram holds it                | not merged   |
-| [#467](https://github.com/Mhoseinshah1/nexa-bot/pull/467) PR-2 | `/start` captcha kinds (image number, emoji, word number, random)                   | not merged   |
-| [#468](https://github.com/Mhoseinshah1/nexa-bot/pull/468) PR-1 | real-demo leftovers and the date-time picker's end-of-day edge                      | not merged   |
-| [#469](https://github.com/Mhoseinshah1/nexa-bot/pull/469) PR-4 | reseller panel core: access, layout, read screens, PWA                              | not merged   |
-| [#471](https://github.com/Mhoseinshah1/nexa-bot/pull/471) PR-5 | buying (several at once), clients book, auto-renew, trials, tier progress; on #469  | not merged   |
-| [#470](https://github.com/Mhoseinshah1/nexa-bot/pull/470) PR-6 | dedicated bot for a reseller with a monthly wallet fee; on #469 (it merged #469 in) | not merged   |
+| [#466](https://github.com/Mhoseinshah1/nexa-bot/pull/466) PR-3 | backup «بدون نگهداری»: no archive on the host once Telegram holds it                | `6639f075`   |
+| [#467](https://github.com/Mhoseinshah1/nexa-bot/pull/467) PR-2 | `/start` captcha kinds (image number, emoji, word number, random)                   | `925c1316`   |
+| [#468](https://github.com/Mhoseinshah1/nexa-bot/pull/468) PR-1 | real-demo leftovers and the date-time picker's end-of-day edge                      | `ae33cce6`   |
+| [#469](https://github.com/Mhoseinshah1/nexa-bot/pull/469) PR-4 | reseller panel core: access, layout, read screens, PWA                              | `ebc2338f`   |
+| [#471](https://github.com/Mhoseinshah1/nexa-bot/pull/471) PR-5 | buying (several at once), clients book, auto-renew, trials, tier progress; on #469  | `ff6f5621`   |
+| [#470](https://github.com/Mhoseinshah1/nexa-bot/pull/470) PR-6 | dedicated bot for a reseller with a monthly wallet fee; on #469 (it merged #469 in) | `2de10ee3`   |
 | PR-7 (this)                                                    | status, README, this report, screens                                                | merge last   |
 
-Merge order: #466, #467, #468, #469, #471, #470, then this PR. Migrations: #467 0342, #469 0342, #471 0343, #470 0343;
-after each merge the next branch merges `main` and renumbers (`bash scripts/claude/renumber-migration.sh`). Per-PR
+Merge order: #466, #467, #468, #469, #471, #470, then this PR. Before each merge the branch merged `main` and got a new
+green CI run. Migrations on `main`: 0342 captcha kinds (#467), 0343 reseller web panel (#469, renumbered from 0342),
+0344 reseller selling (#471, from 0343), 0345 reseller bots (#470, from 0343). #469 and #471 stayed byte-identical (the
+drizzle-dropped NOT VALID/VALIDATE hand edits restored); #470 differs only in its generated `customer_notifications` kind
+and `secret_reentry_items` purpose CHECK lists, which now also carry #469's and #471's values. Per-PR
 detail (changes, tests, mutation checks, decisions) is in each PR description.
 
 ## Codex findings and fixes (one line each)
@@ -53,8 +56,8 @@ detail (changes, tests, mutation checks, decisions) is in each PR description.
 
 ## Not done, with reasons
 
-- **No PR merged**: the merge call was refused by the session's permission check. Everything waits for the owner.
-- **Persian comments on issue #358 not posted**: they are per merge, and nothing merged.
+- **Merges waited for the owner**: the session's first merge call was refused by its permission check; the owner
+  approved in the conversation and the merges followed. The Persian comments on issue #358 were posted per merge.
 - **`pnpm web:demo-diff`**: run once on a scratch tree holding #468, #469, #471 and #470 (light, 1440: remaining 219 against
   #468's 216, the three extra on `/resellers`). Dark and 390 runs were not made. The owner should re-run it after the merges.
 - **`approved-demo.dc.html` not rendered** beside the app: it needs the owner's `support.js`, absent here. The README
