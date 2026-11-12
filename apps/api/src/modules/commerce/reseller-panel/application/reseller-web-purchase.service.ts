@@ -186,20 +186,10 @@ export class ResellerWebPurchaseService {
       batch = await this.createBatch(context, input, batchKey, first);
     }
     const orders: OrderRecord[] = [first];
-    await this.deps.repository.insertBatchOrder(context.scope, {
-      batchId: batch.id,
-      position: 0,
-      orderId: first.id,
-      customerId,
-    });
+    await this.group(context, batch.id, 0, first.id);
     for (let index = 1; index < input.quantity; index += 1) {
       const order = await this.draft(context, input, batchKey, index);
-      await this.deps.repository.insertBatchOrder(context.scope, {
-        batchId: batch.id,
-        position: index,
-        orderId: order.id,
-        customerId,
-      });
+      await this.group(context, batch.id, index, order.id);
       orders.push(order);
     }
     for (const [index, order] of orders.entries()) {
@@ -371,6 +361,23 @@ export class ResellerWebPurchaseService {
   }
 
   // --- helpers ------------------------------------------------------------------------------
+
+  /** One order filed under its batch, in a transaction with the scope check (a write path). */
+  private async group(
+    context: ResellerWebContext,
+    batchId: string,
+    position: number,
+    orderId: string,
+  ): Promise<void> {
+    await this.deps.uow.run(context.scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(context.scope, tx))) throw stopped();
+      await this.deps.repository.insertBatchOrder(
+        context.scope,
+        { batchId, position, orderId, customerId: context.customer.id },
+        tx,
+      );
+    });
+  }
 
   private async draft(
     context: ResellerWebContext,

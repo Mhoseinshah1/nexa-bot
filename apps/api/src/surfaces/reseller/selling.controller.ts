@@ -116,7 +116,7 @@ export class ResellerSellingController {
     };
   }
 
-  /** «سرویس دلخواه»: the bot's own offer and ranges for this reseller. */
+  /** The custom service tab: the bot's own offer and ranges for this reseller. */
   @Get(RESELLER_SELLING_ROUTES.catalogueCustom)
   async custom(@Req() request: FastifyRequest): Promise<ResellerCustomOffer> {
     const context = await resellerCall(this.container, request);
@@ -161,7 +161,7 @@ export class ResellerSellingController {
     return this.container.resellerWeb.purchases.get(context, batchId);
   }
 
-  /** «خرید»: the wallet pre-check, then each order paid; the per-service result. */
+  /** The buy button: the wallet pre-check, then each order paid; the per-service result. */
   @Post(RESELLER_SELLING_ROUTES.purchaseConfirm)
   @HttpCode(200)
   async confirm(

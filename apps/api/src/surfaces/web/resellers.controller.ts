@@ -283,7 +283,7 @@ export class ResellersController {
     return this.container.resellerWeb.access.adminForceLogout(scope, actor, customerId, body);
   }
 
-  /** PR-5: the drawer's «بازنشانی ورود دومرحله‌ای» — `resellers.edit`, a reason, audited. */
+  /** PR-5: the drawer's two-step sign-in reset — `resellers.edit`, a reason, audited. */
   @Post('resellers/:customerId/web-panel/totp-reset')
   async webPanelTotpReset(
     @Req() request: FastifyRequest,
@@ -304,7 +304,7 @@ export class ResellersController {
     return this.container.resellerWeb.trials.adminTrials(scope, actor, customerId);
   }
 
-  /** PR-5: a tier's «هدف سطح بعد» (`resellers.view`). Display only. */
+  /** PR-5: a tier's next-tier target (`resellers.view`). Display only. */
   @Get('reseller-tiers/:id/next-target')
   async tierTarget(
     @Req() request: FastifyRequest,
@@ -314,7 +314,7 @@ export class ResellersController {
     return this.container.resellerWeb.tierProgress.adminTarget(scope, actor, id);
   }
 
-  /** PR-5: set or clear a tier's «هدف سطح بعد» (`resellers.edit`, audited). Changes no tier. */
+  /** PR-5: set or clear a tier's next-tier target (`resellers.edit`, audited). Changes no tier. */
   @Put('reseller-tiers/:id/next-target')
   async setTierTarget(
     @Req() request: FastifyRequest,
