@@ -78,6 +78,7 @@ export class ResellerServicesController {
       filter: input.filter,
       page: input.page,
       ...(input.q === undefined ? {} : { q: input.q }),
+      ...(input.clientId === undefined ? {} : { clientId: input.clientId }),
     });
   }
 

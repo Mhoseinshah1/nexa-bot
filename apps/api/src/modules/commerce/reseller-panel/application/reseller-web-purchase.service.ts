@@ -108,6 +108,31 @@ export function payableTotal(orders: readonly OrderRecord[]): Money | null {
   return total;
 }
 
+/**
+ * The wallet pre-check of a group of orders, INSIDE the caller's transaction and under the
+ * wallet's own lock (the caller took `lockCustomer`): the ledger balance must be non-negative
+ * and cover the whole total, or nothing is charged — there is no credit.
+ */
+export async function assertWalletCovers(
+  wallet: ResellerWebPurchaseDeps['wallet'],
+  scope: TenantContext,
+  customerId: UserId,
+  total: Money,
+  tx: unknown,
+): Promise<void> {
+  const balance = await wallet.balanceOf(scope, customerId, total.currency, tx);
+  if (balance.amountMinor < 0n || balance.amountMinor < total.amountMinor) {
+    throw errors.conflict(
+      COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS,
+      'The wallet does not cover this purchase.',
+      {
+        shortfallMinor: (total.amountMinor - balance.amountMinor).toString(),
+        currency: total.currency,
+      },
+    );
+  }
+}
+
 type ItemOutcome = { readonly status: ResellerPurchaseItemStatus; readonly reason: string | null };
 
 /**
@@ -480,22 +505,7 @@ export class ResellerWebPurchaseService {
       if (!(await this.deps.scopeActivity.scopeIsActive(context.scope, tx))) throw stopped();
       if (!(await this.deps.wallet.lockCustomer(context.scope, customerId, tx))) throw notFound();
       if (total !== null) {
-        const balance = await this.deps.wallet.balanceOf(
-          context.scope,
-          customerId,
-          total.currency,
-          tx,
-        );
-        if (balance.amountMinor < 0n || balance.amountMinor < total.amountMinor) {
-          throw errors.conflict(
-            COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS,
-            'The wallet does not cover this purchase.',
-            {
-              shortfallMinor: (total.amountMinor - balance.amountMinor).toString(),
-              currency: total.currency,
-            },
-          );
-        }
+        await assertWalletCovers(this.deps.wallet, context.scope, customerId, total, tx);
       }
       const now = this.deps.clock.now();
       if (

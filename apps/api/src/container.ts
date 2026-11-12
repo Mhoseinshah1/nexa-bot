@@ -800,6 +800,7 @@ import { ResellerWebLoginRateLimiter } from './modules/commerce/reseller-panel/a
 import { DrizzleResellerWebRepository } from './modules/commerce/reseller-panel/infrastructure/drizzle-reseller-web.repository.js';
 import { DrizzleResellerSellingRepository } from './modules/commerce/reseller-panel/infrastructure/drizzle-reseller-selling.repository.js';
 import { ResellerWebPurchaseService } from './modules/commerce/reseller-panel/application/reseller-web-purchase.service.js';
+import { ResellerWebClientsService } from './modules/commerce/reseller-panel/application/reseller-web-clients.service.js';
 import { DrizzleAuditHistoryReader } from './modules/platform/audit/infrastructure/drizzle-audit-history.reader.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
 // Round N, C1: campaigns.
@@ -1719,6 +1720,8 @@ export interface Container {
     readonly loginLimiter: ResellerWebLoginRateLimiter;
     /** PR-5: «خرید» — N ordinary orders, one wallet pre-check. */
     readonly purchases: ResellerWebPurchaseService;
+    /** PR-5: «مشتری‌ها», a client's «تمدید همه», and the auto-renew switch. */
+    readonly clients: ResellerWebClientsService;
   };
   /** WP20: counts every Telegram interaction, including the `/ping` the runtime never sees. */
   readonly antiSpam: Pick<AntiSpamService, 'observe'>;
@@ -5553,6 +5556,8 @@ export function createContainer(
   const serviceAutoRenewService = new ServiceAutoRenewService({
     repository: new DrizzleServiceAutoRenewRepository(database.db),
     services: serviceRepository,
+    // PR-5 (OQ-R10-D1-01): only an ACTIVE reseller may auto-renew an imported service.
+    resellers: resellerService,
     commercial: commercialActionService,
     orders: orderService,
     payments: paymentService,
@@ -9610,6 +9615,8 @@ export function createContainer(
     uow,
     clock,
     ids,
+    // PR-5: the clients book's labels (built below; read only once a request arrives).
+    clients: { labelsOf: (context) => resellerWebClients.labelsOf(context) },
   });
   // PR-5: the selling half.
   const resellerSellingRepository = new DrizzleResellerSellingRepository(database.db);
@@ -9631,9 +9638,25 @@ export function createContainer(
     clock,
     ids,
   });
+  const resellerWebClients: ResellerWebClientsService = new ResellerWebClientsService({
+    repository: resellerSellingRepository,
+    services: resellerWebServices,
+    purchases: resellerWebPurchases,
+    autoRenew: serviceAutoRenewService,
+    commercial: commercialActionService,
+    orders: orderService,
+    checkout: checkoutService,
+    wallet: walletRepository,
+    audit,
+    uow,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
   const resellerWeb = {
     access: resellerWebAccess,
     purchases: resellerWebPurchases,
+    clients: resellerWebClients,
     loginLimiter: new ResellerWebLoginRateLimiter({
       // The mini app's store under its own subject key: no second Redis connection to close.
       counter: miniAppCounter,

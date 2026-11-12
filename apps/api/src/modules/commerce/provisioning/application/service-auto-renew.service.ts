@@ -106,6 +106,17 @@ export function autoRenewEligible(
 }
 
 /**
+ * PR-5 (OQ-R10-D1-01, the owner's decision): an IMPORTED service may be renewed automatically
+ * for a RESELLER who chose, at opt-in, the plan to renew it into. From its own row: imported,
+ * a deadline to renew before, ACTIVE. The plan and the reseller standing are decided apart.
+ */
+export function importedAutoRenewEligible(
+  service: Pick<ServiceRecord, 'source' | 'expiresAt' | 'state'>,
+): boolean {
+  return renewsFromPanelPlans(service) && service.expiresAt !== null && service.state === 'ACTIVE';
+}
+
+/**
  * Whether a service is due: its deadline is ahead, and no further ahead than the lead time.
  * Half-open on the deadline — `[expiresAt - lead, expiresAt)` — so a pass at the deadline
  * itself does not renew a service that has already expired (it lapses as it would have).
@@ -124,6 +135,8 @@ export interface AutoRenewState {
   /** The quote when offered, the consented total when enabled; else null. */
   readonly price: Money | null;
   readonly leadHours: number;
+  /** PR-5: an imported service's chosen plan while on; null otherwise. */
+  readonly planId: string | null;
 }
 
 export interface AutoRenewReport {
@@ -159,6 +172,13 @@ export interface ServiceAutoRenewDeps {
   readonly ids: IdGenerator;
   /** At most this many periods claimed per pass; `AUTO_RENEW_BATCH_LIMIT` unless given. */
   readonly batchLimit?: number;
+  /**
+   * PR-5: whether a customer is an ACTIVE reseller — only a reseller may switch an imported
+   * service on (with a plan). Absent, no imported service is ever offered.
+   */
+  readonly resellers?: {
+    standing(scope: TenantContext, customerId: string, tx?: unknown): Promise<unknown>;
+  };
   readonly logger?: {
     error: (context: Record<string, unknown>, message: string) => void;
   };
@@ -281,10 +301,32 @@ export class ServiceAutoRenewService {
     const leadHours = await this.leadHours(scope);
     const preference = await this.deps.repository.preferenceOf(scope, service.id);
     if (preference !== null && preference.enabled && preference.customerId === customerId) {
-      return { offered: false, enabled: true, price: preference.consented, leadHours };
+      return {
+        offered: false,
+        enabled: true,
+        price: preference.consented,
+        leadHours,
+        planId: preference.renewProductId,
+      };
     }
     const quote = await this.offerQuote(scope, actor, customerId, service);
-    return { offered: quote !== null, enabled: false, price: quote, leadHours };
+    return { offered: quote !== null, enabled: false, price: quote, leadHours, planId: null };
+  }
+
+  /**
+   * PR-5: whether this customer may switch THIS imported service on, given a plan: the
+   * feature on, the service eligible by its row, and the customer an ACTIVE reseller.
+   */
+  async importedOffered(
+    scope: TenantContext,
+    customerId: UserId,
+    service: ServiceRecord,
+    tx?: unknown,
+  ): Promise<boolean> {
+    if (!importedAutoRenewEligible(service)) return false;
+    if (this.deps.resellers === undefined) return false;
+    if (!(await this.featureOn(scope, tx))) return false;
+    return (await this.deps.resellers.standing(scope, customerId, tx)) !== null;
   }
 
   /** The renewal total switching ON would agree to, or null when it cannot be switched on. */
@@ -318,6 +360,11 @@ export class ServiceAutoRenewService {
        * without it, nothing is recorded and the answer offers the new price to confirm again.
        */
       readonly expected?: Money | null;
+      /**
+       * PR-5 (OQ-R10-D1-01): switching ON an IMPORTED service — the plan a reseller chose to
+       * renew it into. Without it an imported service is refused (`PLAN_REQUIRED`).
+       */
+      readonly planId?: string | null;
       readonly idempotencyKey: string;
     },
   ): Promise<AutoRenewState> {
@@ -347,12 +394,14 @@ export class ServiceAutoRenewService {
 
     const namespace = actor.surface;
     const expected = input.enabled ? (input.expected ?? null) : null;
+    const planId = input.enabled ? (input.planId ?? null) : null;
     const requestHash = hashRequest({
       customerId,
       serviceId,
       autoRenew: input.enabled,
       expectedMinor: expected?.amountMinor.toString() ?? null,
       expectedCurrency: expected?.currency ?? null,
+      ...(planId === null ? {} : { planId }),
     });
     const replay = await this.deps.idempotency.find<{ serviceId: string }>(
       scope,
@@ -375,14 +424,29 @@ export class ServiceAutoRenewService {
      * panel unable) is one answer to the customer: not available.
      */
     let consented: Money | null = null;
+    let imported = false;
     if (input.enabled) {
       const service = await owned();
-      if (!autoRenewEligible(service)) throw this.notAvailable();
+      imported = renewsFromPanelPlans(service);
+      if (imported) {
+        // PR-5: an imported service, for a reseller only, and only with the plan chosen.
+        if (!(await this.importedOffered(scope, customerId, service))) throw this.notAvailable();
+        if (planId === null) throw this.planRequired();
+      } else if (!autoRenewEligible(service)) {
+        throw this.notAvailable();
+      }
       if (!(await this.featureOn(scope))) throw this.featureOff();
       let quote: Money;
       try {
-        quote = (await this.deps.commercial.renewalQuote(scope, actor, customerId, serviceId))
-          .total;
+        quote = (
+          await this.deps.commercial.renewalQuote(
+            scope,
+            actor,
+            customerId,
+            serviceId,
+            imported ? planId : null,
+          )
+        ).total;
       } catch (error) {
         if (isRefusal(error)) throw this.notAvailable();
         throw error;
@@ -403,6 +467,7 @@ export class ServiceAutoRenewService {
           enabled: false,
           price: quote,
           leadHours: await this.leadHours(scope),
+          planId: null,
         };
       }
       consented = quote;
@@ -410,7 +475,11 @@ export class ServiceAutoRenewService {
 
     const now = this.deps.clock.now();
     const source: AutoRenewPreferenceSource =
-      actor.surface === 'MINI_APP' ? 'MINI_APP' : 'TELEGRAM';
+      actor.surface === 'MINI_APP'
+        ? 'MINI_APP'
+        : actor.surface === 'WEB' && actor.id?.startsWith('reseller-web:') === true
+          ? 'RESELLER_WEB'
+          : 'TELEGRAM';
     await runAuthorizedMutation(
       this.mutationDeps(),
       scope,
@@ -427,11 +496,26 @@ export class ServiceAutoRenewService {
         // Authoritative: the switch and the row, read inside the write's transaction.
         if (input.enabled && !(await this.featureOn(scope, tx))) throw this.featureOff();
         const service = await owned(tx);
-        if (input.enabled && !autoRenewEligible(service)) throw this.notAvailable();
+        if (
+          input.enabled &&
+          !(imported
+            ? await this.importedOffered(scope, customerId, service, tx)
+            : autoRenewEligible(service))
+        ) {
+          throw this.notAvailable();
+        }
         const before = await this.deps.repository.preferenceOf(scope, serviceId, tx);
         const changed = await this.deps.repository.savePreference(
           scope,
-          { serviceId, customerId, enabled: input.enabled, consented, source, now },
+          {
+            serviceId,
+            customerId,
+            enabled: input.enabled,
+            consented,
+            source,
+            now,
+            renewProductId: imported ? planId : null,
+          },
           tx,
         );
         await this.deps.audit.record(
@@ -449,12 +533,14 @@ export class ServiceAutoRenewService {
                     customerId: before.customerId,
                     consentedTotalMinor: before.consented?.amountMinor.toString() ?? null,
                     currency: before.consented?.currency ?? null,
+                    renewProductId: before.renewProductId,
                   },
             after: {
               enabled: input.enabled,
               customerId,
               consentedTotalMinor: consented?.amountMinor.toString() ?? null,
               currency: consented?.currency ?? null,
+              renewProductId: imported ? planId : null,
               changed,
             },
             result: 'SUCCESS',
@@ -473,6 +559,7 @@ export class ServiceAutoRenewService {
               consentedTotalMinor: consented?.amountMinor.toString() ?? null,
               currency: consented?.currency ?? null,
               source,
+              renewProductId: imported ? planId : null,
             },
           });
         }
@@ -492,7 +579,17 @@ export class ServiceAutoRenewService {
       enabled: input.enabled,
       price: consented,
       leadHours: await this.leadHours(scope),
+      planId: imported ? planId : null,
     };
+  }
+
+  /** PR-5: an imported service switched on without the plan to renew into. */
+  private planRequired(): Error {
+    return errors.conflict(
+      COMMERCE_ERROR_CODES.AUTO_RENEW_NOT_AVAILABLE,
+      'Choose the plan to renew this imported service into.',
+      { reason: 'PLAN_REQUIRED' },
+    );
   }
 
   private notAvailable(): Error {
@@ -655,11 +752,27 @@ export class ServiceAutoRenewService {
     // 0. This lane's own unpaid orders for the service, withdrawn before anything is drafted.
     await this.withdrawLeftBehind(scope, actor, run, stem);
 
+    /*
+     * PR-5: an imported service renews into the plan its reseller chose at opt-in — and only
+     * while they are still a reseller (a suspended one is an ordinary customer, whose imported
+     * services are not renewed automatically).
+     */
+    const planId =
+      (await this.deps.repository.preferenceOf(scope, run.serviceId))?.renewProductId ?? null;
+    if (
+      planId !== null &&
+      (this.deps.resellers === undefined ||
+        (await this.deps.resellers.standing(scope, customerId)) === null)
+    ) {
+      return this.finish(scope, run, 'REFUSED', 'NOT_RENEWABLE', null);
+    }
+
     // 1. The quote, read: refused before anything is written for a period that cannot renew.
     let quote: Money;
     try {
-      quote = (await this.deps.commercial.renewalQuote(scope, actor, customerId, run.serviceId))
-        .total;
+      quote = (
+        await this.deps.commercial.renewalQuote(scope, actor, customerId, run.serviceId, planId)
+      ).total;
     } catch (error) {
       if (!isRefusal(error)) throw error;
       return this.finish(scope, run, 'REFUSED', 'NOT_RENEWABLE', null);
@@ -680,7 +793,12 @@ export class ServiceAutoRenewService {
         scope,
         actor,
         customerId,
-        { serviceId: run.serviceId, kind: 'RENEW', idempotencyKey: `${stem}:draft` },
+        {
+          serviceId: run.serviceId,
+          kind: 'RENEW',
+          idempotencyKey: `${stem}:draft`,
+          ...(planId === null ? {} : { productId: planId }),
+        },
         AUTO_RENEW_COMMERCIAL_AUTHORITY,
       ));
     } catch (error) {
@@ -754,7 +872,9 @@ export class ServiceAutoRenewService {
               !preference.enabled ||
               preference.customerId !== customerId ||
               preference.consented === null ||
-              !sameOrBelow(done.order.totals.total, preference.consented)
+              !sameOrBelow(done.order.totals.total, preference.consented) ||
+              // PR-5: the plan an imported service renews into is the one consented to.
+              (preference.renewProductId ?? null) !== planId
             ) {
               throw consentWithdrawn();
             }

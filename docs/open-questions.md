@@ -4554,6 +4554,16 @@ otherwise.
   `commerce.auto_renew_not_available`; the sweep never selects them). To offer it, the owner
   decides which plan an imported service renews to automatically (the cheapest current plan? the
   one last bought? one the customer picks at opt-in?).
+  **Owner decision (reseller panel phase, PR-5):** for a RESELLER only, an imported service may be
+  renewed automatically when the reseller chooses, at opt-in, the plan to renew it into — from the
+  plans their entitlement allows on that service's panel (the renewal offer's own list). The
+  choice and its price ceiling are stored with the consent
+  (`service_auto_renew_preferences.renew_product_id`, `consented_total_*`); the sweep renews into
+  that plan, re-checking the reseller standing, the consent, the plan and the ceiling where the
+  money moves. Without a chosen plan the switch stays unavailable, with the reason «برای روشن کردن،
+  پلن تمدید را انتخاب کنید» (`reseller_web.auto_renew_plan_required`). An ordinary customer's
+  imported services are still not offered auto-renew; a reseller suspended later is refused by the
+  sweep (`REFUSED`, `NOT_RENEWABLE`).
 - **OQ-R10-D1-02 — a renewal price above the consented total.** Lead decision: no renewal and ONE
   notice (`SERVICE_AUTO_RENEW_PRICE_CHANGED`); the consent stays on, so the next period is tried
   again at the then-current price, refused again if still higher, and told again (one notice per
