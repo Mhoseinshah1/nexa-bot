@@ -792,9 +792,20 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * one instruction — "send /start again" — is answered on this head.
        */
       'bot.captcha.challenge',
+      'bot.captcha.emoji_challenge',
+      'bot.captcha.emoji_expired',
+      'bot.captcha.emoji_option_button',
+      'bot.captcha.emoji_wrong',
       'bot.captcha.expired',
+      'bot.captcha.image_challenge',
+      'bot.captcha.image_expired',
+      'bot.captcha.image_wrong',
       'bot.captcha.locked',
       'bot.captcha.option_button',
+      'bot.captcha.refresh_button',
+      'bot.captcha.word_challenge',
+      'bot.captcha.word_expired',
+      'bot.captcha.word_wrong',
       'bot.captcha.wrong',
       'bot.catalog.back_to_categories_button',
       /*

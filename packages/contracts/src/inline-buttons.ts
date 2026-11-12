@@ -361,6 +361,9 @@ export const INLINE_BUTTONS = [
 
   // The /start captcha's four answers (R10 D5): the label is the offered number.
   button('captcha.option', 'CAPTCHA', 'bot.captcha.option_button'),
+  // `captcha.kind`: an emoji answer, and «🔄 تصویر جدید» under the picture question.
+  button('captcha.emoji_option', 'CAPTCHA', 'bot.captcha.emoji_option_button'),
+  button('captcha.refresh', 'CAPTCHA', 'bot.captcha.refresh_button'),
 ] as const satisfies readonly InlineButtonDefinition[];
 
 export type InlineButtonKey = (typeof INLINE_BUTTONS)[number]['key'];

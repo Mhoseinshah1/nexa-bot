@@ -1,6 +1,8 @@
 import {
+  BACKUP_ARCHIVE_REMOVED_AFTER_DELIVERY_CODE,
   BACKUP_OVERDUE_TOLERANCE,
   toPersianDigits,
+  type BackupTrigger,
   type Clock,
   type OperationalEventRecorder,
   type ScopeContext,
@@ -74,6 +76,12 @@ export interface BackupHousekeepingDeps {
    * default 1, 0 allowed). Absent is "keep them all" — the pre-E4 behaviour.
    */
   readonly localCopies?: () => Promise<number>;
+  /**
+   * Owner 2026-11-11 (`backup.archive_keep_on_host`, installation tenant only, default true).
+   * False: every run delivered IN FULL loses its local copy at once — `localCopies` is read as
+   * 0 — and each removal writes one operations line naming the run. Absent is true.
+   */
+  readonly keepOnHost?: () => Promise<boolean>;
   /**
    * Backup run ids an in-progress recovery refers to — its pre-restore backup,
    * and a local run whose archive it is restoring. Never pruned.
@@ -224,6 +232,22 @@ export class BackupHousekeeping {
     return { skipped: false, pruned, debrisRemoved };
   }
 
+  /**
+   * Retention right after a run finished SUCCEEDED (Round 8 B2; `BackupService.afterSuccess`):
+   * the archive rules, then the delivered copies — so with `keepOnHost` false the archive
+   * leaves the host as soon as its delivery is confirmed.
+   *
+   * Never the delivered copies after a `PRE_RESTORE` run: a recovery names its emergency
+   * backup on its row only once the run has returned, so `protectedByRecovery` cannot see it
+   * yet, and with `keepOnHost` false it would be the archive removed. The housekeeping pass
+   * decides it later, while the recovery protects it by id.
+   */
+  async afterRun(run: { readonly trigger: BackupTrigger }): Promise<void> {
+    await this.pruneArchives();
+    if (run.trigger === 'PRE_RESTORE') return;
+    await this.pruneDeliveredCopies();
+  }
+
   /** Job 1. The run table decides; the directory goes; then the row says so. */
   async pruneArchives(): Promise<number> {
     const { keepCount, keepDays } = await this.deps.retention();
@@ -280,11 +304,22 @@ export class BackupHousekeeping {
    * when EVERY part has a recorded Telegram message id, and the newest `localCopies` such
    * runs stay. A run delivered in part, not at all, or with an unknown outcome is never a
    * candidate — its local copy is the only complete one, and its alert is already open.
-   * A run an unfinished recovery names is protected as in `pruneArchives`.
+   * Nor is an unverified run, a run still in flight, or a hosted bot's archive. A run an
+   * unfinished recovery names is protected as in `pruneArchives`.
+   *
+   * With `keepOnHost` false (owner, 2026-11-11) none of the delivered runs stays: the newest
+   * goes too, which is the ONE place the rule "the newest verified archive is never pruned"
+   * is lifted — and only for an archive the group holds in full. Every other archive keeps
+   * `pruneArchives`' rules. Called right after a successful run (`afterSuccess`), so the
+   * archive leaves the host as soon as its delivery is confirmed.
    */
   async pruneDeliveredCopies(): Promise<number> {
-    if (this.deps.localCopies === undefined) return 0;
-    const keepDelivered = await this.deps.localCopies();
+    const keepOnHost = this.deps.keepOnHost === undefined || (await this.deps.keepOnHost());
+    let keepDelivered = 0;
+    if (keepOnHost) {
+      if (this.deps.localCopies === undefined) return 0;
+      keepDelivered = await this.deps.localCopies();
+    }
     const now = this.deps.clock.now();
     const candidates = await this.deps.runs.deliveredCopyPruneCandidates({
       keepDelivered,
@@ -303,11 +338,25 @@ export class BackupHousekeeping {
         survivedDirectories += 1;
         continue;
       }
-      if (await this.deps.runs.markArchivePruned({ id: candidate.id, now })) pruned += 1;
+      if (!(await this.deps.runs.markArchivePruned({ id: candidate.id, now }))) continue;
+      pruned += 1;
+      // One line per removal, naming the run — only for the removal the stamp was ours for,
+      // so two worker replicas never report the same archive twice.
+      if (!keepOnHost) {
+        await this.record({
+          code: BACKUP_ARCHIVE_REMOVED_AFTER_DELIVERY_CODE,
+          severity: 'INFO',
+          message:
+            `فایل بکاپ ${candidate.id} پس از رسیدن کامل به گروه تلگرام از روی سرور پاک شد ` +
+            '(نگه داشتن نسخه روی سرور خاموش است).',
+          context: { backupId: candidate.id },
+          dedupeKey: `${BACKUP_ARCHIVE_REMOVED_AFTER_DELIVERY_CODE}:${candidate.id}`,
+        });
+      }
     }
     if (pruned > 0) {
       this.deps.logger.info(
-        { pruned, keepDelivered },
+        { pruned, keepDelivered, keepOnHost },
         'local copies of backups delivered in full were removed',
       );
     }

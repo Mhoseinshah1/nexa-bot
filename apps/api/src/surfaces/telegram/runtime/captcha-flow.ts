@@ -39,13 +39,78 @@ export type CaptchaTurn =
     }
   | { readonly kind: 'HOLD'; readonly reply: PendingReply };
 
-/** The four answers, two to a row, each `hc:<question>:<position>`. Never the answer itself. */
+/** The picture question's fixed file name: never derived from the question or its answer. */
+export const CAPTCHA_IMAGE_FILE_NAME = 'captcha.png';
+
+/**
+ * The buttons under a question, each `hc:<question>:<position>`. Never the answer itself. The
+ * four answers go two to a row (numbers for `MATH` and `WORD_NUMBER`, emoji for `EMOJI`); the
+ * picture question has none, only «🔄 تصویر جدید» (`hc:<question>:r`) while swaps remain.
+ */
 export function captchaOptionButtons(question: CaptchaQuestion): CustomerButton[] {
+  if (question.kind === 'IMAGE_NUMBER') {
+    return question.refreshesLeft > 0
+      ? [
+          {
+            ...inlineLabel('captcha.refresh'),
+            data: `${START_CAPTCHA_CALLBACK_PREFIX}${question.challengeId}:r`,
+            row: 1,
+          },
+        ]
+      : [];
+  }
   return question.options.map((answer, position) => ({
-    ...inlineLabel('captcha.option', { answer }),
+    ...(question.kind === 'EMOJI'
+      ? inlineLabel('captcha.emoji_option', { emoji: String(answer) })
+      : inlineLabel('captcha.option', { answer: Number(answer) })),
     data: `${START_CAPTCHA_CALLBACK_PREFIX}${question.challengeId}:${String(position)}`,
     row: Math.floor(position / 2) + 1,
   }));
+}
+
+/** The template and its values for a question, by kind and by why it is shown. */
+function captchaText(
+  question: CaptchaQuestion,
+  reason: 'CHALLENGE' | 'WRONG' | 'EXPIRED',
+  remaining: number,
+): Pick<PendingReply, 'key' | 'values'> {
+  const wrong = { remaining };
+  switch (question.kind) {
+    case 'IMAGE_NUMBER':
+      return reason === 'WRONG'
+        ? { key: 'bot.captcha.image_wrong', values: wrong }
+        : {
+            key: reason === 'EXPIRED' ? 'bot.captcha.image_expired' : 'bot.captcha.image_challenge',
+            values: {},
+          };
+    case 'EMOJI': {
+      const name = { name: question.name ?? '' };
+      return reason === 'WRONG'
+        ? { key: 'bot.captcha.emoji_wrong', values: { ...wrong, ...name } }
+        : {
+            key: reason === 'EXPIRED' ? 'bot.captcha.emoji_expired' : 'bot.captcha.emoji_challenge',
+            values: name,
+          };
+    }
+    case 'WORD_NUMBER': {
+      const words = { words: question.words ?? '' };
+      return reason === 'WRONG'
+        ? { key: 'bot.captcha.word_wrong', values: { ...wrong, ...words } }
+        : {
+            key: reason === 'EXPIRED' ? 'bot.captcha.word_expired' : 'bot.captcha.word_challenge',
+            values: words,
+          };
+    }
+    case 'MATH': {
+      const sum = { first: question.first, second: question.second };
+      return reason === 'WRONG'
+        ? { key: 'bot.captcha.wrong', values: { ...wrong, ...sum } }
+        : {
+            key: reason === 'EXPIRED' ? 'bot.captcha.expired' : 'bot.captcha.challenge',
+            values: sum,
+          };
+    }
+  }
 }
 
 /**
@@ -53,10 +118,15 @@ export function captchaOptionButtons(question: CaptchaQuestion): CustomerButton[
  *
  * A tap on an answer EDITS the question message in place (`edit`), so the chat keeps one
  * question, not a trail of dead ones; any other turn — `/start`, a typed message, a menu
- * label — is answered with the question as a new message.
+ * label — is answered with the question as a new message. The picture question is always a
+ * NEW message (a photo cannot be edited into another photo's text): `image` are its bytes,
+ * sent as the photo with the caption below it; absent, the caption goes alone.
  */
-export function captchaReply(outcome: StartCaptchaOutcome, tapped: boolean): PendingReply | null {
-  const edit = tapped ? { edit: true as const } : {};
+export function captchaReply(
+  outcome: StartCaptchaOutcome,
+  tapped: boolean,
+  image: Uint8Array | null = null,
+): PendingReply | null {
   switch (outcome.kind) {
     case 'FREE':
     case 'PASSED':
@@ -67,27 +137,37 @@ export function captchaReply(outcome: StartCaptchaOutcome, tapped: boolean): Pen
         values: { minutes: outcome.minutes },
         buttons: [],
         orderId: null,
-        ...edit,
+        ...(tapped ? { edit: true as const } : {}),
       };
     case 'ASK': {
-      const question = { first: outcome.question.first, second: outcome.question.second };
-      const buttons = captchaOptionButtons(outcome.question);
-      if (outcome.reason === 'WRONG') {
+      const { question } = outcome;
+      const buttons = captchaOptionButtons(question);
+      const reason =
+        outcome.reason === 'WRONG'
+          ? 'WRONG'
+          : outcome.reason === 'EXPIRED'
+            ? 'EXPIRED'
+            : 'CHALLENGE';
+      const text = captchaText(question, reason, outcome.remaining);
+      if (question.kind === 'IMAGE_NUMBER') {
         return {
-          key: 'bot.captcha.wrong',
-          values: { remaining: outcome.remaining, ...question },
+          ...text,
           buttons,
           orderId: null,
-          ...edit,
+          ...(image === null
+            ? {}
+            : {
+                mediaBytes: {
+                  kind: 'PHOTO' as const,
+                  bytes: image,
+                  mimeType: 'image/png' as const,
+                  fileName: CAPTCHA_IMAGE_FILE_NAME,
+                  captioned: true,
+                },
+              }),
         };
       }
-      return {
-        key: outcome.reason === 'EXPIRED' ? 'bot.captcha.expired' : 'bot.captcha.challenge',
-        values: question,
-        buttons,
-        orderId: null,
-        ...edit,
-      };
+      return { ...text, buttons, orderId: null, ...(tapped ? { edit: true as const } : {}) };
     }
   }
 }
@@ -120,17 +200,33 @@ export async function captchaGate(
   const captcha = rt.deps.captcha;
   const carryOn: CaptchaTurn = { kind: 'CONTINUE', command, arrival };
   if (captcha === undefined) return carryOn;
-  const tapped = command.intent === 'CAPTCHA_ANSWER';
+  const tapped = command.intent === 'CAPTCHA_ANSWER' || command.intent === 'CAPTCHA_REFRESH';
   // The update's key is already spent by `resolveFromUpdate`: the captcha takes a sub-key.
   const idempotencyKey = `${input.idempotencyKey}:captcha`;
-  const outcome =
-    tapped && command.targetId !== null && command.choice !== undefined
-      ? await captcha.answer(scope, actor, customer.id, {
-          idempotencyKey,
-          challengeId: command.targetId,
-          choice: command.choice,
-        })
-      : await captcha.present(scope, actor, customer.id, { idempotencyKey });
+  // A typed message is a possible answer to a picture question; `answerText` shows the
+  // question as `present` does for every other kind and for every customer not held.
+  const typed = command.intent === 'USERNAME_TEXT' ? command.args?.[0] : undefined;
+  let outcome: StartCaptchaOutcome;
+  if (
+    command.intent === 'CAPTCHA_ANSWER' &&
+    command.targetId !== null &&
+    command.choice !== undefined
+  ) {
+    outcome = await captcha.answer(scope, actor, customer.id, {
+      idempotencyKey,
+      challengeId: command.targetId,
+      choice: command.choice,
+    });
+  } else if (command.intent === 'CAPTCHA_REFRESH' && command.targetId !== null) {
+    outcome = await captcha.refresh(scope, actor, customer.id, {
+      idempotencyKey,
+      challengeId: command.targetId,
+    });
+  } else if (typed !== undefined) {
+    outcome = await captcha.answerText(scope, actor, customer.id, { idempotencyKey, text: typed });
+  } else {
+    outcome = await captcha.present(scope, actor, customer.id, { idempotencyKey });
+  }
   if (outcome.kind === 'PASSED') {
     return {
       kind: 'CONTINUE',
@@ -138,7 +234,11 @@ export async function captchaGate(
       arrival: 'FIRST_SEEN',
     };
   }
-  const reply = captchaReply(outcome, tapped);
+  const picture =
+    outcome.kind === 'ASK' && outcome.question.kind === 'IMAGE_NUMBER'
+      ? await captcha.renderImage(scope, customer.id, outcome.question.challengeId)
+      : null;
+  const reply = captchaReply(outcome, tapped, picture?.png ?? null);
   if (reply === null) return carryOn;
   if (
     (await rt.deps.telegramAdmins?.resolve(scope, input.telegramUserId, actor.correlationId)) !=

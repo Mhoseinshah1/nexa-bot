@@ -31,6 +31,8 @@ import {
   BACKUP_CPU_LIMIT_SETTING_KEY,
   BACKUP_LOCAL_COPIES_DEFAULT,
   BACKUP_LOCAL_COPIES_SETTING_KEY,
+  BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT,
+  BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
   LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS,
   LEGACY_IMPORT_ADOPTION_CONCURRENCY_SETTING_KEY,
@@ -377,6 +379,7 @@ import {
 } from './modules/control/media/application/qr-template.service.js';
 import { ReferralSignupGiftService } from './modules/commerce/referrals/application/referral-signup-gift.service.js';
 import { StartCaptchaService } from './modules/commerce/customers/application/start-captcha.service.js';
+import { PNG_CAPTCHA_IMAGE_RENDERER } from './modules/commerce/customers/infrastructure/captcha-image.js';
 import { DrizzleStartCaptchaRepository } from './modules/commerce/customers/infrastructure/drizzle-start-captcha.repository.js';
 import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
 import { TenantReferralDayCalendar } from './modules/commerce/referrals/infrastructure/tenant-referral-day.calendar.js';
@@ -3003,6 +3006,7 @@ export function createContainer(
     idempotency,
     clock,
     ids,
+    images: PNG_CAPTCHA_IMAGE_RENDERER,
   });
   const customerService = new CustomerService({
     newCustomers: newCustomerGate,
@@ -8617,11 +8621,11 @@ export function createContainer(
         ? null
         : { freeBytes: state.freeBytes, requiredBytes: state.requiredBytes };
     },
-    afterSuccess: async () => {
+    afterSuccess: async (run) => {
       // Like the housekeeping pass: no file is deleted beside a recovery.
       if (await recoveryQuiesced()) return;
-      await backupHousekeeping.pruneArchives();
-      await backupHousekeeping.pruneDeliveredCopies();
+      // The archive rules, then the delivered copies — never a recovery's emergency backup's.
+      await backupHousekeeping.afterRun(run);
     },
     // Round 4 PR-D (L31): the caption is the operator's template, short and in Persian, with
     // the time of the next automatic backup when one is scheduled.
@@ -9346,6 +9350,15 @@ export function createContainer(
         : settingsResolver.valueOf<number>(
             { tenantId: installationTenantId, botInstanceId: null },
             BACKUP_LOCAL_COPIES_SETTING_KEY,
+          ),
+    // Owner 2026-11-11: off, the host keeps no copy of a backup the group holds in full. Read
+    // on the INSTALLATION tenant only; a hosted tenant's value changes nothing here.
+    keepOnHost: async () =>
+      installationTenantId === null
+        ? BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT
+        : settingsResolver.valueOf<boolean>(
+            { tenantId: installationTenantId, botInstanceId: null },
+            BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
           ),
     protectedByRecovery: () => recoveryRequests.backupIdsInUse(),
     // Longer than any dump plus any restore can take, plus the lease window: a

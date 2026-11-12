@@ -81,7 +81,16 @@ describe('a captcha question', () => {
 });
 
 describe('the answer buttons', () => {
-  const question = { challengeId: QUESTION, first: 4, second: 7, options: [9, 11, 14, 3] };
+  const question = {
+    challengeId: QUESTION,
+    kind: 'MATH' as const,
+    first: 4,
+    second: 7,
+    options: [9, 11, 14, 3],
+    name: null,
+    words: null,
+    refreshesLeft: 0,
+  };
 
   it('carry the question and a POSITION, never the number they show', () => {
     const buttons = captchaOptionButtons(question);
@@ -134,8 +143,19 @@ describe('the answer buttons', () => {
 });
 
 describe('the replies', () => {
-  const question = { challengeId: QUESTION, first: 4, second: 7, options: [9, 11, 14, 3] };
-  const ask = (reason: 'CURRENT' | 'WRONG' | 'EXPIRED' | 'RENEWED'): StartCaptchaOutcome => ({
+  const question = {
+    challengeId: QUESTION,
+    kind: 'MATH' as const,
+    first: 4,
+    second: 7,
+    options: [9, 11, 14, 3],
+    name: null,
+    words: null,
+    refreshesLeft: 0,
+  };
+  const ask = (
+    reason: 'CURRENT' | 'WRONG' | 'EXPIRED' | 'RENEWED' | 'REFRESHED',
+  ): StartCaptchaOutcome => ({
     kind: 'ASK',
     reason,
     question,
