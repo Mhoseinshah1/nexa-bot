@@ -32,8 +32,13 @@ detail (changes, tests, mutation checks, decisions) is in each PR description.
   page, fixed (every page is read).
 - #470: P1 the renewal sweep read one page, so a page of unpaid subscriptions starved newer ones, fixed (keyset cursor
   over the whole due set, test with a page of 1).
-- #471: no Codex findings yet when this was written (the review run reported `failed`); CI on `fd31cb51` showed
-  «Typecheck, lint and boundaries» red with the rest pending. Read the PR for the current state.
+- #471: the first Codex run failed («Unknown error»), so the second and last `@codex review` was posted. P1 renew-all
+  did not pay the quote the reseller confirmed, fixed (the confirm names the quoted services and prices; any change
+  answers `commerce.reseller_terms_changed` and pays nothing); P2 auto-renew reported success when it was not on,
+  fixed; P2 a files-only send counted without checking the file outcome, fixed; P2 the server chooser read one page,
+  fixed. The same fix commit cleared the red «Typecheck, lint and boundaries» (`check:i18n`).
+- CI: every PR is green (23/23) on its final head: #466 `c4777286`, #467 `ac77dff4`, #468 `ec92ae58`, #469
+  `381de9ec`, #470 `c5849eea`, #471 `8ad5bd1a`.
 
 ## Security-review findings fixed
 
