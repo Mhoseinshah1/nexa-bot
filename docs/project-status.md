@@ -18,6 +18,7 @@ This file was moved verbatim out of `CLAUDE.md` on 2026-10-24. It holds project 
 - [Phase 6 capacity and usernames](#phase-6-capacity-and-usernames)
 - [Phase 6A creator panel](#phase-6a-creator-panel-میزبانیها-pr-3)
 - [Phase 6B tenant backup, move, export and enter](#phase-6b-tenant-backup-move-export-and-enter)
+- [Reseller web panel](#reseller-web-panel)
 - [Deployment](#deployment)
 - [Backup](#backup)
 - [Cleanup after a Mirza import (v0.9.7)](#cleanup-after-a-mirza-import-v097)
@@ -648,6 +649,68 @@ owner decision); media-library files in the export; a second fresh code for the 
 ZIP64; restoring a hosted tenant missing from the installation backup inside `move import` (kept in
 `move-unrestored/`, exit 2); `botctl telegram register-hosted`; physical erasure of a purged tenant
 (designed only, ADR-0039 § 10). The real-provider TonPays acceptance is unchanged.
+
+## Reseller web panel
+
+Built in the reseller-panel phase (PRs #466–#471, #468 and this sweep; round report
+`docs/round-reports/reseller-panel.md`, operator reference `docs/reseller-panel/README.md`). **State when
+this was written: every PR open, none merged — «ادغام نشده (منتظر مالک)».** What is below describes the
+code on those branches; once the PRs land on `main` it is the standing rule.
+
+**What exists.** An ACTIVE reseller manages selling from a web panel under `/r/…` with its own sign-in,
+cookie and session, served by `/api/reseller/v1/…`: dashboard, buying (several services at once), «سرویس‌های من»,
+the clients book, wallet and top-up, price list, support, «ربات اختصاصی», «حساب و تنظیمات» (2FA, sessions,
+recent activity, notices), and a PWA. Feature flags (both default OFF, Web Admin «قابلیت‌ها»):
+`reseller_web_panel` (the whole panel; off ⇒ every `/api/reseller/v1` route answers 404
+`reseller_web.unavailable`) and `reseller_tier_progress` (the dashboard's progress-to-next-tier card).
+
+**Settings.** `reseller.trial_daily_quota` (0–20, 0 = no trials) and `reseller.trial_product` (a PANEL id: a
+reseller trial is that panel's trial configuration); `hosting.reseller_bot_monthly_fee` (money; 0 = «فعلاً ارائه
+نمی‌شود») and `hosting.reseller_bot_grace_days` (default 3, 0–30), both installation tenant, owner only; the tier's
+«هدف سطح بعد» target. Phase siblings: `captcha.kind` and `backup.archive_keep_on_host` (below).
+
+**Access.** The bot issues a one-time link (10 minutes); the page reads it from the URL fragment before the router,
+posts it once and never stores it. The session is the `nexa_reseller_session` cookie (`__Host-` and `Secure` in
+production), 30 days idle / 90 absolute; the admin cookie never works here and this one never on the admin API.
+Reseller requests act as `SYSTEM_JOB` with surface WEB, as the mini app does. Optional TOTP 2FA; enrolling or
+disabling needs a session opened less than 15 minutes ago; the code step is bounded to five wrong codes, counted
+under the session row lock (a malformed code is a counted wrong code), and disabling consumes the step (replay
+rule). The factor's secret is sealed under the secret registry (`reseller_web.totp_secret`). A new device (browser
+family + /24) sends a Telegram notice, also on the first sign-in. Admins may force-logout and reset 2FA (reason
+required, audited; the reset ends sessions with `ADMIN_FORCE_LOGOUT`).
+
+**Money (no second path).** Every purchase, renewal, add-on, top-up, receipt and trial goes through the services the
+bot and mini app use (`PricingService`, checkout/order services, `settleFromWallet`, `ResellerService.recordPurchase`).
+A quote creates N drafts and is honoured, never re-priced; confirm pre-checks the whole batch against the wallet
+under its lock (no credit, a negative wallet blocks); a failed order charges nothing; `reseller_purchase_batches` only
+groups results. A custom username is allowed for quantity 1 only. Auto-renew reuses Round 10 D1 (consent per
+service, ceiling at opt-in, same sweep). **Owner decision, imported services (`OQ-R10-D1-01`):** for a RESELLER an
+imported service may be auto-renewed when the reseller picks, at opt-in, the plan to renew into (from the products
+the entitlement allows on that service's panel); choice and price ceiling are stored with the consent; without it the
+switch says «برای روشن کردن، پلن تمدید را انتخاب کنید». Reseller trials: quota per tenant-calendar day, no sales
+credit; tier progress is display-only.
+
+**Dedicated bot for a monthly fee (ADR-0038 flow, ledger reason `HOSTED_BOT_FEE`).** Offered by the installation
+tenant's resellers only. The fee is snapshotted when the request is filed; approval and every renewal charge that
+figure. Approve debits the first month in one transaction (wallet row locked first, no allowance; short ⇒ refused,
+nothing written); reject and cancel never charge; a second debit for one `(request, period)` is impossible
+(reference `hosted-bot-fee:<requestId>:<period>`, unique charge row, DB CHECK). Billing calendar: UTC calendar months
+from approval, day clamped to the month's last day; after a stop (or a window already over) a period restarts at the
+payment moment, missed months are never charged. The `reseller-bot-renewal` job (`SYSTEM_JOB`, installation pass
+only, `ScopeActivityReader` inside each per-subscription transaction) pages the whole due set with a
+`(paidThrough, id)` cursor. Short wallet: one notice per UTC day during the grace days, then STOP through the expiry
+sweep's EXPIRED state (data kept, never deleted); a later debit (job after a top-up, or «پرداخت و فعال‌سازی دوباره»)
+resumes it. A bot the owner suspended or deleted, or an approved-but-unlinked request, is never billed. **No refund
+when an approved request never gets a bot** — the first month stays charged. The bot token is checked with `getMe`, sealed, shown masked, handed server-side to the existing activation
+step. The activation link is sealed on the request and its sealed copy is never cleared; the delivered text is NOT
+stored (`CUSTOMER_NOTIFICATION_TEXT_NOT_STORED`): audit, outbox and ops rows carry the link id only.
+
+**Phase siblings.** `/start` captcha kinds (`captcha.kind`: MATH default, IMAGE_NUMBER, EMOJI, WORD_NUMBER, RANDOM): a
+pending question keeps its kind; the picture is redrawn from a per-question CSPRNG `render_seed` kept only on the row
+(never the client-visible challenge id), never stored or written to disk. Backup «بدون نگهداری»
+(`backup.archive_keep_on_host`, default on; see § Backup): off ⇒ a confirmed-delivered archive leaves the host.
+
+**Not wanted (owner):** bulk operations, saved templates, profit reports, a public status page, branding.
 
 ## Deployment
 
