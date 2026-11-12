@@ -55,8 +55,10 @@ import {
  * a day is chosen applies at once too. The quick chips apply at once. «تأیید» only closes.
  * THE TIME RULE (one rule): a tapped day takes the time already chosen — the value's own time,
  * or the steppers' current time once the user has touched them; with neither, the current time
- * rounded UP to the 5-minute step (14:32 → 14:35; 23:58 → 00:00). A moment outside `min`/`max`
- * is not applied (and «تأیید» stays disabled). `date` and `time` modes still commit on pick /
+ * rounded UP to the 5-minute step inside the same day (14:32 → 14:35; 23:58 → 23:59, never
+ * 00:00). When that default moment is outside `min`/`max` it is moved to the nearest allowed
+ * one and the field shows it. A moment the USER chose (a typed time, a stepper) outside
+ * `min`/`max` is not applied (and «تأیید» stays disabled). `date` and `time` modes still commit on pick /
  * «تأیید».
  *
  * Tests drive it ONLY through `setDateField` in `tests/web/ui-helpers.ts`.
@@ -250,11 +252,24 @@ export function DateField({
 
 const TIME_MINUTE_STEP = 5;
 
-/** The current time rounded UP to the step: 14:32 → 14:35, 14:35 → 14:35, 23:58 → 00:00. */
+/**
+ * The current time rounded UP to the step INSIDE THE SAME DAY: 14:32 → 14:35, 14:35 → 14:35,
+ * and from 23:56 on, 23:59 (the last minute of the day) — never 00:00, which is the start of
+ * a day that is not the one being tapped and can fall before the field's `min`.
+ */
 function roundedUpNow(now: Date): { h: number; m: number } {
-  const total =
-    Math.ceil((now.getHours() * 60 + now.getMinutes()) / TIME_MINUTE_STEP) * TIME_MINUTE_STEP;
-  return { h: Math.floor(total / 60) % 24, m: total % 60 };
+  const total = Math.min(
+    Math.ceil((now.getHours() * 60 + now.getMinutes()) / TIME_MINUTE_STEP) * TIME_MINUTE_STEP,
+    24 * 60 - 1,
+  );
+  return { h: Math.floor(total / 60), m: total % 60 };
+}
+
+/** `next` moved to the nearest value `min`/`max` allow (both are wire values of the same shape). */
+function clampToBounds(next: string, min: string | undefined, max: string | undefined): string {
+  if (min !== undefined && min !== '' && next < min) return min;
+  if (max !== undefined && max !== '' && next > max) return max;
+  return next;
 }
 
 function DatePopover({
@@ -294,6 +309,8 @@ function DatePopover({
   const [focusDay, setFocusDay] = useState(startDay);
   const [selected, setSelected] = useState<number | null>(parts.day);
   const [time, setTime] = useState(parts.time ?? roundedUpNow(now));
+  /** True once the value had a time or the user touched a stepper or a quick pick. */
+  const timeChosen = useRef(parts.time !== null);
   const [hourText, setHourText] = useState<string | null>(null);
   const [minuteText, setMinuteText] = useState<string | null>(null);
 
@@ -329,8 +346,12 @@ function DatePopover({
     const next = `${formatIsoDay(dayNumberToGregorian(day))}T${formatTime(at)}`;
     if (candidateAllowed(next) && next !== value) onApply(next);
   };
-  const changeTime = (at: { h: number; m: number }) => {
+  const chooseTime = (at: { h: number; m: number }) => {
+    timeChosen.current = true;
     setTime(at);
+  };
+  const changeTime = (at: { h: number; m: number }) => {
+    chooseTime(at);
     if (selected !== null) applyNow(selected, at);
   };
 
@@ -339,6 +360,21 @@ function DatePopover({
     if (timed) {
       setSelected(day);
       setFocusDay(day);
+      if (mode === 'datetime' && !timeChosen.current) {
+        // No time chosen yet: the default time (now, rounded up inside the day) may fall
+        // outside min/max — move it to the nearest allowed moment and show that.
+        const wanted = `${formatIsoDay(dayNumberToGregorian(day))}T${formatTime(time)}`;
+        const fitted = clampToBounds(wanted, min, max);
+        const fittedParts = partsOf(mode, fitted);
+        if (fitted !== wanted && fittedParts.day !== null && fittedParts.time !== null) {
+          setTime(fittedParts.time);
+          setSelected(fittedParts.day);
+          setFocusDay(fittedParts.day);
+          moveView(fittedParts.day);
+          if (candidateAllowed(fitted) && fitted !== value) onApply(fitted);
+          return;
+        }
+      }
       applyNow(day, time);
       return;
     }
@@ -412,11 +448,11 @@ function DatePopover({
           {
             key: 'now',
             label: t('web.date_now'),
-            apply: () => setTime({ h: now.getHours(), m: now.getMinutes() }),
+            apply: () => chooseTime({ h: now.getHours(), m: now.getMinutes() }),
           },
-          { key: '9', label: t('web.date_9am'), apply: () => setTime({ h: 9, m: 0 }) },
-          { key: '12', label: t('web.date_noon'), apply: () => setTime({ h: 12, m: 0 }) },
-          { key: '18', label: t('web.date_6pm'), apply: () => setTime({ h: 18, m: 0 }) },
+          { key: '9', label: t('web.date_9am'), apply: () => chooseTime({ h: 9, m: 0 }) },
+          { key: '12', label: t('web.date_noon'), apply: () => chooseTime({ h: 12, m: 0 }) },
+          { key: '18', label: t('web.date_6pm'), apply: () => chooseTime({ h: 18, m: 0 }) },
         ]
       : [
           {
@@ -424,7 +460,7 @@ function DatePopover({
             label: t('web.date_now'),
             apply: () => {
               const at = { h: now.getHours(), m: now.getMinutes() };
-              setTime(at);
+              chooseTime(at);
               setSelected(today);
               moveView(today);
               applyNow(today, at);
@@ -437,7 +473,7 @@ function DatePopover({
               const later = new Date(now.getTime() + 3_600_000);
               const day = dayNumberOfDate(later);
               const at = { h: later.getHours(), m: later.getMinutes() };
-              setTime(at);
+              chooseTime(at);
               setSelected(day);
               moveView(day);
               applyNow(day, at);
@@ -448,7 +484,7 @@ function DatePopover({
             label: t('web.date_tomorrow_10'),
             apply: () => {
               const at = { h: 10, m: 0 };
-              setTime(at);
+              chooseTime(at);
               setSelected(today + 1);
               moveView(today + 1);
               applyNow(today + 1, at);

@@ -10,6 +10,8 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
+  type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
@@ -1949,6 +1951,7 @@ export function DataTable<T>({
   toolbar,
   filters,
   rowClassName,
+  onRowActivate,
   detail,
   stack = true,
 }: {
@@ -1961,6 +1964,14 @@ export function DataTable<T>({
   toolbar?: ReactNode;
   filters?: ReactNode;
   rowClassName?: (row: T) => string | undefined;
+  /**
+   * The row itself is the way in (owner ruling, demo parity): a click on the row, or Enter
+   * while the row has focus, runs this. A click that lands on a control inside the row (a
+   * link, a button, a field, an open menu) belongs to that control and never reaches here, so
+   * the row's own actions keep their meaning. The row is focusable and takes the pointer
+   * cursor; nothing else about the table changes.
+   */
+  onRowActivate?: (row: T) => void;
   /**
    * A row's DETAIL (demo parity X9): the facts a wide list cannot hold as columns at 1440
    * without scrolling sideways, drawn on a full-width line under the row when its toggle is
@@ -2046,7 +2057,30 @@ export function DataTable<T>({
               const detailId = `tbl-detail-${key}`;
               return (
                 <Fragment key={key}>
-                  <tr role="row" className={cx(rowClassName?.(row), expanded && 'expanded')}>
+                  <tr
+                    role="row"
+                    className={cx(
+                      rowClassName?.(row),
+                      expanded && 'expanded',
+                      onRowActivate !== undefined && 'activatable',
+                    )}
+                    {...(onRowActivate === undefined
+                      ? {}
+                      : {
+                          tabIndex: 0,
+                          onClick: (event: MouseEvent<HTMLTableRowElement>) => {
+                            if (isRowBackground(event.target as Element, event.currentTarget)) {
+                              onRowActivate(row);
+                            }
+                          },
+                          onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => {
+                            if (event.key === 'Enter' && event.target === event.currentTarget) {
+                              event.preventDefault();
+                              onRowActivate(row);
+                            }
+                          },
+                        })}
+                  >
                     {columns.map((column) => (
                       <td
                         key={column.key}
@@ -2089,6 +2123,15 @@ export function DataTable<T>({
       </div>
     </>
   );
+}
+/** True when a click landed on the row's own surface, not on a control or an open menu inside it. */
+function isRowBackground(target: Element, row: Element): boolean {
+  // A portaled menu's events still bubble through React to the row, but its node is not in it.
+  if (!row.contains(target)) return false;
+  const control = target.closest(
+    'a, button, input, select, textarea, label, summary, [role="menu"], [role="menuitem"], [role="dialog"]',
+  );
+  return control === null || !row.contains(control);
 }
 /** A two-line cell: the primary value, and a quieter line beneath it. */
 export function CellMain({ primary, secondary }: { primary: ReactNode; secondary?: ReactNode }) {

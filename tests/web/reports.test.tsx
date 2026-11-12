@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { openFilterPanel, FILTERS_TOGGLE } from './ui-helpers';
 import {
   OWNER_ROLE_KEY,
   reportFailuresResponseSchema,
@@ -398,7 +399,9 @@ describe('report exports and paging (WP12 review)', () => {
     expect(title).toHaveAttribute('href', '/orders/019210ab-cdef-7012-8345-6789abcdef02');
     // The customer link stays; the separate order link («سفارش») does not.
     expect(screen.queryByRole('link', { name: 'سفارش' })).toBeNull();
-    const range = screen.getByRole('group', { name: t('web.period_label') });
+    // Owner ruling (demo parity): the period is inside «فیلترها», not an always-visible chip row.
+    expect(screen.queryByRole('group', { name: t('web.period_label') })).toBeNull();
+    const range = within(openFilterPanel()).getByRole('group', { name: t('web.period_label') });
     expect(
       within(range).getByRole('button', { name: t('web.report_range_today') }),
     ).toHaveAttribute('aria-pressed', 'true');
@@ -434,6 +437,8 @@ describe('report exports and paging (WP12 review)', () => {
     );
     const from = () => screen.getByLabelText(t('web.report_range_from')) as HTMLInputElement;
     const to = () => screen.getByLabelText(t('web.report_range_to')) as HTMLInputElement;
+    await screen.findByRole('button', { name: FILTERS_TOGGLE });
+    openFilterPanel();
     await waitFor(() => expect(from().value).toBe('1405-07-01'));
 
     // History brings a different custom range into the same mounted page.

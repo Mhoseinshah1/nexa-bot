@@ -323,34 +323,50 @@ export function SettingsSection({
   description,
   defaultOpen = true,
   changed = 0,
+  collapsible = true,
   children,
 }: {
   title: ReactNode;
   description?: ReactNode;
   defaultOpen?: boolean;
+  /**
+   * `false` draws the title as a plain heading and keeps the body open: a page whose tab strip
+   * already names the section (the settings page) has no use for a second, collapsing button
+   * of the same name (owner ruling, demo parity).
+   */
+  collapsible?: boolean;
   /** How many settings in this section hold an unsaved change; a dot marks the title. */
   changed?: number;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [openState, setOpen] = useState(defaultOpen);
+  const open = collapsible ? openState : true;
   const bodyId = useId();
+  const changedMark = changed > 0 && (
+    <span className="settings-changed num" aria-hidden="true">
+      {formatNumber(changed)}
+    </span>
+  );
   return (
     <section className={cx('settings-section card', open && 'open')}>
       <h2 className="settings-section-head">
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-controls={bodyId}
-          onClick={() => setOpen((v) => !v)}
-        >
-          <Icon name={open ? 'chevron' : 'chevronLeft'} size={16} />
-          <span className="settings-section-title">{title}</span>
-          {changed > 0 && (
-            <span className="settings-changed num" aria-hidden="true">
-              {formatNumber(changed)}
-            </span>
-          )}
-        </button>
+        {collapsible ? (
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={bodyId}
+            onClick={() => setOpen((v) => !v)}
+          >
+            <Icon name={open ? 'chevron' : 'chevronLeft'} size={16} />
+            <span className="settings-section-title">{title}</span>
+            {changedMark}
+          </button>
+        ) : (
+          <span className="settings-section-plain">
+            <span className="settings-section-title">{title}</span>
+            {changedMark}
+          </span>
+        )}
       </h2>
       {description !== undefined && <p className="settings-section-desc">{description}</p>}
       <div id={bodyId} className="settings-section-body" hidden={!open}>

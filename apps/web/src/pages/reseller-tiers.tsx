@@ -389,16 +389,8 @@ export function ResellerTiersPage({
     {
       key: 'name',
       header: t('web.reseller_tier_name'),
-      // The name is the way in: the edit drawer, or the read-only grants without the edit key.
-      render: (row) => (
-        <button
-          type="button"
-          className="link strong"
-          onClick={() => (mayEdit ? setEditingId(row.id) : setGrantsId(row.id))}
-        >
-          {row.name}
-        </button>
-      ),
+      // The row is the way in (onRowActivate): the edit drawer, or the read-only grants without the edit key.
+      render: (row) => <strong>{row.name}</strong>,
     },
     {
       key: 'pricing',
@@ -504,6 +496,7 @@ export function ResellerTiersPage({
             rowClassName={(row) =>
               row.id === grantsId || row.id === editingId ? 'selected' : undefined
             }
+            onRowActivate={(row) => (mayEdit ? setEditingId(row.id) : setGrantsId(row.id))}
           />
           {tierPage.pager}
         </StateSwitch>
