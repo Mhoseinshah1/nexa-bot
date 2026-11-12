@@ -20,7 +20,10 @@ import type {
   HostedDnsResolver,
   HostedTlsProbe,
 } from '../application/activation-ports.js';
-import { HostedActivationService } from '../application/hosted-activation.service.js';
+import {
+  HostedActivationService,
+  type HostedActivationDeps,
+} from '../application/hosted-activation.service.js';
 import { HostedOwnerActivationService } from '../application/hosted-owner-activation.service.js';
 import type { HostingOwnerGuard } from '../application/hosting-owner-guard.js';
 import type { HostingSectionService } from '../application/hosting-section.service.js';
@@ -80,6 +83,8 @@ export function buildHostedActivation(deps: {
   readonly telegram: HostedBotIdentifier;
   readonly dns?: HostedDnsResolver;
   readonly tls?: HostedTlsProbe;
+  /** Reseller-phase PR-6: a link issued for a reseller's bot is sent to them (late-bound). */
+  readonly onLinkIssued?: HostedActivationDeps['onLinkIssued'];
 }): {
   readonly hostedActivation: HostedActivationService;
   readonly hostedOwnerActivation: HostedOwnerActivationService;
@@ -112,6 +117,7 @@ export function buildHostedActivation(deps: {
     ids: deps.ids,
     dnsTarget: { hostname, addresses: deps.config.HOSTED_BOTS_SERVER_IPS },
     reservedHosts,
+    ...(deps.onLinkIssued === undefined ? {} : { onLinkIssued: deps.onLinkIssued }),
   });
   const hostedOwnerActivation = new HostedOwnerActivationService({
     directory: new DrizzleHostedDomainDirectory(deps.db),

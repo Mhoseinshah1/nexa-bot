@@ -49,6 +49,7 @@ import { HostingController } from './surfaces/web/hosting.controller.js';
 import { HostedBackupController } from './surfaces/web/hosted-backup.controller.js';
 import { DataExportController } from './surfaces/web/data-export.controller.js';
 import { HostingActivationController } from './surfaces/web/hosting-activation.controller.js';
+import { ResellerBotAdminController } from './surfaces/web/reseller-bot-admin.controller.js';
 import {
   HostedActivationController,
   HostedDomainCheckController,
@@ -177,6 +178,7 @@ export class AppModule implements NestModule {
         HostedBackupController as never,
         DataExportController as never,
         HostingActivationController as never,
+        ResellerBotAdminController as never,
         HostedActivationController as never,
         HostedDomainCheckController as never,
         SupportFaqController as never,

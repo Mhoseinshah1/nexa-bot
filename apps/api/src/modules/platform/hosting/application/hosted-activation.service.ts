@@ -76,6 +76,18 @@ export interface HostedActivationDeps {
   readonly dnsTarget: { readonly hostname: string | null; readonly addresses: readonly string[] };
   /** This server's own names (normalised): never a hosted domain. */
   readonly reservedHosts: ReadonlySet<string>;
+  /**
+   * Reseller-phase PR-6: told of every issued link, inside the issuing transaction, so a bot
+   * created for a reseller's request has its link sent to the reseller (sealed; never stored
+   * in clear). Absent, nothing else happens.
+   */
+  readonly onLinkIssued?: (
+    installation: TenantContext,
+    actor: ActorContext,
+    link: { readonly hostedTenantId: string; readonly linkId: string; readonly url: string },
+    now: Date,
+    tx: TransactionScope,
+  ) => Promise<void>;
 }
 
 /**
@@ -510,6 +522,19 @@ export class HostedActivationService {
           now,
           tx,
         );
+        if (this.deps.onLinkIssued !== undefined && locked?.domain != null) {
+          await this.deps.onLinkIssued(
+            installation,
+            actor,
+            {
+              hostedTenantId,
+              linkId,
+              url: `https://${locked.domain}${HOSTED_ACTIVATION_PAGE_PATH}#token=${secret}`,
+            },
+            now,
+            tx,
+          );
+        }
         await this.deps.audit.record(
           installation,
           actor,

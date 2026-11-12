@@ -13,6 +13,7 @@ import {
   legacyNxpkgImports,
   panelCredentials,
   paymentGatewayCredentials,
+  resellerBotRequests,
   supportAiProviderCredentials,
 } from '../persistence/schema.js';
 
@@ -998,6 +999,140 @@ const hostedArchivePassword: SecretColumn = {
   },
 };
 
+/**
+ * Reseller-phase PR-6: a reseller's dedicated-bot token, sealed on their request row (the
+ * INSTALLATION tenant's) until the owner hands it to the hosted bot's activation. NOT NULL.
+ */
+const resellerBotToken: SecretColumn = {
+  purpose: 'hosting.reseller_bot_token',
+  table: 'reseller_bot_requests',
+  ciphertextColumn: 'token_ciphertext',
+  keyIdColumn: 'token_key_id',
+  entityIdColumn: 'id',
+
+  async all(db) {
+    return db
+      .select({
+        ciphertext: resellerBotRequests.tokenCiphertext,
+        keyId: resellerBotRequests.tokenKeyId,
+      })
+      .from(resellerBotRequests);
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: resellerBotRequests.id })
+      .from(resellerBotRequests)
+      .where(cursor === null ? undefined : gt(resellerBotRequests.id, cursor))
+      .orderBy(asc(resellerBotRequests.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: resellerBotRequests.id,
+        tenantId: resellerBotRequests.tenantId,
+        ciphertext: resellerBotRequests.tokenCiphertext,
+        keyId: resellerBotRequests.tokenKeyId,
+      })
+      .from(resellerBotRequests)
+      .where(eq(resellerBotRequests.id, id))
+      .for('update')
+      .limit(1);
+    return row ?? null;
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(resellerBotRequests)
+      .set({ tokenCiphertext: next.ciphertext, tokenKeyId: next.keyId })
+      .where(
+        and(
+          eq(resellerBotRequests.id, id),
+          eq(resellerBotRequests.tokenCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: resellerBotRequests.id });
+    return updated.length > 0;
+  },
+};
+
+/**
+ * Reseller-phase PR-6: the newest one-time activation link of a reseller's dedicated bot,
+ * sealed on the request row only so the notification lane can send it. NULLABLE.
+ */
+const resellerActivationLink: SecretColumn = {
+  purpose: 'hosting.reseller_activation_link',
+  table: 'reseller_bot_requests',
+  ciphertextColumn: 'activation_link_ciphertext',
+  keyIdColumn: 'activation_link_key_id',
+  entityIdColumn: 'id',
+
+  async all(db) {
+    const rows = await db
+      .select({
+        ciphertext: resellerBotRequests.activationLinkCiphertext,
+        keyId: resellerBotRequests.activationLinkKeyId,
+      })
+      .from(resellerBotRequests)
+      .where(isNotNull(resellerBotRequests.activationLinkCiphertext));
+    return rows.flatMap((row) =>
+      typeof row.ciphertext === 'string' && typeof row.keyId === 'string'
+        ? [{ ciphertext: row.ciphertext, keyId: row.keyId }]
+        : [],
+    );
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: resellerBotRequests.id })
+      .from(resellerBotRequests)
+      .where(
+        cursor === null
+          ? isNotNull(resellerBotRequests.activationLinkCiphertext)
+          : and(
+              isNotNull(resellerBotRequests.activationLinkCiphertext),
+              gt(resellerBotRequests.id, cursor),
+            ),
+      )
+      .orderBy(asc(resellerBotRequests.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: resellerBotRequests.id,
+        tenantId: resellerBotRequests.tenantId,
+        ciphertext: resellerBotRequests.activationLinkCiphertext,
+        keyId: resellerBotRequests.activationLinkKeyId,
+      })
+      .from(resellerBotRequests)
+      .where(eq(resellerBotRequests.id, id))
+      .for('update')
+      .limit(1);
+    if (row === undefined || row.ciphertext === null || row.keyId === null) return null;
+    return { id: row.id, tenantId: row.tenantId, ciphertext: row.ciphertext, keyId: row.keyId };
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(resellerBotRequests)
+      .set({ activationLinkCiphertext: next.ciphertext, activationLinkKeyId: next.keyId })
+      .where(
+        and(
+          eq(resellerBotRequests.id, id),
+          eq(resellerBotRequests.activationLinkCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: resellerBotRequests.id });
+    return updated.length > 0;
+  },
+};
+
 export const SECRET_COLUMNS: readonly SecretColumn[] = [
   botInstanceToken,
   panelUsername,
@@ -1014,4 +1149,6 @@ export const SECRET_COLUMNS: readonly SecretColumn[] = [
   backupArchivePassword,
   giftCardBatchExport,
   hostedArchivePassword,
+  resellerBotToken,
+  resellerActivationLink,
 ];

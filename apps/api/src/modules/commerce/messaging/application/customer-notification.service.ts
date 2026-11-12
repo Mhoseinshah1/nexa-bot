@@ -7,6 +7,7 @@ import {
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
   CUSTOMER_NOTIFICATION_QUIET_HOURS,
   CUSTOMER_NOTIFICATION_TEMPLATES,
+  CUSTOMER_NOTIFICATION_TEXT_NOT_STORED,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
   templateDefinition,
   type BotInstanceId,
@@ -661,6 +662,19 @@ export interface CustomerNotificationDeps {
     } | null>;
   };
   /**
+   * Reseller-phase PR-6: what `HOSTED_BOT_ACTIVATION_LINK` and `HOSTED_BOT_FEE_SHORT` render —
+   * the reseller's one-time link (opened from its seal only now), or the fee, the shortfall and
+   * the deadline — read at send time. Null when the link is no longer open or the period was
+   * paid meanwhile, which sends nothing. Absent, neither kind is sent.
+   */
+  readonly resellerBots?: {
+    notificationFacts(
+      scope: TenantContext,
+      kind: 'HOSTED_BOT_ACTIVATION_LINK' | 'HOSTED_BOT_FEE_SHORT',
+      subjectId: string,
+    ): Promise<{ readonly values: TemplateValues } | null>;
+  };
+  /**
    * Phase E3: what `INCIDENT_NOTICE` renders — the operator's message, read at send time
    * from the communication the notice row names. A reader, not a payload (ADR 0030 §1).
    * Null when the row is gone, which sends nothing. Absent, the kind is not sent.
@@ -1118,6 +1132,11 @@ export class CustomerNotificationService {
             ? []
             : (this.deps.buttonsFor?.(row.kind, { resellerRequestId: facts.replyRequestId }) ?? []),
       };
+    }
+    if (row.kind === 'HOSTED_BOT_ACTIVATION_LINK' || row.kind === 'HOSTED_BOT_FEE_SHORT') {
+      if (this.deps.resellerBots === undefined) return null;
+      const facts = await this.deps.resellerBots.notificationFacts(scope, row.kind, row.subjectId);
+      return facts === null ? null : { values: facts.values, buttons: [] };
     }
     if (row.kind === 'INCIDENT_NOTICE') {
       if (this.deps.incidents === undefined) return null;
@@ -1855,6 +1874,11 @@ export class CustomerNotificationService {
     kindKeyForced: boolean,
   ): Promise<string | null> {
     if (this.deps.centreText === undefined) return null;
+    /*
+     * PR-6: a kind whose values carry a live credential (the reseller's one-time activation
+     * link) is never stored: its words exist only in the Telegram message.
+     */
+    if (CUSTOMER_NOTIFICATION_TEXT_NOT_STORED.includes(row.kind)) return null;
     try {
       // The key the send path actually used: a text send uses `content.templateKey` when the
       // subject names one (an AI ticket reply is `bot.ticket.ai_replied`, not the kind's own);

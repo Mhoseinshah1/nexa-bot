@@ -1808,9 +1808,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'پاسخ خود را برای درخواست شمارهٔ {number} بنویسید یا یک عکس بفرستید.',
   'bot.reseller_request.reply_sent': '{icon:success} پاسخ شما به درخواست اضافه شد.',
   'bot.hosted_bot.activation_link':
-    '{icon:success} ربات اختصاصی شما (@{bot}) آماده است.\nبرای راه‌اندازی پنل مدیریت آن، این لینک یک‌بارمصرف را باز کنید:\n{url}\n⏳ اعتبار لینک تا {expiresAt}',
+    '{icon:success} ربات اختصاصی شما (@{bot}) آماده است.\nبرای راه‌اندازی پنل مدیریت آن، این لینک یک‌بارمصرف را باز کنید:\n{url}\n{icon:time} اعتبار لینک تا {expiresAt}',
   'bot.hosted_bot.fee_short':
-    '{icon:warning} موجودی کیف پول شما برای هزینهٔ ماهانهٔ ربات اختصاصی @{bot} کافی نیست.\n💰 هزینهٔ ماهانه: {fee}\n➕ کمبود: {shortfall}\nاگر تا {deadline} کیف پول را شارژ نکنید، ربات متوقف می‌شود؛ داده‌های آن حفظ می‌شود و با پرداخت دوباره فعال می‌شود.',
+    '{icon:warning} موجودی کیف پول شما برای هزینهٔ ماهانهٔ ربات اختصاصی @{bot} کافی نیست.\n{icon:amount} هزینهٔ ماهانه: {fee}\n{icon:wallet} کمبود: {shortfall}\nاگر تا {deadline} کیف پول را شارژ نکنید، ربات متوقف می‌شود؛ داده‌های آن حفظ می‌شود و با پرداخت دوباره فعال می‌شود.',
   'bot.reseller_request.thread_closed': 'دربارهٔ این درخواست تصمیم گرفته شده و گفتگو بسته است.',
   'bot.reseller_request.button_start': '▶️ شروع',
   'bot.reseller_request.button_skip': '⏭ رد کردن',

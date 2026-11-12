@@ -200,6 +200,8 @@ export const OPERATIONAL_EVENT_FAMILY_LABELS_FA: Readonly<Record<string, string>
   'panel.health.': 'وضعیت سلامت پنل',
   'admin.': 'رویداد مدیران',
   'incident.': 'رویداد حادثه',
+  // Reseller-phase PR-6: a reseller's dedicated bot — approval, fee, short wallet, stop, resume.
+  'hosting.reseller_bot.': 'ربات اختصاصی نماینده',
   'maintenance.': 'رویداد نگهداری',
 };
 

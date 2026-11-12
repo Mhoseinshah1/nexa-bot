@@ -231,6 +231,19 @@ export const walletEntries = pgTable(
         AND (reason <> 'GIFT_CARD_REDEMPTION' OR (direction = 'CREDIT' AND order_id IS NULL
           AND payment_id IS NULL AND reverses_entry_id IS NULL AND actor_admin_id IS NULL))`,
     ),
+    /**
+     * Reseller-phase PR-6: a dedicated bot's fee and its reference prefix are ONE thing, in both
+     * directions. A `HOSTED_BOT_FEE` entry is written under `hosted-bot-fee:<request>:<period>`
+     * and nothing else, so `wallet_entries_tenant_reference_key` allows ONE debit per period
+     * whoever writes it; and the prefix belongs to that reason alone. It is a DEBIT naming no
+     * order, payment, reversal or administrator. `left(...)` rather than `LIKE`.
+     */
+    check(
+      'wallet_entries_hosted_bot_fee_shape_check',
+      sql`(reason = 'HOSTED_BOT_FEE') = (left(reference, 15) = 'hosted-bot-fee:')
+        AND (reason <> 'HOSTED_BOT_FEE' OR (direction = 'DEBIT' AND order_id IS NULL
+          AND payment_id IS NULL AND reverses_entry_id IS NULL AND actor_admin_id IS NULL))`,
+    ),
     check(
       'wallet_entries_migration_opening_shape_check',
       sql`(reason = 'MIGRATION_OPENING_BALANCE') = (left(reference, 15) = 'legacy:opening:')

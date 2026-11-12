@@ -1038,7 +1038,13 @@ import { buildHostedBackups } from './modules/platform/hosting/infrastructure/bu
 import { buildDataExport } from './modules/platform/data-export/infrastructure/build-data-export.js';
 import type { DataExportService } from './modules/platform/data-export/application/data-export.service.js';
 import type { DataExportRunner } from './modules/platform/data-export/application/data-export.runner.js';
-import { buildHostedActivation } from './modules/platform/hosting/infrastructure/build-hosted-activation.js';
+import {
+  buildHostedActivation,
+  reservedHostsOf,
+} from './modules/platform/hosting/infrastructure/build-hosted-activation.js';
+import { ResellerBotFeeService } from './modules/commerce/reseller-bots/application/reseller-bot-fee.service.js';
+import { ResellerBotRequestService } from './modules/commerce/reseller-bots/application/reseller-bot-request.service.js';
+import { DrizzleResellerBotRepository } from './modules/commerce/reseller-bots/infrastructure/drizzle-reseller-bot.repository.js';
 import type { HostedActivationService } from './modules/platform/hosting/application/hosted-activation.service.js';
 import type { HostedOwnerActivationService } from './modules/platform/hosting/application/hosted-owner-activation.service.js';
 import { HostingEnterService } from './modules/platform/hosting/application/hosting-enter.service.js';
@@ -1381,6 +1387,12 @@ export interface Container {
   readonly hostingEnter: HostingEnterService;
   readonly hosting: HostingService;
   readonly hostedBotExpiry: HostedBotExpiryService;
+  /**
+   * Reseller-phase PR-6: a reseller's dedicated bot — the request (both sides, the reseller
+   * panel's controller included) and the monthly fee's renewal job.
+   */
+  readonly resellerBots: ResellerBotRequestService;
+  readonly resellerBotFees: ResellerBotFeeService;
   /**
    * Sets the role's installation tenant and records its kind with the tenant guard, at the
    * moment the scope is set (PR #411). `kind` is the resolved tenant's own kind; omitted, it
@@ -2596,34 +2608,45 @@ export function createContainer(
    * behind their own TOTP factor and 12-hour section session; the expiry sweep runs in the
    * installation-scoped sweep loop below. The disks are the capacity monitor's two.
    */
-  const { hostingSection, hosting, hostedBotExpiry, hostingRepository, hostingOwner } =
-    buildHosting({
-      db: database.db,
-      config,
-      uow,
-      guard,
-      audit,
-      opsLog,
-      outbox,
-      idempotency,
-      scopeActivity: tenants,
-      cipher,
-      hasher,
-      clock,
-      ids,
-      qr: new PngQrCodeEncoder(),
-      admins,
-      roles,
-      sessions,
-      verifyOwnPassword: (scope, actor, password, context, action) =>
-        adminManagement.verifyOwnPassword(scope, actor, password, context, action),
-      capacityLimits,
-      capacityResolver,
-      systemProbe,
-      diskPaths: ['/', config.BACKUP_WORK_DIR],
-      installationTenantId: () => installationTenantId,
-      enter: hostingEnterRepository,
-    });
+  const {
+    hostingSection,
+    hosting,
+    hostedBotExpiry,
+    hostingRepository,
+    hostingOwner,
+    hostingSystemPath,
+  } = buildHosting({
+    db: database.db,
+    config,
+    uow,
+    guard,
+    audit,
+    opsLog,
+    outbox,
+    idempotency,
+    scopeActivity: tenants,
+    cipher,
+    hasher,
+    clock,
+    ids,
+    qr: new PngQrCodeEncoder(),
+    admins,
+    roles,
+    sessions,
+    verifyOwnPassword: (scope, actor, password, context, action) =>
+      adminManagement.verifyOwnPassword(scope, actor, password, context, action),
+    capacityLimits,
+    capacityResolver,
+    systemProbe,
+    diskPaths: ['/', config.BACKUP_WORK_DIR],
+    installationTenantId: () => installationTenantId,
+    enter: hostingEnterRepository,
+    // Reseller-phase PR-6: late-bound — the request service is built further down.
+    resellerBots: {
+      linkCreated: (installation, actor, requestId, hostedTenantId, now, tx) =>
+        resellerBots.linkCreated(installation, actor, requestId, hostedTenantId, now, tx),
+    },
+  });
   // Phase 6A PR-4: the activation of a hosted bot (token, domain, SSL, webhook, one-time link)
   // and the Host → hosted-tenant resolution, over the same Telegram gateway and bootstrap.
   const { hostedActivation, hostedOwnerActivation } = buildHostedActivation({
@@ -2645,6 +2668,9 @@ export function createContainer(
     telegram: telegramBotGateway,
     ...(options.hostedNetwork?.dns === undefined ? {} : { dns: options.hostedNetwork.dns }),
     ...(options.hostedNetwork?.tls === undefined ? {} : { tls: options.hostedNetwork.tls }),
+    // Reseller-phase PR-6: a link issued for a reseller's bot is sent to the reseller.
+    onLinkIssued: (installation, actor, link, now, tx) =>
+      resellerBots.activationLinkIssued(installation, actor, link, now, tx),
   });
   // Phase 6B «ورود به پنل» (ADR-0039 § 9): the owner's entry into a hosted bot's Web Admin.
   const hostingEnter = new HostingEnterService({
@@ -3847,6 +3873,54 @@ export function createContainer(
       },
     },
     ids,
+  });
+  /*
+   * Reseller-phase PR-6 (§5.9): a reseller's dedicated bot. The fee service debits each period
+   * under the wallet lock and stops/resumes through the expiry sweep's lifecycle step; the
+   * request service is both sides of the request and the two hosting hooks above.
+   */
+  const resellerBotRepository = new DrizzleResellerBotRepository(database.db);
+  const resellerBotFees = new ResellerBotFeeService({
+    repository: resellerBotRepository,
+    hosting: hostingRepository,
+    system: hostingSystemPath,
+    wallet: walletRepository,
+    notifier: customerNotifier,
+    settings: settingsResolver,
+    scopeActivity: tenants,
+    audit,
+    opsLog,
+    outbox,
+    uow,
+    clock,
+    ids,
+  });
+  const resellerBots = new ResellerBotRequestService({
+    repository: resellerBotRepository,
+    resellers: resellerRepository,
+    customers: customerRepository,
+    wallet: walletRepository,
+    fees: resellerBotFees,
+    telegram: telegramBotGateway,
+    cipher,
+    section: hostingSection,
+    owner: hostingOwner,
+    hosting: hostingRepository,
+    activation: hostedActivation,
+    notifier: customerNotifier,
+    settings: settingsResolver,
+    scopeActivity: tenants,
+    guard,
+    sessions,
+    idempotency,
+    audit,
+    opsLog,
+    outbox,
+    uow,
+    clock,
+    ids,
+    installationTenantId: () => installationTenantId,
+    reservedHosts: reservedHostsOf(config),
   });
 
   const paymentGatewayRepository = new DrizzlePaymentGatewayRepository(database.db);
@@ -5610,6 +5684,17 @@ export function createContainer(
           scope.tenantId === installationTenantId ? hostedBotExpiry.runOnce(scope) : 0,
       },
       {
+        // Reseller-phase PR-6: a dedicated bot's monthly fee. Installation-wide, like the expiry
+        // sweep: only the installation's own pass runs it.
+        name: 'reseller-bot-renewal',
+        everyMs: SERVICE_REMINDER_INTERVAL_MS,
+        runOnce: async (scope) => {
+          if (scope.tenantId !== installationTenantId) return 0;
+          const report = await resellerBotFees.runOnce(scope);
+          return report.charged + report.noticed + report.stopped;
+        },
+      },
+      {
         /*
          * Round 10, D1: the service reminder cadence. The lead time is at least an hour, so a
          * fifteen-minute pass always lands inside it; the flag is read inside the pass.
@@ -6685,6 +6770,8 @@ export function createContainer(
       tickets: ticketService,
       // PR-2: an operator's message to an applicant, and the decision, read from their rows.
       resellerRequests: resellerRequestService,
+      // Reseller-phase PR-6: the dedicated bot's activation link and fee notice.
+      resellerBots,
       // Phase A2: an operator's direct message, read from the message row it names.
       directMessages: customerDirectMessageService,
       // Phase E3: an incident notice's words, read from its communication row.
@@ -9684,6 +9771,8 @@ export function createContainer(
     hostedOwnerActivation,
     hostingEnter,
     hostedBotExpiry,
+    resellerBots,
+    resellerBotFees,
     botTurnGuard,
     heavyJobs,
     capacityMonitorLoop,
