@@ -85,7 +85,7 @@ describe('the reseller web panel — clients book and auto-renew (PR-5)', () => 
       ['PUT', `/clients/${client.id}`, { name: 'x' }],
       ['POST', `/clients/${client.id}/archive`, undefined],
       ['GET', `/clients/${client.id}/renew-all`, undefined],
-      ['POST', `/clients/${client.id}/renew-all`, undefined],
+      ['POST', `/clients/${client.id}/renew-all`, { items: [] }],
       // Their own service under MY client: my client is not theirs to use.
       ['PUT', `/services/${service.id}/client`, { clientId: client.id }],
     ] as const) {
@@ -185,11 +185,15 @@ describe('the reseller web panel — clients book and auto-renew (PR-5)', () => 
       count: number;
       total: { amountMinor: string };
       sufficient: boolean;
+      items: { serviceId: string; price: { amountMinor: string; currency: string } | null }[];
     };
     expect(quote).toMatchObject({ count: 2, total: { amountMinor: '400000' }, sufficient: false });
+    const confirmed = {
+      items: quote.items.map((item) => ({ serviceId: item.serviceId, price: item.price })),
+    };
 
     await h().credit(h().reseller, 300_000n);
-    const short = await h().call(cookie, 'POST', `/clients/${client.id}/renew-all`);
+    const short = await h().call(cookie, 'POST', `/clients/${client.id}/renew-all`, confirmed);
     expect(short.statusCode).toBe(409);
     expect(codeOf(short)).toBe('commerce.wallet_insufficient_funds');
     expect(await h().balance(h().reseller)).toBe(300_000n);
@@ -200,7 +204,7 @@ describe('the reseller web panel — clients book and auto-renew (PR-5)', () => 
       cookie,
       'POST',
       `/clients/${client.id}/renew-all`,
-      undefined,
+      confirmed,
       key,
     );
     expect(renewed.statusCode, renewed.body).toBe(200);
@@ -210,9 +214,69 @@ describe('the reseller web panel — clients book and auto-renew (PR-5)', () => 
     ]);
     expect(await h().balance(h().reseller)).toBe(0n);
     // A replay renews nothing twice.
-    const again = await h().call(cookie, 'POST', `/clients/${client.id}/renew-all`, undefined, key);
+    const again = await h().call(cookie, 'POST', `/clients/${client.id}/renew-all`, confirmed, key);
     expect(again.statusCode, again.body).toBe(200);
     expect(await h().balance(h().reseller)).toBe(0n);
+  });
+
+  it('«تمدید همه» pays exactly the confirmed quote: a changed price or service set pays nothing', async () => {
+    const cookie = await h().signedIn();
+    const client = await newClient(cookie);
+    const first = await h().delivered(h().reseller);
+    const second = await h().delivered(h().reseller);
+    for (const service of [first, second]) {
+      await h().call(cookie, 'PUT', `/services/${service.id}/client`, { clientId: client.id });
+    }
+    const quote = (await h().call(cookie, 'GET', `/clients/${client.id}/renew-all`)).json() as {
+      items: { serviceId: string; price: { amountMinor: string; currency: string } | null }[];
+    };
+    const confirmed = {
+      items: quote.items.map((item) => ({ serviceId: item.serviceId, price: item.price })),
+    };
+    await h().credit(h().reseller, 1_000_000n);
+    const paidOrders = async () =>
+      (
+        await h()
+          .db()
+          .execute(
+            sql`SELECT count(*)::int AS n FROM orders WHERE customer_id = ${h().reseller}::uuid AND state = 'PAID'`,
+          )
+      ).rows[0] as { n: number };
+    const before = await paidOrders();
+
+    // The price rose after the reseller saw the quote: refused, nothing charged.
+    await h()
+      .db()
+      .execute(
+        sql`UPDATE products SET price_amount = price_amount + 50000 WHERE id = ${first.productId}::uuid`,
+      );
+    const raised = await h().call(cookie, 'POST', `/clients/${client.id}/renew-all`, confirmed);
+    expect(raised.statusCode, raised.body).toBe(409);
+    expect(codeOf(raised)).toBe('commerce.reseller_terms_changed');
+    expect(await h().balance(h().reseller)).toBe(1_000_000n);
+    expect(await paidOrders()).toEqual(before);
+
+    // The confirmation names a different set of services: refused before anything is drafted.
+    const fresh = (await h().call(cookie, 'GET', `/clients/${client.id}/renew-all`)).json() as {
+      items: { serviceId: string; price: { amountMinor: string; currency: string } | null }[];
+    };
+    const partial = {
+      items: fresh.items
+        .slice(0, 1)
+        .map((item) => ({ serviceId: item.serviceId, price: item.price })),
+    };
+    const fewer = await h().call(cookie, 'POST', `/clients/${client.id}/renew-all`, partial);
+    expect(fewer.statusCode, fewer.body).toBe(409);
+    expect(codeOf(fewer)).toBe('commerce.reseller_terms_changed');
+    expect(await h().balance(h().reseller)).toBe(1_000_000n);
+
+    // The fresh quote, confirmed, is what is paid — and exactly that.
+    const total = fresh.items.reduce((sum, item) => sum + BigInt(item.price?.amountMinor ?? 0), 0n);
+    const ok = await h().call(cookie, 'POST', `/clients/${client.id}/renew-all`, {
+      items: fresh.items.map((item) => ({ serviceId: item.serviceId, price: item.price })),
+    });
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(await h().balance(h().reseller)).toBe(1_000_000n - total);
   });
 
   it('auto-renew: the D1 consent per service; an imported one needs the plan chosen at opt-in', async () => {
@@ -240,6 +304,14 @@ describe('the reseller web panel — clients book and auto-renew (PR-5)', () => 
         sql`SELECT source FROM service_auto_renew_preferences WHERE service_id = ${native.id}::uuid`,
       );
     expect(source.rows[0]).toEqual({ source: 'RESELLER_WEB' });
+    // The services list carries each row's switch, so the panel reads none per row.
+    const listed = (await h().call(cookie, 'GET', '/services?filter=ALL&page=0')).json() as {
+      items: { id: string; autoRenew: ResellerAutoRenew }[];
+    };
+    expect(listed.items.find((row) => row.id === native.id)?.autoRenew).toMatchObject({
+      enabled: true,
+      price: { amountMinor: '200000' },
+    });
 
     // An imported (Mirza) service: unavailable until a plan is chosen.
     const imported = await h().delivered(h().reseller);

@@ -266,7 +266,8 @@ export class ResellerWebPurchaseService {
   /**
    * «ارسال همهٔ لینک‌ها در تلگرام»: each created service through the existing delivery to the
    * reseller's OWN chat — the link card (none on a files-only panel), then the connection files
-   * by `sendAfterDelivery`, in the bot's order.
+   * by `sendAfterDelivery`, in the bot's order. A files-only service whose files did not arrive
+   * (stopped, rate-limited, unavailable, none sent) is a failure, never a send.
    */
   async sendLinks(
     context: ResellerWebContext,
@@ -286,7 +287,8 @@ export class ResellerWebPurchaseService {
         continue;
       }
       try {
-        if (!(await this.deps.delivery.isFilesOnly(context.scope, service))) {
+        const filesOnly = await this.deps.delivery.isFilesOnly(context.scope, service);
+        if (!filesOnly) {
           await this.deps.delivery.redeliver(
             context.scope,
             service,
@@ -295,11 +297,19 @@ export class ResellerWebPurchaseService {
             context.botInstanceId,
           );
         }
-        await this.deps.files.sendAfterDelivery(context.scope, context.actor, service, {
-          chatId: context.customer.telegramUserId,
-          botInstanceId: context.botInstanceId as BotInstanceId,
-        });
-        sent += 1;
+        const files = await this.deps.files.sendAfterDelivery(
+          context.scope,
+          context.actor,
+          service,
+          {
+            chatId: context.customer.telegramUserId,
+            botInstanceId: context.botInstanceId as BotInstanceId,
+          },
+        );
+        // On a files-only panel the files ARE the delivery: it counts only when at least one
+        // reached the chat. Beside a delivered link they are optional, as in the bot.
+        if (filesOnly && !(files.outcome === 'SENT' && files.sent > 0)) failed += 1;
+        else sent += 1;
       } catch (error) {
         if (!(error instanceof NexaError)) throw error;
         failed += 1;

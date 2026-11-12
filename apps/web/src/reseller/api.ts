@@ -41,13 +41,14 @@ import {
   resellerPricesResponseSchema,
   resellerSendResultSchema,
   resellerServiceDetailSchema,
-  resellerServicesResponseSchema,
+  resellerSellingServicesResponseSchema,
   resellerSessionsResponseSchema,
   resellerTotpEnrolResponseSchema,
   type MiniAppServiceAction,
   type MoneyWire,
   type ResellerClientWrite,
   type ResellerPurchaseQuoteRequest,
+  type ResellerRenewAllRequest,
   type ResellerPreferences,
   type ResellerServiceFilter,
 } from '@nexa/contracts';
@@ -154,7 +155,8 @@ export function fetchServices(input: {
     query.set('clientId', input.clientId);
   }
   if (input.q.trim() !== '') query.set('q', input.q.trim());
-  return call('GET', `${R.services}?${query.toString()}`, resellerServicesResponseSchema);
+  // PR-5: each row carries its auto-renew switch, so no row reads its own.
+  return call('GET', `${R.services}?${query.toString()}`, resellerSellingServicesResponseSchema);
 }
 export const fetchServiceDetail = (id: string) =>
   call('GET', path(R.service, { serviceId: id }), resellerServiceDetailSchema);
@@ -303,8 +305,12 @@ export const fetchClientServices = (id: string) =>
   call('GET', path(S.clientServices, { clientId: id }), resellerClientServicesResponseSchema);
 export const fetchRenewAllQuote = (id: string) =>
   call('GET', path(S.clientRenewAll, { clientId: id }), resellerRenewAllQuoteSchema);
-export const renewAll = (id: string, key: string) =>
-  call('POST', path(S.clientRenewAll, { clientId: id }), resellerRenewAllResultSchema, { key });
+/** Renew-all, confirmed: the quote shown (each service and its price) is what is paid. */
+export const renewAll = (id: string, body: ResellerRenewAllRequest, key: string) =>
+  call('POST', path(S.clientRenewAll, { clientId: id }), resellerRenewAllResultSchema, {
+    body,
+    key,
+  });
 export const assignServiceClient = (serviceId: string, clientId: string | null) =>
   call('PUT', path(S.serviceClient, { serviceId }), okParser, { body: { clientId } });
 export const fetchAutoRenew = (serviceId: string) =>

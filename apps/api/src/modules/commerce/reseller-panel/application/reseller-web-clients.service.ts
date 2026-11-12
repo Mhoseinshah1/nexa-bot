@@ -17,6 +17,8 @@ import {
   type ResellerClientWrite,
   type ResellerRenewAllQuote,
   type ResellerRenewAllResult,
+  type ResellerSellingServicesResponse,
+  type ResellerServicesResponse,
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
@@ -71,6 +73,14 @@ const stopped = (): NexaError =>
     'This installation has stopped accepting work.',
   );
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+/** «تمدید همه»: the confirmed quote no longer holds; nothing was paid. */
+const termsChanged = (reason: string, details: Record<string, unknown> = {}): NexaError =>
+  errors.conflict(
+    COMMERCE_ERROR_CODES.RESELLER_TERMS_CHANGED,
+    'The renewal no longer matches the confirmed quote.',
+    { reason, ...details },
+  );
 
 /** A decided refusal: a 4xx the server chose, never a transport failure or a 5xx. */
 function isRefusal(error: unknown): error is NexaError {
@@ -351,20 +361,28 @@ export class ResellerWebClientsService {
   }
 
   /**
-   * Each ACTIVE service of the client renewed ONCE: drafted under `(key, service)`, the total
-   * pre-checked under the wallet's lock, then each paid by the bot's wallet checkout. A replay
-   * re-reads the same drafts; a paid one is not paid again.
+   * Each ACTIVE service of the client renewed ONCE, at the price the reseller CONFIRMED: the
+   * quote is honoured, never re-priced. The services renewed must be exactly the confirmed
+   * ones, and each renewal drafted under `(key, service)` must cost exactly the confirmed
+   * price; anything else — a service added, gone or no longer renewable, a price up or down —
+   * refuses the whole renewal with `RESELLER_TERMS_CHANGED` before anything is paid. Then the
+   * total is pre-checked under the wallet's lock and each order paid by the bot's wallet
+   * checkout. A replay re-reads the same drafts (at the price they were drafted at); a paid one
+   * is not paid again.
    */
   async renewAll(
     context: ResellerWebContext,
     clientId: string,
+    confirmed: readonly { readonly serviceId: string; readonly price: Money }[],
     key: string,
   ): Promise<ResellerRenewAllResult> {
     const client = await this.ownClient(context, clientId);
     const customerId = context.customer.id as UserId;
+    const agreed = new Map(confirmed.map((item) => [item.serviceId, item.price]));
+    if (agreed.size !== confirmed.length) throw termsChanged('DUPLICATE_SERVICE');
     const active = (await this.servicesOf(context, client.id)).filter((s) => s.state === 'ACTIVE');
     const results = new Map<string, ResellerRenewAllResult['items'][number]>();
-    const drafted: { readonly service: ServiceRecord; readonly order: OrderRecord }[] = [];
+    const renewing: ServiceRecord[] = [];
     for (const service of active) {
       if (renewsFromPanelPlans(service)) {
         results.set(service.id, {
@@ -373,29 +391,34 @@ export class ResellerWebClientsService {
           reason: 'PLAN_REQUIRED',
           orderId: null,
         });
-        continue;
+      } else {
+        renewing.push(service);
       }
+    }
+    // The set first: nothing is drafted for a renewal the reseller did not agree to.
+    if (renewing.length !== agreed.size || renewing.some((service) => !agreed.has(service.id))) {
+      throw termsChanged('SERVICES_CHANGED');
+    }
+    const drafted: { readonly service: ServiceRecord; readonly order: OrderRecord }[] = [];
+    for (const service of renewing) {
+      let order: OrderRecord;
       try {
-        const { order } = await this.deps.commercial.draft(
-          context.scope,
-          context.actor,
-          customerId,
-          {
-            serviceId: service.id,
-            kind: 'RENEW',
-            idempotencyKey: `${key}:${service.id}:draft`,
-          },
-        );
-        drafted.push({ service, order });
+        ({ order } = await this.deps.commercial.draft(context.scope, context.actor, customerId, {
+          serviceId: service.id,
+          kind: 'RENEW',
+          idempotencyKey: `${key}:${service.id}:draft`,
+        }));
       } catch (error) {
         if (!isRefusal(error)) throw error;
-        results.set(service.id, {
-          serviceId: service.id,
-          status: 'FAILED',
-          reason: error.code,
-          orderId: null,
-        });
+        // Quoted with a price, refused now: what was agreed to can no longer be bought.
+        throw termsChanged('NOT_AVAILABLE', { serviceId: service.id, refusal: error.code });
       }
+      const price = agreed.get(service.id) as Money;
+      const line = order.totals.total;
+      if (line.currency !== price.currency || line.amountMinor !== price.amountMinor) {
+        throw termsChanged('PRICE_CHANGED', { serviceId: service.id });
+      }
+      drafted.push({ service, order });
     }
     const total = payableTotal(drafted.map((item) => item.order));
     await this.write(context, async (tx) => {
@@ -425,6 +448,26 @@ export class ResellerWebClientsService {
   }
 
   // --- auto-renew (Round 10 D1) --------------------------------------------------------------
+
+  /**
+   * «سرویس‌های من»'s page with each row's auto-renew switch, so the panel reads no switch per
+   * row. The rows are the services list's own; the records are read once for the page.
+   */
+  async withAutoRenew(
+    context: ResellerWebContext,
+    listed: ResellerServicesResponse,
+  ): Promise<ResellerSellingServicesResponse> {
+    if (listed.items.length === 0) return { ...listed, items: [] };
+    const records = new Map(
+      (await this.deps.services.ownList(context)).map((service) => [service.id, service]),
+    );
+    const items: ResellerSellingServicesResponse['items'] = [];
+    for (const row of listed.items) {
+      const service = records.get(row.id) ?? (await this.deps.services.own(context, row.id));
+      items.push({ ...row, autoRenew: await this.autoRenewOf(context, service) });
+    }
+    return { ...listed, items };
+  }
 
   async autoRenew(context: ResellerWebContext, serviceId: string): Promise<ResellerAutoRenew> {
     return this.autoRenewOf(context, await this.deps.services.own(context, serviceId));

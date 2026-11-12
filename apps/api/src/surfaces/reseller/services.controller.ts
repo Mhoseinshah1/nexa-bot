@@ -30,7 +30,7 @@ import {
   type QrPayloadKind,
   type ResellerConnectionFilesResponse,
   type ResellerServiceDetail,
-  type ResellerServicesResponse,
+  type ResellerSellingServicesResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import {
@@ -72,15 +72,17 @@ export class ResellerServicesController {
   async list(
     @Req() request: FastifyRequest,
     @Query() query: unknown,
-  ): Promise<ResellerServicesResponse> {
+  ): Promise<ResellerSellingServicesResponse> {
     const context = await resellerCall(this.container, request);
     const input = parseWith(resellerServicesQuerySchema, query);
-    return this.container.resellerWeb.services.list(context, {
+    const listed = await this.container.resellerWeb.services.list(context, {
       filter: input.filter,
       page: input.page,
       ...(input.q === undefined ? {} : { q: input.q }),
       ...(input.clientId === undefined ? {} : { clientId: input.clientId }),
     });
+    // PR-5: each row carries its auto-renew switch; the page reads none per row.
+    return this.container.resellerWeb.clients.withAutoRenew(context, listed);
   }
 
   @Get(RESELLER_PANEL_ROUTES.service)

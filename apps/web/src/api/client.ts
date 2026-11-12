@@ -6368,7 +6368,7 @@ function tierTargetPath(tierId: string): string {
   return RESELLER_SELLING_ADMIN_ROUTES.tierTarget.replace(':tierId', encodeURIComponent(tierId));
 }
 
-/** PR-5: a tier's «هدف سطح بعد» (`resellers.view`); null when none is set. */
+/** PR-5: a tier's next-tier target (`resellers.view`); null when none is set. */
 export function fetchResellerTierTarget(
   tierId: string,
 ): Promise<{ target: ResellerTierTarget | null }> {

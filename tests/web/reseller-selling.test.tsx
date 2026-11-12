@@ -5,6 +5,7 @@ import { PanelShell } from '../../apps/web/src/reseller/shell';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Route } from './harness';
 import {
+  autoRenewState,
   irt,
   me,
   problem,
@@ -201,6 +202,41 @@ describe('«خرید سرویس»', () => {
     expect(screen.queryByRole('tab')).toBeNull();
     fireEvent.click(radio('آلمان'));
     expect(await screen.findByRole('tab', { name: 'ماهانه' })).toBeInTheDocument();
+  });
+
+  it('pages the server chooser like categories and plans: a later server stays choosable', async () => {
+    const api = mount(
+      '/r/buy',
+      buyRoutes([
+        {
+          url: `${API}/catalogue/servers`,
+          body: {
+            enabled: true,
+            step: true,
+            items: [{ id: 's-1', name: 'آلمان' }],
+            page: 0,
+            hasMore: true,
+          },
+        },
+        {
+          url: `${API}/catalogue/servers?page=1`,
+          body: {
+            enabled: true,
+            step: true,
+            items: [{ id: 's-21', name: 'فرانسه' }],
+            page: 1,
+            hasMore: false,
+          },
+        },
+      ]),
+    );
+    expect(await screen.findByRole('radio', { name: 'آلمان' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'فرانسه' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.rp_buy_more') }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'فرانسه' }));
+    expect(await screen.findByRole('tab', { name: 'ماهانه' })).toBeInTheDocument();
+    expect(api.calls.some((call) => call.url.includes('serverId=s-21'))).toBe(true);
+    expect(screen.queryByRole('button', { name: t('web.rp_buy_more') })).toBeNull();
   });
 
   it('draws «سرویس دلخواه» only when the bot offers it', async () => {
@@ -471,17 +507,7 @@ describe('«خرید سرویس»', () => {
 
 // --- Clients book ---------------------------------------------------------------------------------
 
-const autoRenew = (overrides: Record<string, unknown> = {}) => ({
-  enabled: false,
-  offered: true,
-  price: irt('96000'),
-  leadHours: 24,
-  imported: false,
-  planId: null,
-  plans: [],
-  unavailable: null,
-  ...overrides,
-});
+const autoRenew = autoRenewState;
 
 const clientServices = {
   items: [
@@ -609,6 +635,46 @@ describe('«مشتری‌ها»', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /^تمدید 1 سرویس$/u }));
     expect(await within(dialog).findByText(t('web.rp_cl_renew_renewed'))).toBeInTheDocument();
     expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(1);
+    // The confirmation IS the quote shown: each renewed service at the price drawn, no other.
+    expect(api.calls.find((call) => call.method === 'POST')?.body).toEqual({
+      items: [{ serviceId: 'svc-a', price: irt('96000') }],
+    });
+  });
+
+  it('a renewal whose quote changed is refused, nothing paid, and the fresh quote is drawn', async () => {
+    const api = mount(
+      '/r/clients',
+      routes([
+        {
+          url: `${API}/clients/cl-1/renew-all`,
+          method: 'GET',
+          body: {
+            count: 1,
+            total: irt('96000'),
+            balance: irt('2450000'),
+            sufficient: true,
+            shortfall: null,
+            items: [{ serviceId: 'svc-a', username: 'rz_1', price: irt('96000'), skipped: null }],
+          },
+        },
+        {
+          ...problem(`${API}/clients/cl-1/renew-all`, 409, 'commerce.reseller_terms_changed'),
+          method: 'POST',
+        },
+      ]),
+    );
+    await screen.findByText('rz_1');
+    press(t('web.rp_cl_renew_all'));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(await within(dialog).findByRole('button', { name: /^تمدید 1 سرویس$/u }));
+    expect(
+      await within(dialog).findByText(t('web.error_reseller_terms_changed')),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        api.calls.filter((call) => call.method === 'GET' && call.url.endsWith('/renew-all')),
+      ).toHaveLength(2),
+    );
   });
 
   it('a short wallet replaces the renewal with «شارژ کیف پول»', async () => {
@@ -653,7 +719,6 @@ describe('«سرویس‌های من» with clients and auto-renew', () => {
         body: servicesPage([serviceRow({ client: 'رضا احمدی', clientId: 'cl-1' })]),
       },
       { url: `${API}/clients`, body: CLIENTS },
-      { url: `${API}/services/svc-1/auto-renew`, body: autoRenew() },
     ]);
     await screen.findByText('ar_1043');
     expect(screen.getByRole('columnheader', { name: t('web.rp_col_client') })).toBeInTheDocument();
@@ -681,7 +746,6 @@ describe('«سرویس‌های من» with clients and auto-renew', () => {
         body: servicesPage([serviceRow({ client: 'رضا احمدی', clientId: 'cl-1' })]),
       },
       { url: `${API}/clients`, body: CLIENTS },
-      { url: `${API}/services/svc-1/auto-renew`, body: autoRenew() },
     ]);
     fireEvent.click(await screen.findByRole('button', { name: t('web.rp_manage') }));
     fireEvent.click(await screen.findByRole('tab', { name: t('web.rp_tab_client') }));
@@ -700,7 +764,6 @@ describe('«سرویس‌های من» with clients and auto-renew', () => {
     const api = mount('/r/services', [
       { url: `${API}/services`, body: servicesPage([serviceRow()]) },
       { url: `${API}/clients`, body: { items: [] } },
-      { url: `${API}/services/svc-1/auto-renew`, body: autoRenew() },
       {
         url: `${API}/services/svc-1/auto-renew`,
         method: 'PUT',
@@ -718,6 +781,50 @@ describe('«سرویس‌های من» with clients and auto-renew', () => {
       expected: irt('96000'),
       planId: null,
     });
+    expect(await screen.findByText(t('web.rp_ar_on'))).toBeInTheDocument();
+  });
+
+  it('the services list carries each row’s switch: no row reads its own (no N+1)', async () => {
+    const api = mount('/r/services', [
+      {
+        url: `${API}/services`,
+        body: servicesPage([
+          serviceRow(),
+          serviceRow({ id: 'svc-2', username: 'ar_2000', autoRenew: autoRenew({ enabled: true }) }),
+        ]),
+      },
+      { url: `${API}/clients`, body: { items: [] } },
+    ]);
+    const second = await screen.findByRole('switch', {
+      name: t('web.rp_ar_label').replace('{user}', 'ar_2000'),
+    });
+    expect(second).toBeChecked();
+    expect(
+      screen.getByRole('switch', { name: t('web.rp_ar_label').replace('{user}', 'ar_1043') }),
+    ).not.toBeChecked();
+    expect(api.calls.some((call) => call.url.includes('/auto-renew'))).toBe(false);
+  });
+
+  it('a price that rose since it was shown leaves auto-renew off and says so, with the new price', async () => {
+    mount('/r/services', [
+      { url: `${API}/services`, body: servicesPage([serviceRow()]) },
+      { url: `${API}/clients`, body: { items: [] } },
+      {
+        url: `${API}/services/svc-1/auto-renew`,
+        method: 'PUT',
+        // The API recorded no consent: the price is now above the figure that was sent.
+        body: autoRenew({ enabled: false, offered: true, price: irt('120000') }),
+      },
+    ]);
+    const toggle = await screen.findByRole('switch', {
+      name: t('web.rp_ar_label').replace('{user}', 'ar_1043'),
+    });
+    fireEvent.click(toggle);
+    expect(
+      await screen.findByText(t('web.rp_ar_price_changed').replace('{price}', '120,000 تومان')),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(t('web.rp_ar_on'))).toBeNull();
+    expect(toggle).not.toBeChecked();
   });
 
   it('an imported service says to choose a plan, and switches on only with the chosen plan', async () => {
@@ -732,9 +839,8 @@ describe('«سرویس‌های من» with clients and auto-renew', () => {
       ],
     });
     const api = mount('/r/services', [
-      { url: `${API}/services`, body: servicesPage([serviceRow()]) },
+      { url: `${API}/services`, body: servicesPage([serviceRow({ autoRenew: imported })]) },
       { url: `${API}/clients`, body: { items: [] } },
-      { url: `${API}/services/svc-1/auto-renew`, body: imported },
       {
         url: `${API}/services/svc-1/auto-renew`,
         method: 'PUT',
@@ -759,21 +865,25 @@ describe('«سرویس‌های من» with clients and auto-renew', () => {
       expected: irt('50000'),
       planId: 'plan-2',
     });
+    expect(await screen.findByText(t('web.rp_ar_on'))).toBeInTheDocument();
   });
 
   it('an imported service with no plan to choose stays off, with the reason, and cannot be switched', async () => {
     mount('/r/services', [
-      { url: `${API}/services`, body: servicesPage([serviceRow()]) },
-      { url: `${API}/clients`, body: { items: [] } },
       {
-        url: `${API}/services/svc-1/auto-renew`,
-        body: autoRenew({
-          offered: false,
-          price: null,
-          imported: true,
-          unavailable: 'NOT_AVAILABLE',
-        }),
+        url: `${API}/services`,
+        body: servicesPage([
+          serviceRow({
+            autoRenew: autoRenew({
+              offered: false,
+              price: null,
+              imported: true,
+              unavailable: 'NOT_AVAILABLE',
+            }),
+          }),
+        ]),
       },
+      { url: `${API}/clients`, body: { items: [] } },
     ]);
     const toggle = await screen.findByRole('switch', {
       name: t('web.rp_ar_label').replace('{user}', 'ar_1043'),

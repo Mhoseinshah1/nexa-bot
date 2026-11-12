@@ -76,12 +76,27 @@ export function dashboard(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** PR-5: the auto-renew switch each services row carries (a plain service, offered). */
+export function autoRenewState(overrides: Record<string, unknown> = {}) {
+  return {
+    enabled: false,
+    offered: true,
+    price: irt('96000'),
+    leadHours: 24,
+    imported: false,
+    planId: null,
+    plans: [],
+    unavailable: null,
+    ...overrides,
+  };
+}
+
 export function servicesPage(
   items: readonly Record<string, unknown>[],
   overrides: Record<string, unknown> = {},
 ) {
   return {
-    items,
+    items: items.map((item) => ({ autoRenew: autoRenewState(), ...item })),
     counts: { ALL: 14, ACTIVE: 12, EXPIRING: 1, EXPIRED: 1, SUSPENDED: 0, OTHER: 0 },
     page: 0,
     pages: 1,

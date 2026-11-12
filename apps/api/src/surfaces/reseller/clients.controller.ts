@@ -18,6 +18,7 @@ import {
   resellerAutoRenewWriteSchema,
   resellerClientWriteSchema,
   resellerClientsQuerySchema,
+  resellerRenewAllRequestSchema,
   resellerServiceClientWriteSchema,
   type ResellerAutoRenew,
   type ResellerClient,
@@ -103,11 +104,14 @@ export class ResellerClientsController {
   async renewAll(
     @Req() request: FastifyRequest,
     @Param('clientId') clientId: string,
+    @Body() body: unknown,
   ): Promise<ResellerRenewAllResult> {
     const context = await resellerCall(this.container, request);
+    const input = parseWith(resellerRenewAllRequestSchema, body);
     return this.container.resellerWeb.clients.renewAll(
       context,
       clientId,
+      input.items.map((item) => ({ serviceId: item.serviceId, price: fromWire(item.price) })),
       resellerKey(request, context, 'renew-all'),
     );
   }

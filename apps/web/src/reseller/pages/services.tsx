@@ -153,7 +153,11 @@ export function ServicesPage({ search = '' }: { search?: string }) {
                         <StateBadge value={row.state} />
                       </td>
                       <td>
-                        <AutoRenewSwitch serviceId={row.id} username={row.username} />
+                        <AutoRenewSwitch
+                          serviceId={row.id}
+                          username={row.username}
+                          initial={row.autoRenew}
+                        />
                       </td>
                       <td className="rp-end">
                         <Button size="sm" onClick={() => setOpenId(row.id)}>

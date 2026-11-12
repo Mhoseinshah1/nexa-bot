@@ -104,6 +104,7 @@ describe('the resellers page’s trial settings card', () => {
       value: 3,
       expectedVersion: null,
     });
+    expect(await screen.findByText(t('web.rp_trial_settings_saved'))).toBeInTheDocument();
   });
 
   it('chooses the trial panel from the panels list and can clear it', async () => {
@@ -142,9 +143,9 @@ describe('the resellers page’s trial settings card', () => {
 });
 
 describe('«قابلیت‌ها»', () => {
-  it('labels reseller_tier_progress «پیشرفت تا سطح بعد در پنل نماینده»', () => {
+  it("labels reseller_tier_progress «پیشرفت سطح», the owner's wording", () => {
     const entry = FEATURE_PRESENTATION.reseller_tier_progress;
     expect(entry).toBeDefined();
-    expect(t(entry!.title)).toBe('پیشرفت تا سطح بعد در پنل نماینده');
+    expect(t(entry!.title)).toBe('پیشرفت سطح');
   });
 });

@@ -5,6 +5,7 @@ import {
   type MoneyWire,
   type ResellerCustomOffer,
   type ResellerPlan,
+  type ResellerPlansResponse,
   type ResellerPurchaseBatch,
   type ResellerPurchaseQuote,
   type ResellerPurchaseQuoteRequest,
@@ -93,9 +94,9 @@ function planSize(plan: ResellerPlan): string {
 }
 
 /** A paged catalogue read that keeps asking while the API says there is more. */
-function usePaged<T>(
+function usePaged<P extends { items: unknown[]; hasMore: boolean }>(
   key: readonly unknown[],
-  load: (page: number) => Promise<{ items: T[]; hasMore: boolean }>,
+  load: (page: number) => Promise<P>,
   enabled: boolean,
 ) {
   const query = useInfiniteQuery({
@@ -107,7 +108,8 @@ function usePaged<T>(
   });
   return {
     query,
-    items: query.data?.pages.flatMap((page) => page.items) ?? [],
+    first: query.data?.pages[0],
+    items: (query.data?.pages.flatMap((page) => page.items) ?? []) as P['items'],
   };
 }
 
@@ -123,10 +125,12 @@ export function BuyPage({ search = '' }: { search?: string }) {
   const client = useQueryClient();
   const toast = useToast();
   const me = useQuery({ queryKey: ME_KEY, queryFn: fetchMe, staleTime: 30_000 });
-  const servers = useQuery({
-    queryKey: ['reseller', 'catalogue', 'servers'],
-    queryFn: () => fetchCatalogueServers(),
-  });
+  // Servers page like categories and plans: a server past the first page must stay choosable.
+  const servers = usePaged(
+    ['reseller', 'catalogue', 'servers'],
+    (page) => fetchCatalogueServers(page),
+    true,
+  );
   const clients = useQuery({ queryKey: [...CLIENTS_KEY, 'active'], queryFn: () => fetchClients() });
   const custom = useQuery({
     queryKey: ['reseller', 'catalogue', 'custom'],
@@ -149,8 +153,8 @@ export function BuyPage({ search = '' }: { search?: string }) {
   const quoteKey = useSubmissionKey();
   const confirmKey = useSubmissionKey();
 
-  const needsServer = servers.data?.step === true;
-  const serverReady = servers.data !== undefined && (!needsServer || serverId !== null);
+  const needsServer = servers.first?.step === true;
+  const serverReady = servers.first !== undefined && (!needsServer || serverId !== null);
   const categories = usePaged(
     ['reseller', 'catalogue', 'categories', serverId],
     (page) => fetchCatalogueCategories(serverId, page),
@@ -308,7 +312,7 @@ export function BuyPage({ search = '' }: { search?: string }) {
   const total = unit === null || activeCategory === CUSTOM_TAB ? null : times(unit, quantity);
   const saving = plan === null || activeCategory === CUSTOM_TAB ? null : savingOf(plan, quantity);
   const after = total === null ? null : afterOf(me.data?.balance, total);
-  const serverName = servers.data?.items.find((one) => one.id === serverId)?.name;
+  const serverName = servers.items.find((one) => one.id === serverId)?.name;
   const categoryState = queryState(
     categories.query,
     categories.items.length === 0 && !customOffered,
@@ -320,7 +324,7 @@ export function BuyPage({ search = '' }: { search?: string }) {
         {needsServer && (
           <RpCard title={t('web.rp_buy_server_title')} hint={t('web.rp_buy_server_hint')}>
             <div className="rp-chips" role="radiogroup" aria-label={t('web.rp_buy_server_title')}>
-              {servers.data?.items.map((one) => (
+              {servers.items.map((one) => (
                 <button
                   key={one.id}
                   type="button"
@@ -337,10 +341,19 @@ export function BuyPage({ search = '' }: { search?: string }) {
                 </button>
               ))}
             </div>
+            {servers.query.hasNextPage && (
+              <Button
+                size="sm"
+                disabled={servers.query.isFetchingNextPage}
+                onClick={() => void servers.query.fetchNextPage()}
+              >
+                {t('web.rp_buy_more')}
+              </Button>
+            )}
           </RpCard>
         )}
         <RpCard title={t('web.rp_buy_plan_title')} hint={t('web.rp_buy_plan_hint')}>
-          <StateSwitch query={servers}>
+          <StateSwitch query={servers.query}>
             {!serverReady ? (
               <p className="muted">{t('web.rp_buy_server_first')}</p>
             ) : categoryState === 'loading' ? (
@@ -559,7 +572,7 @@ function PlanGrid({
   selected,
   onPick,
 }: {
-  paged: ReturnType<typeof usePaged<ResellerPlan>>;
+  paged: ReturnType<typeof usePaged<ResellerPlansResponse>>;
   selected: string | null;
   onPick: (plan: ResellerPlan) => void;
 }) {

@@ -6,6 +6,7 @@ import {
   RESELLER_CLIENT_NOTE_MAX,
   type ResellerClient,
   type ResellerRenewAllQuote,
+  type ResellerRenewAllRequest,
   type ResellerRenewAllResult,
 } from '@nexa/contracts';
 import { ApiError } from '../../api/client';
@@ -428,7 +429,9 @@ function RenewAllDialog({ client, onClose }: { client: ResellerClient; onClose: 
   const [refused, setRefused] = useState<string | null>(null);
 
   const run = useMutation({
-    mutationFn: () => renewAll(client.id, submission.current(client.id)),
+    // The quote on screen is the confirmation: each service at the price shown, nothing else.
+    mutationFn: (confirmed: ResellerRenewAllRequest) =>
+      renewAll(client.id, confirmed, submission.current({ clientId: client.id, confirmed })),
     onSuccess: (done) => {
       submission.settle();
       setResult(done);
@@ -438,7 +441,12 @@ function RenewAllDialog({ client, onClose }: { client: ResellerClient; onClose: 
     },
     onError: (error) => {
       submission.settleOn(error);
-      if (error instanceof ApiError && error.code === 'commerce.wallet_insufficient_funds') {
+      if (
+        error instanceof ApiError &&
+        (error.code === 'commerce.wallet_insufficient_funds' ||
+          error.code === 'commerce.reseller_terms_changed')
+      ) {
+        // Nothing was paid: the fresh quote is drawn for the reseller to confirm again.
         setRefused(errorText(error));
         void quote.refetch();
         return;
@@ -470,7 +478,17 @@ function RenewAllDialog({ client, onClose }: { client: ResellerClient; onClose: 
               </Button>
             )}
             {data !== undefined && renewable.length > 0 && data.sufficient && (
-              <Button variant="primary" disabled={run.isPending} onClick={() => run.mutate()}>
+              <Button
+                variant="primary"
+                disabled={run.isPending || quote.isFetching}
+                onClick={() =>
+                  run.mutate({
+                    items: renewable.flatMap((item) =>
+                      item.price === null ? [] : [{ serviceId: item.serviceId, price: item.price }],
+                    ),
+                  })
+                }
+              >
                 {t('web.rp_cl_renew_confirm').replace('{n}', formatNumber(renewable.length))}
               </Button>
             )}

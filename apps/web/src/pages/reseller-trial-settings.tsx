@@ -146,6 +146,11 @@ export function ResellerTrialSettingsCard({
           {!maySettingsEdit && (
             <p className="muted small">{t('web.rp_trial_settings_read_only')}</p>
           )}
+          {save.isSuccess && (
+            <Banner tone="ok" role="status">
+              {t('web.rp_trial_settings_saved')}
+            </Banner>
+          )}
           {save.error !== null && (
             <Banner tone="danger">
               {errorText(save.error)}

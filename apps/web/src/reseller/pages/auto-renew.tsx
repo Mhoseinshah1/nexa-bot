@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { MoneyWire, ResellerAutoRenew } from '@nexa/contracts';
 import { errorText } from '../../error-text';
@@ -37,9 +37,10 @@ export function autoRenewReason(state: ResellerAutoRenew): string | null {
  * One service's auto-renew switch (Round 10 D1): the consent, the price ceiling at opt-in and
  * the sweep are the API's; this draws the state it answers and sends the figure it showed.
  *
- * `initial` is the state a list already holds (the clients book returns it with each service);
- * without it the switch reads its own. An imported service is switched on through a plan
- * picker — the reseller chooses the plan to renew into, and that plan's price is the ceiling.
+ * `initial` is the state a list already holds (the services list and the clients book return
+ * it with each service); without it the switch reads its own. An imported service is switched
+ * on through a plan picker — the reseller chooses the plan to renew into, and that plan's
+ * price is the ceiling.
  */
 export function AutoRenewSwitch({
   serviceId,
@@ -52,12 +53,17 @@ export function AutoRenewSwitch({
 }) {
   const toast = useToast();
   const client = useQueryClient();
+  // A list that carries the state is the source: the switch reads nothing of its own then
+  // (a page of rows is not a request per row). Only a switch drawn alone fetches.
   const query = useQuery({
     queryKey: autoRenewKey(serviceId),
     queryFn: () => fetchAutoRenew(serviceId),
-    ...(initial === undefined ? {} : { initialData: initial, staleTime: 30_000 }),
+    enabled: initial === undefined,
   });
-  const state = query.data;
+  // The answer to this switch's own save, until the list it came from is read again.
+  const [saved, setSaved] = useState<ResellerAutoRenew | null>(null);
+  useEffect(() => setSaved(null), [initial]);
+  const state = saved ?? initial ?? query.data;
   const [picking, setPicking] = useState(false);
   const [planId, setPlanId] = useState('');
   const submission = useSubmissionKey();
@@ -67,10 +73,27 @@ export function AutoRenewSwitch({
       saveAutoRenew(serviceId, input, submission.current({ serviceId, ...input })),
     onSuccess: (next, input) => {
       submission.settle();
+      setSaved(next);
       client.setQueryData(autoRenewKey(serviceId), next);
-      setPicking(false);
-      toast({ tone: 'ok', message: t(input.enabled ? 'web.rp_ar_on' : 'web.rp_ar_off') });
       for (const key of AFTER_CHANGE) void client.invalidateQueries({ queryKey: [...key] });
+      if (next.enabled !== input.enabled) {
+        // The price rose above the figure shown: nothing was consented to. The answer carries
+        // the new figure (the plan picker stays open on it) for the reseller to agree to again.
+        const fresh =
+          input.planId === null
+            ? next.price
+            : (next.plans.find((plan) => plan.planId === input.planId)?.price ?? null);
+        toast({
+          tone: 'warn',
+          message: t('web.rp_ar_price_changed').replace(
+            '{price}',
+            fresh === null ? '—' : formatMoneyText(fresh),
+          ),
+        });
+        return;
+      }
+      setPicking(false);
+      toast({ tone: 'ok', message: t(next.enabled ? 'web.rp_ar_on' : 'web.rp_ar_off') });
     },
     onError: (error) => {
       submission.settleOn(error);
@@ -137,6 +160,9 @@ export function AutoRenewSwitch({
       >
         <div className="rp-stack">
           <Banner tone="info">{t('web.rp_ar_pick_hint')}</Banner>
+          <span className="muted small">
+            {t('web.rp_ar_note').replace('{n}', String(state.leadHours))}
+          </span>
           <Field label={t('web.rp_ar_plan')} htmlFor={`rp-ar-plan-${serviceId}`}>
             <Select
               id={`rp-ar-plan-${serviceId}`}
