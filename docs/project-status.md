@@ -373,6 +373,18 @@ answer costs an attempt and, at the limit, a cooldown — never a block, never a
 status change. It is the first check of the bot's gate chain and a mini-app
 gate (`CAPTCHA`). Open points: OQ-D5-05..07.
 
+The question's kind is the setting `captcha.kind` (owner decision, reseller-panel
+phase): `MATH` (default, exactly the old sum), `IMAGE_NUMBER` (a server-drawn PNG,
+about 320x120, of a 4-digit number the customer TYPES; pure-JS rasteriser and
+`pngjs`, never on disk), `EMOJI` (named in the text, four of twenty fixed
+emoji), `WORD_NUMBER` (10-99 in Persian words, four Latin-digit buttons) or
+`RANDOM` (one of the four per new question). A PENDING question keeps the kind it
+was asked with. The picture's answer lives only in the row's `answer_text`; callback
+data is `hc:<question>:<0-3|r>` and never holds it. «🔄 تصویر جدید» is a new question,
+not a spent attempt, three per question. Attempts, expiry, cooldown, who is asked and
+the gate order are unchanged. The mini app answers `IMAGE_NUMBER` itself (image
+endpoint, digit input, refresh); the other kinds are answered in the chat.
+
 Four reseller rules, each a way to sell below cost or on credit nobody granted:
 
 - A reseller is a customer with an **ACTIVE** reseller row; SUSPENDED is an

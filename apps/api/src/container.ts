@@ -379,6 +379,7 @@ import {
 } from './modules/control/media/application/qr-template.service.js';
 import { ReferralSignupGiftService } from './modules/commerce/referrals/application/referral-signup-gift.service.js';
 import { StartCaptchaService } from './modules/commerce/customers/application/start-captcha.service.js';
+import { PNG_CAPTCHA_IMAGE_RENDERER } from './modules/commerce/customers/infrastructure/captcha-image.js';
 import { DrizzleStartCaptchaRepository } from './modules/commerce/customers/infrastructure/drizzle-start-captcha.repository.js';
 import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
 import { TenantReferralDayCalendar } from './modules/commerce/referrals/infrastructure/tenant-referral-day.calendar.js';
@@ -3005,6 +3006,7 @@ export function createContainer(
     idempotency,
     clock,
     ids,
+    images: PNG_CAPTCHA_IMAGE_RENDERER,
   });
   const customerService = new CustomerService({
     newCustomers: newCustomerGate,

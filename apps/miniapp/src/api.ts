@@ -86,6 +86,7 @@ export class MiniAppApi {
   async blob(route: string, params: Record<string, string>): Promise<string> {
     const response = await fetch(`${MINIAPP_API_PREFIX}${miniAppPath(route, params)}`, {
       headers: this.headers(false),
+      cache: 'no-store',
     });
     if (!response.ok) await this.read(response, { parse: () => null });
     return URL.createObjectURL(await response.blob());

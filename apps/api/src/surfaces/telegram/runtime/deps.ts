@@ -328,7 +328,10 @@ export interface BotRuntimeDeps {
    * chain. Optional for the reason `membership` is; absent, nobody is ever asked — which is
    * also what every customer sees while `start_captcha` is off.
    */
-  readonly captcha?: Pick<StartCaptchaService, 'present' | 'answer'>;
+  readonly captcha?: Pick<
+    StartCaptchaService,
+    'present' | 'answer' | 'answerText' | 'refresh' | 'renderImage'
+  >;
   /**
    * The terms and rules (program §6). Optional for the reason `membership` is; absent, no
    * customer is asked to accept anything — which is also what a tenant with enforcement off,

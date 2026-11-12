@@ -140,6 +140,7 @@ import {
 import { referralSignupGiftShareSchema } from './customer-ux.js';
 import {
   START_CAPTCHA_COOLDOWN_SECONDS_MAX,
+  START_CAPTCHA_KINDS,
   START_CAPTCHA_COOLDOWN_SECONDS_MIN,
   START_CAPTCHA_EXPIRY_SECONDS_MAX,
   START_CAPTCHA_EXPIRY_SECONDS_MIN,
@@ -2357,6 +2358,22 @@ export const SETTINGS = [
       .min(START_CAPTCHA_EXPIRY_SECONDS_MIN)
       .max(START_CAPTCHA_EXPIRY_SECONDS_MAX),
     defaultValue: 300,
+    configures: 'start_captcha',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'captcha.kind',
+    description:
+      'Which question a new customer is asked: MATH (a sum of two digits, the original), ' +
+      'IMAGE_NUMBER (a picture with a 4-digit number to type), EMOJI (tap the named fruit or ' +
+      'animal), WORD_NUMBER (a number written in words, four digit buttons) or RANDOM (one ' +
+      'of those four for each new question). A question already pending keeps the kind it ' +
+      'was asked with.',
+    schema: z.enum(START_CAPTCHA_KINDS),
+    defaultValue: 'MATH',
     configures: 'start_captcha',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
