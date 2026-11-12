@@ -31,7 +31,11 @@ import { noticeDay, renewalDue, shortWalletAction } from '../domain/fee-period.j
 import { chargePeriod } from './fee-charge.js';
 import type { ResellerBotRepository, ResellerBotRequestRecord } from './ports.js';
 
-/** Subscriptions one pass looks at; a bigger backlog waits for the next pass. */
+/**
+ * Subscriptions read per page. A pass pages through the WHOLE due set (keyset on
+ * `(paidThrough, id)`): a subscription it leaves as it was — short and waiting, or a bot it may
+ * not touch — must not hold the page newer due ones are on.
+ */
 export const RESELLER_BOT_RENEWAL_BATCH = 100;
 
 /** The audit actions a stop and a resume are recorded under (the timeline reads them). */
@@ -93,30 +97,48 @@ export class ResellerBotFeeService {
 
   async runOnce(installation: TenantContext): Promise<RenewalReport> {
     const now = this.deps.clock.now();
-    const ids = await this.deps.repository.dueIds(
-      installation,
-      now,
-      this.deps.batch ?? RESELLER_BOT_RENEWAL_BATCH,
-    );
+    const batch = this.deps.batch ?? RESELLER_BOT_RENEWAL_BATCH;
     const report = { charged: 0, noticed: 0, stopped: 0, resumed: 0 };
-    if (ids.length === 0) return report;
+    let page = await this.deps.repository.dueAfter(installation, now, batch, null);
+    if (page.length === 0) return report;
     const graceDays = await this.graceDays(installation);
     const actor = systemJobActor('reseller-bot-renewal', this.deps.ids.uuid() as CorrelationId);
-    for (const id of ids) {
-      const outcome = await this.deps.uow.run(installation, async (tx) => {
-        if (!(await this.deps.scopeActivity.scopeIsActive(installation, tx))) return 'SKIPPED';
-        const request = await this.deps.repository.find(installation, id, tx, true);
-        if (request === null) return 'SKIPPED';
-        return this.renew(installation, actor, request, graceDays, this.deps.clock.now(), tx, {
-          kind: 'JOB',
-        });
-      });
-      if (outcome === 'CHARGED' || outcome === 'CHARGED_RESUMED') report.charged += 1;
-      if (outcome === 'CHARGED_RESUMED') report.resumed += 1;
-      if (outcome === 'NOTICED') report.noticed += 1;
-      if (outcome === 'STOPPED') report.stopped += 1;
+    // Each id once per pass, whatever a page boundary does.
+    const seen = new Set<string>();
+    while (page.length > 0) {
+      const fresh = page.filter((due) => !seen.has(due.id));
+      if (fresh.length === 0) break;
+      for (const due of fresh) {
+        seen.add(due.id);
+        await this.renewOne(installation, actor, due.id, graceDays, report);
+      }
+      if (page.length < batch) break;
+      const last = page[page.length - 1];
+      if (last === undefined) break;
+      page = await this.deps.repository.dueAfter(installation, now, batch, last);
     }
     return report;
+  }
+
+  private async renewOne(
+    installation: TenantContext,
+    actor: ActorContext,
+    id: string,
+    graceDays: number,
+    report: { -readonly [K in keyof RenewalReport]: number },
+  ): Promise<void> {
+    const outcome = await this.deps.uow.run(installation, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(installation, tx))) return 'SKIPPED';
+      const request = await this.deps.repository.find(installation, id, tx, true);
+      if (request === null) return 'SKIPPED';
+      return this.renew(installation, actor, request, graceDays, this.deps.clock.now(), tx, {
+        kind: 'JOB',
+      });
+    });
+    if (outcome === 'CHARGED' || outcome === 'CHARGED_RESUMED') report.charged += 1;
+    if (outcome === 'CHARGED_RESUMED') report.resumed += 1;
+    if (outcome === 'NOTICED') report.noticed += 1;
+    if (outcome === 'STOPPED') report.stopped += 1;
   }
 
   /**

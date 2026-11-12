@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, or } from 'drizzle-orm';
 import type { CurrencyCode, TenantContext, UserId } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
@@ -15,6 +15,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   ResellerBotChargeRecord,
+  ResellerBotDueCursor,
   ResellerBotLifecycleMark,
   ResellerBotNoticeRecord,
   ResellerBotRepository,
@@ -378,9 +379,14 @@ export class DrizzleResellerBotRepository implements ResellerBotRepository {
     return row === undefined ? null : { request: toRecord(row.request), expiresAt: row.expiresAt };
   }
 
-  async dueIds(scope: TenantContext, now: Date, limit: number): Promise<string[]> {
+  async dueAfter(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    after: ResellerBotDueCursor | null,
+  ): Promise<ResellerBotDueCursor[]> {
     const rows = await this.db
-      .select({ id: resellerBotRequests.id })
+      .select({ id: resellerBotRequests.id, paidThrough: resellerBotRequests.paidThrough })
       .from(resellerBotRequests)
       .where(
         and(
@@ -388,11 +394,22 @@ export class DrizzleResellerBotRepository implements ResellerBotRepository {
           eq(resellerBotRequests.status, 'APPROVED'),
           isNotNull(resellerBotRequests.hostedTenantId),
           lte(resellerBotRequests.paidThrough, now),
+          after === null
+            ? undefined
+            : or(
+                gt(resellerBotRequests.paidThrough, after.paidThrough),
+                and(
+                  eq(resellerBotRequests.paidThrough, after.paidThrough),
+                  gt(resellerBotRequests.id, after.id),
+                ),
+              ),
         ),
       )
       .orderBy(asc(resellerBotRequests.paidThrough), asc(resellerBotRequests.id))
       .limit(limit);
-    return rows.map((row) => row.id);
+    return rows.flatMap((row) =>
+      row.paidThrough === null ? [] : [{ id: row.id, paidThrough: row.paidThrough }],
+    );
   }
 
   async insertCharge(

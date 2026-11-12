@@ -31,6 +31,10 @@ import type {
   HostedTlsProbe,
 } from '../../apps/api/src/modules/platform/hosting/application/activation-ports';
 import type { DnsObservation } from '../../apps/api/src/modules/platform/hosting/domain/hosted-domain';
+import {
+  ResellerBotFeeService,
+  type ResellerBotFeeDeps,
+} from '../../apps/api/src/modules/commerce/reseller-bots/application/reseller-bot-fee.service';
 import { CustomerNotificationService } from '../../apps/api/src/modules/commerce/messaging/application/customer-notification.service';
 import type { CustomerMessage } from '../../apps/api/src/modules/commerce/messaging/application/ports';
 import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
@@ -588,6 +592,39 @@ describe('a reseller’s dedicated bot (reseller-phase PR-6)', () => {
       expect(await feeDebits(requestId)).toHaveLength(2);
       expect(await codeOf(pay())).toBe(CODES.NOTHING_DUE);
       expect(await balanceOf(reseller)).toBe(0n);
+    });
+
+    it('a full page of subscriptions it cannot settle does not starve a newer due one', async () => {
+      // Codex on #470: the pass read ONE page of the oldest due rows, and a row it leaves as it
+      // was (short and waiting, or a bot the owner suspended) keeps its paid-through; a page of
+      // those came back on every pass. The page is shrunk to 1 so one stuck row fills it.
+      const fees = new ResellerBotFeeService({
+        ...(Reflect.get(api.container.resellerBotFees, 'deps') as ResellerBotFeeDeps),
+        batch: 1,
+      });
+      const stuck = await subscribed();
+      await api.container.hosting.suspend(tenantA, ownerActor, panel.token, stuck.hostedTenantId, {
+        idempotencyKey: key(),
+        proof: { code: code() },
+      });
+      await credit(otherReseller, FEE);
+      const newer = await submit(otherReseller, {
+        botToken: telegram.createBot({ id: 7_200_000_002, username: 'reseller_two_bot' }),
+      });
+      await approve(newer.id);
+      await createLinked(newer.id, 'reseller-two');
+      const stuckDue = (await requestRow(stuck.requestId))?.paidThrough?.getTime() ?? 0;
+      expect((await requestRow(newer.id))?.paidThrough?.getTime()).toBeGreaterThan(stuckDue);
+
+      offsetMs += MONTH_MS;
+      await credit(otherReseller, FEE);
+      expect((await fees.runOnce(tenantA)).charged).toBe(1);
+      expect(await feeDebits(newer.id)).toHaveLength(2);
+      expect(await feeDebits(stuck.requestId)).toHaveLength(1);
+      expect(await balanceOf(otherReseller)).toBe(0n);
+      // The next pass pages over the stuck row again and charges nothing twice.
+      expect((await fees.runOnce(tenantA)).charged).toBe(0);
+      expect(await feeDebits(newer.id)).toHaveLength(2);
     });
 
     it('never bills an unlinked approval, or a bot the owner suspended', async () => {

@@ -69,6 +69,12 @@ export interface ResellerBotLifecycleMark {
  * row the INSTALLATION tenant's. Every state change is a conditional UPDATE naming its `from`
  * state, answering false when it matched nothing.
  */
+/** A due subscription's position in the renewal job's `(paidThrough, id)` order. */
+export interface ResellerBotDueCursor {
+  readonly id: string;
+  readonly paidThrough: Date;
+}
+
 export interface ResellerBotRepository {
   insert(
     scope: TenantContext,
@@ -163,8 +169,19 @@ export interface ResellerBotRepository {
     linkId: string,
     now: Date,
   ): Promise<{ readonly request: ResellerBotRequestRecord; readonly expiresAt: Date } | null>;
-  /** The approved, linked subscriptions whose paid window has ended, oldest first. */
-  dueIds(scope: TenantContext, now: Date, limit: number): Promise<string[]>;
+  /**
+   * The approved, linked subscriptions whose paid window has ended, oldest first, ordered by
+   * `(paidThrough, id)` and starting strictly after `after` when given. The renewal job pages
+   * through the WHOLE due set with it: a subscription it cannot settle this pass (short and
+   * waiting, or a bot it may not touch) keeps its `paidThrough`, and without the cursor a full
+   * first page of those would starve every newer one.
+   */
+  dueAfter(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    after: ResellerBotDueCursor | null,
+  ): Promise<ResellerBotDueCursor[]>;
   insertCharge(
     scope: TenantContext,
     row: Omit<ResellerBotChargeRecord, 'createdAt'> & { readonly now: Date },
