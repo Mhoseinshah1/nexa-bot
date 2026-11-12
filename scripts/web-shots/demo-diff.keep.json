@@ -376,5 +376,47 @@
     "side": "ONLY-APP",
     "match": "دلخواه",
     "reason": "Dashboard range chips were built after the demo (owner KEEP)"
+  },
+  {
+    "route": "/recovery",
+    "field": "heads",
+    "side": "ONLY-DEMO",
+    "match": "نتیجهٔ انتقال هر فاکتور قدیمی",
+    "reason": "The per-invoice result card of the old Mirza import was removed on purpose (owner ruling, 2026-11-11); the page keeps no per-invoice search"
+  },
+  {
+    "route": "/recovery",
+    "field": "labels",
+    "side": "ONLY-DEMO",
+    "match": "جستجو با شمارهٔ فاکتور قدیمی",
+    "reason": "The per-invoice result card of the old Mirza import was removed on purpose (owner ruling, 2026-11-11); the page keeps no per-invoice search"
+  },
+  {
+    "route": "/recovery",
+    "field": "empty",
+    "side": "ONLY-DEMO",
+    "match": "فاکتوری با این مشخصات در گزارش انتقال نیست.",
+    "reason": "The per-invoice result card of the old Mirza import was removed on purpose (owner ruling, 2026-11-11); the page keeps no per-invoice search"
+  },
+  {
+    "route": "/reports",
+    "field": "buttons",
+    "side": "ONLY-DEMO",
+    "match": "/^(امروز|دیروز|# روز اخیر|این ماه|ماه قبل|امسال|بازهٔ دلخواه)$/",
+    "reason": "Period chips live in the «فیلترها» panel, not on the page (owner ruling, 2026-11-11, as done on /referrals)"
+  },
+  {
+    "route": "/referrals",
+    "field": "buttons",
+    "side": "ONLY-DEMO",
+    "match": "/^(امروز|دیروز|# روز اخیر|این ماه|ماه قبل|امسال|بازهٔ دلخواه)$/",
+    "reason": "Period chips live in the «فیلترها» panel, not on the page (owner ruling, 2026-11-11, as done on /referrals)"
+  },
+  {
+    "route": "/reports",
+    "field": "buttons",
+    "side": "ONLY-APP",
+    "match": "فیلترها",
+    "reason": "Period chips live in the «فیلترها» panel, not on the page (owner ruling, 2026-11-11, as done on /referrals)"
   }
 ]

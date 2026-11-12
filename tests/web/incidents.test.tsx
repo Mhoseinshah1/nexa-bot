@@ -406,8 +406,13 @@ describe('the incident detail', () => {
   it('offers no action on a resolved incident', async () => {
     stubApi([detail({ status: 'RESOLVED', resolvedAt: '2026-10-03T11:00:00.000Z' })]);
     renderPage(<IncidentDetailPage id={ID} denied={false} mayManage mayNotify />);
-    // The status chip under the title and the summary's status line.
-    expect(await screen.findAllByText(t('web.inc_status_resolved'))).toHaveLength(2);
+    // Owner ruling (demo parity): status, severity and kind are rows of the summary box and
+    // there are no chips under the title, so the status appears exactly once.
+    expect(await screen.findAllByText(t('web.inc_status_resolved'))).toHaveLength(1);
+    expect(document.querySelector('.incident-chips')).toBeNull();
+    const summary = screen.getByText(t('web.inc_summary')).closest('section') as HTMLElement;
+    expect(within(summary).getByText(t('web.inc_col_severity'))).toBeInTheDocument();
+    expect(within(summary).getByText(t('web.inc_col_kind'))).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: t('web.inc_edit') })).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.inc_notice') })).toBeNull();
   });

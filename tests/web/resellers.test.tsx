@@ -268,13 +268,13 @@ describe('the reseller list', () => {
     renderList();
     const table = await screen.findByRole('table', { name: 'فهرست نمایندگان' });
     const first = within(table).getByText('Reza Reseller').closest('tr') as HTMLElement;
-    // The name opens the standing (a button); the customer page is its own link in the row.
-    expect(within(first).getByText('Reza Reseller').closest('a')).toBeNull();
-    expect(
-      within(first)
-        .getByRole('link', { name: t('web.reseller_customer_page') })
-        .getAttribute('href'),
-    ).toBe(`/users/${CUSTOMER_ID}`);
+    // The row opens the standing; the name is plain text, and the customer page is an entry of
+    // the row's «بیشتر» menu (owner ruling), not a button or link beside the actions.
+    expect(within(first).getByText('Reza Reseller').closest('a, button')).toBeNull();
+    expect(within(first).queryByRole('link')).toBeNull();
+    fireEvent.click(within(first).getByRole('button', { name: t('web.page_more_menu') }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: t('web.reseller_customer_page') }));
+    expect(window.location.pathname).toBe(`/users/${CUSTOMER_ID}`);
     expect(first.textContent).toContain('5551234567');
     expect(first.textContent).toContain('Gold');
     expect(first.textContent).toContain('فعال');
@@ -642,7 +642,7 @@ describe('the standing and register surfaces (W2/W3)', () => {
     expect(document.getElementById('reseller-standing')).toBeNull();
     expect(document.getElementById('reseller-register-customer')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reza Reseller' }));
+    fireEvent.click(screen.getByText('Reza Reseller'));
     const drawer = screen.getByRole('dialog');
     expect(drawer).toContainElement(document.getElementById('reseller-standing'));
     fireEvent.keyDown(document, { key: 'Escape' });
@@ -652,6 +652,36 @@ describe('the standing and register surfaces (W2/W3)', () => {
     expect(screen.getByRole('dialog', { name: t('web.reseller_register_title') })).toContainElement(
       document.getElementById('reseller-register-customer'),
     );
+  });
+
+  it('draws the row menu in the page body, outside the clipping table cell, and a pick does not open the row', async () => {
+    stubApi(listRoutes());
+    renderList();
+    const row = (await screen.findByText('Reza Reseller')).closest('tr') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: t('web.page_more_menu') }));
+    const menu = await screen.findByRole('menu', { name: t('web.page_more_menu') });
+    // Revert the `portal` prop and the menu is a descendant of the cell (clipped by
+    // `.tbl-wrap.stack .tbl td { overflow: hidden }` under 820px).
+    expect(row.contains(menu)).toBe(false);
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.classList.contains('portal')).toBe(true);
+    fireEvent.click(within(menu).getByRole('menuitem', { name: t('web.reseller_customer_page') }));
+    expect(window.location.pathname).toBe(`/users/${CUSTOMER_ID}`);
+    expect(document.getElementById('reseller-standing')).toBeNull();
+  });
+
+  it('opens the standing from a click on the row and from Enter on the focused row, not from its menu', async () => {
+    stubApi(listRoutes());
+    renderList();
+    const row = (await screen.findByText('Reza Reseller')).closest('tr') as HTMLElement;
+    expect(row.tabIndex).toBe(0);
+    // A click on the row's «بیشتر» trigger belongs to the menu: no drawer.
+    fireEvent.click(within(row).getByRole('button', { name: t('web.page_more_menu') }));
+    expect(document.getElementById('reseller-standing')).toBeNull();
+    fireEvent.click(within(row).getByRole('button', { name: t('web.page_more_menu') }));
+    // Enter on the row opens it.
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(document.getElementById('reseller-standing')).not.toBeNull();
   });
 
   it('opens the register dialog for a customer handed over by link', async () => {
@@ -779,7 +809,7 @@ describe('unsaved edits on the reseller forms', () => {
     await openResellerTab('danger');
     fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
 
-    fireEvent.click(within(row('Sara')).getByRole('button', { name: 'Sara' }));
+    fireEvent.click(within(row('Sara')).getByText('Sara'));
     const asked = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
     fireEvent.click(within(asked).getByRole('button', { name: t('web.unsaved_stay') }));
     expect((screen.getByLabelText('وضعیت') as HTMLSelectElement).value).toBe('SUSPENDED');
@@ -1051,7 +1081,7 @@ describe('the tiers page', () => {
     const table = await screen.findByRole('table', { name: 'سطوح' });
     expect(screen.queryByLabelText('سقف اعتبار (واحد خرد)')).toBeNull();
     // Redesign: the tier's name is the way in — the same edit drawer as the row's «ویرایش».
-    fireEvent.click(within(table).getByRole('button', { name: 'Gold' }));
+    fireEvent.click(within(table).getByText('Gold'));
     expect(await screen.findByDisplayValue('Gold')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: t('web.close') }));
     fireEvent.click(within(table).getByRole('button', { name: 'ویرایش' }));

@@ -211,7 +211,7 @@ describe('the reseller plans page', () => {
   it('draws each tier’s allowed Products, panels and monthly minimum in words', async () => {
     stubApi(routes());
     render();
-    const cell = await screen.findByText('Gold', { selector: 'button.link' });
+    const cell = await screen.findByText('Gold', { selector: 'strong' });
     const tableRow = cell.closest('tr') ?? document.body;
     const text = tableRow.textContent ?? '';
     expect(text).toContain('محصول: همه');
@@ -219,6 +219,21 @@ describe('the reseller plans page', () => {
     // No raw enum reaches the operator.
     expect(text).not.toContain('PERCENTAGE_DISCOUNT');
     expect(text).not.toContain('PRODUCT');
+  });
+
+  it('opens the tier’s products drawer from the row (click or Enter); the name is not a button', async () => {
+    stubApi(routes());
+    render();
+    const cell = await screen.findByText('Gold', { selector: 'strong' });
+    expect(cell.closest('button, a')).toBeNull();
+    const row = cell.closest('tr') as HTMLElement;
+    expect(row.tabIndex).toBe(0);
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(cell);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
   it('draws the server’s progress figures, and says nothing happens below the minimum', async () => {
@@ -256,7 +271,7 @@ describe('the reseller plans page', () => {
   it('asks for no progress without orders.view, and says why', async () => {
     const api = stubApi(routes());
     render({ orders: false });
-    await screen.findByText('Gold', { selector: 'button.link' });
+    await screen.findByText('Gold', { selector: 'strong' });
     expect(gets(api, '/reseller-minimums')).toHaveLength(0);
     expect(screen.getByText(/orders\.view/u)).toBeInTheDocument();
   });

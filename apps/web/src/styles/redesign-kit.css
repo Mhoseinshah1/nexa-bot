@@ -244,7 +244,8 @@
   margin: 0;
   font-size: 16px;
 }
-.settings-section-head button {
+.settings-section-head button,
+.settings-section-head .settings-section-plain {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -257,6 +258,9 @@
   font-weight: 700;
   text-align: start;
   cursor: pointer;
+}
+.settings-section-head .settings-section-plain {
+  cursor: default;
 }
 .settings-changed {
   min-inline-size: 20px;
