@@ -25,10 +25,10 @@ const STATE_TONE: Readonly<Record<ServiceState, Tone>> = {
   UNRECONCILED: 'warn',
 };
 
-export function StateBadge({ state }: { state: ServiceState }) {
+export function StateBadge({ value }: { value: ServiceState }) {
   return (
-    <Badge tone={STATE_TONE[state]} dot>
-      {t(STATE_LABEL[state])}
+    <Badge tone={STATE_TONE[value]} dot>
+      {t(STATE_LABEL[value])}
     </Badge>
   );
 }

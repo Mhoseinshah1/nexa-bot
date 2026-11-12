@@ -18,6 +18,7 @@ import {
   useToast,
 } from '../../ui/kit';
 import { Drawer } from '../../ui/overlays';
+import { queryState } from '../../view-state';
 import {
   fetchConnectionFiles,
   fetchOffer,
@@ -37,6 +38,25 @@ import { SCREEN_PATHS, goTo } from '../route';
 import { Expiry, StateBadge, Usage } from '../view';
 
 export type DrawerTab = 'link' | 'renew' | 'traffic';
+
+/**
+ * How often an open drawer re-reads its service while a change is in flight (`working`: a
+ * rotation, a suspension or a move the worker has not finished), so the link and the QR it
+ * shows are the ones the panel holds once the change lands.
+ */
+export const SERVICE_WORKING_POLL_MS = 2000;
+
+/**
+ * A short name of the link a QR encodes, for the image address: a rotated link is a new
+ * address, so the browser fetches the new picture instead of showing the one it holds.
+ */
+function linkVersion(link: string): string {
+  let hash = 5381;
+  for (let index = 0; index < link.length; index += 1) {
+    hash = ((hash << 5) + hash + link.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
+}
 
 /** Every query a purchase or a note touches, so the lists behind the drawer stay true. */
 function useRefreshPanelData() {
@@ -61,6 +81,10 @@ export function ServiceDrawer({
   const query = useQuery({
     queryKey: ['reseller', 'service', serviceId],
     queryFn: () => fetchServiceDetail(serviceId),
+    // Codex on #469: «لینک تازه» only schedules the rotation; the drawer keeps reading until
+    // the worker has finished it, then draws the new link and QR.
+    refetchInterval: (current) =>
+      current.state.data?.working === true ? SERVICE_WORKING_POLL_MS : false,
   });
   const detail = query.data;
   const [tab, setTab] = useState<DrawerTab>(initialTab);
@@ -83,7 +107,7 @@ export function ServiceDrawer({
       }
     >
       {detail === undefined ? (
-        query.isError ? (
+        queryState(query) === 'error' ? (
           <Empty variant="error" title={errorText(query.error)} />
         ) : (
           <Skeleton rows={4} cols={2} />
@@ -95,7 +119,7 @@ export function ServiceDrawer({
               {[detail.product, detail.location].filter((part) => part !== null).join(' • ')}
             </span>
             <div className="rp-line">
-              <StateBadge state={detail.state} />
+              <StateBadge value={detail.state} />
               <Expiry row={detail} />
             </div>
             <Usage row={detail} />
@@ -130,6 +154,7 @@ export function ServiceDrawer({
 
 function ConnectionTab({ detail }: { detail: ResellerServiceDetail }) {
   const toast = useToast();
+  const client = useQueryClient();
   const [qrKind, setQrKind] = useState<string | null>(null);
   // One key per press of «لینک تازه»; a retry of the SAME press reuses it, a new press starts over.
   const rotateKey = useRef(newIdempotencyKey());
@@ -143,6 +168,9 @@ function ConnectionTab({ detail }: { detail: ResellerServiceDetail }) {
     onSuccess: () => {
       rotateKey.current = newIdempotencyKey();
       toast({ tone: 'ok', message: t('web.rp_rotated') });
+      // The rotation is now in flight: re-read the service, which answers `working` and so
+      // keeps the drawer reading until the new link exists.
+      void client.invalidateQueries({ queryKey: ['reseller', 'service', detail.id] });
     },
     onError: (error) => toast({ tone: 'danger', message: errorText(error), error }),
   });
@@ -172,7 +200,7 @@ function ConnectionTab({ detail }: { detail: ResellerServiceDetail }) {
               )}
               <img
                 className="rp-qr"
-                src={serviceQrUrl(detail.id, kind)}
+                src={serviceQrUrl(detail.id, kind, linkVersion(detail.subscriptionUrl))}
                 alt={t('web.rp_qr_alt')}
                 width={180}
                 height={180}
@@ -195,12 +223,21 @@ function ConnectionTab({ detail }: { detail: ResellerServiceDetail }) {
               {t('web.rp_send_connection')}
             </Button>
             {detail.canRotateLink && (
-              <Button size="sm" disabled={rotate.isPending} onClick={() => rotate.mutate()}>
+              <Button
+                size="sm"
+                disabled={rotate.isPending || detail.working}
+                onClick={() => rotate.mutate()}
+              >
                 {t('web.rp_rotate')}
               </Button>
             )}
           </div>
           {detail.canRotateLink && <p className="muted small">{t('web.rp_rotate_hint')}</p>}
+          {detail.working && (
+            <Banner tone="info" role="status">
+              {t('web.rp_rotating')}
+            </Banner>
+          )}
         </>
       )}
       {detail.filesOnly && <Banner tone="info">{t('web.rp_files_only')}</Banner>}
@@ -228,6 +265,9 @@ export function FilesBlock({ serviceId }: { serviceId: string }) {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
+  // The panel's own refusal (`files_unavailable`, not found) is the sentence shown, so the
+  // state is asked of `queryState` and the words are the error's.
+  const filesState = queryState(files, files.data?.files.length === 0);
   const send = useMutation({
     mutationFn: () => sendConnectionFiles(serviceId),
     onSuccess: () => toast({ tone: 'ok', message: t('web.rp_sent_files') }),
@@ -239,11 +279,9 @@ export function FilesBlock({ serviceId }: { serviceId: string }) {
         <b>{t('web.rp_files_title')}</b>
         <span className="muted small">{t('web.rp_files_hint')}</span>
       </div>
-      {files.isPending && <p className="muted small">{t('web.rp_files_loading')}</p>}
-      {files.isError && <Banner tone="danger">{errorText(files.error)}</Banner>}
-      {files.data !== undefined && files.data.files.length === 0 && (
-        <p className="muted small">{t('web.rp_files_empty')}</p>
-      )}
+      {filesState === 'loading' && <p className="muted small">{t('web.rp_files_loading')}</p>}
+      {filesState === 'error' && <Banner tone="danger">{errorText(files.error)}</Banner>}
+      {filesState === 'empty' && <p className="muted small">{t('web.rp_files_empty')}</p>}
       {files.data?.files.map((file) => (
         <div key={file.index} className="rp-file">
           <span dir="ltr" className="rp-mono rp-file-name">
@@ -334,6 +372,7 @@ function OfferPicker({ serviceId, kind }: { serviceId: string; kind: MiniAppServ
   }, [picked]);
 
   const options = offer.data?.options ?? [];
+  const offerState = queryState(offer, options.length === 0);
   const chosen = picked === null ? undefined : options[picked];
   const pay = useMutation({
     mutationFn: async () => {
@@ -367,11 +406,9 @@ function OfferPicker({ serviceId, kind }: { serviceId: string; kind: MiniAppServ
   return (
     <section className="rp-stack" aria-label={heading === null ? undefined : t(heading)}>
       {heading !== null && <h3>{t(heading)}</h3>}
-      {offer.isPending && <Skeleton rows={2} cols={2} />}
-      {offer.isError && <Banner tone="danger">{errorText(offer.error)}</Banner>}
-      {offer.data !== undefined && options.length === 0 && (
-        <p className="muted small">{t('web.rp_offer_none')}</p>
-      )}
+      {offerState === 'loading' && <Skeleton rows={2} cols={2} />}
+      {offerState === 'error' && <Banner tone="danger">{errorText(offer.error)}</Banner>}
+      {offerState === 'empty' && <p className="muted small">{t('web.rp_offer_none')}</p>}
       {options.length > 0 && (
         <div className="rp-options" role="radiogroup" aria-label={heading ?? t('web.rp_tab_renew')}>
           {options.map((option, index) => (

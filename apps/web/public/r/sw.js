@@ -21,7 +21,7 @@ function isShellRequest(request, origin) {
   var url;
   try {
     url = new URL(request.url);
-  } catch (error) {
+  } catch {
     return false;
   }
   if (url.origin !== origin) return false;

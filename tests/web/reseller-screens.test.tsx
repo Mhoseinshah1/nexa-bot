@@ -144,6 +144,130 @@ describe('«کیف پول»', () => {
     expect(screen.queryByRole('radiogroup')).toBeNull();
   });
 
+  it('a gateway attempt whose invoice is still being made is read again until its link exists', async () => {
+    const attempt = (ready: boolean) => ({
+      paymentId: 'pay-gw',
+      orderId: null,
+      provider: 'TETRAPAY',
+      invoiceReady: ready,
+      payUrl: ready ? 'https://pay.example.test/i/77' : null,
+      paysInChat: false,
+      inAppInvoice: false,
+      expiresAt: null,
+    });
+    const status = (ready: boolean) => ({
+      paymentId: 'pay-gw',
+      method: 'GATEWAY',
+      state: 'PENDING',
+      transferPending: false,
+      receiptFiled: false,
+      gateway: attempt(ready),
+      order: null,
+    });
+    const routes: Route[] = [
+      ...base,
+      {
+        url: `${API}/wallet/topup/quote`,
+        method: 'POST',
+        body: {
+          outcome: 'ROUTES',
+          amount: irt('500000'),
+          routes: [
+            {
+              provider: 'TETRAPAY',
+              kind: 'GATEWAY',
+              name: 'درگاه',
+              paysInChat: false,
+              giftPercent: 0,
+            },
+          ],
+        },
+      },
+      {
+        url: `${API}/wallet/topup`,
+        method: 'POST',
+        body: { kind: 'GATEWAY', attempt: attempt(false) },
+      },
+      { url: `${API}/payments/pay-gw`, method: 'GET', body: status(false) },
+    ];
+    const api = mount('/r/wallet', routes);
+    fireEvent.click(await screen.findByRole('button', { name: '500,000 تومان' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.rp_topup_continue') }));
+    fireEvent.click(await screen.findByRole('radio', { name: /درگاه/u }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.rp_topup_pay') }));
+    expect(await screen.findByText(t('web.rp_topup_gateway_waiting'))).toBeInTheDocument();
+    // The worker makes the invoice; the screen reads the payment again and draws its link.
+    await waitFor(() =>
+      expect(api.calls.some((c) => c.method === 'GET' && c.url.endsWith('/payments/pay-gw'))).toBe(
+        true,
+      ),
+    );
+    stubApi(
+      signedIn(
+        routes.map((r) => (r.url.endsWith('/payments/pay-gw') ? { ...r, body: status(true) } : r)),
+      ),
+    );
+    const link = await screen.findByRole(
+      'link',
+      { name: t('web.rp_topup_gateway_open') },
+      { timeout: 6000 },
+    );
+    expect(link).toHaveAttribute('href', 'https://pay.example.test/i/77');
+    expect(screen.queryByText(t('web.rp_topup_gateway_waiting'))).toBeNull();
+  }, 15_000);
+
+  it('a gateway attempt whose payment closed without a link says so and stops asking', async () => {
+    const pending = {
+      paymentId: 'pay-gx',
+      orderId: null,
+      provider: 'TETRAPAY',
+      invoiceReady: false,
+      payUrl: null,
+      paysInChat: false,
+      inAppInvoice: false,
+      expiresAt: null,
+    };
+    mount('/r/wallet', [
+      ...base,
+      {
+        url: `${API}/wallet/topup/quote`,
+        method: 'POST',
+        body: {
+          outcome: 'ROUTES',
+          amount: irt('500000'),
+          routes: [
+            {
+              provider: 'TETRAPAY',
+              kind: 'GATEWAY',
+              name: 'درگاه',
+              paysInChat: false,
+              giftPercent: 0,
+            },
+          ],
+        },
+      },
+      { url: `${API}/wallet/topup`, method: 'POST', body: { kind: 'GATEWAY', attempt: pending } },
+      {
+        url: `${API}/payments/pay-gx`,
+        method: 'GET',
+        body: {
+          paymentId: 'pay-gx',
+          method: 'GATEWAY',
+          state: 'FAILED',
+          transferPending: false,
+          receiptFiled: false,
+          gateway: pending,
+          order: null,
+        },
+      },
+    ]);
+    fireEvent.click(await screen.findByRole('button', { name: '500,000 تومان' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.rp_topup_continue') }));
+    fireEvent.click(await screen.findByRole('radio', { name: /درگاه/u }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.rp_topup_pay') }));
+    expect(await screen.findByText(t('web.rp_topup_gateway_closed'))).toBeInTheDocument();
+  });
+
   it('card-to-card: shows where to send exactly how much, then the receipt step', async () => {
     const api = mount('/r/wallet', [
       ...base,
@@ -201,7 +325,9 @@ describe('«کیف پول»', () => {
     expect(screen.getByText('REF-123')).toBeInTheDocument();
     expect(screen.getByText('علی رضایی')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: t('web.rp_card_sent') }));
-    expect(await screen.findByLabelText(t('web.rp_card_receipt_label'))).toBeInTheDocument();
+    const picker = await screen.findByLabelText(t('web.rp_card_receipt_label'));
+    // The receipt is chosen through the Persian FilePicker, never the browser's bare control.
+    expect(picker.closest('.file-picker')).not.toBeNull();
     expect(
       screen.getByText(t('web.rp_card_receipt_window').replace('{n}', '30')),
     ).toBeInTheDocument();

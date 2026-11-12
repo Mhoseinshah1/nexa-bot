@@ -1,12 +1,9 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  fetchResellerWebPanel,
-  forceLogoutResellerWebPanel,
-  newIdempotencyKey,
-} from '../api/client';
+import { fetchResellerWebPanel, forceLogoutResellerWebPanel } from '../api/client';
 import { errorText } from '../error-text';
 import { formatNumber, formatTimestamp } from '../format';
+import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Badge, Banner, Button, Card, Field, KV, StateSwitch, Textarea, useToast } from '../ui/kit';
@@ -32,15 +29,19 @@ export function ResellerWebPanelCard({
   const query = useQuery({ queryKey: key, queryFn: () => fetchResellerWebPanel(customerId) });
   const [asking, setAsking] = useState(false);
   const [reason, setReason] = useState('');
-  const [attempt] = useState(() => ({ current: newIdempotencyKey() }));
+  // One key per logical attempt: a retry of the same reason re-sends it; an answer retires it.
+  const submission = useSubmissionKey();
   const force = useMutation({
-    mutationFn: () =>
-      forceLogoutResellerWebPanel(customerId, {
-        reason: reason.trim(),
-        idempotencyKey: attempt.current,
-      }),
+    mutationFn: () => {
+      const written = reason.trim();
+      return forceLogoutResellerWebPanel(customerId, {
+        reason: written,
+        idempotencyKey: submission.current({ customerId, reason: written }),
+      });
+    },
+    onError: (error) => submission.settleOn(error),
     onSuccess: ({ ended }) => {
-      attempt.current = newIdempotencyKey();
+      submission.settle();
       setAsking(false);
       setReason('');
       toast({

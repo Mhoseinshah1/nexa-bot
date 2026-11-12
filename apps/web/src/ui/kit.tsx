@@ -220,6 +220,29 @@ export function Duration({ ms }: { ms: number }) {
 /* ------------------------------------------------------------------ copy --- */
 
 /**
+ * Copies a text and reports the outcome as a toast — `CopyButton`'s action, for a page whose
+ * copy control is a labelled button (the reseller price list). `copied` replaces the success
+ * sentence. The failure is the browser's refusal, never an API error, so its toast has none.
+ */
+export function useCopyText(): (value: string, copied?: string) => void {
+  const toast = useToast();
+  return useCallback(
+    (value: string, copied: string = t('web.copied')) => {
+      const clipboard = navigator.clipboard as Clipboard | undefined;
+      if (clipboard === undefined) {
+        toast({ tone: 'danger', message: t('web.copy_failed') });
+        return;
+      }
+      clipboard.writeText(value).then(
+        () => toast({ tone: 'ok', message: copied }),
+        () => toast({ tone: 'danger', message: t('web.copy_failed') }),
+      );
+    },
+    [toast],
+  );
+}
+
+/**
  * The copy action on its own: copies `value`, reports the outcome as a toast.
  *
  * `navigator.clipboard` is absent on an insecure origin and can be refused by
@@ -228,18 +251,8 @@ export function Duration({ ms }: { ms: number }) {
  * avoid.
  */
 export function CopyButton({ value, label }: { value: string; label?: string }) {
-  const toast = useToast();
-  const copy = useCallback(() => {
-    const clipboard = navigator.clipboard as Clipboard | undefined;
-    if (clipboard === undefined) {
-      toast({ tone: 'danger', message: t('web.copy_failed') });
-      return;
-    }
-    clipboard.writeText(value).then(
-      () => toast({ tone: 'ok', message: t('web.copied') }),
-      () => toast({ tone: 'danger', message: t('web.copy_failed') }),
-    );
-  }, [toast, value]);
+  const copyText = useCopyText();
+  const copy = useCallback(() => copyText(value), [copyText, value]);
 
   return (
     <button
