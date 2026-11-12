@@ -720,6 +720,18 @@ looks like a backup and is not:
   replicas is normal on every rolling update. A stale lease is taken over by
   FAILING the abandoned run, never by adopting it: its files belong to a process
   that may still be writing them.
+- **No copies on the server (owner, 2026-11-11, «بدون نگهداری»).** The switch
+  «نگه داشتن نسخه روی سرور» (`backup.archive_keep_on_host`, default on, installation tenant
+  only, audited) — the old «There is no zero: "keep nothing" is not a policy» changed on
+  purpose. Off: a run's archive and working directory are removed right after its Telegram
+  delivery is CONFIRMED (SUCCEEDED, verified, every part with a message id), with one
+  `backup.archive_removed_after_delivery` operations line naming the run. NEVER for a delivery
+  that FAILED, is partial or UNKNOWN, a run in flight, an unverified run, an archive an
+  unfinished recovery names (nor a `PRE_RESTORE` run right after it finishes), or a hosted
+  bot's archive; those keep `keepCount` / `keepDays`. "The newest verified archive is never
+  pruned" is lifted only in this mode and only for confirmed-delivered archives. Switching back
+  restores nothing. A restore then uploads the file from the group (`docs/backup.md` § Keeping
+  no copy on the server).
 
 ## Cleanup after a Mirza import (v0.9.7)
 

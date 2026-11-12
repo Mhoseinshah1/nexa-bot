@@ -1186,6 +1186,13 @@ form.set-row > * + * {
   margin-top: 0;
   font-size: var(--fs-xs);
 }
+/*
+ * «نگه داشتن نسخه روی سرور» off: the archive-retention numbers on the schedule card are drawn
+ * greyed, with the one line under them that says why.
+ */
+.backup-retention.is-off {
+  opacity: 0.55;
+}
 /* The restore card's part titles («بارگذاری آرشیو», the earlier restores) read as headings. */
 .card.recovery-operations h3.card-subtitle {
   color: var(--fg);
