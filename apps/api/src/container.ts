@@ -796,6 +796,11 @@ import { ResellerAdminService } from './modules/commerce/resellers/application/r
 import { ResellerMinimumService } from './modules/commerce/resellers/application/reseller-minimum.service.js';
 import { ResellerExpiryService } from './modules/commerce/resellers/application/reseller-expiry.service.js';
 import { TenantMonthlyPeriods } from './infrastructure/time/monthly-period.js';
+import { ResellerWebAccessService } from './modules/commerce/reseller-panel/application/reseller-web-access.service.js';
+import { ResellerWebServicesService } from './modules/commerce/reseller-panel/application/reseller-web-services.service.js';
+import { ResellerWebDashboardService } from './modules/commerce/reseller-panel/application/reseller-web-dashboard.service.js';
+import { ResellerWebLoginRateLimiter } from './modules/commerce/reseller-panel/application/reseller-web-rate-limiter.js';
+import { DrizzleResellerWebRepository } from './modules/commerce/reseller-panel/infrastructure/drizzle-reseller-web.repository.js';
 import { DrizzleAuditHistoryReader } from './modules/platform/audit/infrastructure/drizzle-audit-history.reader.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
 // Round N, C1: campaigns.
@@ -1703,6 +1708,17 @@ export interface Container {
    * and the bot's runtime hold, so there is one instance of each.
    */
   readonly miniApp: MiniAppSurfaceDeps;
+  /**
+   * PR-4: the reseller web panel — its access and sessions, the reseller's own services and
+   * connection files, and its dashboard and price list. Every other service the panel reaches
+   * is the one the bot and the mini app hold.
+   */
+  readonly resellerWeb: {
+    readonly access: ResellerWebAccessService;
+    readonly services: ResellerWebServicesService;
+    readonly dashboard: ResellerWebDashboardService;
+    readonly loginLimiter: ResellerWebLoginRateLimiter;
+  };
   /** WP20: counts every Telegram interaction, including the `/ping` the runtime never sees. */
   readonly antiSpam: Pick<AntiSpamService, 'observe'>;
 
@@ -9547,6 +9563,82 @@ export function createContainer(
     payments: paymentService,
     screens: customerScreens,
   });
+  // PR-4: the reseller web panel.
+  const resellerWebRepository = new DrizzleResellerWebRepository(database.db);
+  const hostedActivationReader = new DrizzleHostedActivationRepository(database.db);
+  const resellerWebAccess = new ResellerWebAccessService({
+    repository: resellerWebRepository,
+    resellers: resellerService,
+    customers: customerRepository,
+    features: featureFlagResolver,
+    guard,
+    audit,
+    uow,
+    scopeActivity: tenants,
+    notifier: customerNotifier,
+    cipher,
+    qr: new PngQrCodeEncoder(),
+    clock,
+    ids,
+    /*
+     * The tenant's own web address: the installation's admin origin, or a hosted tenant's
+     * domain once its DNS and TLS are verified. Only `https://` — the link travels as a
+     * Telegram URL button, which carries nothing else.
+     */
+    webOrigin: async (scope) => {
+      const installation = installationTenantId;
+      if (installation === null) return null;
+      if (scope.tenantId === installation) {
+        const origin = config.WEB_ADMIN_ORIGINS[0] ?? null;
+        return origin !== null && origin.startsWith('https://') ? origin : null;
+      }
+      const activation = await hostedActivationReader.find(
+        { tenantId: installation, botInstanceId: null },
+        scope.tenantId,
+      );
+      if (
+        activation === null ||
+        activation.domain === null ||
+        activation.dnsVerifiedAt === null ||
+        activation.tlsVerifiedAt === null
+      ) {
+        return null;
+      }
+      return `https://${activation.domain}`;
+    },
+  });
+  const resellerWebServices = new ResellerWebServicesService({
+    provisioning: provisioningService,
+    delivery: deliveryService,
+    files: subscriptionFileService,
+    commercial: commercialActionService,
+    titleOf: async (scope, orderId) =>
+      (await orderRepository.findById(scope, orderId as never))?.line.title ?? null,
+    repository: resellerWebRepository,
+    audit,
+    uow,
+    clock,
+    ids,
+  });
+  const resellerWeb = {
+    access: resellerWebAccess,
+    loginLimiter: new ResellerWebLoginRateLimiter({
+      // The mini app's store under its own subject key: no second Redis connection to close.
+      counter: miniAppCounter,
+      clock,
+      ids,
+    }),
+    services: resellerWebServices,
+    dashboard: new ResellerWebDashboardService({
+      wallet: walletService,
+      services: resellerWebServices,
+      products: productService,
+      sales: new DrizzleReportingRepository(database.db),
+      periods: new TenantMonthlyPeriods(),
+      presentation: new CachedTenantPresentationReader(tenants, clock),
+      clock,
+    }),
+  };
   const miniApp: MiniAppSurfaceDeps = {
     sessions: miniAppSessions,
     rateLimit: new MiniAppRateLimiter({ counter: miniAppCounter, clock, ids }),
@@ -9837,7 +9929,10 @@ export function createContainer(
     }),
     antiSpam,
     miniApp,
+    resellerWeb,
     botRuntime: new BotRuntime({
+      // PR-4: «ورود به پنل وب».
+      resellerWeb: resellerWebAccess,
       // R5C-1 item 4: «نمایش زمان اضافه داخل تمدید هم» (flag `addon_time_in_renew_menu`).
       renewMenuShowsTime: (scope) =>
         featureFlagResolver.isEnabled(scope, 'addon_time_in_renew_menu'),

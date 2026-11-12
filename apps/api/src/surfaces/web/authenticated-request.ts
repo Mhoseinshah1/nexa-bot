@@ -314,6 +314,19 @@ export function anonymousActor(
   };
 }
 
+/**
+ * PR-4: the first of `names` this request's cookies carry — the reseller panel's own cookie is
+ * read through this, with its own names, so neither surface can ever read the other's.
+ */
+export function readCookie(request: FastifyRequest, names: readonly string[]): string | null {
+  const cookies = parseCookies(request.headers.cookie);
+  for (const name of names) {
+    const token = cookies.get(name);
+    if (token !== undefined) return token;
+  }
+  return null;
+}
+
 function parseCookies(header: string | undefined): Map<string, string> {
   const cookies = new Map<string, string>();
   if (!header) return cookies;

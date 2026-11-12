@@ -1,5 +1,6 @@
 // Reading the intent out of a Telegram update.
 // Moved verbatim out of bot-runtime.ts, which still re-exports every name it exported.
+import { RESELLER_WEB_CALLBACK } from '@nexa/contracts';
 import {
   ADMIN_MENU_COMMAND,
   BROADCAST_ACTIONS,
@@ -778,6 +779,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      */
     if (data === TOPUP_MENU_CALLBACK_PREFIX) {
       return { intent: 'TOPUP_MENU', targetId: null, callbackQueryId: id };
+    }
+    if (data === RESELLER_WEB_CALLBACK) {
+      return { intent: 'RESELLER_WEB_LINK', targetId: null, callbackQueryId: id };
     }
     if (data === GIFT_CARD_CALLBACK_DATA) {
       return { intent: 'GIFT_CARD', targetId: null, callbackQueryId: id };

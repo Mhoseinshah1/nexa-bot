@@ -855,6 +855,29 @@ export class DrizzleReportingRepository implements ReportingRepository {
     return out;
   }
 
+  /**
+   * PR-4 (reseller panel «فروش این ماه»): ONE reseller's sales in a window — count and sum per
+   * currency — by the same `resellerSalesStatement` the report and the monthly minimum use.
+   */
+  async resellerSalesOf(
+    scope: TenantContext,
+    customerId: string,
+    window: Window,
+  ): Promise<
+    readonly { readonly currency: CurrencyCode; readonly count: number; readonly amount: bigint }[]
+  > {
+    const rows = (
+      await this.db.execute(sql`SELECT s.currency, s.n, s.amount::text AS amount
+             FROM (${resellerSalesStatement(scope.tenantId, window)}) s
+            WHERE s.reseller_customer_id = ${customerId}::uuid`)
+    ).rows as { currency: CurrencyCode; n: number; amount: string }[];
+    return rows.map((row) => ({
+      currency: row.currency,
+      count: Number(row.n),
+      amount: BigInt(row.amount),
+    }));
+  }
+
   async failures(scope: TenantContext, window: Window): Promise<FailureTotals> {
     const t = tenant(scope);
     const payments = await this.paymentFailures(scope, window);

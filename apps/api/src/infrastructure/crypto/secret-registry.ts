@@ -13,6 +13,7 @@ import {
   legacyNxpkgImports,
   panelCredentials,
   paymentGatewayCredentials,
+  resellerWebTotpFactors,
   supportAiProviderCredentials,
 } from '../persistence/schema.js';
 
@@ -676,6 +677,67 @@ const hostingTotpSecret: SecretColumn = {
   },
 };
 
+/**
+ * PR-4: a reseller's optional TOTP secret for the reseller web panel
+ * (`reseller_web_totp_factors`), separate from both admin factors. The entity in the AEAD
+ * context is the factor row's own id.
+ */
+const resellerWebTotpSecret: SecretColumn = {
+  purpose: 'reseller_web.totp_secret',
+  table: 'reseller_web_totp_factors',
+  ciphertextColumn: 'totp_secret_ciphertext',
+  keyIdColumn: 'totp_secret_key_id',
+  entityIdColumn: 'id',
+
+  async all(db) {
+    return db
+      .select({
+        ciphertext: resellerWebTotpFactors.totpSecretCiphertext,
+        keyId: resellerWebTotpFactors.totpSecretKeyId,
+      })
+      .from(resellerWebTotpFactors);
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: resellerWebTotpFactors.id })
+      .from(resellerWebTotpFactors)
+      .where(cursor === null ? undefined : gt(resellerWebTotpFactors.id, cursor))
+      .orderBy(asc(resellerWebTotpFactors.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: resellerWebTotpFactors.id,
+        tenantId: resellerWebTotpFactors.tenantId,
+        ciphertext: resellerWebTotpFactors.totpSecretCiphertext,
+        keyId: resellerWebTotpFactors.totpSecretKeyId,
+      })
+      .from(resellerWebTotpFactors)
+      .where(eq(resellerWebTotpFactors.id, id))
+      .for('update')
+      .limit(1);
+    return row ?? null;
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(resellerWebTotpFactors)
+      .set({ totpSecretCiphertext: next.ciphertext, totpSecretKeyId: next.keyId })
+      .where(
+        and(
+          eq(resellerWebTotpFactors.id, id),
+          eq(resellerWebTotpFactors.totpSecretCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: resellerWebTotpFactors.id });
+    return updated.length > 0;
+  },
+};
+
 // TB4: a tenant's key for one AI provider (ADR-0034 §8).
 const supportAiProviderApiKey: SecretColumn = {
   purpose: 'support_ai_provider.api_key',
@@ -1009,6 +1071,7 @@ export const SECRET_COLUMNS: readonly SecretColumn[] = [
   paymentGatewayRefundCard,
   adminTotpSecret,
   hostingTotpSecret,
+  resellerWebTotpSecret,
   supportAiProviderApiKey,
   legacyNxpkgPackageKey,
   backupArchivePassword,

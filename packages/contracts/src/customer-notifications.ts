@@ -433,6 +433,13 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * `bot.reseller_request.rejected`, or `bot.reseller_request.approved` when the row says so.
    */
   'RESELLER_REQUEST_DECISION',
+  /*
+   * PR-4, «اعلان ورود جدید»: a device or browser the reseller had not signed in from opened a
+   * reseller web panel session. `reseller_web_sessions.id` is the subject; the sentence names
+   * nothing from it (no address, no device string). Raised once per new fingerprint, only
+   * while the reseller's own preference is on.
+   */
+  'RESELLER_WEB_NEW_DEVICE',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -520,6 +527,8 @@ export const CUSTOMER_NOTIFICATION_AUTOMATED: Readonly<Record<CustomerNotificati
     // PR-2: an operator wrote, or decided, on purpose.
     RESELLER_REQUEST_MESSAGE: false,
     RESELLER_REQUEST_DECISION: false,
+    // PR-4: the answer to a sign-in that just happened.
+    RESELLER_WEB_NEW_DEVICE: false,
   };
 
 /**
@@ -747,6 +756,8 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
   // PR-2: an operator's own message, and the answer to the customer's own request.
   RESELLER_REQUEST_MESSAGE: false,
   RESELLER_REQUEST_DECISION: false,
+  // PR-4: a sign-in happened; that stays true.
+  RESELLER_WEB_NEW_DEVICE: false,
 };
 
 /**
@@ -847,6 +858,8 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   // PR-2: an operator wrote, or decided, now; the applicant is told now.
   RESELLER_REQUEST_MESSAGE: false,
   RESELLER_REQUEST_DECISION: false,
+  // PR-4: a sign-in happened; that stays true.
+  RESELLER_WEB_NEW_DEVICE: false,
 };
 
 /**
@@ -951,6 +964,8 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   // PR-2: values read at send time from the message row / the request row.
   RESELLER_REQUEST_MESSAGE: 'bot.reseller_request.message_from_owner',
   RESELLER_REQUEST_DECISION: 'bot.reseller_request.rejected',
+  // PR-4: no values; a sign-in from a new device.
+  RESELLER_WEB_NEW_DEVICE: 'bot.reseller_web.new_device',
 };
 
 /**

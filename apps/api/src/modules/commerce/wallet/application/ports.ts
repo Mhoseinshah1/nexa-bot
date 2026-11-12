@@ -210,6 +210,8 @@ export interface WalletRepository {
     limit: number,
     cursor: WalletCursor | null,
     tx?: unknown,
+    /** PR-4: only one direction's movements; absent, both. */
+    direction?: 'CREDIT' | 'DEBIT',
   ): Promise<WalletEntryPage>;
 
   findByReference(

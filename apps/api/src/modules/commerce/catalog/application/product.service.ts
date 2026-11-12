@@ -10,6 +10,7 @@ import {
   type AuditWriter,
   type SalesCurrencyCode,
   type Clock,
+  type Money,
   type IdGenerator,
   type IdempotencyStore,
   type PanelId,
@@ -149,6 +150,22 @@ export interface ProductListQuery {
   readonly limit?: number;
   readonly cursor?: ProductCursor;
   readonly search: ProductSearch;
+}
+
+/**
+ * Every item of a paged customer read, `PRODUCT_PAGE_MAX` at a time, following the
+ * repository's own `hasMore`. A page that says there is more but brought nothing ends the
+ * walk rather than asking for the same offset forever.
+ */
+async function allPages<T>(
+  read: (limit: number, offset: number) => Promise<CustomerPage<T>>,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (;;) {
+    const page = await read(PRODUCT_PAGE_MAX, out.length);
+    out.push(...page.items);
+    if (!page.hasMore || page.items.length === 0) return out;
+  }
 }
 
 /**
@@ -386,6 +403,73 @@ export class ProductService {
       view.audience,
     );
     return this.offered(scope, view, page, customerId);
+  }
+
+  /**
+   * PR-4 (reseller web panel «لیست قیمت»): the reseller's whole catalogue, category by category
+   * in the tenant's order, each plan with its LIST price and the price the reseller is offered
+   * (`ResellerService.offeredPrices`, the quote's own function — the same courtesy the bot's
+   * buttons draw). Read-only and decides nothing: a purchase is priced again at the one
+   * boundary. Empty for a customer who is not an ACTIVE reseller.
+   */
+  async resellerPriceList(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: string,
+  ): Promise<
+    readonly {
+      readonly category: ProductCategoryRecord;
+      readonly items: readonly {
+        readonly product: ProductRecord;
+        readonly listPrice: Money;
+        readonly offered: Money;
+      }[];
+    }[]
+  > {
+    await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
+    const view = await this.catalogueView(scope, customerId);
+    if (view === null || view.standing === undefined) return [];
+    /*
+     * Every page, not the first (Codex on #469): the screen has no "more" control, so a
+     * category past the hundredth, or a plan past the hundredth in its category, would
+     * silently vanish from the list and from the customer copy drawn from it.
+     */
+    const categories = await allPages((limit, offset) =>
+      this.deps.repository.listCustomerCategories(
+        scope,
+        limit,
+        offset,
+        view.panelIds,
+        view.audience,
+      ),
+    );
+    const out = [];
+    for (const category of categories) {
+      const products = await allPages((limit, offset) =>
+        this.deps.repository.listCustomerProductsInCategory(
+          scope,
+          category.id,
+          limit,
+          offset,
+          view.panelIds,
+          view.audience,
+        ),
+      );
+      const offered = await this.deps.resellers.offeredPrices(
+        scope,
+        view.standing,
+        'NEW_SERVICE',
+        products,
+      );
+      const items = products.flatMap((product) => {
+        const price = offered.get(product.id) ?? null;
+        return product.price === null || price === null
+          ? []
+          : [{ product, listPrice: product.price, offered: price }];
+      });
+      if (items.length > 0) out.push({ category, items });
+    }
+    return out;
   }
 
   /**

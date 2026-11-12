@@ -120,6 +120,8 @@ export const TEMPLATE_CATEGORY_PREFIXES: Readonly<Record<TemplateCategory, reado
     'bot.reseller.',
     // PR-2: the reseller request's screens and the operator's messages to the applicant.
     'bot.reseller_request.',
+    // PR-4: the reseller web panel's way in and its new-device notice.
+    'bot.reseller_web.',
     'bot.incident.',
     'bot.broadcast.',
     'bot.marketing.',

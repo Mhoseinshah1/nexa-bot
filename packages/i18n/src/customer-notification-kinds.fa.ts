@@ -63,4 +63,5 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES_FA: Readonly<
   SERVICE_AUTO_DELETE_WARNING: 'هشدار حذف خودکار سرویس',
   RESELLER_REQUEST_MESSAGE: 'پیام مدیریت دربارهٔ درخواست نمایندگی',
   RESELLER_REQUEST_DECISION: 'نتیجهٔ درخواست نمایندگی',
+  RESELLER_WEB_NEW_DEVICE: 'ورود تازه به پنل نماینده',
 };

@@ -1809,6 +1809,15 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '📋 خلاصهٔ درخواست شما\n\n{answers}\n\nاگر درست است «ارسال» را بزنید، وگرنه «ویرایش».',
   'bot.reseller_request.submitted':
     '{icon:success} درخواست شما ثبت شد.\nشمارهٔ درخواست: {number}\nنتیجه و هر پیام مدیریت همین‌جا برایتان فرستاده می‌شود.',
+  'bot.reseller_web.open_button': '🌐 ورود به پنل وب',
+  'bot.reseller_web.link':
+    '🔐 لینک ورود به پنل نماینده آماده است.\n\nاین لینک فقط یک بار باز می‌شود و تا {minutes} دقیقه معتبر است. آن را برای کسی نفرستید.',
+  'bot.reseller_web.link_button': 'بازکردن پنل نماینده',
+  'bot.reseller_web.link_rate_limited':
+    '{icon:time} در یک ساعت گذشته چند لینک ورود گرفته‌اید. کمی بعد دوباره امتحان کنید.',
+  'bot.reseller_web.unavailable': 'پنل وب نماینده در حال حاضر در دسترس نیست.',
+  'bot.reseller_web.new_device':
+    '🔔 ورود تازه به پنل نماینده از یک دستگاه یا مرورگر جدید انجام شد.\nاگر این ورود کار شما نبود، از بخش «امنیت» پنل یا با پشتیبانی همهٔ ورودها را ببندید.',
   'bot.reseller_request.already_reseller': 'شما هم‌اکنون نماینده هستید و نیازی به درخواست نیست.',
   'bot.reseller_request.status_pending':
     '{icon:time} درخواست نمایندگی شما (شمارهٔ {number}) در انتظار بررسی است.',

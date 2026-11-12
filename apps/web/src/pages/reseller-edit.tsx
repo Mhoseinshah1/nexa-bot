@@ -41,6 +41,7 @@ import { ErrorRef } from '../ui/technical-details';
 import { messageFor } from './settings';
 import { SaveBar } from './editor-layout';
 import { ResellerExpiryCard } from './reseller-expiry';
+import { ResellerWebPanelCard } from './reseller-web-panel';
 import {
   OverrideGrantsEditor,
   OverrideMinimumEditor,
@@ -328,6 +329,7 @@ export function ResellerStandingView({
         <div className="stack rs-panel">
           <Pane id="profile" active={tab}>
             <ProfileTab row={row} customerId={customerId} tiers={tiers} mayEdit={mayEdit} />
+            <ResellerWebPanelCard customerId={customerId} mayEdit={mayEdit} />
           </Pane>
           <Pane id="pricing" active={tab}>
             <PricingTab

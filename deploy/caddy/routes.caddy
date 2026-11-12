@@ -193,6 +193,16 @@
 			# operator and something mildly useful to everyone else.
 			-Server
 		}
+		# The reseller panel (`/r/…`) is part of this SPA, with three static files of its own under
+		# `/r/` (the manifest, the service worker, the icons). Two consequences for routing:
+		#  - `/r/` is a DIRECTORY there, and `try_files {path}` would hand it to `file_server`, which
+		#    404s on a directory with no index; the bare panel address goes to the document instead.
+		#  - the manifest has no extension Go's MIME table knows, so its type is set here (file_server
+		#    keeps a Content-Type that is already set).
+		@reseller_root path /r /r/
+		rewrite @reseller_root /index.html
+		@reseller_manifest path /r/manifest.webmanifest
+		header @reseller_manifest Content-Type "application/manifest+json"
 		# The activated release. `current` is a SYMLINK replaced by one
 		# rename(2) per publication, and Caddy resolves it when it opens the
 		# file — so a request is served entirely out of one release, and never

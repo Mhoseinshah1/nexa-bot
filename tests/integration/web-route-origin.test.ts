@@ -6,6 +6,7 @@ import {
   HOSTED_ACTIVATION_ROUTES,
   IDENTITY_ERROR_CODES,
   MINIAPP_API_PREFIX,
+  RESELLER_API_PREFIX,
   SESSION_COOKIE_NAME,
 } from '@nexa/contracts';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
@@ -64,6 +65,9 @@ const NON_ADMIN_PREFIXES = [
   // The customer mini app: Telegram initData and its own bearer session.
   MINIAPP_API_PREFIX,
   '/miniapp',
+  // PR-4: the reseller web panel — its own cookie and its own Origin check
+  // (`tests/integration/reseller-web-panel.test.ts` sweeps its routes both ways).
+  RESELLER_API_PREFIX,
   // Phase 6A PR-4: the edge's certificate question for hosted domains. Never proxied by the
   // edge; answers only the edge's own address (`hosted-activation.test.ts`).
   '/internal/hosting/',

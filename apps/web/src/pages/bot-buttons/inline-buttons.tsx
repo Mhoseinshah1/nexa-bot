@@ -214,6 +214,8 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'marketing.opt_in': 'web.ib_button_marketing_opt_in',
   'reminders.opt_out': 'web.ib_button_reminders_opt_out',
   'reminders.opt_in': 'web.ib_button_reminders_opt_in',
+  'reseller_web.open': 'web.ib_button_reseller_web_open',
+  'reseller_web.link': 'web.ib_button_reseller_web_link',
   'reseller_request.start': 'web.ib_button_reseller_request_start',
   'reseller_request.skip': 'web.ib_button_reseller_request_skip',
   'reseller_request.back': 'web.ib_button_reseller_request_back',

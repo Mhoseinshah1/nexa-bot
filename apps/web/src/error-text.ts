@@ -27,6 +27,7 @@ import type {
   LEGACY_WALLET_DEBT_ERROR_CODES,
   MESSAGING_ERROR_CODES,
   MINIAPP_ERROR_CODES,
+  RESELLER_WEB_ERROR_CODES,
   NOTIFICATION_CENTER_ERROR_CODES,
   OPS_GROUP_ERROR_CODES,
   PANEL_ERROR_CODES,
@@ -89,6 +90,7 @@ export type ContractErrorCode =
   | CodesOf<typeof LEGACY_WALLET_DEBT_ERROR_CODES>
   | CodesOf<typeof MESSAGING_ERROR_CODES>
   | CodesOf<typeof MINIAPP_ERROR_CODES>
+  | CodesOf<typeof RESELLER_WEB_ERROR_CODES>
   | CodesOf<typeof NOTIFICATION_CENTER_ERROR_CODES>
   | CodesOf<typeof OPS_GROUP_ERROR_CODES>
   | CodesOf<typeof PANEL_ERROR_CODES>
@@ -552,6 +554,20 @@ export const ERROR_TEXT = {
   'miniapp.rate_limited': 'web.err_miniapp_rate_limited',
   'miniapp.receipt_refused': 'web.err_miniapp_receipt_refused',
   'miniapp.receipt_upload_failed': 'web.err_miniapp_receipt_upload_failed',
+  'reseller_web.unavailable': 'web.err_reseller_web_unavailable',
+  'reseller_web.link_invalid': 'web.err_reseller_web_link_invalid',
+  'reseller_web.link_used': 'web.err_reseller_web_link_used',
+  'reseller_web.link_expired': 'web.err_reseller_web_link_expired',
+  'reseller_web.session_invalid': 'web.err_reseller_web_session_invalid',
+  'reseller_web.second_factor_required': 'web.err_reseller_web_second_factor_required',
+  'reseller_web.second_factor_invalid': 'web.err_reseller_web_second_factor_invalid',
+  'reseller_web.second_factor_state': 'web.err_reseller_web_second_factor_state',
+  'reseller_web.rate_limited': 'web.err_reseller_web_rate_limited',
+  'reseller_web.request_invalid': 'web.err_reseller_web_request_invalid',
+  'reseller_web.not_found': 'web.err_reseller_web_not_found',
+  'reseller_web.files_unavailable': 'web.err_reseller_web_files_unavailable',
+  'reseller_web.telegram_undelivered': 'web.err_reseller_web_telegram_undelivered',
+  'reseller_web.rotate_unavailable': 'web.err_reseller_web_rotate_unavailable',
   'miniapp.request_invalid': 'web.err_miniapp_request_invalid',
   'miniapp.route_unavailable': 'web.err_miniapp_route_unavailable',
   'miniapp.session_invalid': 'web.err_miniapp_session_invalid',
