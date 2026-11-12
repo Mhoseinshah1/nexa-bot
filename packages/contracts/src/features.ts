@@ -341,15 +341,20 @@ export const FEATURE_FLAGS = [
   {
     key: 'start_captcha',
     description:
-      'R10 D5 (a): ask every NEW customer a simple question in the chat (a sum, four answer ' +
-      'buttons) before the bot serves them. Only customers who first arrive while it is on ' +
+      'R10 D5 (a): ask every NEW customer a simple question in the chat (a sum by default, or ' +
+      'a number in a picture, an emoji, a number in words: `captcha.kind`) before the bot serves them. Only customers who first arrive while it is on ' +
       'are asked; existing customers never are, and turning it off lets everybody waiting ' +
       'through at once. A wrong answer costs an attempt and, at the limit, a cooldown — ' +
       'never a block. Administrators are never asked. No third-party service is involved.',
     defaultEnabled: false,
     // TENANT_WIDE: it stands in front of every new customer of the tenant.
     blastRadius: 'TENANT_WIDE',
-    configuredBy: ['captcha.expiry_seconds', 'captcha.max_attempts', 'captcha.cooldown_seconds'],
+    configuredBy: [
+      'captcha.kind',
+      'captcha.expiry_seconds',
+      'captcha.max_attempts',
+      'captcha.cooldown_seconds',
+    ],
   },
   {
     key: 'panel_auto_balancing',

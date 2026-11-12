@@ -295,6 +295,11 @@ export const BOT_INTENTS = [
    * stale button.
    */
   'CAPTCHA_ANSWER',
+  /**
+   * `captcha.kind`: «🔄 تصویر جدید» under the picture question, `hc:<question id>:r`. Decided
+   * by the captcha gate, like `CAPTCHA_ANSWER`: a new picture, never a spent attempt.
+   */
+  'CAPTCHA_REFRESH',
   /*
    * WP-A7 — the customer's support tickets. `TICKETS` is the list (the menu entry, /tickets
    * and its callback), `TICKET_NEW` the category chooser, `TICKET_CATEGORY` opens the window

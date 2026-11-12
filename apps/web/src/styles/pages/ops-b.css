@@ -1186,6 +1186,13 @@ form.set-row > * + * {
   margin-top: 0;
   font-size: var(--fs-xs);
 }
+/*
+ * «نگه داشتن نسخه روی سرور» off: the archive-retention numbers on the schedule card are drawn
+ * greyed, with the one line under them that says why.
+ */
+.backup-retention.is-off {
+  opacity: 0.55;
+}
 /* The restore card's part titles («بارگذاری آرشیو», the earlier restores) read as headings. */
 .card.recovery-operations h3.card-subtitle {
   color: var(--fg);
@@ -1685,4 +1692,51 @@ form.set-row > * + * {
  */
 :root:has(.incident-detail.in-drawer) :is(.modal-layer, .dialog-backdrop) {
   z-index: 102;
+}
+
+/* `captcha.kind`: the preview of each question kind under its select. */
+.captcha-preview {
+  margin-top: 12px;
+}
+.captcha-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.captcha-preview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
+}
+.captcha-preview-card[data-selected='true'] {
+  border-color: var(--accent);
+}
+.captcha-sample-picture img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+}
+.captcha-sample-picture {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.captcha-sample-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.captcha-chip {
+  padding: 4px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-3);
+  font-size: var(--fs-ui);
 }
