@@ -385,7 +385,7 @@ export const WEB_FA_ERRORS = {
     'اکنون نمی‌توان از تلگرام پرسید. کمی بعد دوباره تلاش کنید.',
   'web.err_reseller_bot_token_in_use': 'این ربات در درخواست دیگری ثبت شده است.',
   'web.err_reseller_bot_domain_invalid':
-    'دامنه معتبر نیست؛ فقط نام دامنه مانند bot.example.com را بنویسید.',
+    'دامنه معتبر نیست؛ فقط نام دامنه را بدون نشانی کامل بنویسید.',
   'web.err_reseller_bot_insufficient_funds':
     'موجودی کیف پول نماینده برای هزینهٔ ماهانه کافی نیست؛ چیزی کسر نشد.',
   'web.err_reseller_bot_not_linked': 'هنوز ربات میزبانی‌شده‌ای برای این درخواست ساخته نشده است.',

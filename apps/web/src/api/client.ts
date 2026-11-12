@@ -47,6 +47,7 @@ import {
 import {
   // Phase 6A (D1): the installation owner's creator panel.
   HOSTING_ROUTES,
+  RESELLER_BOT_ADMIN_ROUTES,
   DATA_EXPORT_ROUTES,
   type DataExportHostRequest,
   type DataExportRequestResponse,
@@ -71,6 +72,8 @@ import {
   type HostingActivateResponse,
   type HostingEnrolResponse,
   type HostingProof,
+  type ResellerBotRequestAdminResponse,
+  type ResellerBotRequestsAdminResponse,
   type HostingRecoveryCodesResponse,
   type HostingServerResponse,
   type HostingSessionResponse,
@@ -6014,6 +6017,49 @@ export function setHostedBotLimit(
 
 export function fetchHostingServer(): Promise<HostingServerResponse> {
   return authedGet(HOSTING_ROUTES.server, hostingShape<HostingServerResponse>());
+}
+
+// --- Reseller-phase PR-6: «درخواست‌های نماینده‌ها» -------------------------------------------
+
+export function fetchResellerBotRequests(): Promise<ResellerBotRequestsAdminResponse> {
+  return authedGet(
+    RESELLER_BOT_ADMIN_ROUTES.list,
+    hostingShape<ResellerBotRequestsAdminResponse>(),
+  );
+}
+
+export function approveResellerBotRequest(
+  requestId: string,
+  body: { idempotencyKey: string; proof: HostingProof },
+): Promise<ResellerBotRequestAdminResponse> {
+  return post(
+    RESELLER_BOT_ADMIN_ROUTES.approve.replace(':requestId', encodeURIComponent(requestId)),
+    body,
+    hostingShape<ResellerBotRequestAdminResponse>(),
+  );
+}
+
+export function rejectResellerBotRequest(
+  requestId: string,
+  body: { idempotencyKey: string; reason: string },
+): Promise<ResellerBotRequestAdminResponse> {
+  return post(
+    RESELLER_BOT_ADMIN_ROUTES.reject.replace(':requestId', encodeURIComponent(requestId)),
+    body,
+    hostingShape<ResellerBotRequestAdminResponse>(),
+  );
+}
+
+/** Hands the request's sealed token to the hosted bot's activation; the token never comes here. */
+export function configureResellerBotActivation(
+  requestId: string,
+  body: { idempotencyKey: string; proof: HostingProof; domain: string },
+): Promise<HostedActivationResponse> {
+  return post(
+    RESELLER_BOT_ADMIN_ROUTES.configure.replace(':requestId', encodeURIComponent(requestId)),
+    body,
+    hostingShape<HostedActivationResponse>(),
+  );
 }
 
 // --- Phase 6A PR-4: the activation of a hosted bot --------------------------------------------

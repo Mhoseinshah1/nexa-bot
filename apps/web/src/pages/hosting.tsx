@@ -15,6 +15,8 @@ import { ErrorRef } from '../ui/technical-details';
 import { HostingGate } from './hosting-gate';
 import { HostedBots } from './hosting-bots';
 import { HostedRestoreSection } from './hosting-restore';
+import { ResellerBotRequests } from './hosting-reseller-requests';
+import { DotTabs } from './dot-tabs';
 import {
   CodePromptDialog,
   HOSTING_STATUS_KEY,
@@ -67,12 +69,37 @@ function HostingPanel({
   session: { readonly expiresAt: string };
   onRecoveryCodes: (codes: readonly string[]) => void;
 }) {
+  // Reseller-phase PR-6: the bots, and the resellers' dedicated-bot requests, as two tabs.
+  const [tab, setTab] = useState<'bots' | 'reseller-requests'>('bots');
   return (
     <>
       <SessionCard status={status} session={session} onRecoveryCodes={onRecoveryCodes} />
-      <ServerCard />
-      <HostedBots fallbackCreate={status.create} />
-      <HostedRestoreSection />
+      <DotTabs
+        value={tab}
+        onChange={setTab}
+        panelId="hosting-panel"
+        label={t('web.hosting_tabs_label')}
+        items={[
+          { id: 'bots', label: t('web.hosting_tab_bots') },
+          { id: 'reseller-requests', label: t('web.hosting_tab_reseller_requests') },
+        ]}
+      />
+      <div
+        id="hosting-panel"
+        role="tabpanel"
+        aria-labelledby={`hosting-panel-tab-${tab}`}
+        className="stack"
+      >
+        {tab === 'bots' ? (
+          <>
+            <ServerCard />
+            <HostedBots fallbackCreate={status.create} />
+            <HostedRestoreSection />
+          </>
+        ) : (
+          <ResellerBotRequests />
+        )}
+      </div>
     </>
   );
 }
