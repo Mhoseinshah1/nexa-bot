@@ -64,4 +64,6 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES_FA: Readonly<
   RESELLER_REQUEST_MESSAGE: 'پیام مدیریت دربارهٔ درخواست نمایندگی',
   RESELLER_REQUEST_DECISION: 'نتیجهٔ درخواست نمایندگی',
   RESELLER_WEB_NEW_DEVICE: 'ورود تازه به پنل نماینده',
+  RESELLER_WEB_EXPIRING_DIGEST: 'گزارش روزانهٔ سرویس‌های رو به اتمام نماینده',
+  RESELLER_WEB_DAILY_SALES: 'گزارش روزانهٔ فروش نماینده',
 };

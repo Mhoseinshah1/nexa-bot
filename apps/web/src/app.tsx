@@ -1009,6 +1009,8 @@ export function resolve(
           mayViewCatalog={may('catalog.view')}
           mayViewPanels={may('panels.view')}
           maySearchCustomers={may('users.view') && may('users.search')}
+          maySettingsView={may('settings.view')}
+          maySettingsEdit={may('settings.edit')}
         />
       ),
       crumbs: [{ label: t('web.resellers_title') }],

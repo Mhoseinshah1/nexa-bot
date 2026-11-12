@@ -687,6 +687,19 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'sales',
     control: { kind: 'integer', unit: 'web.unit_days' },
   },
+  // PR-5 §5.7: reseller trials from the reseller web panel.
+  'reseller.trial_daily_quota': {
+    title: 'web.setting_reseller_trial_daily_quota',
+    description: 'web.setting_reseller_trial_daily_quota_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_times' },
+  },
+  'reseller.trial_product': {
+    title: 'web.setting_reseller_trial_product',
+    description: 'web.setting_reseller_trial_product_desc',
+    group: 'sales',
+    control: { kind: 'text' },
+  },
   // Round N, package D.
   'reminders.reseller_minimum_days': {
     title: 'web.setting_reminders_reseller_minimum_days',

@@ -35,6 +35,7 @@ import { enumCheck, timestamptz } from './_shared.js';
 import { botInstances, tenants } from './tenancy.js';
 import { admins } from './identity.js';
 import { panels } from './panels.js';
+import { products } from './catalogue.js';
 import { customers } from './customers.js';
 import { orders } from './orders.js';
 import { walletEntries } from './wallet.js';
@@ -166,6 +167,11 @@ export const trialGrants = pgTable(
      */
     resetAt: timestamptz('reset_at'),
     resetId: uuid('reset_id'),
+    /**
+     * PR-5 §5.7: a reseller's «سرویس تست» from the web panel. Counted against the reseller's
+     * daily quota (`reseller.trial_daily_quota`), never against their own trial allowance.
+     */
+    resellerTrial: boolean('reseller_trial').notNull().default(false),
   },
   (table) => [
     foreignKey({
@@ -497,6 +503,12 @@ export const serviceAutoRenewPreferences = pgTable(
     enabled: boolean('enabled').notNull(),
     consentedTotalMinor: bigint('consented_total_minor', { mode: 'bigint' }),
     consentedCurrency: text('consented_currency'),
+    /**
+     * PR-5 (OQ-R10-D1-01, owner decision): an IMPORTED service's plan to renew into, chosen by
+     * a reseller at opt-in from the plans their entitlement allows. Null for a native service
+     * (it renews its own product) and whenever the switch is off.
+     */
+    renewProductId: uuid('renew_product_id'),
     /** One of `AUTO_RENEW_PREFERENCE_SOURCES`: where it last changed. */
     source: text('source').notNull(),
     createdAt: timestamptz('created_at').notNull(),
@@ -517,6 +529,12 @@ export const serviceAutoRenewPreferences = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'service_auto_renew_preferences_customer_fk',
     }),
+    foreignKey({
+      columns: [table.tenantId, table.renewProductId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'service_auto_renew_preferences_product_fk',
+    }),
+    check('service_auto_renew_preferences_plan_check', sql`renew_product_id IS NULL OR enabled`),
     /** The sweep reads the enabled consents of one tenant. */
     index('service_auto_renew_preferences_enabled_idx')
       .on(table.tenantId, table.serviceId)

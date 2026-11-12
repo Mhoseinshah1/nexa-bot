@@ -242,6 +242,96 @@ export class CustomServiceFlowService {
     return { outcome: 'DRAFTED', order };
   }
 
+  /**
+   * PR-5 (reseller web panel «سرویس دلخواه»): every location `offeredLocations` would draw for
+   * this customer, each with the two ranges the bot's volume and days questions state. A
+   * location without both ranges is one the bot's `begin` answers UNAVAILABLE, so it is left out.
+   */
+  async offeredWithRanges(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+  ): Promise<
+    readonly {
+      readonly location: OfferedLocation;
+      readonly volume: CustomServiceRange;
+      readonly days: CustomServiceRange;
+    }[]
+  > {
+    await this.deps.guard.check(scope, actor, CUSTOM_SERVICE_FLOW_PERMISSION);
+    const out = [];
+    for (const location of await this.deps.pricer.offeredLocations(scope, customerId)) {
+      const volume = await this.deps.pricer.rangeFor(scope, customerId, location.panelId, 'VOLUME');
+      const days = await this.deps.pricer.rangeFor(scope, customerId, location.panelId, 'TIME');
+      if (volume !== null && days !== null) out.push({ location, volume, days });
+    }
+    return out;
+  }
+
+  /**
+   * PR-5 (reseller web panel): the draft from the location, volume and days typed on ONE page —
+   * exactly the checks `begin`, `recordVolume` and `recordDays` make, in their order (the
+   * location re-decided, the volume parsed and bounded and priceable, the days parsed and
+   * bounded and priceable), then the same `createCustomDraft`. Without a capture window: the
+   * page holds the figures the bot's windows hold, and the key is the caller's.
+   */
+  async draftFromFigures(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: UserId;
+      readonly panelId: string;
+      readonly volume: string;
+      readonly days: string;
+    },
+  ): Promise<
+    | CustomServiceDaysResult
+    | { readonly outcome: 'INVALID_VOLUME'; readonly range: CustomServiceRange | null }
+    | { readonly outcome: 'VOLUME_UNPRICED' }
+  > {
+    await this.deps.guard.check(scope, actor, CUSTOM_SERVICE_FLOW_PERMISSION);
+    if (!(await this.deps.pricer.enabled(scope))) return { outcome: 'UNAVAILABLE' };
+    const location = await this.deps.pricer.offeredLocation(scope, input.customerId, input.panelId);
+    if (location === null) return { outcome: 'UNAVAILABLE' };
+    const volumeRange = await this.deps.pricer.rangeFor(
+      scope,
+      input.customerId,
+      input.panelId,
+      'VOLUME',
+    );
+    if (volumeRange === null) return { outcome: 'UNAVAILABLE' };
+    const units = parseCustomServiceVolume(input.volume);
+    if (units === null || units < volumeRange.min || units > volumeRange.max) {
+      return { outcome: 'INVALID_VOLUME', range: volumeRange };
+    }
+    if (!(await this.deps.pricer.volumePriceable(scope, input.customerId, input.panelId, units))) {
+      return { outcome: 'VOLUME_UNPRICED' };
+    }
+    const daysRange = await this.deps.pricer.rangeFor(
+      scope,
+      input.customerId,
+      input.panelId,
+      'TIME',
+    );
+    if (daysRange === null) return { outcome: 'UNAVAILABLE' };
+    const days = parseCustomServiceDays(input.days);
+    if (days === null || BigInt(days) < daysRange.min || BigInt(days) > daysRange.max) {
+      return { outcome: 'INVALID', range: daysRange };
+    }
+    if (!(await this.deps.pricer.daysPriceable(scope, input.customerId, input.panelId, days))) {
+      return { outcome: 'UNPRICED' };
+    }
+    const order = await this.deps.orders.createCustomDraft(scope, actor, {
+      idempotencyKey: input.idempotencyKey,
+      customerId: input.customerId,
+      panelId: input.panelId,
+      volumeUnits: units,
+      durationDays: days,
+    });
+    return { outcome: 'DRAFTED', order };
+  }
+
   /** A custom order's frozen terms, for the pre-invoice. */
   async termsFor(scope: TenantContext, orderId: string): Promise<OrderCustomServiceTerms | null> {
     return this.deps.terms.findByOrder(scope, orderId);

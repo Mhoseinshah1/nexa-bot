@@ -33,6 +33,8 @@ export interface TrialGrantDraft {
   readonly productId: ProductId | null;
   readonly serviceId: string;
   readonly now: Date;
+  /** PR-5: a reseller's «سرویس تست» from the panel — the daily quota counts it, not the limit. */
+  readonly resellerTrial?: boolean;
 }
 
 export interface TrialGrantRepository {
@@ -45,6 +47,16 @@ export interface TrialGrantRepository {
    * read.
    */
   countCounting(scope: TenantContext, customerId: UserId, tx?: TransactionScope): Promise<number>;
+  /**
+   * PR-5: a reseller's panel trials made in `[from, to)` that still count (not given back).
+   * A DECISION only under the customer's row lock, like `countCounting`.
+   */
+  countResellerTrials(
+    scope: TenantContext,
+    customerId: UserId,
+    window: { readonly from: Date; readonly to: Date } | null,
+    tx?: TransactionScope,
+  ): Promise<number>;
   /** One per trial order; `trial_grants_order_key` makes a replay lose. */
   create(scope: TenantContext, draft: TrialGrantDraft, tx: TransactionScope): Promise<boolean>;
   findByOrder(

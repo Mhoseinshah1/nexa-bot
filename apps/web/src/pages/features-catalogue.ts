@@ -283,6 +283,17 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // PR-5 §5.8: off hides the reseller panel's «پیشرفت تا سطح بعد» card; it never changed a tier.
+  reseller_tier_progress: {
+    title: 'web.feature_reseller_tier_progress_title',
+    summary: 'web.feature_reseller_tier_progress_summary',
+    category: 'sales',
+    where: ['web_admin'],
+    offEffect: 'web.feature_reseller_tier_progress_off_effect',
+    related: { path: '/resellers', label: 'web.nav_resellers' },
+    disableEffect: null,
+    confirmEnable: null,
+  },
   reseller_requests: {
     title: 'web.feature_reseller_requests_title',
     summary: 'web.feature_reseller_requests_summary',

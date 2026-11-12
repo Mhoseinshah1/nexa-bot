@@ -1903,4 +1903,10 @@ export const RESELLER_WEB_ERROR_CODES = {
   TELEGRAM_UNDELIVERED: 'reseller_web.telegram_undelivered',
   /** The panel's provider cannot issue a fresh link for this service. */
   ROTATE_UNAVAILABLE: 'reseller_web.rotate_unavailable',
+  /** PR-5: a «دلخواه» username was asked for more than one service; only quantity 1 may. */
+  CUSTOM_USERNAME_SINGLE: 'reseller_web.custom_username_single',
+  /** PR-5: «سرویس تست» is off, not configured, or today's quota is used up. */
+  TRIAL_UNAVAILABLE: 'reseller_web.trial_unavailable',
+  /** PR-5: an imported service's auto-renew needs the plan to renew into, chosen at opt-in. */
+  AUTO_RENEW_PLAN_REQUIRED: 'reseller_web.auto_renew_plan_required',
 } as const;

@@ -166,6 +166,8 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES: Readonly<Record<CustomerNotificat
     RESELLER_REQUEST_MESSAGE: 'web.pay_notice_reseller_request_message',
     RESELLER_REQUEST_DECISION: 'web.pay_notice_reseller_request_decision',
     RESELLER_WEB_NEW_DEVICE: 'web.pay_notice_reseller_web_new_device',
+    RESELLER_WEB_EXPIRING_DIGEST: 'web.pay_notice_reseller_web_expiring_digest',
+    RESELLER_WEB_DAILY_SALES: 'web.pay_notice_reseller_web_daily_sales',
   };
 
 /**

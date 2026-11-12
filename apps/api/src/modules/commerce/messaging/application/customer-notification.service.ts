@@ -264,6 +264,9 @@ const ACCOUNT_REMINDER_KINDS = new Set<string>([
   // Round N R2: the reseller monthly minimum, read from its notice row the same way.
   'RESELLER_MINIMUM_REMINDER',
   'RESELLER_MINIMUM_ACHIEVED',
+  // PR-5: the reseller's daily digest and sales report, read from the day's report row.
+  'RESELLER_WEB_EXPIRING_DIGEST',
+  'RESELLER_WEB_DAILY_SALES',
 ]);
 
 export interface CustomerNotificationDeps {

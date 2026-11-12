@@ -3,9 +3,10 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { RESELLER_SERVICE_FILTERS, type ResellerServiceFilter } from '@nexa/contracts';
 import { formatNumber } from '../../format';
 import { t, type WebKey } from '../../i18n/web.fa';
-import { Badge, Button, Empty, SearchInput, StateSwitch } from '../../ui/kit';
-import { fetchServices } from '../api';
+import { Badge, Button, Empty, Field, SearchInput, Select, StateSwitch } from '../../ui/kit';
+import { fetchClients, fetchServices } from '../api';
 import { Expiry, RpCard, StateBadge, Usage } from '../view';
+import { AutoRenewSwitch } from './auto-renew';
 import { ServiceDrawer } from './service-drawer';
 
 const FILTER_LABEL: Readonly<Record<ResellerServiceFilter, WebKey>> = {
@@ -24,12 +25,12 @@ function initialFilter(search: string): ResellerServiceFilter {
   return RESELLER_SERVICE_FILTERS.find((filter) => filter === wanted) ?? 'ALL';
 }
 
+export const CLIENTS_KEY = ['reseller', 'clients'] as const;
+
 /**
- * «سرویس‌های من»: filter chips with server counts, search, the table and the «مدیریت» drawer.
- *
- * The «مشتری» column is drawn only when a row carries a client, and there is no auto-renew
- * switch column: the wire has neither a client nor an auto-renew flag yet (PR-5), and a column
- * of dashes or a dead switch would be a fabricated feature.
+ * «سرویس‌های من»: filter chips with server counts, a client filter, search, the table (with the
+ * «مشتری» column and each service's auto-renew switch) and the «مدیریت» drawer, where a
+ * service is assigned to a client or released from one.
  */
 export function ServicesPage({ search = '' }: { search?: string }) {
   const [filter, setFilter] = useState<ResellerServiceFilter>(() => initialFilter(search));
@@ -37,6 +38,8 @@ export function ServicesPage({ search = '' }: { search?: string }) {
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [clientId, setClientId] = useState('');
+  const clients = useQuery({ queryKey: [...CLIENTS_KEY, 'active'], queryFn: () => fetchClients() });
 
   // The search box waits for a pause in typing; every change starts again from the first page.
   useEffect(() => {
@@ -48,12 +51,11 @@ export function ServicesPage({ search = '' }: { search?: string }) {
   }, [draft]);
 
   const query = useQuery({
-    queryKey: [...SERVICES_KEY, filter, q, page],
-    queryFn: () => fetchServices({ filter, q, page }),
+    queryKey: [...SERVICES_KEY, filter, q, page, clientId],
+    queryFn: () => fetchServices({ filter, q, page, clientId: clientId === '' ? null : clientId }),
     placeholderData: keepPreviousData,
   });
   const data = query.data;
-  const showClient = data?.items.some((row) => row.client !== null) === true;
 
   return (
     <RpCard>
@@ -75,6 +77,25 @@ export function ServicesPage({ search = '' }: { search?: string }) {
             </button>
           ))}
         </div>
+        {(clients.data?.items.length ?? 0) > 0 && (
+          <Field label={t('web.rp_filter_client')} htmlFor="rp-client-filter" compact>
+            <Select
+              id="rp-client-filter"
+              value={clientId}
+              onChange={(event) => {
+                setClientId(event.target.value);
+                setPage(0);
+              }}
+            >
+              <option value="">{t('web.rp_filter_client_all')}</option>
+              {clients.data?.items.map((one) => (
+                <option key={one.id} value={one.id}>
+                  {one.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
         <SearchInput
           value={draft}
           onChange={setDraft}
@@ -94,13 +115,14 @@ export function ServicesPage({ search = '' }: { search?: string }) {
                 <thead>
                   <tr>
                     <th>{t('web.rp_col_user')}</th>
-                    {showClient && <th>{t('web.rp_col_client')}</th>}
+                    <th>{t('web.rp_col_client')}</th>
                     <th>{t('web.rp_col_note')}</th>
                     <th>{t('web.rp_col_product')}</th>
                     <th>{t('web.rp_col_location')}</th>
                     <th>{t('web.rp_col_usage')}</th>
                     <th>{t('web.rp_col_expiry')}</th>
                     <th>{t('web.rp_col_status')}</th>
+                    <th>{t('web.rp_col_ar')}</th>
                     <th>
                       <span className="visually-hidden">{t('web.rp_col_manage')}</span>
                     </th>
@@ -117,7 +139,7 @@ export function ServicesPage({ search = '' }: { search?: string }) {
                           </Badge>
                         )}
                       </td>
-                      {showClient && <td>{row.client ?? '—'}</td>}
+                      <td>{row.client ?? '—'}</td>
                       <td>{row.note ?? '—'}</td>
                       <td>{row.product ?? '—'}</td>
                       <td>{row.location ?? '—'}</td>
@@ -129,6 +151,13 @@ export function ServicesPage({ search = '' }: { search?: string }) {
                       </td>
                       <td>
                         <StateBadge value={row.state} />
+                      </td>
+                      <td>
+                        <AutoRenewSwitch
+                          serviceId={row.id}
+                          username={row.username}
+                          initial={row.autoRenew}
+                        />
                       </td>
                       <td className="rp-end">
                         <Button size="sm" onClick={() => setOpenId(row.id)}>

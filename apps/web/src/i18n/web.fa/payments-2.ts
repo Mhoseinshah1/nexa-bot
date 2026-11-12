@@ -563,6 +563,8 @@ export const WEB_FA_PAYMENTS_2 = {
   'web.pay_notice_reseller_request_message': 'پیام مدیریت دربارهٔ درخواست نمایندگی',
   'web.pay_notice_reseller_request_decision': 'نتیجهٔ درخواست نمایندگی',
   'web.pay_notice_reseller_web_new_device': 'ورود تازه به پنل نماینده',
+  'web.pay_notice_reseller_web_expiring_digest': 'گزارش روزانهٔ سرویس‌های رو به اتمام نماینده',
+  'web.pay_notice_reseller_web_daily_sales': 'گزارش روزانهٔ فروش نماینده',
   'web.pay_provider_pending': 'در انتظار',
   'web.pay_provider_processing': 'در حال پردازش',
   'web.pay_provider_completed': 'تکمیل‌شده',

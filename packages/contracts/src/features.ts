@@ -812,6 +812,18 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: [],
   },
+  {
+    key: 'reseller_tier_progress',
+    description:
+      'PR-5: «پیشرفت تا سطح بعد» \u2014 the reseller web panel\u2019s dashboard shows, for a tier with ' +
+      'a next-tier target (a monthly count of services or a monthly sales amount), how far this ' +
+      'month\u2019s sales are from it, read from the existing monthly reseller sales tracking. ' +
+      'Display only: no tier ever changes because of it. Off by default.',
+    defaultEnabled: false,
+    // LOCAL: a card on the reseller panel; nothing else reads it.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

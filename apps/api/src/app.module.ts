@@ -90,6 +90,9 @@ import { MiniAppStaticController } from './surfaces/miniapp/static.controller.js
 import { ResellerAccessController } from './surfaces/reseller/access.controller.js';
 import { ResellerServicesController } from './surfaces/reseller/services.controller.js';
 import { ResellerAccountController } from './surfaces/reseller/account.controller.js';
+import { ResellerSellingController } from './surfaces/reseller/selling.controller.js';
+import { ResellerClientsController } from './surfaces/reseller/clients.controller.js';
+import { ResellerExtrasController } from './surfaces/reseller/extras.controller.js';
 import { CorrelationMiddleware } from './surfaces/web/correlation.middleware.js';
 import { securityHeaders } from './surfaces/web/security-headers.middleware.js';
 import { DomainErrorFilter } from './surfaces/web/error.filter.js';
@@ -262,6 +265,10 @@ export class AppModule implements NestModule {
       ResellerAccessController as never,
       ResellerServicesController as never,
       ResellerAccountController as never,
+      // PR-5: «خرید» (the bot's catalogue and checkout), the clients book, auto-renew, trials.
+      ResellerSellingController as never,
+      ResellerClientsController as never,
+      ResellerExtrasController as never,
     );
 
     return {

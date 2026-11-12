@@ -33,6 +33,7 @@ import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
+import { TierTargetEditor } from './reseller-tier-target';
 import { messageFor } from './settings';
 import { PURPOSE_LABELS } from './discounts';
 import { PricingText, TIER_PRICING_LABELS, percentOf } from './resellers';
@@ -1049,6 +1050,7 @@ function TierForm({
         </>
       )}
       {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
+      {mode === 'edit' && tier !== undefined && <TierTargetEditor tierId={tier.id} />}
       <SaveBar dirty={dirty}>
         {mode === 'create' && (
           <span className="muted small tiers-form-hint">

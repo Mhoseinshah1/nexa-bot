@@ -1,4 +1,4 @@
-import { and, count, eq, isNull } from 'drizzle-orm';
+import { and, count, eq, gte, isNull, lt } from 'drizzle-orm';
 import type { OrderId, ProductId, TenantContext, UserId } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -38,6 +38,31 @@ export class DrizzleTrialGrantRepository implements TrialGrantRepository {
           isNull(trialGrants.releasedAt),
           // A reset grant stops counting exactly as a released one does (ADR-0015).
           isNull(trialGrants.resetAt),
+          // PR-5: a reseller's panel trials are counted by their daily quota, not here.
+          eq(trialGrants.resellerTrial, false),
+        ),
+      );
+    return rows[0]?.value ?? 0;
+  }
+
+  async countResellerTrials(
+    scope: TenantContext,
+    customerId: UserId,
+    window: { readonly from: Date; readonly to: Date } | null,
+    tx?: TransactionScope,
+  ): Promise<number> {
+    const rows = await this.exec(tx)
+      .select({ value: count() })
+      .from(trialGrants)
+      .where(
+        and(
+          eq(trialGrants.tenantId, requireTenantId(scope)),
+          eq(trialGrants.customerId, customerId),
+          eq(trialGrants.resellerTrial, true),
+          isNull(trialGrants.releasedAt),
+          ...(window === null
+            ? []
+            : [gte(trialGrants.createdAt, window.from), lt(trialGrants.createdAt, window.to)]),
         ),
       );
     return rows[0]?.value ?? 0;
@@ -59,6 +84,7 @@ export class DrizzleTrialGrantRepository implements TrialGrantRepository {
         productId: draft.productId,
         serviceId: draft.serviceId,
         createdAt: draft.now,
+        resellerTrial: draft.resellerTrial ?? false,
       })
       .onConflictDoNothing({ target: [trialGrants.tenantId, trialGrants.orderId] })
       .returning({ id: trialGrants.id });

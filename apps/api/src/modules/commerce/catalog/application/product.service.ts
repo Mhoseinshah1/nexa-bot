@@ -144,6 +144,11 @@ export interface ProductServiceDeps {
  */
 export type ListedProduct = ProductRecord & {
   readonly personalDiscount: ListedPersonalDiscount | null;
+  /**
+   * PR-5 (reseller web panel): the product's own LIST price, kept when a reseller's offered
+   * price replaces `price` — the card strikes it through. Display only: nothing prices from it.
+   */
+  readonly listPrice: Money | null;
 };
 
 export interface ProductListQuery {
@@ -495,6 +500,7 @@ export class ProductService {
     const listed = (product: ProductRecord): ListedProduct => ({
       ...product,
       personalDiscount: personal.get(product.id) ?? null,
+      listPrice: product.price,
     });
     if (view.standing === undefined) return { ...page, items: page.items.map(listed) };
     const offered = await this.deps.resellers.offeredPrices(

@@ -29,6 +29,7 @@ import { mayRequest } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { CopyIdButton } from '../ui/record-ref';
 import { navigate, setQueries, useLinkHandler, type Route } from '../router';
+import { ResellerTrialSettingsCard } from './reseller-trial-settings';
 import { messageFor } from './settings';
 import {
   LIST_PAGE_SIZE,
@@ -257,6 +258,8 @@ export function ResellersPage({
   mayViewCatalog = false,
   mayViewPanels = false,
   maySearchCustomers = false,
+  maySettingsView = false,
+  maySettingsEdit = false,
 }: {
   route: Route;
   /** No `resellers.view`: no list, no tiers, and no edit (it opens from a row). */
@@ -272,6 +275,9 @@ export function ResellersPage({
   /** Round N: `catalog.view` and `panels.view`, for names in the effective-policy card. */
   mayViewCatalog?: boolean;
   mayViewPanels?: boolean;
+  /** PR-5: `settings.view` / `settings.edit`, for the reseller trial card's two settings. */
+  maySettingsView?: boolean;
+  maySettingsEdit?: boolean;
   /**
    * UX batch 01, item 9: `users.view` AND `users.search`, for the register form's
    * customer picker — the list charges both for a search. The
@@ -560,6 +566,14 @@ export function ResellersPage({
           </a>
         </p>
       </Card>
+
+      {!denied && (
+        <ResellerTrialSettingsCard
+          maySettingsView={maySettingsView}
+          maySettingsEdit={maySettingsEdit}
+          mayViewPanels={mayViewPanels}
+        />
+      )}
 
       <Card title={t('web.resellers_list_title')}>
         {/* Hidden while the list cannot answer: a filter mints a request the server has

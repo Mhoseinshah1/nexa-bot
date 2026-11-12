@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchResellerWebPanel, forceLogoutResellerWebPanel } from '../api/client';
+import {
+  fetchResellerWebPanel,
+  fetchResellerWebTrials,
+  forceLogoutResellerWebPanel,
+  resetResellerWebTotp,
+} from '../api/client';
 import { errorText } from '../error-text';
 import { formatNumber, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
@@ -51,6 +56,31 @@ export function ResellerWebPanelCard({
       void client.invalidateQueries({ queryKey: key });
     },
   });
+  const trials = useQuery({
+    queryKey: ['reseller-web-trials', customerId],
+    queryFn: () => fetchResellerWebTrials(customerId),
+  });
+  // «بازنشانی ورود دومرحله‌ای»: its own reason and its own key, like the forced logout.
+  const [resetting, setResetting] = useState(false);
+  const [resetReason, setResetReason] = useState('');
+  const resetSubmission = useSubmissionKey();
+  const reset = useMutation({
+    mutationFn: () => {
+      const written = resetReason.trim();
+      return resetResellerWebTotp(customerId, {
+        reason: written,
+        idempotencyKey: resetSubmission.current({ customerId, reason: written }),
+      });
+    },
+    onError: (error) => resetSubmission.settleOn(error),
+    onSuccess: ({ reset: done }) => {
+      resetSubmission.settle();
+      setResetting(false);
+      setResetReason('');
+      toast({ tone: 'ok', message: t(done ? 'web.rp_admin_totp_done' : 'web.rp_admin_totp_none') });
+      void client.invalidateQueries({ queryKey: key });
+    },
+  });
   const data = query.data;
   return (
     <Card title={t('web.rp_admin_title')}>
@@ -75,6 +105,17 @@ export function ResellerWebPanelCard({
                     {data.secondFactor ? t('web.rp_2fa_on') : t('web.rp_2fa_off')}
                   </Badge>,
                 ],
+                ...(trials.data === undefined
+                  ? []
+                  : [
+                      [
+                        t('web.rp_admin_trials'),
+                        t('web.rp_admin_trials_value')
+                          .replace('{today}', formatNumber(trials.data.today))
+                          .replace('{quota}', formatNumber(trials.data.quota))
+                          .replace('{total}', formatNumber(trials.data.total)),
+                      ] as [string, string],
+                    ]),
               ]}
             />
             {mayEdit ? (
@@ -86,6 +127,14 @@ export function ResellerWebPanelCard({
                   onClick={() => setAsking(true)}
                 >
                   {t('web.rp_admin_force')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={!data.secondFactor}
+                  onClick={() => setResetting(true)}
+                >
+                  {t('web.rp_admin_totp_reset')}
                 </Button>
               </div>
             ) : (
@@ -117,6 +166,35 @@ export function ResellerWebPanelCard({
                 <Banner tone="danger">
                   {errorText(force.error)}
                   <ErrorRef error={force.error} />
+                </Banner>
+              )}
+            </div>
+          }
+        />
+      )}
+      {resetting && (
+        <ConfirmDialog
+          title={t('web.rp_admin_totp_reset')}
+          question={t('web.rp_admin_totp_question')}
+          confirmLabel={t('web.rp_admin_totp_confirm')}
+          cancelLabel={t('web.user_action_cancel')}
+          confirmDisabled={!reasonUsable(resetReason) || reset.isPending}
+          onConfirm={() => reset.mutate()}
+          onCancel={() => setResetting(false)}
+          extra={
+            <div className="stack">
+              <Field label={t('web.rp_admin_totp_reason')} htmlFor="reseller-web-totp-reason">
+                <Textarea
+                  id="reseller-web-totp-reason"
+                  rows={3}
+                  value={resetReason}
+                  onChange={(event) => setResetReason(event.target.value)}
+                />
+              </Field>
+              {reset.error !== null && (
+                <Banner tone="danger">
+                  {errorText(reset.error)}
+                  <ErrorRef error={reset.error} />
                 </Banner>
               )}
             </div>
