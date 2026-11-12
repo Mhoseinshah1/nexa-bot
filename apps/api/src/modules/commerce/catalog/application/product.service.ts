@@ -158,6 +158,22 @@ export interface ProductListQuery {
 }
 
 /**
+ * Every item of a paged customer read, `PRODUCT_PAGE_MAX` at a time, following the
+ * repository's own `hasMore`. A page that says there is more but brought nothing ends the
+ * walk rather than asking for the same offset forever.
+ */
+async function allPages<T>(
+  read: (limit: number, offset: number) => Promise<CustomerPage<T>>,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (;;) {
+    const page = await read(PRODUCT_PAGE_MAX, out.length);
+    out.push(...page.items);
+    if (!page.hasMore || page.items.length === 0) return out;
+  }
+}
+
+/**
  * Products, as an operator manages them and a customer browses them.
  *
  * Every mutation runs the seven-step write path: authenticate, resolve scope,
@@ -418,30 +434,39 @@ export class ProductService {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const view = await this.catalogueView(scope, customerId);
     if (view === null || view.standing === undefined) return [];
-    const categories = await this.deps.repository.listCustomerCategories(
-      scope,
-      PRODUCT_PAGE_MAX,
-      0,
-      view.panelIds,
-      view.audience,
-    );
-    const out = [];
-    for (const category of categories.items) {
-      const page = await this.deps.repository.listCustomerProductsInCategory(
+    /*
+     * Every page, not the first (Codex on #469): the screen has no "more" control, so a
+     * category past the hundredth, or a plan past the hundredth in its category, would
+     * silently vanish from the list and from the customer copy drawn from it.
+     */
+    const categories = await allPages((limit, offset) =>
+      this.deps.repository.listCustomerCategories(
         scope,
-        category.id,
-        PRODUCT_PAGE_MAX,
-        0,
+        limit,
+        offset,
         view.panelIds,
         view.audience,
+      ),
+    );
+    const out = [];
+    for (const category of categories) {
+      const products = await allPages((limit, offset) =>
+        this.deps.repository.listCustomerProductsInCategory(
+          scope,
+          category.id,
+          limit,
+          offset,
+          view.panelIds,
+          view.audience,
+        ),
       );
       const offered = await this.deps.resellers.offeredPrices(
         scope,
         view.standing,
         'NEW_SERVICE',
-        page.items,
+        products,
       );
-      const items = page.items.flatMap((product) => {
+      const items = products.flatMap((product) => {
         const price = offered.get(product.id) ?? null;
         return product.price === null || price === null
           ? []

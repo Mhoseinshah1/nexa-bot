@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { ResellerPricesResponse } from '@nexa/contracts';
 import { formatMoneyText, formatNumber, formatTrafficGbText } from '../../format';
 import { t } from '../../i18n/web.fa';
-import { Badge, Button, Empty, StateSwitch, useToast } from '../../ui/kit';
+import { Badge, Button, Empty, StateSwitch, useCopyText } from '../../ui/kit';
 import { fetchPrices } from '../api';
 import { RpCard } from '../view';
 
@@ -44,22 +44,13 @@ export function customerPriceList(data: ResellerPricesResponse): string {
 
 /** The price list: list price against the reseller's own, by category. */
 export function PricesPage({ tierName }: { tierName: string }) {
-  const toast = useToast();
+  const copyText = useCopyText();
   const query = useQuery({ queryKey: ['reseller', 'prices'], queryFn: fetchPrices });
   const data = query.data;
   const empty = data !== undefined && data.groups.every((group) => group.items.length === 0);
 
   const copy = () => {
-    if (data === undefined) return;
-    const clipboard = navigator.clipboard as Clipboard | undefined;
-    if (clipboard === undefined) {
-      toast({ tone: 'danger', message: t('web.copy_failed') });
-      return;
-    }
-    clipboard.writeText(customerPriceList(data)).then(
-      () => toast({ tone: 'ok', message: t('web.rp_prices_copied') }),
-      () => toast({ tone: 'danger', message: t('web.copy_failed') }),
-    );
+    if (data !== undefined) copyText(customerPriceList(data), t('web.rp_prices_copied'));
   };
 
   return (

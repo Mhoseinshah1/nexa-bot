@@ -7,6 +7,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { useTheme } from '../theme';
 import { Button, Empty, Skeleton } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { useSelectedTabInStrip } from '../ui/tab-strip';
 import { ME_KEY, fetchMe, signOutPanel } from './api';
 import { usePanelPwa } from './pwa';
 import {
@@ -171,13 +172,13 @@ function Sidebar({
 }) {
   const client = useQueryClient();
   const nav = useRef<HTMLElement>(null);
-  // On a phone the menu is a swipeable strip: keep the current screen's tab in view.
-  useEffect(() => {
-    const current = nav.current?.querySelector('[aria-current="page"]');
-    if (current instanceof HTMLElement && typeof current.scrollIntoView === 'function') {
-      current.scrollIntoView({ inline: 'center', block: 'nearest' });
-    }
-  }, [screen]);
+  // On a phone the menu is a swipeable strip: keep the current screen's tab in view, by
+  // scrolling the strip itself (the admin's tab-strip rule) and never the page.
+  useSelectedTabInStrip(
+    nav,
+    () => nav.current?.querySelector<HTMLElement>('[aria-current="page"]'),
+    screen,
+  );
   const out = useMutation({
     retry: false,
     mutationFn: signOutPanel,

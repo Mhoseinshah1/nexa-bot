@@ -41,6 +41,7 @@ import {
   uniqueNames,
 } from '../../modules/commerce/reseller-panel/domain/connection-files.js';
 import type { ResellerWebContext } from '../../modules/commerce/reseller-panel/application/reseller-web-access.service.js';
+import type { ResellerSendResult } from '../../modules/commerce/reseller-panel/application/reseller-web-services.service.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
 import { listedPersonalDiscountWire, orderWire, wire } from '../miniapp/projections.js';
 import { parseWith, resellerCall, resellerKey } from './reseller-request.js';
@@ -129,7 +130,7 @@ export class ResellerServicesController {
   async sendConnection(
     @Req() request: FastifyRequest,
     @Param('serviceId') serviceId: string,
-  ): Promise<{ sent: number }> {
+  ): Promise<ResellerSendResult> {
     const context = await resellerCall(this.container, request);
     return this.container.resellerWeb.services.sendConnection(context, serviceId);
   }
@@ -214,7 +215,7 @@ export class ResellerServicesController {
   async sendFiles(
     @Req() request: FastifyRequest,
     @Param('serviceId') serviceId: string,
-  ): Promise<{ sent: number }> {
+  ): Promise<ResellerSendResult> {
     const context = await resellerCall(this.container, request);
     return this.container.resellerWeb.services.sendFiles(context, serviceId);
   }

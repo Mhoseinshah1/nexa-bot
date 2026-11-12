@@ -4,9 +4,12 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMPTY_PRODUCT_DISPLAY,
+  PRODUCT_PAGE_MAX,
   RESELLER_API_PREFIX,
   RESELLER_SESSION_COOKIE_NAME,
+  miniAppPaymentStatusSchema,
   money,
+  resellerSendResultSchema,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -18,6 +21,7 @@ import {
 } from '@nexa/contracts';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
+import { productCategories } from '../../apps/api/src/infrastructure/persistence/schema';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import type { ServiceRecord } from '../../apps/api/src/modules/commerce/provisioning/application/ports';
@@ -203,7 +207,10 @@ describe('the reseller web panel — services and connection files (PR-4)', () =
     expect(tested.probed).toBe(true);
   }
 
-  async function product(price = 250_000n): Promise<ProductId> {
+  async function product(
+    price = 250_000n,
+    categoryId = SEED_IDS.categoryA as ProductCategoryId,
+  ): Promise<ProductId> {
     const created = await products.create(tenantA, {
       id: api.container.ids.uuid() as ProductId,
       draft: {
@@ -212,7 +219,7 @@ describe('the reseller web panel — services and connection files (PR-4)', () =
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelId as PanelId,
-        categoryId: SEED_IDS.categoryA as ProductCategoryId,
+        categoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(price, 'IRT'),
         display: EMPTY_PRODUCT_DISPLAY,
@@ -487,6 +494,8 @@ describe('the reseller web panel — services and connection files (PR-4)', () =
     sent = [];
     const panel = await call(cookie, 'POST', `/services/${service.id}/files/send`);
     expect(panel.statusCode, panel.body).toBe(200);
+    // The answer is the contract's send result, which the web parses as such.
+    expect(resellerSendResultSchema.parse(panel.json())).toMatchObject({ outcome: 'SENT' });
     const fromPanel = documents().map((one) => one.body.replace(/--[-\w]+/gu, '<boundary>'));
     expect(fromPanel).toEqual(fromBot);
     expect(fromPanel.join('')).toContain(RESELLER_TG);
@@ -560,6 +569,35 @@ describe('the reseller web panel — services and connection files (PR-4)', () =
     expect((await call(others, 'POST', `/orders/${order.id}/pay-wallet`)).statusCode).toBe(404);
   });
 
+  it('a top-up’s payment is read back by its owner only (the screen re-reads a gateway attempt)', async () => {
+    const cookie = await signedIn();
+    const topup = await call(cookie, 'POST', '/wallet/topup', {
+      amount: { amountMinor: '100000', currency: 'IRT' },
+      provider: 'MANUAL_TRANSFER',
+    });
+    expect(topup.statusCode, topup.body).toBe(200);
+    const paymentId = (topup.json() as { instruction: { paymentId: string } }).instruction
+      .paymentId;
+    const read = await call(cookie, 'GET', `/payments/${paymentId}`);
+    expect(read.statusCode, read.body).toBe(200);
+    expect(miniAppPaymentStatusSchema.parse(read.json())).toMatchObject({
+      paymentId,
+      method: 'MANUAL_TRANSFER',
+      state: 'PENDING',
+      transferPending: true,
+      receiptFiled: false,
+      gateway: null,
+      order: null,
+    });
+    // Another reseller's read of it is the same "not found" as a payment that does not exist.
+    const others = await signedIn(other);
+    const peek = await call(others, 'GET', `/payments/${paymentId}`);
+    expect(peek.statusCode).toBe(404);
+    expect(codeOf(peek)).toBe('reseller_web.not_found');
+    const missing = await call(cookie, 'GET', `/payments/${randomUUID()}`);
+    expect(missing.statusCode).toBe(404);
+  });
+
   it('the price list shows list price, the reseller’s price and the discount, by category', async () => {
     await bridgePanel(true);
     await product(500_000n);
@@ -580,4 +618,33 @@ describe('the reseller web panel — services and connection files (PR-4)', () =
       discountPercent: 20,
     });
   });
+
+  it('the price list reads every catalogue page — past a hundred categories and a hundred plans', async () => {
+    await bridgePanel(true);
+    // PRODUCT_PAGE_MAX + 5 plans in the seeded category …
+    for (let i = 0; i < PRODUCT_PAGE_MAX + 5; i += 1) await product(500_000n);
+    // … and PRODUCT_PAGE_MAX more categories, one plan each: PRODUCT_PAGE_MAX + 1 in all.
+    const extra = Array.from(
+      { length: PRODUCT_PAGE_MAX },
+      () => api.container.ids.uuid() as ProductCategoryId,
+    );
+    await db()
+      .insert(productCategories)
+      .values(
+        extra.map((id, index) => ({
+          id,
+          tenantId: tenantA.tenantId,
+          name: `دسته ${String(index + 1)}`,
+          sortOrder: 100 + index,
+        })),
+      );
+    for (const id of extra) await product(300_000n, id);
+    const cookie = await signedIn();
+    const response = await call(cookie, 'GET', '/prices');
+    expect(response.statusCode, response.body).toBe(200);
+    const prices = response.json() as { groups: { items: unknown[] }[] };
+    expect(prices.groups).toHaveLength(PRODUCT_PAGE_MAX + 1);
+    expect(prices.groups[0]?.items).toHaveLength(PRODUCT_PAGE_MAX + 5);
+    expect(prices.groups.slice(1).every((group) => group.items.length === 1)).toBe(true);
+  }, 120_000);
 });

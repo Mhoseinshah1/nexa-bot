@@ -31,6 +31,15 @@ import type { SubscriptionFileService } from '../../provisioning/application/sub
 import type { ResellerWebRepository } from './ports.js';
 import type { ResellerWebContext } from './reseller-web-access.service.js';
 
+/**
+ * What a Telegram send answered, as `resellerSendResultSchema` puts it on the wire. A refused
+ * send (`STOPPED`) is a 409 with a Persian code, never a 200, so a success always says `SENT`.
+ */
+export interface ResellerSendResult {
+  readonly outcome: 'SENT';
+  readonly sent: number;
+}
+
 /** How many services the panel reads for its filters and search (the reseller's whole list). */
 export const RESELLER_WEB_SERVICES_CAP = 5000;
 
@@ -313,7 +322,10 @@ export class ResellerWebServicesService {
    * OWN chat through the bot they signed in from — exactly the bot's «🔗 لینک اشتراک» without a
    * card. Files-only panels send the files instead, as the bot does.
    */
-  async sendConnection(context: ResellerWebContext, serviceId: string): Promise<{ sent: number }> {
+  async sendConnection(
+    context: ResellerWebContext,
+    serviceId: string,
+  ): Promise<ResellerSendResult> {
     const service = await this.own(context, serviceId);
     if (await this.deps.delivery.isFilesOnly(context.scope, service)) {
       return this.sendFiles(context, serviceId);
@@ -344,7 +356,7 @@ export class ResellerWebServicesService {
       after: { chat: 'OWN' },
       result: 'SUCCESS',
     });
-    return { sent: 1 };
+    return { outcome: 'SENT', sent: 1 };
   }
 
   /** «لینک تازه»: the bot's rotation, only where the provider supports it. */
@@ -410,7 +422,7 @@ export class ResellerWebServicesService {
   }
 
   /** «ارسال فایل‌ها به تلگرام من»: exactly the bot's button — `SubscriptionFileService.send`. */
-  async sendFiles(context: ResellerWebContext, serviceId: string): Promise<{ sent: number }> {
+  async sendFiles(context: ResellerWebContext, serviceId: string): Promise<ResellerSendResult> {
     const service = await this.own(context, serviceId);
     await this.countFetch(context, service.id);
     const result = await this.deps.files.send(context.scope, context.actor, {
@@ -428,7 +440,7 @@ export class ResellerWebServicesService {
       result: result.outcome === 'SENT' ? 'SUCCESS' : 'FAILED',
     });
     if (result.outcome === 'NOT_FOUND') throw notFound();
-    if (result.outcome === 'SENT') return { sent: result.sent };
+    if (result.outcome === 'SENT') return { outcome: 'SENT', sent: result.sent };
     if (result.outcome === 'STOPPED') {
       throw errors.conflict(
         RESELLER_WEB_ERROR_CODES.TELEGRAM_UNDELIVERED,

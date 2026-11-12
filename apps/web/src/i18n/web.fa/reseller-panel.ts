@@ -136,9 +136,10 @@ export const WEB_FA_RESELLER_PANEL = {
   'web.rp_link_label': 'لینک اشتراک',
   'web.rp_send_connection': 'ارسال لینک و QR به تلگرام من',
   'web.rp_rotate': 'لینک تازه',
-  'web.rp_rotate_hint':
-    '«لینک تازه» لینک قبلی را باطل می‌کند؛ برای وقتی که لینک دست کس دیگری افتاده.',
-  'web.rp_rotated': 'لینک تازه ساخته شد و در ربات برایتان فرستاده شد.',
+  'web.rp_rotate_hint': '«لینک تازه» یک لینک اشتراک جدید برای این سرویس می‌سازد.',
+  'web.rp_rotated':
+    'درخواست لینک تازه ثبت شد؛ لینک جدید پس از ساخته شدن همین‌جا نمایش داده می‌شود.',
+  'web.rp_rotating': 'لینک تازه در حال ساخت است؛ این بخش خودش به‌روز می‌شود.',
   'web.rp_files_only': 'این سرور فقط «فایل اتصال» می‌دهد و لینک اشتراک ندارد (تنظیم پنل).',
   'web.rp_no_link': 'برای این سرویس لینک اتصال در دسترس نیست.',
   'web.rp_files_title': 'فایل‌های اتصال',
@@ -181,7 +182,9 @@ export const WEB_FA_RESELLER_PANEL = {
   'web.rp_topup_pay': 'پرداخت',
   'web.rp_topup_gateway_ready': 'درخواست پرداخت ساخته شد.',
   'web.rp_topup_gateway_open': 'رفتن به صفحهٔ پرداخت',
-  'web.rp_topup_gateway_waiting': 'لینک پرداخت هنوز آماده نیست؛ چند لحظه بعد دوباره امتحان کنید.',
+  'web.rp_topup_gateway_waiting': 'لینک پرداخت در حال ساخت است؛ همین‌جا نمایش داده می‌شود.',
+  'web.rp_topup_gateway_closed':
+    'این پرداخت دیگر باز نیست و لینکی برای آن ساخته نشد؛ برای شارژ دوباره درخواست دهید.',
   'web.rp_topup_gateway_chat': 'پرداخت این روش در ربات انجام می‌شود.',
   'web.rp_card_title': 'کارت‌به‌کارت',
   'web.rp_card_amount': 'مبلغ دقیق انتقال',

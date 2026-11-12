@@ -3,6 +3,7 @@ import {
   RESELLER_IDEMPOTENCY_HEADER,
   RESELLER_PANEL_ROUTES,
   miniAppOrderSchema,
+  miniAppPaymentStatusSchema,
   miniAppReceiptResponseSchema,
   miniAppServiceOfferSchema,
   miniAppTicketCategoriesResponseSchema,
@@ -21,6 +22,7 @@ import {
   resellerMeResponseSchema,
   resellerPreferencesSchema,
   resellerPricesResponseSchema,
+  resellerSendResultSchema,
   resellerServiceDetailSchema,
   resellerServicesResponseSchema,
   resellerSessionsResponseSchema,
@@ -131,20 +133,26 @@ export const fetchServiceDetail = (id: string) =>
   call('GET', path(R.service, { serviceId: id }), resellerServiceDetailSchema);
 export const saveServiceNote = (id: string, note: string | null) =>
   call('PUT', path(R.serviceNote, { serviceId: id }), noteParser, { body: { note } });
-export const serviceQrUrl = (id: string, kind: string) =>
-  `${RESELLER_API_PREFIX}${path(R.serviceQr, { serviceId: id, kind })}`;
+/**
+ * `version` names the link the QR encodes, so a rotated link is a new image address rather than
+ * the old picture the browser already holds; absent, the plain address.
+ */
+export const serviceQrUrl = (id: string, kind: string, version?: string) =>
+  `${RESELLER_API_PREFIX}${path(R.serviceQr, { serviceId: id, kind })}${
+    version === undefined ? '' : `?v=${encodeURIComponent(version)}`
+  }`;
 export const serviceFileUrl = (id: string, index: number) =>
   `${RESELLER_API_PREFIX}${path(R.serviceFile, { serviceId: id, index })}`;
 export const serviceFilesZipUrl = (id: string) =>
   `${RESELLER_API_PREFIX}${path(R.serviceFilesZip, { serviceId: id })}`;
 export const sendConnection = (id: string) =>
-  call('POST', path(R.serviceSendConnection, { serviceId: id }), numberField('sent'));
+  call('POST', path(R.serviceSendConnection, { serviceId: id }), resellerSendResultSchema);
 export const rotateLink = (id: string, key: string) =>
   call('POST', path(R.serviceRotateLink, { serviceId: id }), okParser, { key });
 export const fetchConnectionFiles = (id: string) =>
   call('GET', path(R.serviceFiles, { serviceId: id }), resellerConnectionFilesResponseSchema);
 export const sendConnectionFiles = (id: string) =>
-  call('POST', path(R.serviceFilesSend, { serviceId: id }), numberField('sent'));
+  call('POST', path(R.serviceFilesSend, { serviceId: id }), resellerSendResultSchema);
 
 export const fetchOffer = (id: string, kind: MiniAppServiceAction) =>
   call('GET', path(R.serviceOffer, { serviceId: id, kind }), miniAppServiceOfferSchema);
@@ -172,6 +180,9 @@ export const quoteTopup = (amount: MoneyWire) =>
   });
 export const startTopup = (amount: MoneyWire, provider: string, key: string) =>
   call('POST', R.walletTopup, miniAppTopupResponseSchema, { body: { amount, provider }, key });
+/** One of the reseller's own payments — re-read while a gateway attempt's invoice is made. */
+export const fetchPayment = (paymentId: string) =>
+  call('GET', path(R.payment, { paymentId }), miniAppPaymentStatusSchema);
 export const markTransferSent = (paymentId: string, key: string) =>
   call('POST', path(R.paymentTransferSent, { paymentId }), miniAppTransferSentResponseSchema, {
     key,

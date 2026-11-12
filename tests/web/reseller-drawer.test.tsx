@@ -41,7 +41,7 @@ describe('connection: link and QR', () => {
   it('shows the QR (the bot’s renderer, through the API), the link, send and «لینک تازه»', async () => {
     open(serviceDetail());
     const qr = await screen.findByAltText(t('web.rp_qr_alt'));
-    expect(qr).toHaveAttribute('src', `${SVC}/qr/SINGBOX`);
+    expect(qr.getAttribute('src')).toMatch(new RegExp(`^${SVC}/qr/SINGBOX\\?v=\\w+$`, 'u'));
     expect(
       screen.getByText(t('web.rp_singbox_profile').replace('{name}', 'nexa-ar_1043')),
     ).toBeInTheDocument();
@@ -50,7 +50,9 @@ describe('connection: link and QR', () => {
     expect(screen.getByRole('button', { name: t('web.rp_rotate') })).toBeInTheDocument();
     // The other QR kind is one click away.
     fireEvent.click(screen.getByRole('button', { name: t('web.rp_qr_sublink') }));
-    expect(screen.getByAltText(t('web.rp_qr_alt'))).toHaveAttribute('src', `${SVC}/qr/SUB_LINK`);
+    expect(screen.getByAltText(t('web.rp_qr_alt')).getAttribute('src')).toMatch(
+      new RegExp(`^${SVC}/qr/SUB_LINK\\?v=\\w+$`, 'u'),
+    );
   });
 
   it('offers «لینک تازه» only when the provider supports it', async () => {
@@ -61,8 +63,8 @@ describe('connection: link and QR', () => {
   });
 
   it('send to Telegram and rotate are POSTs, rotate with an idempotency key', async () => {
-    const { api } = open(serviceDetail(), [
-      { url: `${SVC}/send-connection`, method: 'POST', body: { sent: 2 } },
+    const { api } = open(serviceDetail({ working: false }), [
+      { url: `${SVC}/send-connection`, method: 'POST', body: { outcome: 'SENT', sent: 1 } },
       { url: `${SVC}/rotate-link`, method: 'POST', body: { ok: true } },
     ]);
     const seen = watchHeaders();
@@ -70,12 +72,62 @@ describe('connection: link and QR', () => {
     await waitFor(() =>
       expect(api.calls.some((c) => c.url.endsWith('/send-connection'))).toBe(true),
     );
+    // The answer is the contract's `resellerSendResultSchema`, parsed: the success is reported.
+    expect(await screen.findByText(t('web.rp_sent_connection'))).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: t('web.rp_rotate') }));
     await waitFor(() => expect(seen.some((c) => c.url.endsWith('/rotate-link'))).toBe(true));
     const rotate = seen.find((c) => c.url.endsWith('/rotate-link'));
     expect(rotate?.method).toBe('POST');
     expect(rotate?.headers['idempotency-key']).toMatch(/^[A-Za-z0-9-]{16,64}$/u);
   });
+
+  it('a send answer off the contract (no `outcome`) is not reported as sent', async () => {
+    open(serviceDetail(), [{ url: `${SVC}/send-connection`, method: 'POST', body: { sent: 1 } }]);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.rp_send_connection') }));
+    await waitFor(() => expect(document.querySelector('.toast')).not.toBeNull());
+    expect(screen.queryByText(t('web.rp_sent_connection'))).toBeNull();
+  });
+
+  it('«لینک تازه» re-reads the service at once, so a finished rotation shows the new link and QR', async () => {
+    const before = serviceDetail({ working: false });
+    const after = serviceDetail({
+      working: false,
+      subscriptionUrl: 'https://sub.example.com/s/ar_1043-NEW',
+    });
+    open(before, [{ url: `${SVC}/rotate-link`, method: 'POST', body: { ok: true } }]);
+    const oldSrc = (await screen.findByAltText(t('web.rp_qr_alt'))).getAttribute('src');
+    stubApi([
+      { url: SVC, body: after },
+      { url: `${SVC}/rotate-link`, method: 'POST', body: { ok: true } },
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: t('web.rp_rotate') }));
+    expect(await screen.findByText('https://sub.example.com/s/ar_1043-NEW')).toBeInTheDocument();
+    expect(screen.queryByText('https://sub.example.com/s/ar_1043-7f3a9c')).toBeNull();
+    // The QR's address names the link, so the browser fetches the new picture.
+    expect(screen.getByAltText(t('web.rp_qr_alt')).getAttribute('src')).not.toBe(oldSrc);
+  });
+
+  it('while the rotation is in flight the drawer keeps reading until the worker has finished', async () => {
+    open(serviceDetail({ working: true }));
+    expect(await screen.findByText(t('web.rp_rotating'))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.rp_rotate') })).toBeDisabled();
+    stubApi([
+      {
+        url: SVC,
+        body: serviceDetail({
+          working: false,
+          subscriptionUrl: 'https://sub.example.com/s/ar_1043-NEW',
+        }),
+      },
+    ]);
+    expect(
+      await screen.findByText('https://sub.example.com/s/ar_1043-NEW', undefined, {
+        timeout: 5000,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(t('web.rp_rotating'))).toBeNull();
+    expect(screen.getByRole('button', { name: t('web.rp_rotate') })).toBeEnabled();
+  }, 10_000);
 
   it('a link that cannot be had says so instead of drawing an empty box', async () => {
     open(serviceDetail({ subscriptionUrl: null, qrKinds: [], canRotateLink: false }));
@@ -117,7 +169,7 @@ describe('connection: files', () => {
   it('sends the files to Telegram with the bot’s own send (POST files/send)', async () => {
     const { api } = open(serviceDetail({ filesOffered: true }), [
       { url: `${SVC}/files`, body: FILES },
-      { url: `${SVC}/files/send`, method: 'POST', body: { sent: 2 } },
+      { url: `${SVC}/files/send`, method: 'POST', body: { outcome: 'SENT', sent: 2 } },
     ]);
     await screen.findByText('main.json');
     fireEvent.click(screen.getByRole('button', { name: t('web.rp_files_send') }));
@@ -126,6 +178,7 @@ describe('connection: files', () => {
         true,
       ),
     );
+    expect(await screen.findByText(t('web.rp_sent_files'))).toBeInTheDocument();
   });
 
   it('files-only: no link, no QR, no «ارسال لینک و QR», the explanation, and the files block', async () => {

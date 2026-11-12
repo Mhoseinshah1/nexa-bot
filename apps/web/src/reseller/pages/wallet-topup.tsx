@@ -1,6 +1,11 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { MINIAPP_RECEIPT_MAX_BYTES, type MoneyWire } from '@nexa/contracts';
+import {
+  MINIAPP_RECEIPT_MAX_BYTES,
+  type MiniAppGatewayAttempt,
+  type MiniAppPaymentStatus,
+  type MoneyWire,
+} from '@nexa/contracts';
 import { errorText } from '../../error-text';
 import { currencyLabel, formatMoneyText, formatNumber } from '../../format';
 import { t } from '../../i18n/web.fa';
@@ -14,7 +19,9 @@ import {
   StateSwitch,
   useToast,
 } from '../../ui/kit';
+import { FilePicker } from '../../ui/file-picker';
 import {
+  fetchPayment,
   fetchWallet,
   markTransferSent,
   newIdempotencyKey,
@@ -29,6 +36,18 @@ export const WALLET_KEY = ['reseller', 'wallet'] as const;
 
 type TopupOutcome = Awaited<ReturnType<typeof startTopup>>;
 type Quote = Awaited<ReturnType<typeof quoteTopup>>;
+
+/** How often a gateway attempt is read again while its invoice is still being made. */
+export const GATEWAY_ATTEMPT_POLL_MS = 3000;
+
+/**
+ * Whether the screen should keep reading the attempt: the payment is still open and the
+ * provider's invoice — so its link — does not exist yet. An in-chat invoice has no link here.
+ */
+function stillCreating(status: MiniAppPaymentStatus | undefined): boolean {
+  if (status === undefined) return true;
+  return status.state === 'PENDING' && status.gateway !== null && !status.gateway.invoiceReady;
+}
 
 /** Reads a chosen receipt image as base64 (no `data:` prefix), refusing one over the limit. */
 function readBase64(file: File): Promise<string> {
@@ -218,27 +237,40 @@ function Methods({
 }
 
 function TopupResult({ outcome }: { outcome: TopupOutcome }) {
-  if (outcome.kind === 'GATEWAY') {
-    const { attempt } = outcome;
-    if (attempt.paysInChat) return <Banner tone="info">{t('web.rp_topup_gateway_chat')}</Banner>;
-    if (attempt.invoiceReady && attempt.payUrl !== null) {
-      return (
-        <div className="rp-stack">
-          <Banner tone="ok">{t('web.rp_topup_gateway_ready')}</Banner>
-          <a
-            className="btn primary"
-            href={attempt.payUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {t('web.rp_topup_gateway_open')}
-          </a>
-        </div>
-      );
-    }
-    return <Banner tone="info">{t('web.rp_topup_gateway_waiting')}</Banner>;
-  }
+  if (outcome.kind === 'GATEWAY') return <GatewayResult attempt={outcome.attempt} />;
   return <CardInstruction instruction={outcome.instruction} />;
+}
+
+/**
+ * A gateway top-up answers as soon as the attempt is opened, while the worker is still making
+ * the provider's invoice (`invoiceReady: false`). Codex on #469: the screen re-reads the payment,
+ * as the mini app's status screen does, until the link exists or the payment is no longer open,
+ * instead of leaving the reseller at «در حال ساخت» until they press pay again.
+ */
+function GatewayResult({ attempt: first }: { attempt: MiniAppGatewayAttempt }) {
+  const waiting = !first.paysInChat && !first.invoiceReady;
+  const status = useQuery({
+    queryKey: ['reseller', 'payment', first.paymentId],
+    queryFn: () => fetchPayment(first.paymentId),
+    enabled: waiting,
+    refetchInterval: (query) => (stillCreating(query.state.data) ? GATEWAY_ATTEMPT_POLL_MS : false),
+  });
+  const attempt = status.data?.gateway ?? first;
+  if (attempt.paysInChat) return <Banner tone="info">{t('web.rp_topup_gateway_chat')}</Banner>;
+  if (attempt.invoiceReady && attempt.payUrl !== null) {
+    return (
+      <div className="rp-stack">
+        <Banner tone="ok">{t('web.rp_topup_gateway_ready')}</Banner>
+        <a className="btn primary" href={attempt.payUrl} target="_blank" rel="noopener noreferrer">
+          {t('web.rp_topup_gateway_open')}
+        </a>
+      </div>
+    );
+  }
+  if (status.data !== undefined && status.data.state !== 'PENDING') {
+    return <Banner tone="warn">{t('web.rp_topup_gateway_closed')}</Banner>;
+  }
+  return <Banner tone="info">{t('web.rp_topup_gateway_waiting')}</Banner>;
 }
 
 function CardInstruction({
@@ -251,7 +283,7 @@ function CardInstruction({
   const [receiptWindow, setReceiptWindow] = useState<number | null | undefined>(undefined);
   const [filed, setFiled] = useState(false);
   const [tooBig, setTooBig] = useState(false);
-  const file = useRef<File | null>(null);
+  const [file, setFile] = useState<File | null>(null);
   const keys = useRef({ sent: newIdempotencyKey(), receipt: newIdempotencyKey() });
 
   const sent = useMutation({
@@ -261,7 +293,7 @@ function CardInstruction({
   });
   const receipt = useMutation({
     mutationFn: async () => {
-      const chosen = file.current;
+      const chosen = file;
       if (chosen === null) throw new Error('No receipt chosen.');
       return uploadReceipt(
         instruction.paymentId,
@@ -336,16 +368,21 @@ function CardInstruction({
           ) : (
             <div className="rp-stack">
               <Field label={t('web.rp_card_receipt_label')} htmlFor="rp-receipt">
-                <input
+                <FilePicker
                   id="rp-receipt"
-                  className="input"
-                  type="file"
+                  kind="image"
                   accept="image/*"
-                  onChange={(event) => {
-                    const chosen = event.target.files?.[0] ?? null;
+                  selected={file}
+                  disabled={receipt.isPending}
+                  onFiles={(files) => {
+                    const chosen = files[0] ?? null;
                     const big = chosen !== null && chosen.size > MINIAPP_RECEIPT_MAX_BYTES;
                     setTooBig(big);
-                    file.current = big ? null : chosen;
+                    setFile(big ? null : chosen);
+                  }}
+                  onClear={() => {
+                    setTooBig(false);
+                    setFile(null);
                   }}
                 />
               </Field>

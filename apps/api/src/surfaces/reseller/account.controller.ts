@@ -15,13 +15,16 @@ import {
   miniAppTopupQuoteRequestSchema,
   miniAppTopupRequestSchema,
   money,
+  orderCodeOf,
   paymentTrackingCode,
   resellerWalletEntriesQuerySchema,
   ticketCodeOf,
   type Money,
+  type MiniAppPaymentStatus,
   type MiniAppTicketDetail,
   type MiniAppTopupQuoteResponse,
   type MiniAppWalletEntries,
+  type PaymentId,
   type ResellerDashboard,
   type ResellerPricesResponse,
 } from '@nexa/contracts';
@@ -167,6 +170,63 @@ export class ResellerAccountController {
       'Not offered for this amount.',
       { outcome: result.outcome },
     );
+  }
+
+  /**
+   * One of the reseller's own payments, read as the mini app reads it (`MINIAPP_ROUTES.payment`):
+   * the payment's state, the gateway attempt — whose link exists only once the worker has made
+   * the invoice — whether a receipt was filed, and the order. Another customer's payment is the
+   * same "not found" as a missing one. Read-only.
+   */
+  @Get(RESELLER_PANEL_ROUTES.payment)
+  async payment(
+    @Req() request: FastifyRequest,
+    @Param('paymentId') paymentId: string,
+  ): Promise<MiniAppPaymentStatus> {
+    const context = await resellerCall(this.container, request);
+    const { scope, actor } = context;
+    const customerId = context.customer.id;
+    const payment = await owned(() =>
+      this.container.payments.paymentForCustomer(scope, actor, customerId, paymentId),
+    );
+    const attempt =
+      payment.method === 'GATEWAY'
+        ? await this.container.gatewayPayments.attemptFor(scope, customerId, payment.id)
+        : null;
+    const receiptFiled =
+      payment.method === 'MANUAL_TRANSFER'
+        ? await this.container.receipts.filedForCustomer(
+            scope,
+            actor,
+            customerId,
+            payment.id as PaymentId,
+          )
+        : false;
+    const order =
+      payment.orderId === null
+        ? null
+        : await this.container.orders.orderForCustomer(scope, actor, {
+            customerId,
+            orderId: payment.orderId,
+          });
+    return {
+      paymentId: payment.id,
+      method: payment.method,
+      state: payment.state,
+      transferPending: payment.method === 'MANUAL_TRANSFER' && payment.state === 'PENDING',
+      receiptFiled,
+      // The panel has no in-app invoice: a Stars attempt is paid in the chat.
+      gateway: attempt === null ? null : attemptWire(attempt, false),
+      order:
+        order === null
+          ? null
+          : {
+              id: order.id,
+              code: orderCodeOf(order) ?? '',
+              state: order.state,
+              title: order.line.title,
+            },
+    };
   }
 
   /** 'I have transferred': the bot's signal, which opens the receipt window. */

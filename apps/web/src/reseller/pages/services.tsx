@@ -128,7 +128,7 @@ export function ServicesPage({ search = '' }: { search?: string }) {
                         <Expiry row={row} />
                       </td>
                       <td>
-                        <StateBadge state={row.state} />
+                        <StateBadge value={row.state} />
                       </td>
                       <td className="rp-end">
                         <Button size="sm" onClick={() => setOpenId(row.id)}>
