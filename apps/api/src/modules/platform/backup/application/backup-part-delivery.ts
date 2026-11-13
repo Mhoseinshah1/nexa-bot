@@ -58,8 +58,14 @@ export interface PartDeliveryResult {
     readonly state: 'FAILED_DEFINITIVE' | 'OUTCOME_UNKNOWN' | 'NOT_ATTEMPTED';
     readonly detail: string | null;
     readonly reason: BackupDeliveryReason | null;
+    /** NOT_ATTEMPTED because the pass's deadline had passed (Codex review of #479). */
+    readonly deadlinePassed?: true;
   } | null;
 }
+
+/** What a part not sent because the pass's window closed records as its detail. */
+export const PART_DEADLINE_DETAIL =
+  'Not sent: the re-delivery window ended before this part could be sent.';
 
 export interface PartDeliveryDeps {
   readonly clock: Clock;
@@ -84,7 +90,11 @@ export async function deliverPartsInOrder(
      * re-delivery whose lease was lost). Absent: always true.
      */
     readonly beforeSend?: () => Promise<boolean>;
-    /** No resend starts after this instant. Null: bounded by the send count alone. */
+    /**
+     * No send — a part's first or a resend — starts at or after this instant (the legacy
+     * compaction's re-delivery window). Null: bounded by the send count alone (the run's own
+     * DELIVER pass).
+     */
     readonly deadline?: Date | null;
     readonly maxAttempts?: number;
   },
@@ -96,6 +106,34 @@ export async function deliverPartsInOrder(
     let total = part.attemptsSoFar;
     let sends = 0;
     for (;;) {
+      // Codex review of #479: the deadline bounds EVERY send, not only a resend's pause — a
+      // pass whose parts keep succeeding must not keep starting uploads past its window. The
+      // part is recorded as not sent, with why, so the compaction card can say so — unless it
+      // was sent before: its row keeps what that send left (an OUTCOME_UNKNOWN stays one).
+      const deadline = input.deadline ?? null;
+      if (deadline !== null && deps.clock.now().getTime() >= deadline.getTime()) {
+        if (total === 0) {
+          await input.record({
+            partNumber: part.partNumber,
+            state: 'NOT_ATTEMPTED',
+            attemptedAt: deps.clock.now(),
+            messageId: null,
+            detail: PART_DEADLINE_DETAIL,
+            reason: null,
+            attempts: total,
+          });
+        }
+        return {
+          delivered,
+          stopped: {
+            partNumber: part.partNumber,
+            state: 'NOT_ATTEMPTED',
+            detail: PART_DEADLINE_DETAIL,
+            reason: null,
+            deadlinePassed: true,
+          },
+        };
+      }
       if (input.beforeSend !== undefined && !(await input.beforeSend())) {
         return {
           delivered,
@@ -169,7 +207,6 @@ export async function deliverPartsInOrder(
         attempt.state === 'OUTCOME_UNKNOWN' ? attempt.retryAfterMs : undefined,
       );
       if (delay === null) return stop;
-      const deadline = input.deadline ?? null;
       if (deadline !== null && deps.clock.now().getTime() + delay >= deadline.getTime()) {
         return stop;
       }

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BackupDeliveryReason, BackupDeliveryState } from '@nexa/contracts';
 import {
   deliverPartsInOrder,
+  PART_DEADLINE_DETAIL,
   type DeliverablePart,
   type PartOutcome,
 } from '../../apps/api/src/modules/platform/backup/application/backup-part-delivery';
@@ -241,6 +242,58 @@ describe('delivering an archive part by part (NEXA-BACKUP-DELIVERY)', () => {
     });
     expect(sent).toHaveLength(1);
     expect(result.stopped).toMatchObject({ state: 'OUTCOME_UNKNOWN' });
+  });
+
+  // Codex review of #479: the deadline bounds every SEND, not only a resend's pause.
+  it('starts no part after its deadline, even when every earlier part succeeded', async () => {
+    const clock = new FakeClock();
+    const sent: string[] = [];
+    // Each upload takes 20 minutes and succeeds; the window is 30 minutes.
+    const slow: Pick<BackupDeliveryChannel, 'sendDocument'> = {
+      async sendDocument(input) {
+        sent.push(input.filename);
+        clock.advance(20 * 60_000);
+        return { state: 'SUCCEEDED', detail: null, messageId: sent.length };
+      },
+    };
+    const { result, recorded } = await pass(slow, 3, {
+      clock,
+      deadline: new Date(NOW.getTime() + 30 * 60_000),
+    });
+    // Part 1 (0→20 min) and part 2 (20→40 min) started inside the window; part 3 would start
+    // at 40 min, past it, and is never sent.
+    expect(sent).toEqual(['a.7z.001', 'a.7z.002']);
+    expect(result).toEqual({
+      delivered: 2,
+      stopped: {
+        partNumber: 3,
+        state: 'NOT_ATTEMPTED',
+        detail: PART_DEADLINE_DETAIL,
+        reason: null,
+        deadlinePassed: true,
+      },
+    });
+    // Recorded, so the compaction card says why part 3 is not in the group.
+    expect(recorded.at(-1)).toMatchObject({
+      partNumber: 3,
+      state: 'NOT_ATTEMPTED',
+      detail: PART_DEADLINE_DETAIL,
+      attempts: 0,
+    });
+  });
+
+  it('the run’s own pass (no deadline) sends every part however long the uploads take', async () => {
+    const clock = new FakeClock();
+    let sends = 0;
+    const slow: Pick<BackupDeliveryChannel, 'sendDocument'> = {
+      async sendDocument() {
+        sends += 1;
+        clock.advance(60 * 60_000);
+        return { state: 'SUCCEEDED', detail: null, messageId: sends };
+      },
+    };
+    const { result } = await pass(slow, 5, { clock, deadline: null });
+    expect(result).toEqual({ delivered: 5, stopped: null });
   });
 
   it('the rule itself: unknown and never-connected may go again, a refusal may not', () => {
@@ -581,6 +634,23 @@ describe('re-delivering the parts that did not arrive (NEXA-BACKUP-DELIVERY)', (
       deliveryReason: 'CONNECTION_RESET',
     });
     expect(h.reports).toEqual([['OUTCOME_UNKNOWN', 3, 5]]);
+    expect(h.store.owner).toBeNull();
+  });
+
+  it('sends nothing once its window has ended, and keeps the run’s state with the reason', async () => {
+    const h = redelivery({ run: runRow(), parts: partRows([1, 2]) });
+    const outcome = await h.service.redeliver(runRow().id, {
+      deadline: new Date(NOW.getTime() - 1),
+    });
+    expect(outcome).toEqual({ kind: 'NOT_DELIVERED', reason: 'CONNECTION_RESET' });
+    expect(h.sent).toHaveLength(0);
+    expect(h.store.finished.at(-1)).toMatchObject({
+      deliveryState: 'OUTCOME_UNKNOWN',
+      deliveryReason: 'CONNECTION_RESET',
+    });
+    expect(h.store.finished.at(-1)?.deliveryDetail).toContain(PART_DEADLINE_DETAIL);
+    // Part 3 was sent before (unknown): it stays unknown, never rewritten as "not attempted".
+    expect(h.store.parts[2]?.deliveryState).toBe('OUTCOME_UNKNOWN');
     expect(h.store.owner).toBeNull();
   });
 

@@ -273,6 +273,24 @@ export class BackupRedelivery {
     const deliveredTotal = count - pending.length + pass.delivered;
     if (pass.stopped !== null) {
       const stopped = pass.stopped;
+      if (stopped.state === 'NOT_ATTEMPTED' && stopped.deadlinePassed === true) {
+        // The window ended (the compaction's bound): the run keeps the state it had, and says
+        // how far this re-delivery got.
+        const kept = keep.deliveryState;
+        await this.deps.runs.finishRedelivery({
+          id,
+          owner,
+          deliveryState: kept,
+          deliveryAttemptedAt: attemptedAt,
+          deliveryDetail:
+            `Re-delivery: ${String(deliveredTotal)} of ${String(count)} part(s) delivered; part ` +
+            `${String(stopped.partNumber)}: ${stopped.detail ?? stopped.state}`,
+          deliveryReason: run.deliveryReason ?? null,
+          summaryDeliveryState: keep.summaryDeliveryState,
+        });
+        await this.deps.pipeline.reportDelivery(id, kept, deliveredTotal, count);
+        return { kind: 'NOT_DELIVERED', reason: run.deliveryReason ?? null };
+      }
       if (stopped.state === 'NOT_ATTEMPTED') {
         // The lease was lost (taken over after it lapsed): the new holder owns the run now.
         return { kind: 'NOT_DELIVERED', reason: null };
