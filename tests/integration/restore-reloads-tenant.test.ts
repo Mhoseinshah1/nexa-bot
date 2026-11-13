@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { ActorContext, CorrelationId } from '@nexa/contracts';
 import type { Container } from '../../apps/api/src/container';
-import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
+import { createMigratedDatabase } from '../support/migrated-database';
 import { tenants, recoveryRequests } from '../../apps/api/src/infrastructure/persistence/schema';
 import { FileCutoverJournal } from '../../apps/api/src/modules/platform/recovery/infrastructure/cutover-journal';
 import { isTenantForeignKeyViolation } from '../../apps/api/src/infrastructure/lifecycle/installation-tenant-guard';
@@ -67,10 +67,7 @@ describe('a restore that brings a different tenant', () => {
   });
 
   beforeAll(async () => {
-    await maintenance(`CREATE DATABASE "${dbName}"`);
-    const url = new URL(testConfig().DATABASE_URL);
-    url.pathname = `/${dbName}`;
-    await runMigrations(url.toString());
+    const url = new URL(await createMigratedDatabase(testConfig().DATABASE_URL, dbName));
     recoveryRoot = await mkdtemp(join(tmpdir(), 'nexa-tenantguard-'));
     // As nexa_app, under row-level security (ADR-0037); `container.database` is the owner's,
     // for the fixtures and the read-back, and the guard's own lookups take the system path.

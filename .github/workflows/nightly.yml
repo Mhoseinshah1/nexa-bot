@@ -55,8 +55,10 @@ jobs:
     name: Exhaustive orderings
     runs-on: ubuntu-24.04
     # Generous, because the point of this job is to be thorough rather than
-    # quick — but bounded, so a hang is reported rather than billed.
-    timeout-minutes: 60
+    # quick — but bounded, so a hang is reported rather than billed. 90, not 60: the
+    # in-flight ordering search is nine cases of up to 600 s each (one measured 281 s
+    # locally), and the 2026-11-11 run already spent 16 min before its one case timed out.
+    timeout-minutes: 90
 
     env:
       DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test

@@ -15,7 +15,7 @@ import { planArchiveParts } from '../../apps/api/src/modules/platform/backup/inf
 import { PostgresDatabaseTools } from '../../apps/api/src/modules/platform/backup/infrastructure/pg-tools';
 import { FilesystemBackupWorkspaces } from '../../apps/api/src/modules/platform/backup/infrastructure/workspace';
 import { type Container } from '../../apps/api/src/container';
-import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
+import { createMigratedDatabase } from '../support/migrated-database';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { createTestContainer, adminActorFor, createAdmin, tenantA, testConfig } from './harness';
 
@@ -93,12 +93,7 @@ describe('the recovery executor', () => {
     recoveryRoot = await mkdtemp(join(tmpdir(), 'nexa-exec-recovery-'));
     liveName = `nexa_drlive_${randomBytes(6).toString('hex')}`;
     created = [liveName];
-    await maintenance(`CREATE DATABASE "${liveName}"`);
-
-    const url = new URL(testConfig().DATABASE_URL);
-    url.pathname = `/${liveName}`;
-    liveUrl = url.toString();
-    await runMigrations(liveUrl);
+    liveUrl = await createMigratedDatabase(testConfig().DATABASE_URL, liveName);
 
     legacyRoot = await mkdtemp(join(tmpdir(), 'nexa-exec-legacy-'));
     const config = testConfig({

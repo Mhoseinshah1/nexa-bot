@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
+import { createMigratedDatabase } from '../support/migrated-database';
 import { kekFingerprint } from '../../apps/api/src/infrastructure/crypto/kek';
 import { wrapInstallationKey } from '../../apps/api/src/infrastructure/crypto/installation-keyring';
 import { PgCandidateKeyStore } from '../../apps/api/src/modules/platform/recovery/infrastructure/installation-key-adapters';
@@ -64,10 +64,7 @@ describe('the stored decrypt-only keys across a restore', () => {
     // restore would quietly bring `removed-1` back.
     const database = `nexa_kitlive_${randomBytes(6).toString('hex')}`;
     created.push(database);
-    await maintenance(`CREATE DATABASE "${database}"`);
-    const url = new URL(testConfig().DATABASE_URL);
-    url.pathname = `/${database}`;
-    await runMigrations(url.toString());
+    await createMigratedDatabase(testConfig().DATABASE_URL, database);
 
     const wrapping = randomBytes(32);
     const removed = randomBytes(32);

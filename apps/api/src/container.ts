@@ -4979,7 +4979,10 @@ export function createContainer(
     ...(config.PANEL_HTTP_CA_FILE === undefined
       ? {}
       : { caCertificates: [readFileSync(config.PANEL_HTTP_CA_FILE, 'utf8')] }),
-    totalTimeoutMs: Math.max(config.PANEL_HTTP_TIMEOUT_MS, INVENTORY_PAGE_TIMEOUT_FLOOR_MS),
+    totalTimeoutMs: Math.max(
+      config.PANEL_HTTP_TIMEOUT_MS,
+      config.RICKPANEL_INVENTORY_PAGE_TIMEOUT_FLOOR_MS,
+    ),
     maxResponseBytes: Math.max(
       config.PANEL_HTTP_MAX_RESPONSE_BYTES,
       INVENTORY_MAX_PAGE_SIZE * INVENTORY_ROW_BYTES_BOUND,
@@ -10711,8 +10714,6 @@ export function createContainer(
  */
 /** Response bytes allowed per row of a RickPanel inventory page (measured ~1.5 KB a row). */
 const INVENTORY_ROW_BYTES_BOUND = 4096;
-/** The least total time an inventory page is given, whatever PANEL_HTTP_TIMEOUT_MS says. */
-const INVENTORY_PAGE_TIMEOUT_FLOOR_MS = 30_000;
 
 function productionLikeDatabase(databaseUrl: string, nodeEnv: string): boolean {
   const target = databaseTarget(databaseUrl);

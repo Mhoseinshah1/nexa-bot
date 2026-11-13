@@ -10,7 +10,7 @@ import {
   type ActorContext,
 } from '@nexa/contracts';
 import { type Container } from '../../apps/api/src/container';
-import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
+import { createMigratedDatabase } from '../support/migrated-database';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { cmdRun, EXIT_RECOVERY_QUIESCED } from '../../apps/api/src/backup.cli';
 import { createTestContainer, adminActorFor, createAdmin, tenantA, testConfig } from './harness';
@@ -103,10 +103,7 @@ describe('recovery and backup failure drills (E4)', () => {
   async function live(): Promise<Live> {
     const name = `${FILE_PREFIX}${randomBytes(6).toString('hex')}`;
     created.push(name);
-    await maintenance(`CREATE DATABASE "${name}"`);
-    const url = new URL(testConfig().DATABASE_URL);
-    url.pathname = `/${name}`;
-    await runMigrations(url.toString());
+    const url = new URL(await createMigratedDatabase(testConfig().DATABASE_URL, name));
     const workRoot = await mkdtemp(join(tmpdir(), 'nexa-e4-backups-'));
     const recoveryRoot = await mkdtemp(join(tmpdir(), 'nexa-e4-recovery-'));
     roots.push(workRoot, recoveryRoot);

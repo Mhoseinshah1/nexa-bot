@@ -143,6 +143,25 @@ describe('configuration', () => {
     ).toThrowError(/PASSWORD_HASH_PROFILE/);
   });
 
+  it('keeps the 30 s inventory page timeout floor in production', () => {
+    // The lower floor exists only so the integration suite's hung fake panel costs 1 s, not
+    // 30 s, per attempt. In production a full 2000-row page would be cut off mid-answer.
+    const production = {
+      ...valid,
+      NODE_ENV: 'production',
+      PASSWORD_HASH_PROFILE: 'production',
+      WEB_ADMIN_ORIGINS: 'https://admin.example.test',
+    };
+    expect(() =>
+      loadConfig({ ...production, RICKPANEL_INVENTORY_PAGE_TIMEOUT_FLOOR_MS: '29999' }),
+    ).toThrowError(/RICKPANEL_INVENTORY_PAGE_TIMEOUT_FLOOR_MS/);
+    expect(loadConfig(production).RICKPANEL_INVENTORY_PAGE_TIMEOUT_FLOOR_MS).toBe(30_000);
+    expect(
+      loadConfig({ ...valid, RICKPANEL_INVENTORY_PAGE_TIMEOUT_FLOOR_MS: '1000' })
+        .RICKPANEL_INVENTORY_PAGE_TIMEOUT_FLOOR_MS,
+    ).toBe(1_000);
+  });
+
   it('requires an admin origin in production', () => {
     // The Origin check is the half of the CSRF defence that does not depend on
     // the browser honouring SameSite.

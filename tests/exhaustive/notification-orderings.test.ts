@@ -418,89 +418,109 @@ describe('notification state machine invariants', () => {
     },
   ];
 
-  it('holds every invariant when a send is still in flight', async () => {
-    const broken: string[] = [];
-    let correctedAfterSweep = 0;
-    let sweptWhileInFlight = 0;
-    let sweptThenFailingLanding = 0;
+  /**
+   * One test per (prelude, landing) pair, each with its own 10-minute budget, and the coverage
+   * claims asserted over the sum in the test after them.
+   *
+   * This was ONE test over all 1 125 orderings under a single 600 s timeout. Each ordering
+   * is real database work (~0.5 s), so the whole block sat within a runner's variance of its
+   * budget and the nightly of 2026-11-11 (and 11-12) failed with "Test timed out in 600000ms"
+   * — no invariant broken, just a budget a slow runner crossed. The work is unchanged: the
+   * same orderings, the same invariants, now in nine budgets of ~125 orderings each.
+   */
+  const inFlight = { swept: 0, corrected: 0, sweptThenFailing: 0 };
 
-    let windows: Step[][] = [[]];
-    for (let i = 0; i < 3; i += 1) {
-      windows = windows.flatMap((prefix) => INTERLEAVED.map((step) => [...prefix, step]));
-    }
-    const orderings = PRELUDES.flatMap((prelude) =>
-      LANDINGS.flatMap((landing) => windows.map((window) => ({ prelude, landing, window }))),
-    );
+  const slowSendCases = PRELUDES.flatMap((prelude) =>
+    LANDINGS.map((landing) => ({
+      prelude,
+      landing,
+      label: `${prelude.length === 0 ? 'first attempt' : prelude.join(' > ')}, send ${landing.name}`,
+    })),
+  );
 
-    for (const { prelude, landing, window: sequence } of orderings) {
-      const opening = prelude.length === 0 ? 'first attempt' : prelude.join(' → ');
-      const where = `${opening} → send in flight → ${sequence.join(' → ')} → send ${landing.name}`;
-      const intent = await begin(`slow:${prelude.join('-')}:${landing.name}:${sequence.join('-')}`);
-      for (const step of prelude) await apply(step);
+  it.each(slowSendCases)(
+    'holds every invariant when a send is still in flight ($label)',
+    async ({ prelude, landing }) => {
+      const broken: string[] = [];
+      let windows: Step[][] = [[]];
+      for (let i = 0; i < 3; i += 1) {
+        windows = windows.flatMap((prefix) => INTERLEAVED.map((step) => [...prefix, step]));
+      }
 
-      const hold = transport.holdNextSend(landing.result);
-      // NOT awaited. This is the whole point: the tick owns a claimed row and
-      // is parked inside the transport while the steps below run.
-      const slow = ctx.container.notificationDispatcher
-        .tick()
-        .then(() => null)
-        .catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
+      for (const sequence of windows) {
+        const opening = prelude.length === 0 ? 'first attempt' : prelude.join(' → ');
+        const where = `${opening} → send in flight → ${sequence.join(' → ')} → send ${landing.name}`;
+        const intent = await begin(
+          `slow:${prelude.join('-')}:${landing.name}:${sequence.join('-')}`,
+        );
+        for (const step of prelude) await apply(step);
 
-      const started = await Promise.race([
-        hold.entered.then(() => 'entered' as const),
-        slow.then(() => 'finished' as const),
-      ]);
-      if (started !== 'entered') {
-        // A setup that quietly failed to park would make every assertion below
-        // vacuous — the exact way this file has already passed twice while
-        // testing nothing — so it is a failure, never a skip.
+        const hold = transport.holdNextSend(landing.result);
+        // NOT awaited. This is the whole point: the tick owns a claimed row and
+        // is parked inside the transport while the steps below run.
+        const slow = ctx.container.notificationDispatcher
+          .tick()
+          .then(() => null)
+          .catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
+
+        const started = await Promise.race([
+          hold.entered.then(() => 'entered' as const),
+          slow.then(() => 'finished' as const),
+        ]);
+        if (started !== 'entered') {
+          // A setup that quietly failed to park would make every assertion below
+          // vacuous — the exact way this file has already passed twice while
+          // testing nothing — so it is a failure, never a skip.
+          hold.release();
+          await slow;
+          broken.push(`[${where}] no send was in flight; the ordering was never reached`);
+          continue;
+        }
+
+        for (const step of sequence) await apply(step);
+
+        const beforeLanding = await statusOf(intent);
         hold.release();
-        await slow;
-        broken.push(`[${where}] no send was in flight; the ordering was never reached`);
-        continue;
+        const tickError = await slow;
+        if (tickError !== null) broken.push(`[${where}] the in-flight tick threw: ${tickError}`);
+        const afterLanding = await statusOf(intent);
+
+        if (beforeLanding === 'FAILED') {
+          inFlight.swept += 1;
+          if (afterLanding === 'SENT') inFlight.corrected += 1;
+          if (landing.name !== 'succeeds') inFlight.sweptThenFailing += 1;
+        }
+
+        await checkInvariants(intent, where, sweepHadItsChance(sequence), broken);
       }
 
-      for (const step of sequence) await apply(step);
+      expect(
+        broken,
+        `${broken.length} in-flight orderings broke an invariant:\n${broken.slice(0, 10).join('\n')}`,
+      ).toEqual([]);
+    },
+    600_000,
+  );
 
-      const beforeLanding = await statusOf(intent);
-      hold.release();
-      const tickError = await slow;
-      if (tickError !== null) broken.push(`[${where}] the in-flight tick threw: ${tickError}`);
-      const afterLanding = await statusOf(intent);
-
-      if (beforeLanding === 'FAILED') {
-        sweptWhileInFlight += 1;
-        if (afterLanding === 'SENT') correctedAfterSweep += 1;
-        if (landing.name !== 'succeeds') sweptThenFailingLanding += 1;
-      }
-
-      await checkInvariants(intent, where, sweepHadItsChance(sequence), broken);
-    }
-
-    expect(
-      broken,
-      `${broken.length} in-flight orderings broke an invariant:\n${broken.slice(0, 10).join('\n')}`,
-    ).toEqual([]);
-
+  it('reached, across every in-flight case, the states that block exists for', () => {
     // The coverage claim, asserted rather than assumed. Without these the
     // block could be green having never reached the state it exists for —
     // which is what "covered by another test" turned out to mean.
+    expect(inFlight.swept, 'no ordering swept an intent whose send was still open').toBeGreaterThan(
+      0,
+    );
     expect(
-      sweptWhileInFlight,
-      'no ordering swept an intent whose send was still open',
-    ).toBeGreaterThan(0);
-    expect(
-      correctedAfterSweep,
+      inFlight.corrected,
       'a send that landed after its intent was swept never corrected it to SENT',
     ).toBeGreaterThan(0);
     // The landing dimension, asserted rather than assumed — the same guard the
     // preludes needed. Without it every ordering could be parking a success
     // again and the two failing landings would be decoration.
     expect(
-      sweptThenFailingLanding,
+      inFlight.sweptThenFailing,
       'no ordering swept an intent whose outstanding send then FAILED',
     ).toBeGreaterThan(0);
-  }, 600_000);
+  });
 
   /**
    * The kill switch governs the WHOLE batch, not whichever message was first.
