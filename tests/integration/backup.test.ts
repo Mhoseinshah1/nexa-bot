@@ -100,19 +100,22 @@ describe('backup against a real database', () => {
       workDir?: string;
       partBytes?: number;
       verifyServer?: { host: string; port: string };
+      tools?: PostgresDatabaseTools;
     } = {},
   ): BackupService {
     const config = testConfig();
-    const tools = new PostgresDatabaseTools({
-      databaseUrl: config.DATABASE_URL,
-      verifyServer: overrides.verifyServer,
-      dumpTimeoutMs: 120_000,
-      restoreTimeoutMs: 120_000,
-      // The migrator this release ships. Only ever used to migrate a restored
-      // CANDIDATE forward; no case here exercises it, and it is required rather
-      // than optional so a process that could need it cannot be built without one.
-      migratorEntrypoint: MIGRATOR,
-    });
+    const tools =
+      overrides.tools ??
+      new PostgresDatabaseTools({
+        databaseUrl: config.DATABASE_URL,
+        verifyServer: overrides.verifyServer,
+        dumpTimeoutMs: 120_000,
+        restoreTimeoutMs: 120_000,
+        // The migrator this release ships. Only ever used to migrate a restored
+        // CANDIDATE forward; no case here exercises it, and it is required rather
+        // than optional so a process that could need it cannot be built without one.
+        migratorEntrypoint: MIGRATOR,
+      });
     return new BackupService({
       runs: context.container.backupRuns,
       tools,
@@ -779,7 +782,7 @@ describe('backup against a real database', () => {
       });
       const started = Date.now();
       await expect(tools.dump(join(bin, 'out.pgcustom'))).rejects.toMatchObject({
-        code: 'backup.tool_failed',
+        code: 'backup.dump_timeout',
       });
       /*
        * It gave up near its OWN deadline, not the child's and not the backstop's.
@@ -863,7 +866,7 @@ describe('backup against a real database', () => {
         migratorEntrypoint: MIGRATOR,
       });
       await expect(tools.dump(join(bin, 'out.pgcustom'))).rejects.toMatchObject({
-        code: 'backup.tool_failed',
+        code: 'backup.dump_timeout',
       });
 
       const pid = Number((await readFile(pidFile, 'utf8')).trim());
@@ -883,6 +886,209 @@ describe('backup against a real database', () => {
     } finally {
       await rm(bin, { recursive: true, force: true });
     }
+  }, 60_000);
+
+  /*
+   * The dump watchdog (field, 2026-11-13: a manual backup read DUMP for almost two hours).
+   * Three cases through the whole run: a dump that never ends (a fake `pg_dump` whose tree
+   * must die), and a REAL `pg_dump` behind a REAL ACCESS EXCLUSIVE lock, once failing fast on
+   * `--lock-wait-timeout` and once stopped by the watchdog with the lock it waited on recorded.
+   */
+
+  /** Holds ACCESS EXCLUSIVE on `processed_messages` until `release`, as a named session. */
+  async function holdExclusiveLock(): Promise<{ release(): Promise<void>; pid: number }> {
+    const client = new Client({
+      connectionString: testConfig().DATABASE_URL,
+      application_name: 'it-exclusive-holder',
+    });
+    await client.connect();
+    await client.query('BEGIN');
+    await client.query('LOCK TABLE processed_messages IN ACCESS EXCLUSIVE MODE');
+    const pid = Number(
+      (await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid,
+    );
+    return {
+      pid,
+      async release() {
+        await client.query('ROLLBACK').catch(() => undefined);
+        await client.end();
+      },
+    };
+  }
+
+  async function failureEvent(): Promise<string | null> {
+    const events = await context.container.database.db.execute<{ message: string }>(
+      sql`SELECT message FROM operational_events WHERE code = 'backup.run_failed'`,
+    );
+    return (events.rows as unknown as readonly { message: string }[])[0]?.message ?? null;
+  }
+
+  it('watchdog: a dump that never ends fails the run with backup.dump_timeout, kills its tree, tells the ops group and leaves no file', async () => {
+    const bin = await mkdtemp(join(tmpdir(), 'nexa-endless-dump-'));
+    try {
+      // Writes a partial dump to the file it was given, starts a child of its own, and never
+      // ends. `psql` is the real one, so the size and the session are read from PostgreSQL.
+      await writeFile(
+        join(bin, 'pg_dump'),
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "--version" ]; then echo "pg_dump (PostgreSQL) 16.1"; exit 0; fi',
+          'out=""; prev=""',
+          'for arg in "$@"; do if [ "$prev" = "--file" ]; then out="$arg"; fi; prev="$arg"; done',
+          'printf "PGDMP partial" > "$out"',
+          `echo "$$" > '${bin}/dump.pid'`,
+          'sleep 600 </dev/null >/dev/null 2>&1 &',
+          `echo "$!" > '${bin}/child.pid'`,
+          'exec >/dev/null 2>&1',
+          'while :; do sleep 1; done',
+        ].join('\n'),
+      );
+      await writeFile(join(bin, 'psql'), '#!/bin/sh\nexec psql "$@"\n');
+      await chmod(join(bin, 'pg_dump'), 0o755);
+      await chmod(join(bin, 'psql'), 0o755);
+      await pointAtInstallation(context.container);
+
+      const tools = new PostgresDatabaseTools({
+        databaseUrl: testConfig().DATABASE_URL,
+        dumpTimeoutMs: 2_000,
+        restoreTimeoutMs: 60_000,
+        binDir: bin,
+        migratorEntrypoint: MIGRATOR,
+      });
+      const outcome = await service({ tools }).run('MANUAL');
+      if (outcome.kind !== 'COMPLETED') throw new Error('expected the run to finish');
+
+      expect(outcome.run.state).toBe('FAILED');
+      expect(outcome.run.stage).toBe('DUMP');
+      expect(outcome.run.failureCode).toBe('backup.dump_timeout');
+      expect(outcome.run.failureMessage).toContain('pg_dump did not finish within');
+      // The real psql found no session for this fake, and said so rather than guessing.
+      expect(outcome.run.failureMessage).toContain('no open database session');
+      expect(outcome.run.cleanupOk).toBe(true);
+      expect(delivered).toHaveLength(0);
+
+      // The ops group is told, through the ordinary failed-backup condition.
+      expect(await failureEvent()).toContain('backup.dump_timeout');
+
+      // Nothing left behind: the run's directory is gone, partial dump and all.
+      await expect(stat(join(workDir, outcome.run.id))).rejects.toMatchObject({ code: 'ENOENT' });
+
+      // And the tree is dead: the fake pg_dump and the child it started.
+      for (const file of ['dump.pid', 'child.pid']) {
+        const pid = Number((await readFile(join(bin, file), 'utf8')).trim());
+        let alive = true;
+        for (let attempt = 0; attempt < 60 && alive; attempt += 1) {
+          try {
+            process.kill(pid, 0);
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          } catch {
+            alive = false;
+          }
+        }
+        expect(alive).toBe(false);
+      }
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('watchdog: a table held ACCESS EXCLUSIVE fails the dump fast with backup.dump_lock_timeout, naming the table and its holder', async () => {
+    await pointAtInstallation(context.container);
+    const holder = await holdExclusiveLock();
+    try {
+      const tools = new PostgresDatabaseTools({
+        databaseUrl: testConfig().DATABASE_URL,
+        dumpTimeoutMs: 60_000,
+        dumpLockWaitTimeoutMs: 1_500,
+        restoreTimeoutMs: 60_000,
+        migratorEntrypoint: MIGRATOR,
+      });
+      const started = Date.now();
+      const outcome = await service({ tools }).run('MANUAL');
+      if (outcome.kind !== 'COMPLETED') throw new Error('expected the run to finish');
+      // Failed on the lock wait, long before the 60 s watchdog.
+      expect(Date.now() - started).toBeLessThan(30_000);
+
+      expect(outcome.run.state).toBe('FAILED');
+      expect(outcome.run.failureCode).toBe('backup.dump_lock_timeout');
+      expect(outcome.run.failureMessage).toContain(
+        'could not take its ACCESS SHARE lock on processed_messages',
+      );
+      expect(outcome.run.failureMessage).toContain(
+        `pid ${String(holder.pid)} "it-exclusive-holder" (AccessExclusiveLock`,
+      );
+      const message = await failureEvent();
+      expect(message).toContain('backup.dump_lock_timeout');
+      expect(message).toContain('processed_messages');
+      await expect(stat(join(workDir, outcome.run.id))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await holder.release();
+    }
+  }, 60_000);
+
+  it('watchdog: a dump stuck behind a lock past its deadline is stopped with the lock and its holder recorded', async () => {
+    await pointAtInstallation(context.container);
+    const holder = await holdExclusiveLock();
+    try {
+      const tools = new PostgresDatabaseTools({
+        databaseUrl: testConfig().DATABASE_URL,
+        dumpTimeoutMs: 3_000,
+        // Longer than the watchdog, so the watchdog is what ends it.
+        dumpLockWaitTimeoutMs: 60_000,
+        restoreTimeoutMs: 60_000,
+        migratorEntrypoint: MIGRATOR,
+      });
+      const outcome = await service({ tools }).run('MANUAL');
+      if (outcome.kind !== 'COMPLETED') throw new Error('expected the run to finish');
+
+      expect(outcome.run.state).toBe('FAILED');
+      expect(outcome.run.failureCode).toBe('backup.dump_timeout');
+      expect(outcome.run.failureMessage).toContain(
+        'was waiting for AccessShareLock on processed_messages',
+      );
+      expect(outcome.run.failureMessage).toContain(
+        `held by pid ${String(holder.pid)} "it-exclusive-holder" (AccessExclusiveLock`,
+      );
+      expect(await failureEvent()).toContain('pg_dump منتظر قفل جدول processed_messages بود');
+      await expect(stat(join(workDir, outcome.run.id))).rejects.toMatchObject({ code: 'ENOENT' });
+
+      // The real pg_dump's session is gone: the watchdog killed the client, and the server
+      // ended its backend.
+      let sessions = 1;
+      for (let attempt = 0; attempt < 50 && sessions > 0; attempt += 1) {
+        const rows = await context.container.database.db.execute(
+          sql`SELECT 1 FROM pg_stat_activity WHERE application_name LIKE 'nexa-backup-dump-%'`,
+        );
+        sessions = (rows.rows as unknown as readonly unknown[]).length;
+        if (sessions > 0) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(sessions).toBe(0);
+    } finally {
+      await holder.release();
+    }
+  }, 60_000);
+
+  it('watchdog: the scheduler closes a run whose process died on its next tick, schedule off', async () => {
+    // Before, only the next backup's START closed it, so a dead run read DUMP for hours.
+    await pointAtInstallation(context.container);
+    const stale = new Date(context.container.clock.now().getTime() - 60 * 60 * 1000);
+    const claim = await context.container.backupRuns.start({
+      id: context.container.ids.uuid(),
+      trigger: 'MANUAL',
+      leaseOwner: 'a-process-that-died',
+      now: stale,
+    });
+    if (!claim.claimed) throw new Error('unreachable');
+
+    await context.container.backupScheduler.tick();
+
+    const abandoned = await context.container.backupRuns.byId(claim.run.id);
+    expect(abandoned?.state).toBe('FAILED');
+    expect(abandoned?.failureCode).toBe('backup.lease_expired');
+    expect(await failureEvent()).not.toBeNull();
+    // No backup was taken: the schedule is off, and closing a dead run is not a backup.
+    const runs = await context.container.database.db.execute(sql`SELECT 1 FROM backup_runs`);
+    expect((runs.rows as unknown as readonly unknown[]).length).toBe(1);
   }, 60_000);
 
   it('fails the run and delivers nothing when the work directory cannot be written', async () => {

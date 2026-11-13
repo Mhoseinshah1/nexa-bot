@@ -9439,6 +9439,8 @@ export function createContainer(
     // when another process may reclaim it as abandoned.
     runHeartbeatAt: () => backup.leaseHeartbeatAt(),
     runStaleAfterMs: BACKUP_LEASE_STALE_AFTER_MS,
+    // Every tick closes a run whose process died, not only the next backup's start.
+    reclaimAbandoned: () => backup.reclaimAbandoned(),
     logger,
   });
 

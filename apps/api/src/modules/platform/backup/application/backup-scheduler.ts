@@ -83,6 +83,13 @@ export interface BackupSchedulerDeps {
    * reclaim the run as abandoned. Health and reclamation cannot then disagree.
    */
   readonly runStaleAfterMs: number;
+  /**
+   * Closes runs whose lease went stale (`BackupService.reclaimAbandoned`), on EVERY tick —
+   * schedule on or off, due or not (2026-11-13). Before, only the next backup's start did, so
+   * a run whose process died showed its last stage until somebody took another backup: on the
+   * owner's test server a manual backup read DUMP for almost two hours. Absent: not here.
+   */
+  readonly reclaimAbandoned?: () => Promise<number>;
   readonly logger: {
     info(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
@@ -190,10 +197,24 @@ export class BackupScheduler {
     return false;
   }
 
+  /** Never stops the tick: a reclaim that cannot run now runs on the next one. */
+  private async reclaimAbandoned(): Promise<void> {
+    if (this.deps.reclaimAbandoned === undefined) return;
+    try {
+      await this.deps.reclaimAbandoned();
+    } catch (error: unknown) {
+      this.deps.logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        'could not close abandoned backup runs on this tick; the next tick tries again',
+      );
+    }
+  }
+
   async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      await this.reclaimAbandoned();
       const schedule = await this.deps.schedule();
       if (!schedule.enabled) {
         // Off is a decision, not a fault: the tick completed and found nothing to do.

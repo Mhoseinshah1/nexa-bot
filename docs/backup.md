@@ -210,7 +210,7 @@ and the environment values are then only their defaults.
 | `BACKUP_WORK_DIR`            | `/var/lib/nexa/backups` | On the data volume. Never `/tmp`.                                              |
 | `BACKUP_TELEGRAM_CHAT_ID`    | empty                   | The FALLBACK destination, used only with no operations group connected.        |
 | `BACKUP_TELEGRAM_BOT_TOKEN`  | empty                   | Set with the chat id, or not at all. Its own bot, not the customer-facing one. |
-| `BACKUP_DUMP_TIMEOUT_MS`     | 2 h                     | A dump that never ends holds the lock until its lease expires.                 |
+| `BACKUP_DUMP_TIMEOUT_MS`     | 2 h                     | The dump watchdog's CEILING (sized per run, below); also 7-Zip's seal limit.   |
 | `BACKUP_RESTORE_TIMEOUT_MS`  | 2 h                     |                                                                                |
 | `BACKUP_DELIVERY_TIMEOUT_MS` | 10 min                  |                                                                                |
 | `BACKUP_PG_BIN_DIR`          | empty                   | Where `pg_dump`/`pg_restore`/`psql` live, if not on `PATH`.                    |
@@ -414,6 +414,54 @@ A run that fails removes its whole workspace (in its `catch`, and again in `fina
   too. A RUNNING row, a live
   lease, a fresh write and a directory with no row in this database are never touched.
 
+### The dump watchdog (2026-11-13)
+
+On the owner's test server a manual backup read stage `DUMP` from 08:32 to 10:22, when it was
+closed `FAILED` at the very second the Mirza import's protective (`PRE_RESTORE`) backup started.
+What the code says about it:
+
+- **What closed it** was that next run's `reclaimStale` (`backup.lease_expired`), the only thing
+  that closed an abandoned run: the owning process had stopped refreshing its lease at least 15
+  minutes before. A live process refreshes it every minute whatever its dump is doing (unless
+  every heartbeat failed for 15 minutes), so the likeliest story is that the process running the
+  backup (the API, for a manual backup from the Web Admin) stopped — restarted or killed —
+  taking its `pg_dump` with it (`init: true`), and the row then simply
+  stayed `RUNNING`/`DUMP` until somebody took another backup. Two hours in `DUMP` was not two
+  hours of dumping.
+- **What the code rules out**: a pipe deadlock (`pg_dump` writes `--file`; stdout and stderr are
+  always drained; 7-Zip runs after the dump, on the file, never piped to it) and the old
+  two-hour timeout (it would have fired at 10:32 with `backup.tool_failed`, not at another run's
+  start).
+- **What it could not rule out**, and is now bounded: `pg_dump` takes ACCESS SHARE on every table
+  first and, without `--lock-wait-timeout`, waits for as long as any session holds one ACCESS
+  EXCLUSIVE (a TRUNCATE, DROP, ALTER, VACUUM FULL or migration — the legacy cleanup's VACUUM FULL
+  runs with no statement timeout, and the migrator's connection has no lock timeout).
+
+So, now:
+
+- **Every scheduler tick closes abandoned runs** (`BackupService.reclaimAbandoned`), schedule on
+  or off, due or not: a run whose process died is `FAILED` (`backup.lease_expired`) and reported
+  within one tick of its lease going stale (≤ 15 + 5 minutes), not when the next backup starts.
+- **The dump has a deadline sized from the database**:
+  `min(BACKUP_DUMP_TIMEOUT_MS, 20 min + 5 min × pg_database_size in GiB)` — 20 minutes for an
+  empty database, 25 for 1 GiB, 40 for 4 GiB, the two-hour default ceiling from 20 GiB. 5 min per
+  GiB is about 3.4 MB/s, far below what `pg_dump` writes even under the backup's CPU quota, so a
+  slow dump is never stopped and a stuck one is stopped in tens of minutes. A size that cannot be
+  read gets the ceiling. `BACKUP_DUMP_TIMEOUT_MS` below 20 minutes is used as is, for every size.
+- **`pg_dump --lock-wait-timeout=300000`** (5 minutes per table lock): a table held exclusively
+  fails the dump as `backup.dump_lock_timeout`, with the table and the session holding it
+  (pid, `application_name`, state, the first 300 characters of its query) in the run's failure
+  text. The scheduler's backoff retries it like any failure.
+- **The dump's session is named** `nexa-backup-dump-<token>` (`PGAPPNAME`). At the deadline the
+  watchdog first reads that session from `pg_stat_activity` / `pg_locks` / `pg_blocking_pids` —
+  the lock it waited for, on which relation, and who held it, or its wait event when it waited on
+  no lock (`ClientWrite` is a client that stopped reading) — and records it; then it kills
+  `pg_dump`'s whole **process group** (SIGTERM, SIGKILL five seconds later), so nothing it started
+  survives it. The run is `FAILED` with `backup.dump_timeout`, the workspace (the partial dump) is
+  removed, and the ops group gets the ordinary `backup.run_failed` line naming the code and, when
+  it waited on a table, the table (never the holder's query: that stays in the run's redacted
+  failure text and the event's context).
+
 ## Scheduler health
 
 The worker's health check includes the backup scheduler. Before this release the
@@ -521,8 +569,8 @@ in PostgreSQL rather than by any process. Two worker replicas is normal during a
 rolling update; the second is told BUSY by the database.
 
 A run that dies takes its lock with it until the lease expires (15 minutes
-without a heartbeat), after which the next run closes the abandoned one as
-`FAILED` and proceeds. The abandoned run's files are left in place and named on
+without a heartbeat), after which the next scheduler tick (every tick, schedule on or
+off), or the next run, closes the abandoned one as `FAILED` and reports it. The abandoned run's files are left in place and named on
 its row — a process that has stopped reporting may still be writing them.
 
 ## Encryption
@@ -692,7 +740,7 @@ closed by its `_ok` twin only when open — a healthy installation records nothi
 
 | Opens                            | Severity | When                                                                                                                     | Closes with                                                                                                                   |
 | -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| `backup.run_failed`              | ERROR    | a run failed, or an abandoned run was reclaimed                                                                          | `backup.run_ok`, the next successful run                                                                                      |
+| `backup.run_failed`              | ERROR    | a run failed (the code in the line; a dump timeout or lock wait names the table), or an abandoned run was reclaimed      | `backup.run_ok`, the next successful run                                                                                      |
 | `backup.delivery_failed`         | WARN     | a verified run's archive did not leave the host (`FAILED_DEFINITIVE` or `OUTCOME_UNKNOWN`)                               | `backup.delivery_ok`, a later run that delivered (or had no destination configured)                                           |
 | `backup.cleanup_failed`          | ERROR    | a run, the debris sweep, or archive retention left plaintext, a scratch database or a directory behind                   | `backup.cleanup_ok`, when no plaintext is left on disk and EVERY leftover any run recorded (paths, scratch databases) is gone |
 | `backup.disk_threshold_exceeded` | WARN     | free space on `BACKUP_WORK_DIR`'s volume is below max(1 GiB, 1.5 × (last dump + last archive))                           | `backup.disk_threshold_ok`                                                                                                    |
