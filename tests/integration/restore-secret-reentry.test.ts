@@ -10,7 +10,7 @@ import {
   type SecretPurpose,
 } from '@nexa/contracts';
 import { type Container } from '../../apps/api/src/container';
-import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
+import { createMigratedDatabase } from '../support/migrated-database';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { AesGcmSecretCipher } from '../../apps/api/src/infrastructure/crypto/secret-cipher';
 import {
@@ -71,8 +71,7 @@ describe('after a restore refused for unreadable secrets', () => {
   async function installation(keyId: string, material: Buffer) {
     const database = `nexa_rsre_${randomBytes(6).toString('hex')}`;
     created.push(database);
-    await maintenance(`CREATE DATABASE "${database}"`);
-    await runMigrations(urlOf(database));
+    await createMigratedDatabase(testConfig().DATABASE_URL, database);
     const workRoot = await mkdtemp(join(tmpdir(), 'nexa-rsre-backups-'));
     const recoveryRoot = await mkdtemp(join(tmpdir(), 'nexa-rsre-recovery-'));
     roots.push(workRoot, recoveryRoot);
