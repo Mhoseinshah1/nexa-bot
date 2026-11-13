@@ -21,6 +21,7 @@ import type {
   BackupRunRow,
 } from '../../backup/application/ports.js';
 import type { BackupService } from '../../backup/application/backup.service.js';
+import { BackupRedelivery } from '../../backup/application/backup-redelivery.js';
 import type { EffectiveBackupSchedule } from '../../backup/application/backup-schedule.js';
 import type { RecoveryRequestRepository } from './ports.js';
 import { requireInstallationScope } from '../../access/application/installation-scope.js';
@@ -73,6 +74,11 @@ export interface BackupAdminServiceDeps {
    * reseller bot's owner holds `backup.*` in their own tenant, and this is the whole database.
    */
   readonly installationTenantId: () => string | null;
+  /**
+   * NEXA-BACKUP-DELIVERY: «ارسال دوبارهٔ بخش‌های نرسیده». Absent: no run is redeliverable
+   * and the press is refused.
+   */
+  readonly redelivery?: Pick<BackupRedelivery, 'redeliver'>;
 }
 
 export interface BackupDiskView {
@@ -86,6 +92,8 @@ export interface BackupDiskView {
 export interface BackupRunView {
   readonly run: BackupRunRow;
   readonly archiveAvailable: boolean;
+  /** Whether «ارسال دوبارهٔ بخش‌های نرسیده» applies to this run (`BackupRedelivery.eligible`). */
+  readonly redeliverable: boolean;
   /** Each part's own outcome (E4), in order. */
   readonly parts: readonly BackupRunPartRow[];
 }
@@ -262,6 +270,74 @@ export class BackupAdminService {
   }
 
   /**
+   * «ارسال دوبارهٔ بخش‌های نرسیده» (NEXA-BACKUP-DELIVERY): sends again, in order, the parts
+   * of one finished run that carry no Telegram message id, from its archive still on this
+   * host — through the pipeline's own bounded resend (`BackupRedelivery`).
+   *
+   * `backup.run` (HIGH): it sends the encrypted archive to the same destination a backup
+   * does, nothing a backup press could not. Audited for the PRESS, like `run`, with what it
+   * produced. Refused while a recovery quiesces the installation, like `run`. The key is
+   * recorded and not enforced, for `run`'s reason; a double press is `BUSY` through the
+   * run's re-delivery lease, which PostgreSQL enforces.
+   */
+  async redeliver(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: { idempotencyKey: string },
+  ): Promise<{ outcome: 'DELIVERED' | 'NOT_DELIVERED' | 'BUSY'; run: BackupRunView }> {
+    await this.authorize(scope, actor, BACKUP_RUN, {
+      action: 'backup.redeliver',
+      entityType: 'Backup',
+      entityId: uuidV7Schema.safeParse(id).success ? id : null,
+    });
+    const run = await this.requireRun(id);
+    const lock = await this.deps.recoveries.installationLock();
+    if (lock !== null && lock.quiescing) {
+      throw errors.conflict(
+        PLATFORM_ERROR_CODES.RECOVERY_QUIESCED,
+        'This installation is being restored and is not sending backups.',
+        { recoveryId: lock.recoveryId },
+      );
+    }
+    const redelivery = this.deps.redelivery;
+    const result =
+      redelivery === undefined
+        ? ({ kind: 'REFUSED', why: 'NOT_FINISHED' } as const)
+        : await redelivery.redeliver(run.id);
+    await this.deps.audit.record(scope, actor, {
+      action: 'backup.redeliver_requested',
+      entityType: 'Backup',
+      entityId: run.id,
+      before: { deliveryState: run.deliveryState },
+      after: {
+        outcome: result.kind,
+        ...(result.kind === 'REFUSED' ? { refused: result.why } : {}),
+        ...(result.kind === 'NOT_DELIVERED' ? { reason: result.reason } : {}),
+        idempotencyKey: input.idempotencyKey,
+      },
+      result: result.kind === 'REFUSED' || result.kind === 'BUSY' ? 'DENIED' : 'SUCCESS',
+    });
+    if (result.kind === 'REFUSED') {
+      if (result.why === 'ARCHIVE_GONE' || result.why === 'MISSING') {
+        throw errors.notFound(
+          PLATFORM_ERROR_CODES.BACKUP_RUN_MISSING,
+          'The local archive for this backup is no longer on this host.',
+        );
+      }
+      throw errors.conflict(
+        PLATFORM_ERROR_CODES.BACKUP_NOT_REDELIVERABLE,
+        result.why === 'LOCAL_ONLY'
+          ? 'This backup is kept on this server by design and is never sent to Telegram.'
+          : 'This backup cannot be re-delivered.',
+        { why: result.why },
+      );
+    }
+    const after = await this.deps.runs.byId(run.id);
+    return { outcome: result.kind, run: await this.withAvailability(after ?? run) };
+  }
+
+  /**
    * The path of an archive an authorised administrator may download.
    *
    * Returns a PATH rather than a stream, because opening a file is a surface's
@@ -365,7 +441,15 @@ export class BackupAdminService {
       this.archiveBytes(run),
       this.deps.runs.parts(run.id),
     ]);
-    return { run, archiveAvailable: bytes !== null, parts };
+    return {
+      run,
+      archiveAvailable: bytes !== null,
+      parts,
+      redeliverable:
+        bytes !== null &&
+        this.deps.redelivery !== undefined &&
+        BackupRedelivery.eligible(run, parts) === 'YES',
+    };
   }
 
   private async archiveBytes(run: BackupRunRow): Promise<number | null> {

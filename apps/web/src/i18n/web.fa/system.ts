@@ -111,6 +111,42 @@ export const WEB_FA_SYSTEM = {
   'web.backup_keep_on_host_cancel': 'انصراف',
   'web.backup_keep_on_host_off_retention':
     'نگه داشتن نسخه روی سرور خاموش است؛ این دو عدد فقط برای بکاپ‌هایی به کار می‌روند که ارسالشان به گروه تلگرام ناموفق یا نامعلوم مانده است.',
+  // NEXA-BACKUP-DELIVERY: the split size (backup.part_mb) on the schedule card.
+  'web.backup_part_size': 'اندازهٔ هر بخش فایل بکاپ (مگابایت)',
+  'web.backup_part_size_hint':
+    'فایل بکاپ بزرگ در بخش‌هایی با این اندازه به تلگرام فرستاده می‌شود (بین 10 تا 45 مگابایت). روی اینترنت کند یا ناپایدار، عدد کوچک‌تر یعنی آپلود کوتاه‌تر و ارسال دوبارهٔ ارزان‌تر. از بکاپ بعدی اعمال می‌شود.',
+  'web.backup_part_size_invalid': 'یک عدد صحیح بین 10 و 45 وارد کنید.',
+  'web.backup_part_size_save': 'ذخیرهٔ اندازه',
+  // NEXA-BACKUP-DELIVERY: why a delivery ended where it did (BACKUP_DELIVERY_REASONS).
+  'web.backup_reason_local_only_import': 'طبق طراحی فقط روی سرور نگه داشته شد (بکاپ ایمپورت)',
+  'web.backup_reason_local_only_server_move':
+    'طبق طراحی فقط روی سرور نگه داشته شد (عضو بستهٔ انتقال سرور)',
+  'web.backup_reason_local_only_requested': 'طبق طراحی فقط روی سرور نگه داشته شد',
+  'web.backup_reason_no_destination': 'مقصدی برای ارسال تنظیم نشده است',
+  'web.backup_reason_destination_unavailable': 'مقصد ارسال در دسترس نبود؛ چیزی فرستاده نشد',
+  'web.backup_reason_archive_unreadable': 'فایل بکاپ روی سرور خوانده نشد',
+  'web.backup_reason_connect_failed': 'اتصال به تلگرام برقرار نشد؛ چیزی فرستاده نشد',
+  'web.backup_reason_telegram_refused': 'تلگرام درخواست را رد کرد',
+  'web.backup_reason_rate_limited': 'تلگرام محدودیت سرعت اعمال کرد (429)',
+  'web.backup_reason_telegram_server_error': 'خطای سرور تلگرام (5xx)',
+  'web.backup_reason_answer_unreadable': 'پاسخ تلگرام خوانا نبود',
+  'web.backup_reason_deadline_exceeded': 'در مهلت ارسال پاسخی از تلگرام نرسید',
+  'web.backup_reason_connection_reset': 'اتصال وسط ارسال قطع شد',
+  'web.backup_reason_transport_error': 'خطای شبکه هنگام ارسال',
+  'web.backup_delivery_by_design': 'فقط روی سرور (طبق طراحی)',
+  'web.backup_part_label': 'بخش {n}',
+  'web.backup_part_attempts': '{n} بار ارسال',
+  'web.backup_part_waiting': 'ارسال نشد چون بخش قبلی نرسید',
+  'web.backup_parts_title': 'وضعیت بخش‌ها',
+  'web.backup_redeliver': 'ارسال دوبارهٔ بخش‌های نرسیده',
+  'web.backup_redeliver_sending': 'در حال ارسال…',
+  'web.backup_redeliver_delivered': 'همهٔ بخش‌ها به تلگرام رسید.',
+  'web.backup_redeliver_not_delivered': 'همهٔ بخش‌ها نرسید؛ وضعیت هر بخش و دلیلش در جدول آمده است.',
+  'web.backup_redeliver_busy': 'ارسال دوبارهٔ همین بکاپ هم‌اکنون در جریان است.',
+  'web.backup_redeliver_confirm':
+    'بخش‌هایی از این بکاپ که هنوز به تلگرام نرسیده‌اند، به ترتیب از روی سرور دوباره فرستاده می‌شوند. اگر پاسخ ارسال قبلی یک بخش گم شده باشد، ممکن است آن بخش دو بار در گروه دیده شود؛ هر دو یکسان‌اند.',
+  'web.backup_redeliver_confirm_yes': 'بله، دوباره بفرست',
+  'web.backup_redeliver_cancel': 'انصراف',
   'web.backup_source_setting': 'تنظیم‌شده در پنل',
   'web.backup_source_environment': 'پیش‌فرض نصب',
   'web.backup_schedule_technical':
@@ -126,7 +162,7 @@ export const WEB_FA_SYSTEM = {
   'web.recovery_running': 'در حال اجرا',
   'web.recovery_unknown_deliveries': 'ارسال‌های نامعلوم',
   'web.recovery_unknown_deliveries_hint':
-    'تلگرام ممکن است این فایل‌ها را گرفته باشد یا نگرفته باشد. هیچ‌چیز به‌طور خودکار دوباره ارسال نمی‌شود.',
+    'تلگرام ممکن است این فایل‌ها را گرفته باشد یا نگرفته باشد. هر بخشی که پاسخش نرسید چند بار با فاصله دوباره فرستاده می‌شود؛ اگر باز هم نرسید، با «ارسال دوبارهٔ بخش‌های نرسیده» می‌توانید دوباره بفرستید.',
   'web.recovery_quiesced': 'نصب در حال بازیابی است و تغییرات را نمی‌پذیرد.',
   'web.recovery_run_now': 'تهیه بکاپ جدید',
   'web.recovery_running_now': 'در حال تهیه بکاپ…',

@@ -328,6 +328,8 @@ describe('backup without copies on the server (backup.archive_keep_on_host)', ()
     const config = testConfig();
     const received: Buffer[] = [];
     const service = new BackupService({
+      // NEXA-BACKUP-DELIVERY: a resend's pause never really waits in a test.
+      sleep: async () => {},
       runs: context.container.backupRuns,
       tools: new PostgresDatabaseTools({
         databaseUrl: config.DATABASE_URL,

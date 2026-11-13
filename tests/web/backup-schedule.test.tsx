@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   API_PREFIX,
+  BACKUP_PART_SIZE_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
   CONTROL_ROUTES,
   settingDefinition,
@@ -10,7 +11,12 @@ import {
   type PermissionKey,
 } from '@nexa/contracts';
 import { BackupScheduleCard } from '../../apps/web/src/pages/backup-schedule';
-import { intervalMinutes, presetOf, splitInterval } from '../../apps/web/src/backup-interval';
+import {
+  intervalMinutes,
+  partSizeMib,
+  presetOf,
+  splitInterval,
+} from '../../apps/web/src/backup-interval';
 import { SETTINGS_MANAGED_ELSEWHERE } from '../../apps/web/src/settings-presentation';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
@@ -256,6 +262,49 @@ describe('the backup schedule card', () => {
     const before = api.calls.length;
     fireEvent.click(retry);
     await waitFor(() => expect(api.calls.length).toBeGreaterThan(before));
+  });
+
+  // NEXA-BACKUP-DELIVERY: the split size, `backup.part_mb`, on the same card.
+  it('saves the part size in MiB through the settings write, and refuses one past 45', async () => {
+    const api = stubApi([
+      ...routes().filter((route) => route.url !== `${API_PREFIX}${CONTROL_ROUTES.settings}`),
+      {
+        url: `${API_PREFIX}${CONTROL_ROUTES.settings}`,
+        body: {
+          settings: [
+            settingRow(BACKUP_SCHEDULE_SETTING_KEYS.enabled, null, null),
+            settingRow(BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes, null, null),
+            settingRow(BACKUP_PART_SIZE_SETTING_KEY, 45, null),
+          ],
+        },
+      },
+      {
+        url: `${API_PREFIX}${CONTROL_ROUTES.setting(BACKUP_PART_SIZE_SETTING_KEY)}`,
+        body: { setting: settingRow(BACKUP_PART_SIZE_SETTING_KEY, 20, 1), changed: true },
+      },
+    ]);
+    renderPage(<BackupScheduleCard status={STATUS} permissions={EDIT} />);
+    const input = await screen.findByLabelText(t('web.backup_part_size'));
+    await waitFor(() => expect(input).not.toBeDisabled());
+    const save = screen.getByRole('button', { name: t('web.backup_part_size_save') });
+    fireEvent.change(input, { target: { value: '50' } });
+    expect(await screen.findByText(t('web.backup_part_size_invalid'))).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    fireEvent.change(input, { target: { value: '۲۰' } });
+    fireEvent.click(save);
+    await waitFor(() => expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(1));
+    const write = api.calls.find((call) => call.method === 'POST');
+    expect(write?.url).toContain(encodeURIComponent(BACKUP_PART_SIZE_SETTING_KEY));
+    expect(write?.body).toMatchObject({ value: 20, expectedVersion: null });
+    expect(SETTINGS_MANAGED_ELSEWHERE).toContain(BACKUP_PART_SIZE_SETTING_KEY);
+  });
+
+  it('reads a part size only as a whole MiB within 10–45', () => {
+    expect(partSizeMib('45')).toBe(45);
+    expect(partSizeMib('۱۰')).toBe(10);
+    expect(partSizeMib('9')).toBeNull();
+    expect(partSizeMib('46')).toBeNull();
+    expect(partSizeMib('20.5')).toBeNull();
   });
 
   it('is drawn on the backup page, not the generic settings page', () => {

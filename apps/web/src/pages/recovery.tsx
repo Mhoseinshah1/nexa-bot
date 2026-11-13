@@ -52,6 +52,7 @@ import { BackupScheduleCard } from './backup-schedule';
 import { BackupPasswordCard } from './backup-password';
 import { LegacyCompactionCard } from './legacy-compaction';
 import { DataCompactionCard } from './data-compaction';
+import { BackupDeliveryCell, DeliveryBadge } from './backup-delivery';
 import { assembleParts } from '../backup-parts';
 import { phaseRows } from '../backup-phases';
 import { CodeName } from './code-name';
@@ -276,7 +277,7 @@ export function RecoveryPage({
         }
       >
         <DataTable
-          columns={historyColumns(mayDownload)}
+          columns={historyColumns(mayDownload, mayRun)}
           rows={runs}
           rowKey={(run) => run.id}
           caption={t('web.recovery_history_title')}
@@ -1165,7 +1166,10 @@ function PhaseDurations({ run }: { run: BackupRunSummary }) {
   );
 }
 
-function historyColumns(mayDownload: boolean): readonly Column<BackupRunSummary>[] {
+function historyColumns(
+  mayDownload: boolean,
+  mayRun: boolean,
+): readonly Column<BackupRunSummary>[] {
   const columns: Column<BackupRunSummary>[] = [
     {
       key: 'started',
@@ -1199,7 +1203,9 @@ function historyColumns(mayDownload: boolean): readonly Column<BackupRunSummary>
     {
       key: 'delivery',
       header: t('web.recovery_delivery'),
-      render: (run) => <DeliveryBadge outcome={run.deliveryState} />,
+      wrap: true,
+      // NEXA-BACKUP-DELIVERY: each part's state and reason, and the re-delivery button.
+      render: (run) => <BackupDeliveryCell run={run} mayRun={mayRun} />,
     },
     {
       key: 'size',
@@ -1307,28 +1313,6 @@ function recoveryColumns(): readonly Column<RecoveryRequestSummary>[] {
         ),
     },
   ];
-}
-
-/**
- * The Telegram delivery outcome.
- *
- * The prop is `outcome`, not `state`: `state={` is a token the query-view
- * contract scan forbids across `apps/web/src`, because `<StateSwitch state={…}>`
- * was the shape where a view computed its own loading state and got it out of
- * step with the query it was rendering. This component has nothing to do with
- * that, and a name that trips a guard is a name that gets the guard relaxed.
- */
-function DeliveryBadge({ outcome }: { outcome: BackupRunSummary['deliveryState'] }) {
-  if (outcome === 'SUCCEEDED')
-    return <Badge tone="ok">{t('web.recovery_delivery_succeeded')}</Badge>;
-  if (outcome === 'FAILED_DEFINITIVE')
-    return <Badge tone="danger">{t('web.recovery_delivery_failed')}</Badge>;
-  // The third outcome, and the reason the enum has four members: we sent bytes
-  // and never learned the verdict. Rendered as its own state, never folded into
-  // a failure.
-  if (outcome === 'OUTCOME_UNKNOWN')
-    return <Badge tone="warn">{t('web.recovery_delivery_unknown')}</Badge>;
-  return <Badge tone="neutral">{t('web.recovery_delivery_not_attempted')}</Badge>;
 }
 
 /** Bytes as a string, because the wire carries a `bigint` as one. */

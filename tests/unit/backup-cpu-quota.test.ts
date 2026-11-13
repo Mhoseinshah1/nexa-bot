@@ -15,10 +15,7 @@ import {
   sealArgs,
   type SevenZipOptions,
 } from '../../apps/api/src/modules/platform/backup/infrastructure/seven-zip';
-import {
-  SEVEN_ZIP_LEVELS,
-  chooseSevenZipLevel,
-} from '../../apps/api/src/modules/platform/backup/infrastructure/seven-zip-levels';
+import { chooseSevenZipLevel } from '../../apps/api/src/modules/platform/backup/infrastructure/seven-zip-levels';
 import { PostgresDatabaseTools } from '../../apps/api/src/modules/platform/backup/infrastructure/pg-tools';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
 
@@ -109,7 +106,7 @@ describe('the setting and the defaults', () => {
     expect(definition?.schema.safeParse(70).success).toBe(true);
   });
 
-  it('compresses with ONE thread unless an operator raises the ceiling', () => {
+  it('lets the seal use every core the container is allowed, up to a ceiling of 16', () => {
     const config = loadConfig({
       NODE_ENV: 'development',
       DATABASE_URL: 'postgres://u:p@localhost:5432/db',
@@ -118,15 +115,16 @@ describe('the setting and the defaults', () => {
       SECRETS_KEK_ID: 'dev-1',
       TRUSTED_PROXY_IPS: '127.0.0.1,::1',
     });
-    expect(config.BACKUP_SEVEN_ZIP_THREADS).toBe(1);
+    expect(config.BACKUP_SEVEN_ZIP_THREADS).toBe(16);
   });
 
-  it('never picks a two-thread level under a one-thread ceiling, and states -mmt in argv', async () => {
+  it('never picks more threads than the operator ceiling, and states -mmt in argv', async () => {
     const choice = await chooseSevenZipLevel({
       budgetMb: 100_000,
       headroomMb: 0,
       maxMx: 9,
       maxThreads: 1,
+      cores: 8,
       readAvailableMb: async () => null,
     });
     expect(choice.kind).toBe('LEVEL');
@@ -134,9 +132,6 @@ describe('the setting and the defaults', () => {
       expect(choice.level.mmt).toBe(1);
       expect(sealArgs(choice.level, 'a.7z', 'd')).toContain('-mmt=1');
     }
-    expect(SEVEN_ZIP_LEVELS.filter((level) => level.mmt > 1).map((level) => level.name)).toEqual([
-      'max',
-    ]);
   });
 });
 
@@ -253,13 +248,10 @@ describe('a real process under the quota', () => {
   }, 30_000);
 });
 
-describe('a CPU quota forces one 7-Zip thread (Codex on #319)', () => {
-  it('rewrites every -mmt to 1 while a quota is in force, and leaves argv alone at 100', async () => {
-    const { cappedThreadArgs } =
+describe('a CPU quota no longer forces one 7-Zip thread', () => {
+  it('leaves -mmt alone at every quota: the seal plan chose it from the cores', async () => {
+    const seven =
       await import('../../apps/api/src/modules/platform/backup/infrastructure/seven-zip');
-    const argv = ['a', '-mx9', '-md64m', '-mmt=2', '-p', 'x.7z'];
-    expect(cappedThreadArgs(argv, 70)).toEqual(['a', '-mx9', '-md64m', '-mmt=1', '-p', 'x.7z']);
-    expect(cappedThreadArgs(argv, 99)).toContain('-mmt=1');
-    expect(cappedThreadArgs(argv, 100)).toEqual(argv);
+    expect('cappedThreadArgs' in seven).toBe(false);
   });
 });

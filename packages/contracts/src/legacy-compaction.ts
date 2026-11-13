@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { LEGACY_HISTORY_RECORD_TYPES, type LegacyHistoryRecordType } from './legacy-nxpkg.js';
+import { BACKUP_DELIVERY_REASONS, BACKUP_DELIVERY_STATES } from './backup.js';
 
 /**
  * «فشرده‌سازی داده‌های ربات قبلی» — compacting the imported legacy data (Round 4 PR-E, E1).
@@ -207,6 +208,19 @@ export const legacyCompactionRunSchema = z.object({
   updatedAt: z.iso.datetime(),
   /** The «آرشیو ربات قبلی» backup run, once taken. */
   archiveBackupId: z.string().nullable(),
+  /**
+   * NEXA-BACKUP-DELIVERY: each part of that archive's Telegram delivery, in order — so a
+   * run that stopped at `legacy_compaction.archive_not_delivered` says WHICH part did not
+   * arrive and WHY (a reason code, never the transport's message). Empty before the archive.
+   */
+  archiveParts: z.array(
+    z.object({
+      partNumber: z.number().int().positive(),
+      deliveryState: z.enum(BACKUP_DELIVERY_STATES),
+      deliveryReason: z.enum(BACKUP_DELIVERY_REASONS).nullable(),
+      attempts: z.number().int().nonnegative(),
+    }),
+  ),
   deleted: z.number().int().nonnegative(),
   deduplicated: z.number().int().nonnegative(),
   stripped: z.number().int().nonnegative(),

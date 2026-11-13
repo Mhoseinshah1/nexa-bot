@@ -213,6 +213,7 @@ export const ERROR_TEXT = {
   'backup.dump_lock_timeout': 'web.err_backup_dump_lock_timeout',
   'backup.memory_insufficient': 'web.err_backup_memory_insufficient',
   'backup.disk_insufficient': 'web.err_backup_disk_insufficient',
+  'backup.not_redeliverable': 'web.err_backup_not_redeliverable',
   'backup.password_unreadable': 'web.err_backup_password_unreadable',
   'backup.unsafe_restore_target': 'web.err_backup_unsafe_restore_target',
   'backup.verification_failed': 'web.err_backup_verification_failed',

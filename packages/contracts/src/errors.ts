@@ -378,6 +378,13 @@ export const PLATFORM_ERROR_CODES = {
    * would be worse than saying so.
    */
   BACKUP_ALREADY_RUNNING: 'backup.already_running',
+  /**
+   * NEXA-BACKUP-DELIVERY: «ارسال دوبارهٔ بخش‌های نرسیده» was asked of a run that cannot be
+   * re-delivered — still running, not verified, or kept on this server by design (a Mirza
+   * import's backup, a server-move member). A run whose archive is gone is
+   * `backup.run_missing`; one already delivered in full answers `DELIVERED`.
+   */
+  BACKUP_NOT_REDELIVERABLE: 'backup.not_redeliverable',
   /** E4: a backup password that 7-Zip could not be handed on one line (a control character). */
   BACKUP_ARCHIVE_PASSWORD_INVALID: 'backup.archive_password_invalid',
   /** E4: the account-password step-up for setting the backup password was not accepted. */

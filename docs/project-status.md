@@ -775,9 +775,21 @@ looks like a backup and is not:
   audit log is not deleted: "90 days" waits on `OQ-V097-P2-01`.
 - Delivery has **three** outcomes, and the third is why the run row exists.
   A 5xx, a 429, a timeout and an unreadable 2xx are `OUTCOME_UNKNOWN`, never
-  "retryable": Telegram can reject a request whose upload it accepted. Nothing
-  resends automatically. Never fold this into `DELIVERY_OUTCOMES` — that enum is
-  the notification dispatcher's and is pinned by a CHECK constraint.
+  "retryable": Telegram can reject a request whose upload it accepted. Never fold this
+  into `DELIVERY_OUTCOMES` — that enum is the notification dispatcher's and is pinned by a
+  CHECK constraint.
+- **Resend of a backup part (owner, round NEXA-BACKUP-DELIVERY): "sent twice is acceptable,
+  lost is not."** This replaces "nothing resends automatically" for backup PARTS only. The
+  Bot API cannot tell a bot whether a document arrived, so an `OUTCOME_UNKNOWN` part (or one
+  whose connection was never made) is sent again — at most 3 sends, 30 s then 2 min apart,
+  in order, the resend's caption saying so; a refusal is never resent. The state recorded is
+  still the one observed, with a reason CODE (`BACKUP_DELIVERY_REASONS`) and the real cause
+  chain in the detail — never just «fetch failed». «ارسال دوبارهٔ بخش‌های نرسیده» (`backup.run`,
+  audited) re-delivers a finished run's undelivered parts under a re-delivery lease; the
+  legacy compaction does the same, bounded to 30 minutes, before its unchanged
+  `archive_not_delivered` gate. The split size is `backup.part_mb` (10–45 MiB, default 45).
+  `deliver: false` runs (Mirza import, server move) stay on the host BY DESIGN and record
+  `LOCAL_ONLY_*`; never turn their delivery on. `docs/backup.md` § Delivering the parts.
 - One backup at a time is a **partial unique index**, not a process. Two worker
   replicas is normal on every rolling update. A stale lease is taken over by
   FAILING the abandoned run, never by adopting it: its files belong to a process

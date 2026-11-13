@@ -6,7 +6,8 @@ import { PLATFORM_ERROR_CODES, type BackupManifest } from '@nexa/contracts';
 import {
   chooseSevenZipLevel,
   parseMemAvailableMb,
-  SEVEN_ZIP_LEVELS,
+  SEVEN_ZIP_ROWS,
+  estimateSevenZipPeakMb,
   DEFAULT_SEVEN_ZIP_MEMORY_MB,
   type SevenZipMemoryPolicy,
 } from '../../apps/api/src/modules/platform/backup/infrastructure/seven-zip-levels';
@@ -34,7 +35,8 @@ import {
  * 7z / pg_restore, so what is asserted is what a process on this host actually received.
  */
 
-const PEAKS = SEVEN_ZIP_LEVELS.map((level) => level.estimatedPeakMb);
+// One thread: the lightest plan of each row.
+const PEAKS = SEVEN_ZIP_ROWS.map((row) => estimateSevenZipPeakMb(row.mx, row.md, 1));
 const LIGHTEST = Math.min(...PEAKS);
 
 function policy(overrides: Partial<SevenZipMemoryPolicy> & { available: number | null }) {
@@ -50,19 +52,16 @@ function policy(overrides: Partial<SevenZipMemoryPolicy> & { available: number |
 }
 
 describe('the 7-Zip level table', () => {
-  it('is ordered strongest first, with the memory falling at every step', () => {
-    for (let i = 1; i < SEVEN_ZIP_LEVELS.length; i += 1) {
-      const before = SEVEN_ZIP_LEVELS[i - 1];
-      const level = SEVEN_ZIP_LEVELS[i];
-      expect(level?.estimatedPeakMb).toBeLessThan(before?.estimatedPeakMb ?? 0);
+  it('keeps the normal rows before the last-resort row, with the memory falling at every step', () => {
+    const lastResort = SEVEN_ZIP_ROWS.findIndex((row) => row.lastResort);
+    expect(lastResort).toBe(SEVEN_ZIP_ROWS.length - 1);
+    for (let i = 1; i < SEVEN_ZIP_ROWS.length; i += 1) {
+      expect(PEAKS[i]).toBeLessThan(PEAKS[i - 1] ?? 0);
     }
   });
 
-  it('fixes the dictionary and the threads of every level explicitly', () => {
-    for (const level of SEVEN_ZIP_LEVELS) {
-      expect(level.md).toMatch(/^\d+m$/);
-      expect(level.mmt).toBeGreaterThanOrEqual(1);
-    }
+  it('fixes the dictionary of every row explicitly', () => {
+    for (const row of SEVEN_ZIP_ROWS) expect(row.md).toMatch(/^\d+m$/);
   });
 
   it('has a level inside the default budget, so a roomy host never refuses', () => {
@@ -79,21 +78,22 @@ describe('choosing a level from the memory the host has', () => {
     expect(parseMemAvailableMb('MemTotal: 1 kB\n')).toBeNull();
   });
 
-  it('takes the strongest level when memory is plentiful', async () => {
-    const choice = await chooseSevenZipLevel(policy({ available: 1_000_000 }));
-    expect(choice.kind === 'LEVEL' && choice.level).toEqual(SEVEN_ZIP_LEVELS[0]);
+  it('takes the fastest plan when memory is plentiful: the whole allowed core count', async () => {
+    const choice = await chooseSevenZipLevel(policy({ available: 1_000_000, cores: 4 }));
+    expect(choice.kind === 'LEVEL' && choice.level.mmt).toBe(4);
+    expect(choice.kind === 'LEVEL' && choice.level.mx).toBe(5);
   });
 
-  it('takes the strongest level that fits the free memory, less the headroom', async () => {
-    for (const level of SEVEN_ZIP_LEVELS) {
+  it('takes a lighter plan as the free memory, less the headroom, shrinks', async () => {
+    let lastPeak = Infinity;
+    for (const allowance of [2_000, 400, 150, 100, 80]) {
       const choice = await chooseSevenZipLevel(
-        policy({ available: level.estimatedPeakMb + 256, headroomMb: 256 }),
+        policy({ available: allowance + 256, headroomMb: 256, cores: 4 }),
       );
-      // The strongest row whose peak is no more than this row's.
-      const expected = SEVEN_ZIP_LEVELS.find(
-        (candidate) => candidate.estimatedPeakMb <= level.estimatedPeakMb,
-      );
-      expect(choice.kind === 'LEVEL' && choice.level.name).toBe(expected?.name);
+      if (choice.kind !== 'LEVEL') throw new Error('refused');
+      expect(choice.level.estimatedPeakMb).toBeLessThanOrEqual(allowance);
+      expect(choice.level.estimatedPeakMb).toBeLessThanOrEqual(lastPeak);
+      lastPeak = choice.level.estimatedPeakMb;
     }
   });
 
@@ -286,7 +286,8 @@ describe('sealing with 7-Zip under a memory budget', () => {
   });
 
   it('writes -mmt and -md into the argv of every level', () => {
-    for (const level of SEVEN_ZIP_LEVELS) {
+    for (const row of SEVEN_ZIP_ROWS) {
+      const level = { ...row, mmt: 3, estimatedPeakMb: 1 };
       const argv = sealArgs(level, '/a.7z', 'dump');
       expect(argv).toContain(`-mmt=${String(level.mmt)}`);
       expect(argv).toContain(`-md=${level.md}`);

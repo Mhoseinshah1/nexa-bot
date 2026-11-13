@@ -365,6 +365,8 @@ export const WEB_FA_ERRORS = {
   'web.err_backup_memory_insufficient':
     'حافظهٔ آزاد سرور برای فشرده‌سازی بکاپ کافی نیست؛ بکاپ شروع نشد.',
   'web.err_backup_disk_insufficient': 'فضای دیسک برای بکاپ کافی نیست؛ بکاپ شروع نشد.',
+  'web.err_backup_not_redeliverable':
+    'این بکاپ دوباره فرستاده نمی‌شود: یا هنوز کامل و تأیید نشده، یا طبق طراحی فقط روی سرور نگه داشته می‌شود (بکاپ ایمپورت یا انتقال سرور).',
   'web.err_backup_password_unreadable':
     'رمز بکاپ قابل خواندن نیست؛ آن را در «بکاپ و بازیابی» دوباره وارد کنید',
   'web.err_backup_unsafe_restore_target': 'بازیابی روی پایگاه‌دادهٔ در حال کار مجاز نیست.',

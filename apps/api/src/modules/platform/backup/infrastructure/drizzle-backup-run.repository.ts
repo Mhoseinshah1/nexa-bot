@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import type {
   BackupArchiveFormat,
+  BackupDeliveryReason,
   BackupDeliveryState,
   BackupRunState,
   BackupPhaseDurationsMs,
@@ -19,6 +20,7 @@ import type {
 import type {
   BackupArchivePart,
   BackupArchiveRetentionStore,
+  BackupRedeliveryStore,
   BackupRunPartRow,
   BackupRunPartStore,
   BackupRunRepository,
@@ -54,6 +56,23 @@ type Row = typeof backupRuns.$inferSelect;
  */
 const INSTALLATION_RUN = eq(backupRuns.archiveScope, 'INSTALLATION');
 
+/**
+ * The detail every `deliver: false` run recorded before the reason column existed
+ * (NEXA-BACKUP-DELIVERY). Such a run was kept on the server BY DESIGN — the Mirza restore's
+ * backups, or a server-move member (trigger `MOVE`) — and is read as that, so an old import
+ * backup neither shows as a failed delivery nor is offered for re-delivery.
+ */
+export const LEGACY_LOCAL_ONLY_DETAIL =
+  'Kept on this server only: this run was asked not to leave it.';
+
+function storedDeliveryReason(row: Row): BackupDeliveryReason | null {
+  if (row.deliveryReason !== null) return row.deliveryReason as BackupDeliveryReason;
+  if (row.deliveryState === 'NOT_ATTEMPTED' && row.deliveryDetail === LEGACY_LOCAL_ONLY_DETAIL) {
+    return row.trigger === 'MOVE' ? 'LOCAL_ONLY_SERVER_MOVE' : 'LOCAL_ONLY_IMPORT';
+  }
+  return null;
+}
+
 /** The row mapper, shared with `DrizzleHostedArchiveRuns` (the TENANT runs' reads). */
 export function toRow(row: Row): BackupRunRow {
   return {
@@ -72,6 +91,7 @@ export function toRow(row: Row): BackupRunRow {
     deliveryState: row.deliveryState as BackupDeliveryState,
     deliveryAttemptedAt: row.deliveryAttemptedAt,
     deliveryDetail: row.deliveryDetail,
+    deliveryReason: storedDeliveryReason(row),
     failureCode: row.failureCode,
     failureMessage: row.failureMessage,
     cleanupOk: row.cleanupOk,
@@ -92,6 +112,7 @@ export class DrizzleBackupRunRepository
     BackupRunRepository,
     BackupArchiveRetentionStore,
     BackupRunPartStore,
+    BackupRedeliveryStore,
     BackupOrphanRunReader
 {
   constructor(private readonly db: Database) {}
@@ -139,13 +160,17 @@ export class DrizzleBackupRunRepository
     attemptedAt: Date;
     messageId: number | null;
     detail: string | null;
+    reason?: BackupDeliveryReason | null;
+    attempts?: number;
   }): Promise<void> {
     await this.db.execute(sql`
       UPDATE ${backupRunParts} AS part
          SET delivery_state = ${input.state},
              delivery_attempted_at = ${input.attemptedAt},
              telegram_message_id = ${input.state === 'SUCCEEDED' && input.messageId !== null ? String(input.messageId) : null}::bigint,
-             delivery_detail = ${redactStoredText(input.detail)}
+             delivery_detail = ${redactStoredText(input.detail)},
+             delivery_reason = ${input.reason ?? null},
+             delivery_attempts = COALESCE(${input.attempts ?? null}::integer, part.delivery_attempts)
         FROM ${backupRuns} AS run
        WHERE part.backup_id = ${input.id}::uuid
          AND part.part_number = ${input.partNumber}
@@ -171,7 +196,115 @@ export class DrizzleBackupRunRepository
       deliveryAttemptedAt: row.deliveryAttemptedAt,
       telegramMessageId: row.telegramMessageId,
       deliveryDetail: row.deliveryDetail,
+      rangeStart: row.rangeStart,
+      deliveryReason: row.deliveryReason as BackupDeliveryReason | null,
+      deliveryAttempts: row.deliveryAttempts,
     }));
+  }
+
+  // --- Re-delivery (NEXA-BACKUP-DELIVERY) ------------------------------------
+
+  /**
+   * The re-delivery lease: one conditional UPDATE, so two claimants race on the row lock and
+   * the second matches nothing. Only a finished, SUCCEEDED, verified installation run whose
+   * archive retention has not removed it can be re-delivered.
+   */
+  async claimRedelivery(input: {
+    id: string;
+    owner: string;
+    now: Date;
+    leaseUntil: Date;
+  }): Promise<boolean> {
+    const rows = await this.db
+      .update(backupRuns)
+      .set({ redeliveryOwner: input.owner, redeliveryLeaseUntil: input.leaseUntil })
+      .where(
+        and(
+          eq(backupRuns.id, input.id),
+          eq(backupRuns.state, 'SUCCEEDED'),
+          INSTALLATION_RUN,
+          sql`${backupRuns.verifiedAt} IS NOT NULL`,
+          sql`${backupRuns.archivePrunedAt} IS NULL`,
+          sql`(${backupRuns.redeliveryLeaseUntil} IS NULL OR ${backupRuns.redeliveryLeaseUntil} <= ${input.now})`,
+        ),
+      )
+      .returning({ id: backupRuns.id });
+    return rows.length === 1;
+  }
+
+  async extendRedelivery(input: { id: string; owner: string; leaseUntil: Date }): Promise<boolean> {
+    const rows = await this.db
+      .update(backupRuns)
+      .set({ redeliveryLeaseUntil: input.leaseUntil })
+      .where(and(eq(backupRuns.id, input.id), eq(backupRuns.redeliveryOwner, input.owner)))
+      .returning({ id: backupRuns.id });
+    return rows.length === 1;
+  }
+
+  async recordRedeliveredPart(input: {
+    id: string;
+    owner: string;
+    partNumber: number;
+    state: BackupDeliveryState;
+    attemptedAt: Date;
+    messageId: number | null;
+    detail: string | null;
+    reason: BackupDeliveryReason | null;
+    attempts: number;
+  }): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE ${backupRunParts} AS part
+         SET delivery_state = ${input.state},
+             delivery_attempted_at = ${input.attemptedAt},
+             telegram_message_id = ${input.state === 'SUCCEEDED' && input.messageId !== null ? String(input.messageId) : null}::bigint,
+             delivery_detail = ${redactStoredText(input.detail)},
+             delivery_reason = ${input.reason},
+             delivery_attempts = ${input.attempts}::integer
+        FROM ${backupRuns} AS run
+       WHERE part.backup_id = ${input.id}::uuid
+         AND part.part_number = ${input.partNumber}
+         AND run.id = part.backup_id
+         AND run.state = 'SUCCEEDED'
+         AND run.redelivery_owner = ${input.owner}
+         -- A part that already carries a message id is never overwritten: it arrived.
+         AND part.telegram_message_id IS NULL
+    `);
+  }
+
+  async releaseRedelivery(input: { id: string; owner: string }): Promise<void> {
+    await this.db
+      .update(backupRuns)
+      .set({ redeliveryOwner: null, redeliveryLeaseUntil: null })
+      .where(and(eq(backupRuns.id, input.id), eq(backupRuns.redeliveryOwner, input.owner)));
+  }
+
+  async finishRedelivery(input: {
+    id: string;
+    owner: string;
+    deliveryState: BackupDeliveryState;
+    deliveryAttemptedAt: Date;
+    deliveryDetail: string | null;
+    deliveryReason: BackupDeliveryReason | null;
+    summaryDeliveryState: BackupDeliveryState | null;
+  }): Promise<void> {
+    await this.db
+      .update(backupRuns)
+      .set({
+        deliveryState: input.deliveryState,
+        deliveryAttemptedAt: input.deliveryAttemptedAt,
+        deliveryDetail: redactStoredText(input.deliveryDetail),
+        deliveryReason: input.deliveryReason,
+        summaryDeliveryState: input.summaryDeliveryState,
+        redeliveryOwner: null,
+        redeliveryLeaseUntil: null,
+      })
+      .where(
+        and(
+          eq(backupRuns.id, input.id),
+          eq(backupRuns.redeliveryOwner, input.owner),
+          eq(backupRuns.state, 'SUCCEEDED'),
+        ),
+      );
   }
 
   /**
@@ -346,6 +479,7 @@ export class DrizzleBackupRunRepository
     deliveryState: BackupDeliveryState;
     deliveryAttemptedAt?: Date | null;
     deliveryDetail?: string | null;
+    deliveryReason?: BackupDeliveryReason | null;
     failureCode?: string | null;
     failureMessage?: string | null;
     cleanupOk: boolean;
@@ -377,6 +511,7 @@ export class DrizzleBackupRunRepository
         // Redacted by content (FIX-04 S4): a transport's error text can quote the
         // request URL, and the Telegram one carries the bot token in its path.
         deliveryDetail: redactStoredText(input.deliveryDetail ?? null),
+        deliveryReason: input.deliveryReason ?? null,
         failureCode: input.failureCode ?? null,
         failureMessage: redactStoredText(input.failureMessage ?? null),
         cleanupOk: input.cleanupOk,

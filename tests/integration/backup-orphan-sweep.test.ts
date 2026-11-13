@@ -71,6 +71,8 @@ describe('backup cleanup and retries against a real database', () => {
     const clock = options.clock ?? context.container.clock;
     const opsLog = options.opsLog ?? context.container.opsLog;
     return new BackupService({
+      // NEXA-BACKUP-DELIVERY: a resend's pause never really waits in a test.
+      sleep: async () => {},
       runs: context.container.backupRuns,
       tools: new PostgresDatabaseTools({
         databaseUrl: config.DATABASE_URL,

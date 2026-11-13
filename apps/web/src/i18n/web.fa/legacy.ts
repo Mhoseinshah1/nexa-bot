@@ -136,6 +136,8 @@ export const WEB_FA_LEGACY = {
   'web.lcp_maintenance':
     'در حال بازنویسی جدول‌های سوابق ربات قبلی؛ تا پایان این مرحله صفحه‌های سوابق ربات قبلی منتظر می‌مانند.',
   'web.lcp_failed': 'فشرده‌سازی متوقف شد و هیچ داده‌ای حذف نشد.',
+  // NEXA-BACKUP-DELIVERY: the archive's parts on the card, when one did not arrive.
+  'web.lcp_archive_parts': 'ارسال «آرشیو ربات قبلی» به تلگرام، بخش به بخش',
   'web.lcp_failed_reconciliation':
     'پاک‌سازی انجام نشد و هیچ داده‌ای حذف نشد: تطبیق موجودی‌های انتقال ثبت نشده یا اختلاف دارد.',
   'web.lcp_total': 'جمع',

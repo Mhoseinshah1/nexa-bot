@@ -1,4 +1,9 @@
-import { BACKUP_INTERVAL_MINUTES_MAX, BACKUP_INTERVAL_MINUTES_MIN } from '@nexa/contracts';
+import {
+  BACKUP_INTERVAL_MINUTES_MAX,
+  BACKUP_INTERVAL_MINUTES_MIN,
+  BACKUP_PART_SIZE_MIB_MAX,
+  BACKUP_PART_SIZE_MIB_MIN,
+} from '@nexa/contracts';
 
 /**
  * The automatic backup interval as an operator edits it (spec §13.2): a number and a
@@ -75,4 +80,18 @@ export function intervalMinutes(
   if (minutes < BACKUP_INTERVAL_MINUTES_MIN) return { ok: false, problem: 'too_short' };
   if (minutes > BACKUP_INTERVAL_MINUTES_MAX) return { ok: false, problem: 'too_long' };
   return { ok: true, minutes };
+}
+
+/**
+ * NEXA-BACKUP-DELIVERY: the split size an operator typed (`backup.part_mb`), in MiB — Persian
+ * and Arabic-Indic digits accepted — or null when it is not a whole number within 10–45.
+ */
+export function partSizeMib(raw: string): number | null {
+  const normalised = raw
+    .trim()
+    .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
+  if (!/^\d{1,3}$/.test(normalised)) return null;
+  const mib = Number(normalised);
+  return mib >= BACKUP_PART_SIZE_MIB_MIN && mib <= BACKUP_PART_SIZE_MIB_MAX ? mib : null;
 }

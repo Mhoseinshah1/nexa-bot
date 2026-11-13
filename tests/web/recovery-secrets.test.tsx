@@ -36,6 +36,8 @@ function run(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     deliveryState: 'SUCCEEDED',
     deliveryAttemptedAt: '2026-09-09T02:03:00.000Z',
     deliveryDetailPresent: false,
+    deliveryReason: null,
+    redeliverable: false,
     failureCode: null,
     cleanupOk: true,
     cleanupLeftovers: 0,
