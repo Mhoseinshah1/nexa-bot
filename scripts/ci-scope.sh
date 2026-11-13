@@ -100,8 +100,6 @@ if [ "$source" != "--stdin" ]; then
     everything
 fi
 
-[ -n "$paths" ] || everything
-
 # Adds jobs to the run. `api` is the application set: unit, integration and web.
 add() {
   local job
@@ -262,7 +260,7 @@ while IFS= read -r path; do
   classified=$((classified + 1))
 done <<<"$paths"
 
-# Nothing but blank lines is as unreadable as nothing at all.
+# An empty diff, or nothing but blank lines, is as unreadable as a failed one.
 [ "$classified" -gt 0 ] || everything
 
 emit

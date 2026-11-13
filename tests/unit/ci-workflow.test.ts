@@ -374,7 +374,10 @@ describe('the CI workflow', () => {
         return (error as { status: number }).status;
       }
     }
-    const outOfScope = (key: string) => ({ [`${key}_RESULT`]: 'skipped', [`${key}_SCOPE`]: 'false' });
+    const outOfScope = (key: string) => ({
+      [`${key}_RESULT`]: 'skipped',
+      [`${key}_SCOPE`]: 'false',
+    });
 
     it('passes when every job succeeded, on every event', () => {
       for (const event of ['pull_request', 'push', 'workflow_dispatch', 'schedule']) {
@@ -391,7 +394,10 @@ describe('the CI workflow', () => {
         // In scope and skipped: something that should have run did not.
         expect(aggregate({ [`${key}_RESULT`]: 'skipped' }), `${key} in scope`).not.toBe(0);
         expect(aggregate({ [`${key}_RESULT`]: 'skipped', [`${key}_SCOPE`]: '' }), key).not.toBe(0);
-        expect(aggregate({ [`${key}_RESULT`]: 'skipped', [`${key}_SCOPE`]: undefined }), key).not.toBe(0);
+        expect(
+          aggregate({ [`${key}_RESULT`]: 'skipped', [`${key}_SCOPE`]: undefined }),
+          key,
+        ).not.toBe(0);
       }
     });
 
@@ -399,9 +405,14 @@ describe('the CI workflow', () => {
       for (const key of keys) {
         for (const result of ['cancelled', 'failure', 'timed_out', '']) {
           expect(aggregate({ [`${key}_RESULT`]: result }), `${key} ${result}`).not.toBe(0);
-          expect(aggregate({ [`${key}_RESULT`]: result, [`${key}_SCOPE`]: 'false' }), key).not.toBe(0);
+          expect(aggregate({ [`${key}_RESULT`]: result, [`${key}_SCOPE`]: 'false' }), key).not.toBe(
+            0,
+          );
         }
-        expect(aggregate({ [`${key}_RESULT`]: undefined, [`${key}_SCOPE`]: 'false' }), key).not.toBe(0);
+        expect(
+          aggregate({ [`${key}_RESULT`]: undefined, [`${key}_SCOPE`]: 'false' }),
+          key,
+        ).not.toBe(0);
       }
     });
 
@@ -500,7 +511,10 @@ describe('the CI workflow', () => {
 
     it.each([
       // Documentation: today's docs-only rule, unchanged.
-      [['docs/ci.md', 'docs/round-reports/web-redesign.md', 'README.md'], on('web', 'deploy_logic')],
+      [
+        ['docs/ci.md', 'docs/round-reports/web-redesign.md', 'README.md'],
+        on('web', 'deploy_logic'),
+      ],
       [['CLAUDE.md', 'PROGRESS.md'], on('web', 'deploy_logic')],
       // The Web Admin, its text slices and the Mini App: the web project.
       [['apps/web/src/pages/x.tsx'], on('web')],
@@ -1165,7 +1179,9 @@ describe('the nightly workflow', () => {
         { number: 12, title: TITLE },
       ]);
       expect(out.trim()).toBe('commented on #12');
-      const comment = calls.filter((c) => c.startsWith('api --method POST repos/o/r/issues/12/comments'));
+      const comment = calls.filter((c) =>
+        c.startsWith('api --method POST repos/o/r/issues/12/comments'),
+      );
       expect(comment).toHaveLength(1);
       expect(comment[0]).toContain('CI / Integration tests (3/18): failure');
       expect(calls.some((c) => c.startsWith('api --method POST repos/o/r/issues '))).toBe(false);
