@@ -85,7 +85,9 @@ export function parseInactiveFileBytes(stat: string): number {
  * kernel drops it before it kills anything, as `docker stats` also assumes). Null when there
  * is no limit or it cannot be read.
  */
-export async function readCgroupAvailableMb(read: TextReader = defaultReader): Promise<number | null> {
+export async function readCgroupAvailableMb(
+  read: TextReader = defaultReader,
+): Promise<number | null> {
   const sets: readonly (readonly [string, string, string])[] = [
     ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory.current', '/sys/fs/cgroup/memory.stat'],
     [

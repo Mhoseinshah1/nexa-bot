@@ -114,14 +114,72 @@ measured peak fits `min(BACKUP_SEVEN_ZIP_MEMORY_MB, MemAvailable − BACKUP_SEVE
 | 5 / 16m / 1 (`light`)          | 192 MiB  | 33 MiB                 | 2m 47s    |
 | 3 / 4m / 1 (`minimal`)         | 38 MiB   | 46 MiB                 | 0m 24s    |
 
-The default budget therefore selects `balanced`. `BACKUP_SEVEN_ZIP_LEVEL` and
-`BACKUP_SEVEN_ZIP_THREADS` are now only ceilings on that choice. When not even `minimal` fits,
-the run is refused before the dump with `backup.memory_insufficient`; a 7-Zip (or `pg_dump`)
+The default budget selected `balanced` (`-mx=7`, one thread). **That table is superseded by
+§ Speed below**; it is kept as the 2026-10 measurement. `BACKUP_SEVEN_ZIP_LEVEL` and
+`BACKUP_SEVEN_ZIP_THREADS` are only ceilings on the choice. When not even the lightest plan fits, the run is refused before the dump with `backup.memory_insufficient`; a 7-Zip (or `pg_dump`)
 the kernel kills anyway is recorded as `backup.tool_oom_killed`. Neither is retried by the
 scheduler for an hour. 7-Zip, `pg_dump` and the verification's `pg_restore` run under
 `nice -n 10` and `ionice -c3` (`-c2 -n7` where idle is refused, nothing where the binaries are
 missing). The verification's `pg_restore` also runs `--jobs=1` with
 `maintenance_work_mem=64MB` and no parallel index workers for its own session.
+
+### Speed: the seal uses the cores it is allowed (2026-11)
+
+**The incident.** The owner's server (aarch64, 4 vCPU / 8 GB) took 26 minutes to seal a 196 MB
+archive from a ~2 GB dump. Cause: `seven-zip.ts` rewrote `-mmt` to 1 whenever a CPU quota was in
+force (always: the default is 70), and the table's strongest rows were `-mx=9 -md=64m`, about
+1.3 MiB/s per core on dump-like text.
+
+**What changed.**
+
+- _Threads follow the container._ `cgroup-limits.ts` reads the cgroup CPU quota (v2 `cpu.max`,
+  v1 `cfs_quota_us / cfs_period_us`), floors it, takes at least 1 and at most the host's cores.
+  `BACKUP_SEVEN_ZIP_THREADS` (default now 16) is a ceiling on that. The CPU quota setting stays
+  a duty cycle on the whole process, so with N threads it allows `percent` of N cores, and the
+  bot keeps its share through `nice`/`ionice`; the old forced `-mmt=1` (`cappedThreadArgs`) is gone.
+- _Memory follows the container too._ `readMemAvailableMb` is now the LESS of the host's
+  `MemAvailable` and the cgroup's `memory.max` (v1 `limit_in_bytes`) minus usage not counting
+  reclaimable page cache. Before, a role limited to 819 MiB on an 8 GiB host was told it had
+  gigabytes.
+- _A plan, not a fixed level._ A row fixes `-mx` and `-md`; the thread count is the allowed cores,
+  reduced until the memory estimate fits `min(BACKUP_SEVEN_ZIP_MEMORY_MB, available - headroom)`.
+  Among the rows that fit the highest estimated throughput wins; the last-resort row (`-mx=3`,
+  1.5x the archive size) is used only when nothing else fits.
+- _Estimate._ LZMA2 with the binary-tree match finder (`-mx` 5+) runs `-mmt=N` as `floor(N/2)`
+  block coders, each with its own dictionary. `peak MiB = blocks * (12.5 * dictMiB + 32) + 48`
+  (`-mx` 5+), `blocks * (9.5 * dictMiB + 16) + 16` (hash-chain, `-mx` 4 and below). The unit
+  tests assert the estimate is not below any measured peak below.
+- _Rows._ `balanced` 5/16m, `fast` 5/4m, `compact` 5/1m, `minimal` 3/4m (last resort). The
+  `-mx=9/7` rows are gone: on database text they were 3 to 8 times slower for an archive no
+  smaller.
+- _pg_dump_ was already written `--format=custom --compress=0` when the archive is 7-Zip (E4,
+  `uncompressed: true`), so nothing is compressed twice; `pg_restore` reads an uncompressed
+  custom dump as any other. Custom format cannot be dumped with `--jobs`.
+
+**Measured** (`scripts/measure-backup-pipeline.sh`, this repository's sandbox: x86-64, 4 vCPU,
+16 GB, 7-Zip 23.01, PostgreSQL 16; synthetic ledger table, 9.5 M rows, custom-format dump
+2611 MiB, ratio about 10:1 like the owner's). Unthrottled; "verify" is `7z t` + `7z x` +
+`pg_restore` into a scratch database; "deliver" is network time and not measurable here.
+
+| Plan (`-mx` / `-md` / `-mmt`) | dump | seal              | peak RSS | archive | verify | size vs before |
+| ----------------------------- | ---- | ----------------- | -------- | ------- | ------ | -------------- |
+| 9 / 64m / 1 (before)          | 23 s | 2243 s (37.4 min) | 680 MiB  | 255 MiB | 104 s  | 1.00x          |
+| 5 / 4m / 4 (`fast`, new pick) | 24 s | 265 s (4.4 min)   | 135 MiB  | 266 MiB | 80 s   | 1.04x          |
+| 5 / 16m / 4 (`balanced`)      | 24 s | 428 s (7.1 min)   | 485 MiB  | 245 MiB | 71 s   | 0.96x          |
+| 5 / 1m / 4 (`compact`)        | 24 s | 244 s (4.1 min)   | 48 MiB   | 268 MiB | 83 s   | 1.05x          |
+| 3 / 4m / 4 (`minimal`, last)  | 24 s | 139 s (2.3 min)   | 183 MiB  | 386 MiB | 71 s   | 1.51x          |
+
+Slice figures that chose the rows (400 MB of the same dump, one thread): `-mx=9 -md=64m` 318 s
+and 37 MiB; `-mx=7 -md=32m` 302 s; `-mx=5 -md=16m` 183 s and 35 MiB; `-mx=5 -md=4m` 117 s and
+40 MiB; `-mx=3 -md=4m` 29 s and 56 MiB (1.5x, hence last resort). `-mmt=2` and `-mmt=3` do not
+add a block coder (peak 199 MiB at 16m, as for 1); `-mmt=4` doubles it (485 MiB), `-mmt=8` is
+955 MiB.
+
+With the default 70 % duty cycle the seal takes about 1/0.7 of those times: `fast` on 4 cores
+is about 6.3 minutes of seal, 7.1 minutes with the dump, inside the 8-minute target, with
+135 MiB of 7-Zip memory. The before-run is one core unthrottled; the owner's 26 minutes for
+2 GB at 70 % is consistent with it. These are sandbox numbers: the owner's aarch64 server has
+not been measured with this change.
 
 ### Restoring a backup that came in parts
 
@@ -598,11 +656,12 @@ condition, key `backup.disk`), not a second `backup.run_failed`. The Web Admin b
 shows free, total and required space and warns when free is below required.
 
 **CPU quota (Round 8).** `backup.cpu_limit_percent` (default 70, 10–100) is a share of
-ONE core for 7-Zip and the verification's `pg_restore` together (they run one after the
+wall time for 7-Zip and the verification's `pg_restore` together (they run one after the
 other). The production container has no systemd, a read-only cgroup tree and no
 `cpulimit`, so the limit is the one `cpulimit` implements: a 100 ms duty cycle of
-SIGSTOP/SIGCONT on the child (`infrastructure/cpu-quota.ts`), read at each spawn. 7-Zip
-also runs with `-mmt=1` by default (`BACKUP_SEVEN_ZIP_THREADS=1`). The cost is wall time,
+SIGSTOP/SIGCONT on the child (`infrastructure/cpu-quota.ts`), read at each spawn. Since the
+2026-11 speed round 7-Zip no longer runs on one thread: it uses the cores the container is
+allowed (§ Speed), so the share is `percent` of THOSE cores. The cost is wall time,
 about 100/percent times the unlimited time; memory is not reduced.
 
 **The verification's server is capped too (v0.9.7).** The quota above bounds the CLIENT; the

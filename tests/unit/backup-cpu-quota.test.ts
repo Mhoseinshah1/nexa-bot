@@ -15,9 +15,7 @@ import {
   sealArgs,
   type SevenZipOptions,
 } from '../../apps/api/src/modules/platform/backup/infrastructure/seven-zip';
-import {
-    chooseSevenZipLevel,
-} from '../../apps/api/src/modules/platform/backup/infrastructure/seven-zip-levels';
+import { chooseSevenZipLevel } from '../../apps/api/src/modules/platform/backup/infrastructure/seven-zip-levels';
 import { PostgresDatabaseTools } from '../../apps/api/src/modules/platform/backup/infrastructure/pg-tools';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
 

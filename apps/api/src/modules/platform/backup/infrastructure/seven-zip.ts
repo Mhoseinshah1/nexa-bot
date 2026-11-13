@@ -18,11 +18,7 @@ import {
   type AvailableMemoryReader,
   type SevenZipLevel,
 } from './seven-zip-levels.js';
-import {
-  resolveCpuLimit,
-  startCpuThrottle,
-  type CpuLimitProvider,
-} from './cpu-quota.js';
+import { resolveCpuLimit, startCpuThrottle, type CpuLimitProvider } from './cpu-quota.js';
 import { killedBySignal, toolOomKilled, wrapLowPriority } from './tool-process.js';
 import {
   KEY_BUNDLE_ENTRY,
