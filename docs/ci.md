@@ -36,30 +36,30 @@ and fails if two main commits share a group or any main run can be cancelled.
 ## Jobs
 
 ```
-changes ──────────┬──────────────────── Changed paths (docs-only pull request?)
+changes ──────────┬──────────────────── Changed paths (which jobs this PR needs)
 static ───────────┼──────────────────── Typecheck, lint and boundaries
 build ──┬── unit ─┼─────────┐
         ├── web ──┼─────────┤
-        ├── integration 1..10 (skippable)
-        ├── legacy-mysql ×2 ┤ (skippable)
+        ├── integration 1..18 (skippable)
+        ├── legacy-mysql ×1–2 (skippable)
         └── legacy-rehearsal┼────────── Unit and integration tests (aggregate)
 deploy-logic ─────┼─────────┤
 deploy ───────────┼─────────┤ (skippable) Deployment smoke + Mirza rehearsal smoke
 deploy-update ────┴─────────┘ (skippable) Deployment update and rollback smoke
-audit ──────────────────────────────── Dependency audit
+audit ──────────────────────────────── Dependency audit (skippable)
 ```
 
 - **build** compiles once (stamped with the SHA), runs the built-output smoke,
   `check:runtime` and the migration drift check, and uploads the four `dist`
   directories as the `dist` artifact. `unit`, `web` and every integration shard
   download it instead of building again, so every test job runs the same bytes.
-- **integration** is a 10-way matrix over `vitest --shard=i/10`. The shard a
+- **integration** is an 18-way matrix over `vitest --shard=i/18`. The shard a
   file lands in is decided by `tests/support/timed-sequencer.mts`, which the
   root vitest config installs: longest file first, each into the shard with the
   least measured work so far, weights from `tests/support/integration-timings.json`.
   Every shard computes the same partition from the same file list, so every
   file runs in exactly one shard — `timed-sequencer.test.ts` checks that for
-  every count from 1 to 16, and a file missing from the table (a new one) still
+  every count from 1 to 24, and a file missing from the table (a new one) still
   runs, weighted at the median. Each shard has its own PostgreSQL and Redis, so
   suites inside a shard still run one file at a time against a database nothing
   else touches. Each shard applies the compiled migrations without application
@@ -68,8 +68,10 @@ audit ────────────────────────�
   that ALWAYS reports. It runs `if: always()` and is green only when `changes`,
   `unit`, `web`, `deploy-logic`, every shard, both legacy jobs and both
   deployment smokes succeeded. The only other result it accepts is `skipped`
-  for a skippable job, and only when `changes` succeeded, said `heavy=false`,
-  and the event is `pull_request`.
+  for a job `changes` left out: the event is `pull_request`, `changes`
+  succeeded, said `full=false` AND said that job's own scope is `false`
+  (`scripts/ci-aggregate.sh`). A job that was in scope and skipped or
+  cancelled is a failure on every event.
 - **Deployment logic** (shellcheck, botctl against a fake docker, the shell
   check's own test, the release gate against a fake `gh`), **Deployment smoke**
   (the real image, install, serve, back up; then the Mirza rehearsal kit) and
@@ -81,24 +83,62 @@ audit ────────────────────────�
 Coverage is unchanged: every command the workflow ran before the split is still
 run, and `ci-workflow.test.ts` lists them.
 
-### Docs-only pull requests
+### Which jobs a pull request runs
 
-`changes` runs `scripts/ci-docs-only.sh`, which prints `heavy=false` only when
-the event is `pull_request` AND every path the merge commit changes against its
-first parent (`--no-renames`, so a rename counts both sides) is Markdown under
-`docs/`, or `README.md`, `CLAUDE.md` or `PROGRESS.md` at the root — the three
-`.dockerignore` keeps out of the image. Anything else, an unreadable diff
-included, is `heavy=true`.
+`changes` runs `scripts/ci-scope.sh`, which reads the merge commit against its
+first parent (`--no-renames`, so a rename counts both sides) and prints one
+output per job group: `full`, `unit`, `web`, `integration`, `legacy`, `deploy`,
+`deploy_logic`, `audit`, and `legacy_engines` (the legacy-mysql matrix). Every
+changed path is classified; the PR runs the **union** of its paths' jobs. Static
+and build run on every run.
 
-On `heavy=false` the integration shards, both legacy jobs and both deployment
-smokes are skipped. Everything that READS Markdown still runs: `static`
-(prettier, `check:citations`, `check:boundaries`), `unit` (the legacy runbook
-tests), `web` (`docs/open-questions.md`) and `deploy-logic` (botctl's test greps
-`docs/deployment.md`). `ci-workflow.test.ts` scans what the skippable jobs run
-for a read of a Markdown file and fails if one appears; a JSON schema under
-`docs/` is not Markdown and makes a run heavy.
+| A changed path under …                                                                                                                                        | adds                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `docs/**/*.md`, `README.md`, `CLAUDE.md`, `PROGRESS.md`                                                                                                       | unit, web, deploy-logic (today's docs-only rule)   |
+| `apps/web/**`, `apps/miniapp/**`, `tests/web/**`, `scripts/web-shots/**`                                                                                      | unit, web                                          |
+| `apps/api/src/**`, `packages/i18n/**`                                                                                                                         | unit, web, integration                             |
+| the importer (`apps/api/src/modules/*/legacy*`, `nxpkg`, `legacy-*.ts`, `cutover-*`), `tests/legacy-mysql/**`, `tests/fixtures/legacy/**`, `scripts/legacy-*` | + legacy-mysql (MySQL 8.0 only) + legacy-rehearsal |
+| entry points, `*.cli.ts`, the migrator, backup, the recovery role                                                                                             | + legacy, + both deployment smokes                 |
+| `deploy/**`, `Dockerfile*`, compose files, `scripts/install*`, `scripts/*deploy*`, the smoke scripts                                                          | + both deployment smokes, deploy-logic             |
+| `tests/unit/**` / `tests/integration/**`                                                                                                                      | unit / unit, integration                           |
+| `pnpm-lock.yaml`, any `package.json`, `pnpm-workspace.yaml`, `.npmrc`                                                                                         | + dependency audit                                 |
+| **fail-safe:** `packages/contracts/**`, `apps/api/drizzle/**` (every migration), `pnpm-lock.yaml`, any `package.json`, `.github/**`, `scripts/ci-*`           | **everything**                                     |
+| **anything no rule names**, or a diff that cannot be read                                                                                                     | **everything**                                     |
 
-**A push to main and a dispatched run never skip anything.** Those runs are what
+Two choices the table encodes:
+
+- **Unit runs on every run.** The unit project reads files of every class (the
+  web and mini-app sources, `deploy/`, the Dockerfile, the legacy fixtures,
+  `scripts/`, `docs/`), so no path can show it does not need unit.
+- **A migration is fail-safe**, not just "+ deployment smokes": `apps/api/drizzle/**`
+  runs everything, the smokes included.
+
+On a pull request the dependency audit runs only when the dependency graph
+changed, and the legacy-mysql matrix holds MySQL 8.0 only (MirzaBot's production
+engine). A push to main, a dispatch and the nightly run the audit and both
+engines (MariaDB 10.11 and MySQL 8.0).
+
+`tests/unit/ci-workflow.test.ts` holds a table test (a sample changed-file list
+per rule → the expected outputs, unknown path → full, push/dispatch/schedule →
+full), scans what each skippable job reads so a class cannot leave out a job
+that reads its files, and drives `scripts/ci-aggregate.sh` with every result ×
+scope × event. `scripts/mutate-ci-scope.py` reverts each rule in turn (the
+fail-safe rule, the unknown-path rule, the aggregate's scope/event/full checks,
+an accepted cancel, a dropped job, the engine matrix, the nightly wiring and its
+report) and confirms a test goes red.
+
+### The nightly run
+
+`.github/workflows/nightly.yml` (formerly `exhaustive.yml`) runs at 03:00 UTC
+on main: the whole of `ci.yml` as a reusable workflow (event `schedule`, so
+full: every shard, both smokes, both legacy engines, the audit) plus the
+exhaustive notification orderings. When either is red it opens one issue titled
+«CI شبانه قرمز است» listing the failing jobs, or comments on the open one
+(`scripts/ci-nightly-report.sh`, REST only; the `report` job is the only one
+with `issues: write`). The release gate never counts a nightly run: its path is
+`nightly.yml`, and the gate accepts only push and dispatch runs of `ci.yml`.
+
+**A push to main, a dispatched run and the nightly never skip anything.** Those runs are what
 `release.yml` accepts as evidence, so a release can never rest on a skipped job.
 The aggregate refuses a skip on any event but `pull_request`, independently of
 the script, and both halves have a test that fails when the rule is reverted.
@@ -217,6 +257,31 @@ and the largest count whose run stays under the free plan's 20 concurrent jobs
 with nothing else running; twelve already peaks at 21, so a second pull
 request at the same moment would queue behind it.
 
+### Choosing the shard count, 2026-11
+
+With the update/rollback smoke path-scoped, it no longer sets the floor for an
+application PR, so the count was re-decided for the case that matters: two pull
+requests at once under the free plan's ~20-job pool. Inputs are the per-job
+medians of twelve green CI runs (`43087039037` … `43179546656`): the suite is
+~198 shard-minutes, ~0.75 min fixed cost per shard, ~17 % per-shard noise
+(sd 3.3 min around 19.8 at ten shards), and the heaviest file (570 s) as the
+floor. A pool model (FIFO over 20 runners, 300 draws per cell) gives the mean
+wall time of the slower run, minutes:
+
+| scenario                    | 10 shards | 16 shards | **18 shards** | 20 shards |
+| --------------------------- | --------: | --------: | ------------: | --------: |
+| one push to main            |      27.3 |      19.4 |          19.7 |      23.1 |
+| one application PR          |      27.4 |      18.4 |      **16.7** |      18.9 |
+| two application PRs at once |      31.1 |      31.0 |      **28.9** |      30.5 |
+| two app PRs, 3 min apart    |      29.8 |      28.2 |      **26.1** |      28.1 |
+| push to main + app PR       |      35.7 |      31.5 |      **31.2** |      33.6 |
+| two full PRs                |      37.9 |      33.1 |      **32.6** |      34.6 |
+
+Eighteen is best or within 0.3 min of best in every row; twenty already loses
+to queueing. The cost is ~6 runner-minutes of fixed setup per full run
+(8 × 0.75). Measured before/after numbers on real runs are in the CI-slimming
+round report.
+
 ## The 2026-11 image cache, and the docs-only question
 
 ### Was a 33-minute run on a docs-only merge a bug? No — by design
@@ -231,7 +296,7 @@ What it still ran is what reads Markdown: its longest job was `web`
 
 The 33-minute run (`42551072700`, 02:27 → 03:01) is the **`push` to main** of
 its merge commit. A push is what `release.yml` accepts as evidence that a commit
-passed CI, so `ci-docs-only.sh` returns `heavy=true` for every event but
+passed CI, so `ci-docs-only.sh` (since replaced by `ci-scope.sh`) returned `heavy=true` for every event but
 `pull_request` and nothing is skipped; the aggregate refuses a skip on a push
 independently of the script. That is unchanged: a main commit whose evidence is
 partial could be tagged and released. (A merge-commit push that is provably
@@ -423,3 +488,66 @@ unchanged.
 Every job runs on `ubuntu-24.04`, never `ubuntu-latest`, which migrates to a
 newer Ubuntu on GitHub's schedule and would change the toolchain under a green
 commit that the release workflow requires.
+
+## No dependency on Canonical's mirrors
+
+On 2026-11-11 Canonical's DNS was down for hours and CI went red with it: the unit job
+and every integration shard ran `apt-get update && apt-get install 7zip`, and the
+legacy rehearsal ran `apt-get download mysql-server-core-8.0 …`, both against
+`*.ubuntu.com`. None of that is the code under test, so nothing in the common CI path
+now reaches Canonical's hosts. Two approaches were weighed: (a) the tool from somewhere
+that is not apt, or (b) a cached, mirror-independent install. Both tools use (b) with the
+download made once and kept in `actions/cache`.
+
+- **7-Zip** — `scripts/ci-install-7zip.sh`: the official static build from the 7-Zip
+  project's GitHub release (`ip7z/7zip`, `7z<ver>-linux-x64.tar.xz`), version and
+  sha256 pinned in the script, verified on every run (a cached tarball too; a mismatch is
+  re-fetched once, then fails). The tarball is cached (`7zip-<ver>-linux-x64-<script hash>`);
+  the script links `7zz` as `7z` and puts it first on `PATH`, because
+  `BACKUP_SEVEN_ZIP_BIN` defaults to `7z`. `tests/unit/backup-seven-zip.test.ts` (real archive, encrypted headers, listing) passes against this binary.
+  The `7z` an image may already ship is not trusted: the
+  pinned one is installed every run, so the suites test one known version.
+  To bump: change `VERSION` and `SHA256` together.
+- **MySQL 8.0 binaries** (legacy rehearsal) — `scripts/ci-fetch-debs.sh DEST PACKAGE…`.
+  `DEST` is cached by the exact package list; on a hit the script downloads nothing. On a
+  miss it tries `archive.ubuntu.com` and then `mirrors.edge.kernel.org/ubuntu` (kernel.org's
+  own DNS and CDN), through a temporary apt tree (`Dir::Etc::sourcelist`, own state and
+  cache, no sudo, the runner's `/etc/apt` untouched) whose sources are
+  `[signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg]` for `noble`, `-updates` and
+  `-security`: the same signature checks as a default install, never `trusted=yes`. Why
+  not the `mysql:8.0` image's binaries: the harness runs the server unpacked on a scratch
+  directory, and a different build of the server is
+  a behaviour change this round does not take on.
+- **Left alone**: the deployment smokes build the production image, whose Dockerfile still
+  installs Debian packages; the image and `deploy/**` are unchanged.
+
+### The outage drill
+
+Dispatch CI with `block_ubuntu_hosts: true` and, to exercise the cache-miss path too,
+`bypass_tool_cache: true`:
+
+```
+gh api repos/Mhoseinshah1/nexa-bot/actions/workflows/ci.yml/dispatches \
+  -f ref=<branch> -f 'inputs[block_ubuntu_hosts]=true' -f 'inputs[bypass_tool_cache]=true'
+```
+
+The three jobs that install these tools (`unit`, `integration`, `legacy-rehearsal`) then
+begin with `scripts/ci-block-ubuntu-hosts.sh`, which writes `0.0.0.0 <host>` into
+`/etc/hosts` for the Canonical and Launchpad hosts (`archive`, `azure.archive`, `security`,
+`ports`, `esm`, `keyserver`, `changelogs`, `motd`, `ppa.launchpadcontent.net`,
+`api.launchpad.net`, …) and then checks that `archive.ubuntu.com`,
+`security.ubuntu.com` and `azure.archive.ubuntu.com` really cannot be fetched. A green run is
+the proof. `tests/unit/ci-tool-installs.test.ts` keeps the rule on every push: no job step runs
+`apt`/`apt-get` against the default sources, the 7-Zip checksum is pinned and verified, the
+fetch script keeps its signed sources and the kernel.org fallback, and both inputs exist, default
+to false and gate their steps. `scripts/mutate-ci-no-ubuntu.py` reverts each rule in turn and
+confirms a test fails.
+
+**Proof run:** [CI run 2726](https://github.com/Mhoseinshah1/nexa-bot/actions/runs/43196377712)
+(dispatch, 2026-11-12, head `5c7d26d4`, both inputs `true`) is green on all 23 jobs. In the
+unit job, all ten integration shards and the legacy rehearsal the drill step logged
+`blocked: archive.ubuntu.com / security.ubuntu.com / azure.archive.ubuntu.com is unreachable`,
+the cache steps were skipped, 7-Zip 25.01 was downloaded from the GitHub release, and the
+MySQL packages logged `http://archive.ubuntu.com/ubuntu failed, trying the next mirror` and
+then `fetched from https://mirrors.edge.kernel.org/ubuntu`; the rehearsal then passed
+(164 PASS, 0 FAIL).

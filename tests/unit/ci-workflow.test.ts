@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -28,12 +36,18 @@ interface Job {
   if?: string;
   outputs?: Record<string, string>;
   'timeout-minutes'?: number;
-  strategy?: { 'fail-fast'?: boolean; matrix?: { shard?: number[] } };
+  strategy?: { 'fail-fast'?: boolean; matrix?: { shard?: number[]; engine?: unknown } };
   services?: Record<string, unknown>;
   steps: Step[];
 }
 interface Workflow {
-  on: { push?: { branches?: string[] }; pull_request?: unknown; workflow_dispatch?: unknown };
+  on: {
+    push?: { branches?: string[] };
+    pull_request?: unknown;
+    workflow_dispatch?: unknown;
+    workflow_call?: unknown;
+  };
+  permissions: Record<string, string>;
   concurrency: { group: string; 'cancel-in-progress': string | boolean };
   jobs: Record<string, Job>;
 }
@@ -41,6 +55,62 @@ interface Workflow {
 const workflow = parse(
   readFileSync(join(__dirname, '../../.github/workflows/ci.yml'), 'utf8'),
 ) as Workflow;
+
+const ROOT = join(__dirname, '../..');
+
+/**
+ * Every job `changes` may leave out of a pull request, and the scope output
+ * that decides it (scripts/ci-scope.sh). The audit is gated too, on `audit`
+ * alone, and stays out of the aggregate (a registry outage is not a test result).
+ */
+const SCOPED_JOBS: Record<string, string> = {
+  unit: 'unit',
+  web: 'web',
+  integration: 'integration',
+  'legacy-mysql': 'legacy',
+  'legacy-rehearsal': 'legacy',
+  'deploy-logic': 'deploy_logic',
+  deploy: 'deploy',
+  'deploy-update': 'deploy',
+};
+const SCOPE_OUTPUTS = [
+  'full',
+  'unit',
+  'web',
+  'integration',
+  'legacy',
+  'deploy',
+  'deploy_logic',
+  'audit',
+  'legacy_engines',
+];
+
+interface Engine {
+  label: string;
+  image: string;
+  health: string;
+}
+
+function parseOutputs(text: string): Record<string, string> {
+  return Object.fromEntries(
+    text
+      .trim()
+      .split('\n')
+      .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+  );
+}
+
+/** The scope script's outputs for this event and these changed paths (on stdin). */
+function scopeInput(event: string, input: string): Record<string, string> {
+  return parseOutputs(
+    execFileSync('bash', [join(ROOT, 'scripts/ci-scope.sh'), event, '--stdin'], {
+      cwd: ROOT,
+      input,
+    }).toString(),
+  );
+}
+const scope = (event: string, ...paths: string[]) =>
+  scopeInput(event, paths.map((p) => `${p}\n`).join(''));
 
 interface Context {
   workflow: string;
@@ -252,181 +322,390 @@ describe('the CI workflow', () => {
     // Without always() a failed shard SKIPS this job, and a skipped required
     // check is not a red one.
     expect(job.if).toBe('always()');
-    const required = [
-      'changes',
-      'unit',
-      'web',
-      'integration',
-      'legacy-mysql',
-      'legacy-rehearsal',
-      'deploy-logic',
-      'deploy',
-      'deploy-update',
-    ];
-    expect(job.needs).toEqual(expect.arrayContaining(required));
-    const run = job.steps.map((s) => s.run ?? '').join('\n');
-    // Never skippable, on any event.
-    for (const line of [
-      `must 'changed paths' "$CHANGES"`,
-      `must 'unit' "$UNIT"`,
-      `must 'web' "$WEB"`,
-      `must 'deployment logic' "$DEPLOY_LOGIC"`,
-    ]) {
-      expect(run).toContain(line);
-    }
-    // Skippable only by a docs-only pull request.
-    for (const line of [
-      `heavy 'integration (every shard)' "$INTEGRATION"`,
-      `heavy 'legacy mysql' "$LEGACY_MYSQL"`,
-      `heavy 'legacy rehearsal' "$LEGACY_REHEARSAL"`,
-      `heavy 'deployment smoke' "$DEPLOY"`,
-      `heavy 'deployment update smoke' "$DEPLOY_UPDATE"`,
-    ]) {
-      expect(run).toContain(line);
-    }
-    expect(run, 'a result test was inverted').not.toContain('!= "success"');
-  });
-
-  /** Runs the aggregate's script with these results, and returns its exit status. */
-  function aggregate(results: Record<string, string>): number {
-    const job = workflow.jobs.test!;
+    expect(job.needs).toEqual(
+      expect.arrayContaining(['changes', 'build', ...Object.keys(SCOPED_JOBS)]),
+    );
     const step = job.steps.find((s) => s.name === 'Every test job succeeded')!;
-    const env: Record<string, string> = { PATH: process.env.PATH ?? '' };
-    for (const key of Object.keys(step.env ?? {})) env[key] = results[key] ?? 'success';
-    try {
-      execFileSync('bash', ['-c', step.run!], { env, stdio: 'pipe' });
-      return 0;
-    } catch (error) {
-      return (error as { status: number }).status;
+    expect(step.run).toBe('bash scripts/ci-aggregate.sh');
+    expect(step.env?.EVENT).toBe('${{ github.event_name }}');
+    expect(step.env?.CHANGES).toBe('${{ needs.changes.result }}');
+    expect(step.env?.FULL).toBe('${{ needs.changes.outputs.full }}');
+    expect(step.env?.BUILD_RESULT).toBe('${{ needs.build.result }}');
+    // Every scoped job is handed to the decision with its OWN result and the
+    // SAME scope output its `if:` runs on, so the two cannot disagree.
+    for (const [name, output] of Object.entries(SCOPED_JOBS)) {
+      const key = name.toUpperCase().replace(/-/g, '_');
+      expect(step.env?.[`${key}_RESULT`], name).toBe(`\${{ needs.${name}.result }}`);
+      expect(step.env?.[`${key}_SCOPE`], name).toBe(`\${{ needs.changes.outputs.${output} }}`);
     }
-  }
-
-  it('accepts a skipped heavy job only for a docs-only pull request', () => {
-    const heavy = ['INTEGRATION', 'LEGACY_MYSQL', 'LEGACY_REHEARSAL', 'DEPLOY', 'DEPLOY_UPDATE'];
-    const skipped = Object.fromEntries(heavy.map((k) => [k, 'skipped']));
-    expect(aggregate({ EVENT: 'push', HEAVY: 'true' })).toBe(0);
-    expect(aggregate({ EVENT: 'pull_request', HEAVY: 'false', ...skipped })).toBe(0);
-    // The release evidence: a push or a dispatch never accepts a skip.
-    expect(aggregate({ EVENT: 'push', HEAVY: 'false', ...skipped })).not.toBe(0);
-    expect(aggregate({ EVENT: 'workflow_dispatch', HEAVY: 'false', ...skipped })).not.toBe(0);
-    // A pull request that is not docs-only, or whose decision failed, neither.
-    expect(aggregate({ EVENT: 'pull_request', HEAVY: 'true', ...skipped })).not.toBe(0);
-    expect(aggregate({ EVENT: 'pull_request', HEAVY: '', ...skipped })).not.toBe(0);
-    expect(
-      aggregate({ EVENT: 'pull_request', HEAVY: 'false', CHANGES: 'failure', ...skipped }),
-    ).not.toBe(0);
-    for (const key of heavy) {
-      // Each heavy job, failed or cancelled, is red even on a docs-only PR.
-      for (const result of ['failure', 'cancelled']) {
-        expect(aggregate({ EVENT: 'pull_request', HEAVY: 'false', [key]: result }), key).not.toBe(
-          0,
-        );
-      }
-      expect(aggregate({ EVENT: 'push', HEAVY: 'true', [key]: 'skipped' }), key).not.toBe(0);
-    }
-    for (const key of ['CHANGES', 'UNIT', 'WEB', 'DEPLOY_LOGIC']) {
-      expect(
-        aggregate({ EVENT: 'pull_request', HEAVY: 'false', ...skipped, [key]: 'skipped' }),
-        `${key} is never skippable`,
-      ).not.toBe(0);
-    }
+    // ...and the script checks every one of them.
+    const script = readFileSync(join(ROOT, 'scripts/ci-aggregate.sh'), 'utf8');
+    const listed = /^JOBS=\(([^)]*)\)$/mu.exec(script)?.[1]?.trim().split(/\s+/u) ?? [];
+    expect(listed.sort()).toEqual(
+      Object.keys(SCOPED_JOBS)
+        .map((n) => n.toUpperCase().replace(/-/g, '_'))
+        .sort(),
+    );
   });
 
-  it('lets a docs-only change skip only the jobs that read no documentation', () => {
+  describe('the aggregate decision (scripts/ci-aggregate.sh)', () => {
+    const keys = Object.keys(SCOPED_JOBS).map((n) => n.toUpperCase().replace(/-/g, '_'));
+    /** Exit status of the aggregate for these results; everything else green and in scope. */
+    function aggregate(overrides: Record<string, string | undefined>): number {
+      const env: Record<string, string> = {
+        PATH: process.env.PATH ?? '',
+        EVENT: 'pull_request',
+        CHANGES: 'success',
+        FULL: 'false',
+        BUILD_RESULT: 'success',
+      };
+      for (const key of keys) {
+        env[`${key}_RESULT`] = 'success';
+        env[`${key}_SCOPE`] = 'true';
+      }
+      for (const [key, value] of Object.entries(overrides)) {
+        if (value === undefined) delete env[key];
+        else env[key] = value;
+      }
+      try {
+        execFileSync('bash', [join(ROOT, 'scripts/ci-aggregate.sh')], { env, stdio: 'pipe' });
+        return 0;
+      } catch (error) {
+        return (error as { status: number }).status;
+      }
+    }
+    const outOfScope = (key: string) => ({
+      [`${key}_RESULT`]: 'skipped',
+      [`${key}_SCOPE`]: 'false',
+    });
+
+    it('passes when every job succeeded, on every event', () => {
+      for (const event of ['pull_request', 'push', 'workflow_dispatch', 'schedule']) {
+        expect(aggregate({ EVENT: event }), event).toBe(0);
+        expect(aggregate({ EVENT: event, FULL: 'true' }), event).toBe(0);
+      }
+    });
+
+    it('accepts a skip on a pull request only for a job its scope left out', () => {
+      const all = Object.assign({}, ...keys.map(outOfScope)) as Record<string, string>;
+      expect(aggregate(all)).toBe(0);
+      for (const key of keys) {
+        expect(aggregate(outOfScope(key)), key).toBe(0);
+        // In scope and skipped: something that should have run did not.
+        expect(aggregate({ [`${key}_RESULT`]: 'skipped' }), `${key} in scope`).not.toBe(0);
+        expect(aggregate({ [`${key}_RESULT`]: 'skipped', [`${key}_SCOPE`]: '' }), key).not.toBe(0);
+        expect(
+          aggregate({ [`${key}_RESULT`]: 'skipped', [`${key}_SCOPE`]: undefined }),
+          key,
+        ).not.toBe(0);
+      }
+    });
+
+    it('never accepts a cancelled, failed or missing result, in scope or not', () => {
+      for (const key of keys) {
+        for (const result of ['cancelled', 'failure', 'timed_out', '']) {
+          expect(aggregate({ [`${key}_RESULT`]: result }), `${key} ${result}`).not.toBe(0);
+          expect(aggregate({ [`${key}_RESULT`]: result, [`${key}_SCOPE`]: 'false' }), key).not.toBe(
+            0,
+          );
+        }
+        expect(
+          aggregate({ [`${key}_RESULT`]: undefined, [`${key}_SCOPE`]: 'false' }),
+          key,
+        ).not.toBe(0);
+      }
+    });
+
+    it('never accepts a skip on a push, a dispatch or the nightly — the release evidence', () => {
+      for (const event of ['push', 'workflow_dispatch', 'schedule', '']) {
+        for (const key of keys) {
+          expect(aggregate({ EVENT: event, ...outOfScope(key) }), `${event} ${key}`).not.toBe(0);
+        }
+      }
+    });
+
+    it('never accepts a skip on a full pull request, or when the decision failed', () => {
+      for (const key of keys) {
+        expect(aggregate({ FULL: 'true', ...outOfScope(key) }), key).not.toBe(0);
+        expect(aggregate({ FULL: '', ...outOfScope(key) }), key).not.toBe(0);
+        for (const changes of ['failure', 'cancelled', 'skipped', '']) {
+          expect(aggregate({ CHANGES: changes, ...outOfScope(key) }), key).not.toBe(0);
+        }
+      }
+      expect(aggregate({ CHANGES: 'failure' })).not.toBe(0);
+      for (const build of ['skipped', 'failure', 'cancelled']) {
+        expect(aggregate({ BUILD_RESULT: build }), build).not.toBe(0);
+      }
+    });
+  });
+
+  it('runs each scoped job on its own scope output or a full run, and nothing else', () => {
+    for (const [name, output] of Object.entries(SCOPED_JOBS)) {
+      const job = workflow.jobs[name]!;
+      expect(job.if, name).toBe(
+        `needs.changes.outputs.full == 'true' || needs.changes.outputs.${output} == 'true'`,
+      );
+      expect([job.needs].flat(), name).toContain('changes');
+    }
+    // The audit reads the dependency graph only: its own output, which is true
+    // on every non-PR event and on a PR that changed the graph — not `full`.
+    expect(workflow.jobs.audit!.if).toBe("needs.changes.outputs.audit == 'true'");
+    expect([workflow.jobs.audit!.needs].flat()).toContain('changes');
+    // Static and build always run; nothing else may be gated by `changes`.
     const gated = Object.entries(workflow.jobs)
-      .filter(([, job]) => job.if?.includes('needs.changes.outputs.heavy'))
+      .filter(([, job]) => job.if?.includes('needs.changes.outputs'))
       .map(([name]) => name)
       .sort();
-    expect(gated).toEqual([
-      'deploy',
-      'deploy-update',
-      'integration',
-      'legacy-mysql',
-      'legacy-rehearsal',
-    ]);
-    for (const name of gated) {
-      expect(workflow.jobs[name]!.if).toBe("needs.changes.outputs.heavy == 'true'");
-      expect([workflow.jobs[name]!.needs].flat()).toContain('changes');
-    }
+    expect(gated).toEqual([...Object.keys(SCOPED_JOBS), 'audit'].sort());
+    expect(workflow.jobs.static!.if).toBeUndefined();
+    expect(workflow.jobs.build!.if).toBeUndefined();
+    // Every output the script prints is published by `changes`, under its own name.
     const changes = workflow.jobs.changes!;
-    expect(changes.outputs?.heavy).toBe('${{ steps.decide.outputs.heavy }}');
-    expect(changes.steps.some((s) => s.run?.startsWith('bash scripts/ci-docs-only.sh'))).toBe(true);
+    for (const output of SCOPE_OUTPUTS) {
+      expect(changes.outputs?.[output], output).toBe(`\${{ steps.decide.outputs.${output} }}`);
+    }
+    expect(Object.keys(changes.outputs ?? {}).sort()).toEqual([...SCOPE_OUTPUTS].sort());
+    const decide = changes.steps.find((s) => s.name === 'Decide which jobs run');
+    expect(decide?.run).toContain('set -euo pipefail');
+    expect(decide?.run).toContain('bash scripts/ci-scope.sh "$EVENT" | tee -a "$GITHUB_OUTPUT"');
+    expect(existsSync(join(ROOT, 'scripts/ci-docs-only.sh')), 'the old script is back').toBe(false);
   });
 
-  it('decides docs-only from the paths, and only for a pull request', () => {
-    const decide = (event: string, paths: string) =>
-      execFileSync('bash', ['scripts/ci-docs-only.sh', event, '--stdin'], {
-        cwd: join(__dirname, '../..'),
-        input: paths,
-      })
-        .toString()
-        .trim();
-    expect(decide('pull_request', 'docs/ci.md\ndocs/adr/0001-x.md\nREADME.md\n')).toBe(
-      'heavy=false',
+  it('runs the legacy source on MySQL 8.0 only for a pull request, on both engines otherwise', () => {
+    const job = workflow.jobs['legacy-mysql']!;
+    expect(job.strategy?.matrix?.engine).toBe(
+      '${{ fromJSON(needs.changes.outputs.legacy_engines) }}',
     );
-    expect(decide('pull_request', 'CLAUDE.md\nPROGRESS.md\n')).toBe('heavy=false');
-    // PR #440: a round report in a docs/ subdirectory is docs. Its merge push to main still
-    // ran everything (below), by design.
-    expect(decide('pull_request', 'docs/round-reports/web-redesign.md\n')).toBe('heavy=false');
-    expect(decide('push', 'docs/round-reports/web-redesign.md\n')).toBe('heavy=true');
-    // The release evidence always runs everything.
-    expect(decide('push', 'docs/ci.md\n')).toBe('heavy=true');
-    expect(decide('workflow_dispatch', 'docs/ci.md\n')).toBe('heavy=true');
-    // Not Markdown, not under docs/, shipped in the image, or nothing read.
-    for (const paths of [
-      'docs/legacy-migration/final-report.schema.json\n',
-      'docs/ci.md\napps/api/src/main.ts\n',
-      'deploy/rehearsal/README.md\n',
-      'apps/web/README.md\n',
-      'docs\n',
-      '',
-    ]) {
-      expect(decide('pull_request', paths), JSON.stringify(paths)).toBe('heavy=true');
+    const engines = (event: string) =>
+      (JSON.parse(scope(event, 'tests/legacy-mysql/x.test.ts').legacy_engines!) as Engine[]).map(
+        (e) => e.image,
+      );
+    expect(engines('pull_request')).toEqual(['mysql:8.0']);
+    // Even a full pull request: the second engine is main's and the nightly's.
+    expect(JSON.parse(scope('pull_request', 'tests/support/x.ts').legacy_engines!)).toHaveLength(1);
+    for (const event of ['push', 'workflow_dispatch', 'schedule']) {
+      expect(engines(event), event).toEqual(['mariadb:10.11', 'mysql:8.0']);
     }
   });
 
-  it('reads the paths from a two-parent merge commit, and from nothing else', () => {
-    const script = join(__dirname, '../../scripts/ci-docs-only.sh');
-    const dir = mkdtempSync(join(tmpdir(), 'ci-docs-only-'));
-    const git = (...args: string[]) =>
-      execFileSync('git', ['-c', 'user.name=ci', '-c', 'user.email=ci@example.invalid', ...args], {
-        cwd: dir,
-        stdio: 'pipe',
-      });
-    const decide = () =>
-      execFileSync('bash', [script, 'pull_request'], { cwd: dir }).toString().trim();
-    try {
-      git('init', '-q', '-b', 'main');
-      git('commit', '-q', '--allow-empty', '-m', 'base');
-      git('checkout', '-q', '-b', 'docs');
-      mkdirSync(join(dir, 'docs'));
-      writeFileSync(join(dir, 'docs/a.md'), 'x\n');
-      git('add', '.');
-      git('commit', '-q', '-m', 'docs');
-      // Not a merge: HEAD^1 is the PR's own previous commit, not its base.
-      expect(decide()).toBe('heavy=true');
-      git('checkout', '-q', 'main');
-      git('merge', '-q', '--no-ff', 'docs', '-m', 'merge');
-      expect(decide()).toBe('heavy=false');
-      // A pull request that changes code is heavy.
-      git('checkout', '-q', '-b', 'code', 'main~1');
-      writeFileSync(join(dir, 'main.ts'), 'x\n');
-      git('add', '.');
-      git('commit', '-q', '-m', 'code');
-      git('checkout', '-q', 'main~1');
-      git('checkout', '-q', '-b', 'base2');
-      git('merge', '-q', '--no-ff', 'code', '-m', 'merge');
-      expect(decide()).toBe('heavy=true');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  describe('which jobs a pull request runs (scripts/ci-scope.sh)', () => {
+    const NONE = {
+      full: 'false',
+      unit: 'true',
+      web: 'false',
+      integration: 'false',
+      legacy: 'false',
+      deploy: 'false',
+      deploy_logic: 'false',
+      audit: 'false',
+    };
+    const on = (...jobs: string[]) => ({
+      ...NONE,
+      ...Object.fromEntries(jobs.map((j) => [j, 'true'])),
+    });
+    const FULL = on('full', 'web', 'integration', 'legacy', 'deploy', 'deploy_logic');
+    const decided = (event: string, ...paths: string[]) => {
+      const { legacy_engines: _, ...rest } = scope(event, ...paths);
+      return rest;
+    };
+
+    it.each([
+      // Documentation: today's docs-only rule, unchanged.
+      [
+        ['docs/ci.md', 'docs/round-reports/web-redesign.md', 'README.md'],
+        on('web', 'deploy_logic'),
+      ],
+      [['CLAUDE.md', 'PROGRESS.md'], on('web', 'deploy_logic')],
+      // The Web Admin, its text slices and the Mini App: the web project.
+      [['apps/web/src/pages/x.tsx'], on('web')],
+      [['apps/web/src/i18n/web.fa/customers.ts'], on('web')],
+      [['tests/web/customers.test.tsx'], on('web')],
+      [['apps/miniapp/src/screens/store.tsx', 'tests/web/miniapp.test.tsx'], on('web')],
+      // ...except the template copy, which one integration suite imports.
+      [['apps/web/src/i18n/templates.fa.ts'], on('web', 'integration')],
+      // Application code and the shared text: unit, integration, web.
+      [['apps/api/src/modules/commerce/orders/application/x.ts'], on('web', 'integration')],
+      [['packages/i18n/src/fa.ts'], on('web', 'integration')],
+      [['tests/integration/orders.test.ts'], on('integration')],
+      [['tests/unit/x.test.ts'], NONE],
+      // The legacy importer: + both legacy jobs.
+      [
+        ['apps/api/src/modules/platform/legacy-importer/application/plan.ts'],
+        on('web', 'integration', 'legacy'),
+      ],
+      [['apps/api/src/modules/commerce/legacy-adoption/x.ts'], on('web', 'integration', 'legacy')],
+      [['apps/api/src/infrastructure/nxpkg/reader.ts'], on('web', 'integration', 'legacy')],
+      [['tests/legacy-mysql/legacy-mysql-source.test.ts'], on('legacy')],
+      [['tests/fixtures/legacy/synthetic-legacy.ts'], on('integration', 'legacy')],
+      [['scripts/legacy-rehearsal-synthetic-assert.mjs'], on('integration', 'legacy')],
+      [['scripts/legacy-rehearsal.sh'], on('integration', 'legacy', 'deploy_logic')],
+      // The recovery role, backup, the CLIs, the migrator and the process entry
+      // points: what the smokes and the rehearsal run beyond the suites.
+      [
+        ['apps/api/src/modules/platform/recovery/application/x.ts'],
+        on('web', 'integration', 'legacy', 'deploy'),
+      ],
+      [['apps/api/src/main.recovery.ts'], on('web', 'integration', 'legacy', 'deploy')],
+      [['apps/api/src/backup.cli.ts'], on('web', 'integration', 'legacy', 'deploy')],
+      [
+        ['apps/api/src/infrastructure/persistence/migrate.ts'],
+        on('web', 'integration', 'legacy', 'deploy'),
+      ],
+      [
+        ['apps/api/src/infrastructure/config/config.schema.ts'],
+        on('web', 'integration', 'deploy', 'deploy_logic'),
+      ],
+      // The deployment: both smokes and the deployment logic.
+      [['deploy/bin/botctl'], on('deploy', 'deploy_logic')],
+      [['deploy/rehearsal/mirza-rehearsal.sh'], on('deploy', 'deploy_logic')],
+      [['Dockerfile'], on('deploy', 'deploy_logic')],
+      [['.dockerignore', 'docker-compose.yml'], on('deploy', 'deploy_logic')],
+      [['scripts/deployment-update-smoke.sh'], on('deploy', 'deploy_logic')],
+      [['scripts/image-build.sh'], on('deploy', 'deploy_logic')],
+      [['deploy/caddy/routes.caddy'], on('web', 'integration', 'deploy', 'deploy_logic')],
+      [['tests/deploy/botctl.test.sh', 'scripts/release-ci-gate.mjs'], on('deploy_logic')],
+      // Session tooling.
+      [['.claude/skills/nexa-ci-watch/SKILL.md', 'scripts/mutate-tb1.py'], NONE],
+      [['scripts/claude/run-gate.sh'], on('deploy_logic')],
+    ])('%j', (paths, expected) => {
+      expect(decided('pull_request', ...paths)).toEqual(expected);
+    });
+
+    it('runs the union of every path’s jobs', () => {
+      expect(decided('pull_request', 'docs/ci.md', 'apps/web/src/x.tsx')).toEqual(
+        on('web', 'deploy_logic'),
+      );
+      expect(decided('pull_request', 'apps/web/src/x.tsx', 'deploy/bin/botctl')).toEqual(
+        on('web', 'deploy', 'deploy_logic'),
+      );
+      expect(
+        decided('pull_request', 'tests/legacy-mysql/a.test.ts', 'apps/api/src/modules/x/y.ts'),
+      ).toEqual(on('web', 'integration', 'legacy'));
+      expect(
+        decided('pull_request', 'docs/ci.md', 'Dockerfile', 'tests/fixtures/legacy/a.ts'),
+      ).toEqual(on('web', 'integration', 'legacy', 'deploy', 'deploy_logic'));
+    });
+
+    it('runs everything for a path no rule classifies, beside anything else', () => {
+      for (const path of [
+        'tests/support/timed-sequencer.mts',
+        'tests/fixtures/other/x.json',
+        'tests/exhaustive/x.test.ts',
+        'scripts/check-boundaries.sh',
+        'scripts/integration-timings.mjs',
+        'docs/legacy-migration/final-report.schema.json',
+        'docs',
+        'apps/api/drizzle.config.ts',
+        'apps/api/tsconfig.json',
+        'eslint.config.mjs',
+        'vitest.config.mts',
+        'README.fa.md',
+        'a-new-top-level-file',
+        '"docs/\\331\\205.md"',
+      ]) {
+        expect(decided('pull_request', path), path).toEqual(FULL);
+        expect(decided('pull_request', 'docs/ci.md', path), path).toEqual(FULL);
+      }
+    });
+
+    it('runs everything for every fail-safe path, whatever else changed', () => {
+      for (const path of [
+        'packages/contracts/src/templates.ts',
+        'apps/api/drizzle/0300_x.sql',
+        'apps/api/drizzle/meta/_journal.json',
+        '.github/workflows/ci.yml',
+        '.github/workflows/nightly.yml',
+        'scripts/ci-scope.sh',
+        'scripts/ci-aggregate.sh',
+        'scripts/ci-start-services.sh',
+      ]) {
+        expect(decided('pull_request', path), path).toEqual(FULL);
+        expect(decided('pull_request', 'docs/ci.md', path), path).toEqual(FULL);
+      }
+      // The dependency graph: full, and the audit too.
+      for (const path of ['pnpm-lock.yaml', 'package.json', 'apps/web/package.json']) {
+        expect(decided('pull_request', path), path).toEqual({ ...FULL, audit: 'true' });
+      }
+    });
+
+    it('runs the audit on a pull request only when the dependency graph changed', () => {
+      expect(decided('pull_request', 'tests/support/x.ts').audit).toBe('false');
+      expect(decided('pull_request', 'apps/api/src/x.ts').audit).toBe('false');
+      for (const path of ['pnpm-lock.yaml', 'packages/i18n/package.json', 'pnpm-workspace.yaml']) {
+        expect(decided('pull_request', 'docs/ci.md', path).audit, path).toBe('true');
+      }
+    });
+
+    it('runs everything, the audit included, on a push, a dispatch and the nightly', () => {
+      for (const event of ['push', 'workflow_dispatch', 'schedule', '']) {
+        expect(decided(event, 'docs/ci.md'), event).toEqual({ ...FULL, audit: 'true' });
+      }
+    });
+
+    it('runs everything when there is nothing to read', () => {
+      for (const input of ['', '\n', '\n\n']) {
+        expect(scopeInput('pull_request', input), JSON.stringify(input)).toMatchObject({
+          ...FULL,
+          audit: 'true',
+        });
+      }
+    });
+
+    it('reads the paths from a two-parent merge commit, and from nothing else', () => {
+      const script = join(ROOT, 'scripts/ci-scope.sh');
+      const dir = mkdtempSync(join(tmpdir(), 'ci-scope-'));
+      const git = (...args: string[]) =>
+        execFileSync(
+          'git',
+          ['-c', 'user.name=ci', '-c', 'user.email=ci@example.invalid', ...args],
+          { cwd: dir, stdio: 'pipe' },
+        );
+      const decide = () =>
+        parseOutputs(execFileSync('bash', [script, 'pull_request'], { cwd: dir }).toString());
+      try {
+        git('init', '-q', '-b', 'main');
+        git('commit', '-q', '--allow-empty', '-m', 'base');
+        git('checkout', '-q', '-b', 'web');
+        mkdirSync(join(dir, 'apps/web'), { recursive: true });
+        writeFileSync(join(dir, 'apps/web/a.tsx'), 'x\n');
+        git('add', '.');
+        git('commit', '-q', '-m', 'web');
+        // Not a merge: HEAD^1 is the PR's own previous commit, not its base.
+        expect(decide().full).toBe('true');
+        git('checkout', '-q', 'main');
+        git('merge', '-q', '--no-ff', 'web', '-m', 'merge');
+        expect(decide()).toMatchObject({ full: 'false', web: 'true', integration: 'false' });
+        // A pull request that changes an unclassified file runs everything.
+        git('checkout', '-q', '-b', 'code', 'main~1');
+        writeFileSync(join(dir, 'main.ts'), 'x\n');
+        git('add', '.');
+        git('commit', '-q', '-m', 'code');
+        git('checkout', '-q', 'main~1');
+        git('checkout', '-q', '-b', 'base2');
+        git('merge', '-q', '--no-ff', 'code', '-m', 'merge');
+        expect(decide().full).toBe('true');
+        // A rename counts both sides: apps/web/a.tsx -> deploy/a.tsx is web AND deploy.
+        git('checkout', '-q', '-b', 'move', 'main');
+        mkdirSync(join(dir, 'deploy'));
+        git('mv', 'apps/web/a.tsx', 'deploy/a.tsx');
+        git('commit', '-q', '-m', 'move');
+        git('checkout', '-q', 'main');
+        git('merge', '-q', '--no-ff', 'move', '-m', 'merge');
+        expect(decide()).toMatchObject({ full: 'false', web: 'true', deploy: 'true' });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   it('keeps every Markdown file out of what the skippable jobs read', () => {
-    // The docs-only skip is sound only while no skipped job reads a file it
-    // matches. Unit, web, static and deployment logic DO read docs/*.md, and
-    // are never skipped. This scans the code the skipped jobs run for a read
-    // of one, on one line: a file API or a shell reader beside a docs path.
+    // A documentation change selects static, unit, web and deployment logic,
+    // which DO read docs/*.md; it skips the integration shards, both legacy jobs
+    // and both smokes, which is sound only while none of them reads a file the
+    // documentation rule matches. This scans the code they run for a read of
+    // one, on one line: a file API or a shell reader beside a docs path. (The
+    // general check below asks the same of every path; this one also covers
+    // the application source the integration suite runs.)
     const root = join(__dirname, '../..');
     const sources = [
       'tests/integration',
@@ -466,6 +745,84 @@ describe('the CI workflow', () => {
     expect(hits).toEqual([]);
   });
 
+  it('selects every job for every repository path its code reads', () => {
+    // The scope rules are sound only while no job is left out for a file it
+    // reads. This scans what each skippable job runs for a line that names a
+    // repository path and reads, imports, runs or copies it, and asks the
+    // scope script about that path alone: the job must be selected (or the run
+    // full). A new read of an unclassified path passes (full); a new read of a
+    // classified path the job is not in fails here.
+    const readers: Record<string, string[]> = {
+      integration: ['tests/integration', 'apps/api/src'],
+      legacy: [
+        'tests/legacy-mysql',
+        'scripts/legacy-rehearsal-synthetic.sh',
+        'scripts/legacy-rehearsal.sh',
+        'scripts/legacy-rehearsal-synthetic-assert.mjs',
+        'scripts/legacy-rehearsal-reconciliation.mjs',
+        'scripts/legacy-rehearsal-report-check.mjs',
+        'scripts/legacy-archive-inspect.mjs',
+      ],
+      deploy: [
+        'scripts/deployment-smoke.sh',
+        'scripts/deployment-update-smoke.sh',
+        'scripts/mirza-rehearsal-smoke.sh',
+        'scripts/standalone-installer-smoke.sh',
+        'scripts/image-build.sh',
+        'scripts/check-image.sh',
+        'deploy',
+      ],
+      deploy_logic: ['scripts/check-shell.sh', 'tests/deploy'],
+      web: ['tests/web'],
+    };
+    const reads =
+      /(readFile|createReadStream|open\(|\bcat\b|\bgrep\b|\bsed\b|\bjq\b|\bawk\b|<\s*"|\bsource\b|^\s*\.\s|\bbash\b|\bnode\b|\btsx\b|\bcp\b|\bfind\b|\bdocker\b|--file\b|-f\s|from\s+['"]|import\(|require\(|join\(|resolve\(|\$\{?ROOT|\$\{?REPO|\$\{?here)/u;
+    const path =
+      /(?<![\w.-])((?:apps|packages|scripts|deploy|docs|tests)\/[\w./@-]*[\w@-]|Dockerfile\b|\.dockerignore\b)/gu;
+    const files = (source: string): string[] => {
+      try {
+        return readdirSync(join(ROOT, source), { recursive: true })
+          .map(String)
+          .map((f) => join(source, f));
+      } catch {
+        return [source];
+      }
+    };
+    const missing: string[] = [];
+    let checked = 0;
+    for (const [output, sources] of Object.entries(readers)) {
+      const asked = new Map<string, boolean>();
+      for (const file of sources.flatMap(files)) {
+        if (!/\.(m?ts|tsx|m?js|sh|ya?ml|caddy)$|\/bin\/[\w-]+$|Caddyfile/u.test(file)) continue;
+        let text: string;
+        try {
+          text = readFileSync(join(ROOT, file), 'utf8');
+        } catch {
+          continue;
+        }
+        text.split('\n').forEach((line, i) => {
+          const code = line.trim();
+          if (/^(#|\/\/|\*|\/\*)/u.test(code) || !reads.test(code)) return;
+          for (const match of code.matchAll(path)) {
+            const named = match[1]!.replace(/[./]+$/u, '');
+            // A directory (no extension) stands for any file in it.
+            const probe = /\.\w+$|^Dockerfile|^\.dockerignore/u.test(named.split('/').pop()!)
+              ? named
+              : `${named}/__probe__`;
+            if (!asked.has(probe)) {
+              const decided = scope('pull_request', probe);
+              asked.set(probe, decided.full === 'true' || decided[output] === 'true');
+            }
+            checked += 1;
+            if (!asked.get(probe)) missing.push(`${output}: ${file}:${i + 1} reads ${named}`);
+          }
+        });
+      }
+    }
+    expect(checked, 'the scan found nothing: its patterns are wrong').toBeGreaterThan(100);
+    expect(missing).toEqual([]);
+  });
+
   it('runs the update smoke beside the other two, never after them', () => {
     const update = workflow.jobs['deploy-update']!;
     const smoke = workflow.jobs.deploy!;
@@ -481,16 +838,24 @@ describe('the CI workflow', () => {
     expect(smoke.needs).toBe('changes');
   });
 
-  it('runs the legacy MySQL source suite against a real MariaDB AND MySQL 8.0 on every run', () => {
+  it('runs the legacy MySQL source suite against a real MySQL-family engine', () => {
     const job = workflow.jobs['legacy-mysql']!;
     expect(job, 'the legacy-mysql job is gone').toBeDefined();
     expect(Object.keys(job.services ?? {})).toEqual(['legacydb']);
     const service = (job.services ?? {})['legacydb'] as { image?: string };
     expect(service.image).toBe('${{ matrix.engine.image }}');
-    // WP-D1b (OQ-P7-03): both engines, collations never rewritten.
-    const matrix = (job as unknown as { strategy?: { matrix?: { engine?: { image: string }[] } } })
-      .strategy?.matrix?.engine;
-    expect((matrix ?? []).map((e) => e.image)).toEqual(['mariadb:10.11', 'mysql:8.0']);
+    // WP-D1b (OQ-P7-03): both engines on every push, dispatch and nightly (the
+    // engine test above), collations never rewritten. Each engine's image and
+    // health probe, as the script hands them to the matrix:
+    const engines = JSON.parse(scope('push', 'docs/ci.md').legacy_engines!) as Engine[];
+    expect(engines).toEqual([
+      {
+        label: 'mariadb-10.11',
+        image: 'mariadb:10.11',
+        health: 'healthcheck.sh --connect --innodb_initialized',
+      },
+      { label: 'mysql-8.0', image: 'mysql:8.0', health: 'mysqladmin ping -h 127.0.0.1 -proot' },
+    ]);
     expect(job.steps.some((s) => s.run === 'pnpm test:legacy-mysql')).toBe(true);
     // The suite FAILS without its DSN; the job must supply one.
     const env = (job as unknown as { env?: Record<string, string> }).env ?? {};
@@ -500,13 +865,17 @@ describe('the CI workflow', () => {
 
   it('pins the image of every job that downloads release-specific Ubuntu packages', () => {
     for (const [name, job] of Object.entries(workflow.jobs)) {
-      const downloads = job.steps.some((s) => /apt-get download/u.test(s.run ?? ''));
+      const downloads = job.steps.some((s) =>
+        /apt-get download|ci-fetch-debs\.sh/u.test(s.run ?? ''),
+      );
       if (downloads) {
         expect((job as unknown as { 'runs-on'?: string })['runs-on'], name).toBe('ubuntu-24.04');
       }
     }
     expect(
-      workflow.jobs['legacy-rehearsal']!.steps.some((s) => /apt-get download/u.test(s.run ?? '')),
+      workflow.jobs['legacy-rehearsal']!.steps.some((s) =>
+        /apt-get download|ci-fetch-debs\.sh/u.test(s.run ?? ''),
+      ),
     ).toBe(true);
   });
 
@@ -679,6 +1048,147 @@ describe('the CI workflow', () => {
       expect(install).toBeLessThan(dockerfile.indexOf('COPY . .'));
       expect(dockerfile).toMatch(/^FROM system AS runtime$/mu);
       expect(dockerfile).toMatch(/^FROM deps AS builder$/mu);
+    });
+  });
+});
+
+describe('the nightly workflow', () => {
+  interface NightlyJob {
+    uses?: string;
+    needs?: string[];
+    if?: string;
+    permissions?: Record<string, string>;
+    steps?: Step[];
+  }
+  const nightly = parse(readFileSync(join(ROOT, '.github/workflows/nightly.yml'), 'utf8')) as {
+    on: { schedule?: { cron: string }[]; workflow_dispatch?: unknown };
+    permissions: Record<string, string>;
+    concurrency?: unknown;
+    jobs: Record<string, NightlyJob>;
+  };
+  const TITLE = 'CI شبانه قرمز است';
+
+  it('runs the whole CI workflow and the exhaustive search every night', () => {
+    expect(nightly.on.schedule?.length).toBeGreaterThan(0);
+    expect(workflow.on).toHaveProperty('workflow_call');
+    // The workflow itself, not a copy of its jobs: the audit and the second
+    // legacy engine come from the full run the `schedule` event makes.
+    expect(nightly.jobs.ci?.uses).toBe('./.github/workflows/ci.yml');
+    expect(scope('schedule', 'docs/ci.md')).toMatchObject({ full: 'true', audit: 'true' });
+    expect(nightly.jobs.exhaustive?.steps?.some((s) => /pnpm test:exhaustive/u.test(s.run ?? '')));
+    // A concurrency group here would be shared with the called workflow's and
+    // deadlock it.
+    expect(nightly.concurrency).toBeUndefined();
+  });
+
+  it('gives issues: write to the reporting job alone', () => {
+    expect(nightly.permissions).toEqual({ contents: 'read' });
+    for (const [name, job] of Object.entries(nightly.jobs)) {
+      if (name === 'report') continue;
+      expect(job.permissions, name).toBeUndefined();
+    }
+    expect(workflow.permissions).toEqual({ contents: 'read' });
+    const report = nightly.jobs.report!;
+    expect(report.permissions).toEqual({ contents: 'read', actions: 'read', issues: 'write' });
+    expect(report.needs).toEqual(['ci', 'exhaustive']);
+    expect(report.if).toContain('always()');
+    expect(report.if).toContain("github.ref == 'refs/heads/main'");
+    expect(report.if).toContain("needs.ci.result != 'success'");
+    expect(report.if).toContain("needs.exhaustive.result != 'success'");
+    const step = report.steps?.find((s) => s.run === 'bash scripts/ci-nightly-report.sh');
+    expect(step?.env?.RUN_ID).toBe('${{ github.run_id }}');
+    expect(readFileSync(join(ROOT, 'scripts/ci-nightly-report.sh'), 'utf8')).toContain(
+      `TITLE='${TITLE}'`,
+    );
+  });
+
+  describe('the report (scripts/ci-nightly-report.sh) against a fake gh', () => {
+    const jobs = {
+      jobs: [
+        { name: 'CI / Build', conclusion: 'success', html_url: 'https://x/1' },
+        { name: 'CI / Integration tests (3/18)', conclusion: 'failure', html_url: 'https://x/2' },
+        { name: 'CI / Deployment smoke', conclusion: 'cancelled', html_url: 'https://x/3' },
+        { name: 'Exhaustive orderings', conclusion: 'success', html_url: 'https://x/4' },
+        { name: 'Report a red night', conclusion: null, html_url: 'https://x/5' },
+      ],
+    };
+    function report(issues: unknown[]): { calls: string[]; out: string } {
+      const dir = mkdtempSync(join(tmpdir(), 'ci-nightly-'));
+      try {
+        writeFileSync(join(dir, 'jobs.json'), JSON.stringify(jobs));
+        writeFileSync(join(dir, 'issues.json'), JSON.stringify(issues));
+        writeFileSync(
+          join(dir, 'gh'),
+          [
+            '#!/usr/bin/env bash',
+            '{ printf "%s" "$*" | tr "\\n" " "; echo; } >>"$FAKE/calls"',
+            'method=GET filter="" path=""',
+            'while [ $# -gt 0 ]; do',
+            '  case "$1" in',
+            '    api | --paginate) ;;',
+            '    --method) method="$2"; shift ;;',
+            '    --jq) filter="$2"; shift ;;',
+            '    -f) shift ;;',
+            '    *) path="$1" ;;',
+            '  esac',
+            '  shift',
+            'done',
+            'case "$method $path" in',
+            '  "GET repos/o/r/actions/runs/7/jobs?per_page=100") file="$FAKE/jobs.json" ;;',
+            '  "GET repos/o/r/issues?state=open&per_page=100") file="$FAKE/issues.json" ;;',
+            '  "POST repos/o/r/issues") echo \'{"number":99}\' >"$FAKE/out.json"; file="$FAKE/out.json" ;;',
+            '  "POST repos/o/r/issues/"*"/comments") echo "{}" >"$FAKE/out.json"; file="$FAKE/out.json" ;;',
+            '  *) echo "unexpected: $method $path" >&2; exit 9 ;;',
+            'esac',
+            'if [ -n "$filter" ]; then jq -r "$filter" "$file"; else cat "$file"; fi',
+          ].join('\n'),
+          { mode: 0o755 },
+        );
+        const out = execFileSync('bash', [join(ROOT, 'scripts/ci-nightly-report.sh')], {
+          env: {
+            PATH: `${dir}:${process.env.PATH ?? ''}`,
+            FAKE: dir,
+            REPO: 'o/r',
+            RUN_ID: '7',
+            RUN_URL: 'https://github.com/o/r/actions/runs/7',
+          },
+        }).toString();
+        return { calls: readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n'), out };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it('opens one issue with the exact title, the failing jobs and the run', () => {
+      const { calls, out } = report([
+        // Neither is the report's issue: a pull request, and another title.
+        { number: 3, title: TITLE, pull_request: { url: 'x' } },
+        { number: 4, title: `${TITLE} (old)` },
+      ]);
+      expect(out.trim()).toBe('opened #99');
+      const open = calls.filter((c) => c.startsWith('api --method POST repos/o/r/issues '));
+      expect(open).toHaveLength(1);
+      expect(open[0]).toContain(`title=${TITLE}`);
+      expect(open[0]).toContain('https://github.com/o/r/actions/runs/7');
+      expect(open[0]).toContain('CI / Integration tests (3/18): failure');
+      expect(open[0]).toContain('CI / Deployment smoke: cancelled');
+      expect(open[0]).not.toContain('CI / Build');
+      expect(open[0]).not.toContain('Report a red night');
+      expect(calls.some((c) => c.includes('/comments'))).toBe(false);
+    });
+
+    it('comments on the open issue with that exact title instead of opening another', () => {
+      const { calls, out } = report([
+        { number: 4, title: `${TITLE} (old)` },
+        { number: 12, title: TITLE },
+      ]);
+      expect(out.trim()).toBe('commented on #12');
+      const comment = calls.filter((c) =>
+        c.startsWith('api --method POST repos/o/r/issues/12/comments'),
+      );
+      expect(comment).toHaveLength(1);
+      expect(comment[0]).toContain('CI / Integration tests (3/18): failure');
+      expect(calls.some((c) => c.startsWith('api --method POST repos/o/r/issues '))).toBe(false);
     });
   });
 });
