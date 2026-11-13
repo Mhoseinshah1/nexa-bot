@@ -366,7 +366,7 @@ describe('pnpm provisioning in every workflow', () => {
 
   it('is checked against the workflows that exist', () => {
     // A rename must not make the checks below vacuous.
-    expect(files).toEqual(expect.arrayContaining(['ci.yml', 'exhaustive.yml', 'release.yml']));
+    expect(files).toEqual(expect.arrayContaining(['ci.yml', 'nightly.yml', 'release.yml']));
   });
 
   for (const file of files) {

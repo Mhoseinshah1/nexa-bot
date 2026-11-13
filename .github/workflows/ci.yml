@@ -10,11 +10,18 @@ name: CI
 #   published only from a SHA whose own push (or dispatched) run passed.
 # - `workflow_dispatch` runs CI for exactly the head of the chosen ref. It is how
 #   a commit that has no passing run gets one, and it is never cancelled.
+# - `workflow_call` is how the nightly workflow (nightly.yml) runs this whole
+#   workflow on main every night. That run's event is the caller's (`schedule`),
+#   so it is full like a push; its path is nightly.yml, so release.yml's gate,
+#   which accepts only push and dispatch runs of THIS file, never counts it.
+# - A pull request runs only the jobs its changed paths need (scripts/ci-scope.sh,
+#   job `changes`). A push, a dispatch and the nightly run everything.
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 # Cancel only what has been SUPERSEDED, and only for pull requests.
 #
@@ -47,17 +54,16 @@ env:
   NODE_VERSION: '22'
 
 jobs:
-  # Whether this run may skip the jobs no Markdown change can affect. Only a
-  # PULL REQUEST whose every changed path is documentation qualifies: `docs/**/*.md`
-  # and the three root notes `.dockerignore` keeps out of the image. A push to
-  # main and a dispatched run ALWAYS run everything — those runs are the release
+  # Which jobs this run needs (scripts/ci-scope.sh; docs/ci.md § "Which jobs a
+  # pull request runs"). Only a PULL REQUEST may skip anything, and only a job
+  # that reads none of the paths it changes: every changed path is classified,
+  # the PR runs the union of its paths' jobs, and one unclassified path — or a
+  # fail-safe one: packages/contracts, apps/api/drizzle, the lockfile, any
+  # package.json, .github/, scripts/ci-* — makes it full. A push to main, a
+  # dispatched run and the nightly ALWAYS run everything: those are the release
   # evidence (`release.yml`), and a release must never rest on a skipped job.
   #
-  # What a docs-only pull request still runs: static (prettier, the citation
-  # check and the boundary checks READ docs/), build, unit, web, deployment
-  # logic (botctl's test greps docs/deployment.md) and the audit. What it skips:
-  # the integration shards, the deployment smoke and the two legacy jobs —
-  # none of them reads a Markdown file, which `ci-workflow.test.ts` checks.
+  # Static and build run on every run and have no output here.
   #
   # The diff is the merge commit against its first parent: exactly what the PR
   # changes relative to the base it is being tested on. `--no-renames`, so a
@@ -67,7 +73,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      heavy: ${{ steps.decide.outputs.heavy }}
+      full: ${{ steps.decide.outputs.full }}
+      unit: ${{ steps.decide.outputs.unit }}
+      web: ${{ steps.decide.outputs.web }}
+      integration: ${{ steps.decide.outputs.integration }}
+      legacy: ${{ steps.decide.outputs.legacy }}
+      deploy: ${{ steps.decide.outputs.deploy }}
+      deploy_logic: ${{ steps.decide.outputs.deploy_logic }}
+      audit: ${{ steps.decide.outputs.audit }}
+      legacy_engines: ${{ steps.decide.outputs.legacy_engines }}
     steps:
       # Unconditional: the decision is a script in the repository, on every
       # event. Depth 2 is the merge commit and its first parent.
@@ -75,11 +89,16 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Decide whether the heavy jobs run
+      - name: Decide which jobs run
         id: decide
         env:
           EVENT: ${{ github.event_name }}
-        run: bash scripts/ci-docs-only.sh "$EVENT" >>"$GITHUB_OUTPUT"
+        # Printed as well as recorded, so the log says why a job was skipped.
+        # pipefail: a failed decision fails this job, and every scoped job
+        # behind it is then skipped and reported red by the aggregate.
+        run: |
+          set -euo pipefail
+          bash scripts/ci-scope.sh "$EVENT" | tee -a "$GITHUB_OUTPUT"
 
   static:
     name: Typecheck, lint and boundaries
@@ -222,7 +241,8 @@ jobs:
 
   unit:
     name: Unit tests
-    needs: build
+    needs: [build, changes]
+    if: needs.changes.outputs.full == 'true' || needs.changes.outputs.unit == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -258,7 +278,8 @@ jobs:
   # whoever last touched it and nowhere else.
   web:
     name: Web admin tests
-    needs: build
+    needs: [build, changes]
+    if: needs.changes.outputs.full == 'true' || needs.changes.outputs.web == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -292,7 +313,7 @@ jobs:
   integration:
     name: Integration tests (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: [build, changes]
-    if: needs.changes.outputs.heavy == 'true'
+    if: needs.changes.outputs.full == 'true' || needs.changes.outputs.integration == 'true'
     runs-on: ubuntu-24.04
     # Bounded so a hang is reported rather than billed for six hours. A shard
     # takes roughly twelve minutes; the step limit below fires first, so the log
@@ -302,14 +323,16 @@ jobs:
       # Every shard reports, even when one fails: a failure in shard 1 says
       # nothing about the others, and cancelling them throws that away.
       fail-fast: false
-      # Ten, balanced by measured duration (tests/support/timed-sequencer.mts).
-      # Measured, one run each (docs/ci.md): 6 shards 23.1 min, 8 16.6-17.3,
-      # 10 14.3, 12 12.5, 14 13.3, 16 13.8. Past ten the wall time is the
-      # update-and-rollback smoke (11-13.5 min), not a shard, and ten is the
-      # largest count whose run peaks at fewer than 20 concurrent jobs (19), the
-      # free plan's limit; twelve peaked at 21.
+      # Eighteen, balanced by measured duration (tests/support/timed-sequencer.mts).
+      # Chosen by a pool model fed with twelve green runs' job times (docs/ci.md
+      # § "Choosing the shard count, 2026-11"): the suite is ~198 shard-minutes
+      # with ~17% noise per shard; under a 20-job pool, two pull requests at
+      # once finish in ~29 min with 18 shards against ~31 with 10, a lone
+      # application PR in ~17 against ~27, a main run in ~20 against ~27.
+      # The update smoke no longer bounds the count: it runs only when a PR
+      # touches the deployment (or on main), where it overlaps the shards.
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
 
     env:
       DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
@@ -414,23 +437,21 @@ jobs:
   # MySQL 8.0 — MirzaBot's production engine (OQ-P7-03), whose default collation
   # utf8mb4_0900_ai_ci MariaDB does not have. Collations are never rewritten: the same
   # synthetic dataset is loaded into each engine as it is.
+  #
+  # The engines come from `changes` (scripts/ci-scope.sh, `legacy_engines`): a pull
+  # request runs MySQL 8.0 only, and only when it changes what the legacy jobs read; a
+  # push to main, a dispatch and the nightly run both engines.
   legacy-mysql:
     name: Legacy MySQL source (${{ matrix.engine.label }})
     needs: [build, changes]
-    if: needs.changes.outputs.heavy == 'true'
+    if: needs.changes.outputs.full == 'true' || needs.changes.outputs.legacy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     strategy:
       fail-fast: false
       matrix:
-        engine:
-          - label: mariadb-10.11
-            image: mariadb:10.11
-            health: healthcheck.sh --connect --innodb_initialized
-          - label: mysql-8.0
-            image: mysql:8.0
-            health: mysqladmin ping -h 127.0.0.1 -proot
+        engine: ${{ fromJSON(needs.changes.outputs.legacy_engines) }}
 
     services:
       legacydb:
@@ -483,7 +504,7 @@ jobs:
   legacy-rehearsal:
     name: Legacy rehearsal (synthetic, MySQL 8.0)
     needs: [build, changes]
-    if: needs.changes.outputs.heavy == 'true'
+    if: needs.changes.outputs.full == 'true' || needs.changes.outputs.legacy == 'true'
     # Pinned: the step below downloads Ubuntu 24.04's own packages by name
     # (mysql-server-core-8.0, libaio1t64, libprotobuf-lite32t64), which a later image
     # renames or drops.
@@ -579,17 +600,20 @@ jobs:
   # `always()` so it reports a failure rather than being skipped when one of
   # them failed — a skipped check reads as neutral.
   #
-  # The one thing it accepts besides success: a job `changes` let a docs-only
-  # PULL REQUEST skip, reported `skipped`. That needs `changes` itself to have
-  # succeeded and said so, and the event to be a pull request, so a push to
-  # main or a dispatched run — the release evidence — has no skipped job to
-  # accept. Unit, web and deployment logic are never skippable.
+  # The one thing it accepts besides success (scripts/ci-aggregate.sh): a job
+  # `changes` left out of a PULL REQUEST, reported `skipped`. That needs
+  # `changes` itself to have succeeded, said full=false and said that job's own
+  # scope is false, and the event to be a pull request. So a push to main, a
+  # dispatched run and the nightly — full runs, the release evidence — have no
+  # skipped job to accept, and a job that was in scope and skipped (or
+  # cancelled) is a failure on every event.
   test:
     name: Unit and integration tests
     if: always()
     needs:
       [
         changes,
+        build,
         unit,
         web,
         integration,
@@ -602,56 +626,39 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
       - name: Every test job succeeded
         env:
           EVENT: ${{ github.event_name }}
-          HEAVY: ${{ needs.changes.outputs.heavy }}
           CHANGES: ${{ needs.changes.result }}
-          UNIT: ${{ needs.unit.result }}
-          WEB: ${{ needs.web.result }}
-          INTEGRATION: ${{ needs.integration.result }}
-          LEGACY_MYSQL: ${{ needs.legacy-mysql.result }}
-          LEGACY_REHEARSAL: ${{ needs.legacy-rehearsal.result }}
-          DEPLOY_LOGIC: ${{ needs.deploy-logic.result }}
-          DEPLOY: ${{ needs.deploy.result }}
-          DEPLOY_UPDATE: ${{ needs.deploy-update.result }}
-        run: |
-          set -euo pipefail
-          failed=0
-          # Required to succeed, on every event.
-          must() {
-            printf '%s: %s\n' "$1" "$2"
-            if [ "$2" = "success" ]; then return 0; fi
-            echo "::error::$1 did not succeed ($2)"
-            failed=1
-          }
-          # Required to succeed, unless a docs-only pull request skipped it.
-          heavy() {
-            printf '%s: %s\n' "$1" "$2"
-            if [ "$2" = "success" ]; then return 0; fi
-            if [ "$2" = "skipped" ] && [ "$EVENT" = "pull_request" ] && [ "$CHANGES" = "success" ] && [ "$HEAVY" = "false" ]; then
-              echo "  (skipped: this pull request changes documentation only)"
-              return 0
-            fi
-            echo "::error::$1 did not succeed ($2)"
-            failed=1
-          }
-          must 'changed paths' "$CHANGES"
-          must 'unit' "$UNIT"
-          must 'web' "$WEB"
-          must 'deployment logic' "$DEPLOY_LOGIC"
-          heavy 'integration (every shard)' "$INTEGRATION"
-          heavy 'legacy mysql' "$LEGACY_MYSQL"
-          heavy 'legacy rehearsal' "$LEGACY_REHEARSAL"
-          heavy 'deployment smoke' "$DEPLOY"
-          heavy 'deployment update smoke' "$DEPLOY_UPDATE"
-          exit "$failed"
+          FULL: ${{ needs.changes.outputs.full }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          UNIT_RESULT: ${{ needs.unit.result }}
+          UNIT_SCOPE: ${{ needs.changes.outputs.unit }}
+          WEB_RESULT: ${{ needs.web.result }}
+          WEB_SCOPE: ${{ needs.changes.outputs.web }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          INTEGRATION_SCOPE: ${{ needs.changes.outputs.integration }}
+          LEGACY_MYSQL_RESULT: ${{ needs.legacy-mysql.result }}
+          LEGACY_MYSQL_SCOPE: ${{ needs.changes.outputs.legacy }}
+          LEGACY_REHEARSAL_RESULT: ${{ needs.legacy-rehearsal.result }}
+          LEGACY_REHEARSAL_SCOPE: ${{ needs.changes.outputs.legacy }}
+          DEPLOY_LOGIC_RESULT: ${{ needs.deploy-logic.result }}
+          DEPLOY_LOGIC_SCOPE: ${{ needs.changes.outputs.deploy_logic }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          DEPLOY_SCOPE: ${{ needs.changes.outputs.deploy }}
+          DEPLOY_UPDATE_RESULT: ${{ needs.deploy-update.result }}
+          DEPLOY_UPDATE_SCOPE: ${{ needs.changes.outputs.deploy }}
+        run: bash scripts/ci-aggregate.sh
 
   # The deployment logic, against fakes. Split from the live smoke below so the
   # two run side by side: together they were a 20-minute serial job, the
   # longest in the workflow once the integration suite was sharded.
   deploy-logic:
     name: Deployment logic
+    needs: changes
+    if: needs.changes.outputs.full == 'true' || needs.changes.outputs.deploy_logic == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -704,7 +711,7 @@ jobs:
   deploy:
     name: Deployment smoke
     needs: changes
-    if: needs.changes.outputs.heavy == 'true'
+    if: needs.changes.outputs.full == 'true' || needs.changes.outputs.deploy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -769,7 +776,7 @@ jobs:
   deploy-update:
     name: Deployment update and rollback smoke
     needs: changes
-    if: needs.changes.outputs.heavy == 'true'
+    if: needs.changes.outputs.full == 'true' || needs.changes.outputs.deploy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -823,8 +830,15 @@ jobs:
   #
   # If this job is red and the others are green: read it, do not merge around
   # it, and do not weaken the threshold to get past it.
+  #
+  # Its only input is the dependency graph, so a pull request runs it only when
+  # that changed (`audit`: the lockfile, a package.json, pnpm-workspace.yaml,
+  # .npmrc) — not on every full PR run. A push to main, a dispatch and the
+  # nightly always run it: the advisory database changes when the code does not.
   audit:
     name: Dependency audit
+    needs: changes
+    if: needs.changes.outputs.audit == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

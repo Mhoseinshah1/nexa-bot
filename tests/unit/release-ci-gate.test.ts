@@ -124,12 +124,28 @@ describe('the release CI gate', () => {
   it('rejects a green run of any other workflow', () => {
     for (const path of [
       '.github/workflows/exhaustive.yml',
+      '.github/workflows/nightly.yml',
       '.github/workflows/release.yml',
       'ci.yml',
       '.github/workflows/ci.yaml',
     ]) {
       expect(decideReleaseGate({ sha: SHA, runs: [run({ path })] }).ok, path).toBe(false);
     }
+  });
+
+  it('never takes the nightly full CI run on main for push evidence, green or red', () => {
+    // nightly.yml calls ci.yml as a reusable workflow: the run tests a main
+    // commit, but its path is nightly.yml and its event `schedule`.
+    const nightly = (conclusion: string, id: number) =>
+      run({ id, path: '.github/workflows/nightly.yml', event: 'schedule', conclusion });
+    expect(decideReleaseGate({ sha: SHA, runs: [nightly('success', 1)] }).ok).toBe(false);
+    expect(
+      decideReleaseGate({ sha: SHA, runs: [run({ path: '.github/workflows/nightly.yml' })] }).ok,
+    ).toBe(false);
+    // A red night beside the commit's green push run leaves the push run's evidence intact.
+    const decision = decideReleaseGate({ sha: SHA, runs: [nightly('failure', 1), run({ id: 2 })] });
+    expect(decision.ok).toBe(true);
+    expect(decision.accepted?.id).toBe(2);
   });
 
   it('passes on one accepted success beside failed, cancelled and foreign runs', () => {
