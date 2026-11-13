@@ -477,3 +477,12 @@ the proof. `tests/unit/ci-tool-installs.test.ts` keeps the rule on every push: n
 fetch script keeps its signed sources and the kernel.org fallback, and both inputs exist, default
 to false and gate their steps. `scripts/mutate-ci-no-ubuntu.py` reverts each rule in turn and
 confirms a test fails.
+
+**Proof run:** [CI run 2726](https://github.com/Mhoseinshah1/nexa-bot/actions/runs/43196377712)
+(dispatch, 2026-11-12, head `5c7d26d4`, both inputs `true`) is green on all 23 jobs. In the
+unit job, all ten integration shards and the legacy rehearsal the drill step logged
+`blocked: archive.ubuntu.com / security.ubuntu.com / azure.archive.ubuntu.com is unreachable`,
+the cache steps were skipped, 7-Zip 25.01 was downloaded from the GitHub release, and the
+MySQL packages logged `http://archive.ubuntu.com/ubuntu failed, trying the next mirror` and
+then `fetched from https://mirrors.edge.kernel.org/ubuntu`; the rehearsal then passed
+(164 PASS, 0 FAIL).
