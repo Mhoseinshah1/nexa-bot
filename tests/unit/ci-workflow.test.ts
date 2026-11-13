@@ -500,13 +500,17 @@ describe('the CI workflow', () => {
 
   it('pins the image of every job that downloads release-specific Ubuntu packages', () => {
     for (const [name, job] of Object.entries(workflow.jobs)) {
-      const downloads = job.steps.some((s) => /apt-get download/u.test(s.run ?? ''));
+      const downloads = job.steps.some((s) =>
+        /apt-get download|ci-fetch-debs\.sh/u.test(s.run ?? ''),
+      );
       if (downloads) {
         expect((job as unknown as { 'runs-on'?: string })['runs-on'], name).toBe('ubuntu-24.04');
       }
     }
     expect(
-      workflow.jobs['legacy-rehearsal']!.steps.some((s) => /apt-get download/u.test(s.run ?? '')),
+      workflow.jobs['legacy-rehearsal']!.steps.some((s) =>
+        /apt-get download|ci-fetch-debs\.sh/u.test(s.run ?? ''),
+      ),
     ).toBe(true);
   });
 
