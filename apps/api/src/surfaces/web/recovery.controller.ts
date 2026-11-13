@@ -182,7 +182,7 @@ export class RecoveryController {
     return { run: toRunSummary(await this.container.backupAdmin.detail(scope, actor, id)) };
   }
 
-  /** «ارسال دوبارهٔ بخش‌های نرسیده» (NEXA-BACKUP-DELIVERY). `backup.run`, checked by the service. */
+  /** Re-deliver a run's undelivered parts (NEXA-BACKUP-DELIVERY). `backup.run`, checked by the service. */
   @Post('backups/:id/redeliver')
   async redeliverBackup(
     @Req() request: FastifyRequest,

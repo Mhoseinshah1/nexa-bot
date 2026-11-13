@@ -3021,7 +3021,7 @@ export function runBackupNow(input: { idempotencyKey: string }): Promise<RunBack
   return post(BACKUP_ROUTES.run, input, runBackupResponseSchema);
 }
 
-/** «ارسال دوبارهٔ بخش‌های نرسیده» for one run (NEXA-BACKUP-DELIVERY). */
+/** Re-deliver one run's undelivered parts (NEXA-BACKUP-DELIVERY). */
 export function redeliverBackup(
   id: string,
   input: { idempotencyKey: string },

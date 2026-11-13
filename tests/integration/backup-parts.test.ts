@@ -23,6 +23,9 @@ import {
 import { planArchiveParts } from '../../apps/api/src/modules/platform/backup/infrastructure/archive-parts';
 import { BackupService } from '../../apps/api/src/modules/platform/backup/application/backup.service';
 import { BackupHousekeeping } from '../../apps/api/src/modules/platform/backup/application/backup-housekeeping';
+import { BackupRedelivery } from '../../apps/api/src/modules/platform/backup/application/backup-redelivery';
+import { runArchivePath } from '../../apps/api/src/modules/platform/backup/infrastructure/workspace';
+import { LEGACY_LOCAL_ONLY_DETAIL } from '../../apps/api/src/modules/platform/backup/infrastructure/drizzle-backup-run.repository';
 import type { DeliveryAttempt } from '../../apps/api/src/modules/platform/backup/application/ports';
 
 /**
@@ -339,4 +342,166 @@ describe('backup parts, the 7-Zip archive and local-copy retention (E4)', () => 
     });
     expect(unprotected.map((candidate) => candidate.id)).toEqual([run.id]);
   }, 180_000);
+
+  // ---- NEXA-BACKUP-DELIVERY ------------------------------------------------------------
+
+  function redelivery(pipeline: BackupService, owner = 'test:redeliver'): BackupRedelivery {
+    return new BackupRedelivery({
+      runs: context.container.backupRuns,
+      pipeline,
+      archivePathOf: (run) => runArchivePath(workDir, run),
+      archiveExists: (path) =>
+        stat(path).then(
+          (found) => found.isFile(),
+          () => false,
+        ),
+      clock: context.container.clock,
+      sleep: async () => {},
+      logger: { info() {}, warn() {} },
+      owner,
+      leaseMs: 60_000,
+    });
+  }
+
+  /*
+   * The owner's case, end to end on a real archive: part 2 of a split archive never answers
+   * (three sends), the parts after it are not sent, and the run is OUTCOME_UNKNOWN. The
+   * re-delivery then sends parts 2…N — and only those — in order, byte for byte as planned,
+   * records every message id, posts the summary, and the run reads SUCCEEDED.
+   */
+  it('re-delivers only the parts that did not arrive, in order, with their message ids', async () => {
+    outcomes = [
+      { state: 'SUCCEEDED', detail: null, messageId: 1 },
+      { state: 'OUTCOME_UNKNOWN', reason: 'CONNECTION_RESET', detail: 'read ECONNRESET' },
+      { state: 'OUTCOME_UNKNOWN', reason: 'CONNECTION_RESET', detail: 'read ECONNRESET' },
+      { state: 'OUTCOME_UNKNOWN', reason: 'CONNECTION_RESET', detail: 'read ECONNRESET' },
+    ];
+    const pipeline = service(16 * 1024);
+    const outcome = await pipeline.run('MANUAL');
+    if (outcome.kind !== 'COMPLETED') throw new Error('expected a completed run');
+    const run = outcome.run;
+    expect(run.deliveryState).toBe('OUTCOME_UNKNOWN');
+    expect(run.deliveryReason).toBe('CONNECTION_RESET');
+    const before = await context.container.backupRuns.parts(run.id);
+    expect(before.length).toBeGreaterThanOrEqual(3);
+    expect(before[1]).toMatchObject({
+      deliveryState: 'OUTCOME_UNKNOWN',
+      deliveryReason: 'CONNECTION_RESET',
+      deliveryAttempts: 3,
+    });
+    expect(before.slice(2).every((part) => part.deliveryState === 'NOT_ATTEMPTED')).toBe(true);
+
+    const archive = await readFile(runArchivePath(workDir, run) ?? '');
+    bodies = [];
+    messages = [];
+    outcomes = [];
+    await expect(redelivery(pipeline).redeliver(run.id)).resolves.toEqual({ kind: 'DELIVERED' });
+
+    // Parts 2…N, in order, exactly the bytes of each planned range.
+    const after = await context.container.backupRuns.parts(run.id);
+    expect(bodies).toHaveLength(after.length - 1);
+    let offset = Number(after[0]?.bytes ?? 0n);
+    for (const [index, part] of after.slice(1).entries()) {
+      expect(bodies[index]?.equals(archive.subarray(offset, offset + Number(part.bytes)))).toBe(
+        true,
+      );
+      offset += Number(part.bytes);
+    }
+    expect(after.every((part) => part.telegramMessageId !== null)).toBe(true);
+    expect(after[1]?.deliveryAttempts).toBe(4);
+    expect(messages).toHaveLength(1);
+    const finished = await context.container.backupRuns.byId(run.id);
+    expect(finished?.deliveryState).toBe('SUCCEEDED');
+    expect(finished?.deliveryReason).toBeNull();
+    expect(finished?.summaryDeliveryState).toBe('SUCCEEDED');
+    // The lease is given back.
+    const [lease] = (
+      await context.container.database.db.execute(
+        `SELECT redelivery_owner, redelivery_lease_until FROM backup_runs WHERE id = '${run.id}'` as never,
+      )
+    ).rows as { redelivery_owner: string | null; redelivery_lease_until: Date | null }[];
+    expect(lease).toEqual({ redelivery_owner: null, redelivery_lease_until: null });
+  }, 300_000);
+
+  it('lets ONE re-delivery of a run hold its lease; a second claimant is BUSY', async () => {
+    outcomes = [
+      { state: 'OUTCOME_UNKNOWN', detail: 'x' },
+      { state: 'OUTCOME_UNKNOWN', detail: 'x' },
+      { state: 'OUTCOME_UNKNOWN', detail: 'x' },
+    ];
+    const run = await completedRun(16 * 1024);
+    const now = context.container.clock.now();
+    const lease = { id: run.id, now, leaseUntil: new Date(now.getTime() + 60_000) };
+    expect(await context.container.backupRuns.claimRedelivery({ ...lease, owner: 'a' })).toBe(true);
+    expect(await context.container.backupRuns.claimRedelivery({ ...lease, owner: 'b' })).toBe(
+      false,
+    );
+    await expect(redelivery(service(16 * 1024), 'b').redeliver(run.id)).resolves.toEqual({
+      kind: 'BUSY',
+    });
+    // A part already delivered is never overwritten by a re-delivery's write.
+    await context.container.backupRuns.recordRedeliveredPart({
+      id: run.id,
+      owner: 'a',
+      partNumber: 1,
+      state: 'SUCCEEDED',
+      attemptedAt: now,
+      messageId: 77,
+      detail: null,
+      reason: null,
+      attempts: 4,
+    });
+    await context.container.backupRuns.recordRedeliveredPart({
+      id: run.id,
+      owner: 'a',
+      partNumber: 1,
+      state: 'OUTCOME_UNKNOWN',
+      attemptedAt: now,
+      messageId: null,
+      detail: 'late',
+      reason: 'CONNECTION_RESET',
+      attempts: 5,
+    });
+    const [first] = await context.container.backupRuns.parts(run.id);
+    expect(first?.telegramMessageId).toBe(77n);
+    expect(first?.deliveryState).toBe('SUCCEEDED');
+    // An expired lease is taken over.
+    expect(
+      await context.container.backupRuns.claimRedelivery({
+        id: run.id,
+        owner: 'b',
+        now: new Date(now.getTime() + 61_000),
+        leaseUntil: new Date(now.getTime() + 120_000),
+      }),
+    ).toBe(true);
+  }, 300_000);
+
+  it('records an import backup as kept by design, and never re-delivers it', async () => {
+    const pipeline = service(16 * 1024);
+    const outcome = await pipeline.run('MANUAL', { deliver: false, localOnly: 'IMPORT' });
+    if (outcome.kind !== 'COMPLETED') throw new Error('expected a completed run');
+    const stored = await context.container.backupRuns.byId(outcome.run.id);
+    expect(stored?.deliveryState).toBe('NOT_ATTEMPTED');
+    expect(stored?.deliveryReason).toBe('LOCAL_ONLY_IMPORT');
+    expect(stored?.deliveryDetail).toBe('طبق طراحی فقط روی سرور نگه داشته شد (بکاپ ایمپورت)');
+    expect(bodies).toHaveLength(0);
+    await expect(redelivery(pipeline).redeliver(outcome.run.id)).resolves.toEqual({
+      kind: 'REFUSED',
+      why: 'LOCAL_ONLY',
+    });
+    expect(bodies).toHaveLength(0);
+    // A row from before the reason column, with the old detail, reads the same way.
+    await context.container.database.db.execute(
+      `UPDATE backup_runs SET delivery_reason = NULL, delivery_detail = '${LEGACY_LOCAL_ONLY_DETAIL}' WHERE id = '${outcome.run.id}'` as never,
+    );
+    expect((await context.container.backupRuns.byId(outcome.run.id))?.deliveryReason).toBe(
+      'LOCAL_ONLY_IMPORT',
+    );
+    // The CHECK refuses a reason outside the contract's vocabulary.
+    await expect(
+      context.container.database.db.execute(
+        `UPDATE backup_runs SET delivery_reason = 'NOT_A_REASON' WHERE id = '${outcome.run.id}'` as never,
+      ),
+    ).rejects.toThrow();
+  }, 300_000);
 });

@@ -60,8 +60,12 @@ and `cat` of every part in order is the archive. Each part has its own SHA-256 a
 its own document with its **own recorded outcome and Telegram `message_id`**
 (`backup_run_parts`). The plan is on the row before the first send.
 
-- The first part that is not `SUCCEEDED` **stops** the delivery. Nothing is resent; the
-  parts after it stay `NOT_ATTEMPTED`. ADR-0025's three outcomes hold per part.
+- Parts go **in order**. A part whose answer was lost (`OUTCOME_UNKNOWN`), or whose
+  connection was never made (`CONNECT_FAILED`), is **sent again**: at most 3 sends, 30 s then
+  2 min apart (a 429's `retry_after` honoured up to 10 min) — NEXA-BACKUP-DELIVERY, below. A
+  part that still did not arrive, or that Telegram refused, **stops** the delivery; the parts
+  after it stay `NOT_ATTEMPTED`. ADR-0025's three outcomes hold per part, and each part's row
+  records its reason code and how many times it was sent.
 - When every part arrived, **one summary message** follows: date, total size, part count,
   every part's SHA-256, «همهٔ بخش‌ها را در یک پوشه بگذارید و فایل ‎.001 را با 7-Zip باز کنید»,
   and the `botctl restore` command. (Above Telegram's message limit the per-part digests are
@@ -122,6 +126,60 @@ scheduler for an hour. 7-Zip, `pg_dump` and the verification's `pg_restore` run 
 `nice -n 10` and `ionice -c3` (`-c2 -n7` where idle is refused, nothing where the binaries are
 missing). The verification's `pg_restore` also runs `--jobs=1` with
 `maintenance_work_mem=64MB` and no parallel index workers for its own session.
+
+### Delivering the parts: the real cause, the resend, the re-delivery (NEXA-BACKUP-DELIVERY)
+
+**What happened.** On the owner's test server the 197 MB «آرشیو ربات قبلی» archive (5 parts,
+45/45/45/45/16 MB) ended part 1 `OUTCOME_UNKNOWN` «The request did not complete: fetch failed»,
+parts 2–5 `NOT_ATTEMPTED`, and the legacy compaction failed `archive_not_delivered`. Two causes,
+both in the code: the transport used Node's global `fetch`, whose bundled undici dispatcher
+has its **own** `headersTimeout` and `bodyTimeout` of **300 s** beneath the 10-minute
+`BACKUP_DELIVERY_TIMEOUT_MS` (a 45 MB upload on a slow link, or Telegram taking its time to
+store the file before it answers, is cut off by undici and reported as `fetch failed`); and
+the transport kept only `error.message`, so the real cause on `error.cause`
+(`UND_ERR_HEADERS_TIMEOUT`, `UND_ERR_SOCKET`, `ECONNRESET`, …) was never recorded. Which of
+them it was on that run cannot be recovered from its row.
+
+**The transport now** (`telegram-backup-delivery.ts`) speaks HTTP through `node:https`
+directly — Node offers the bundled `fetch` no other dispatcher without the `undici` package —
+so its only deadline is `BACKUP_DELIVERY_TIMEOUT_MS`. The part is a byte range streamed from
+disk with an exact `Content-Length`, never buffered. Every failure's detail names the whole
+cause chain with each `code`, how many bytes had been written and after how long; the same
+goes to the log. A connection never made is `FAILED_DEFINITIVE` with `CONNECT_FAILED`: not one
+byte reached Telegram.
+
+**The resend rule (owner, round NEXA-BACKUP-DELIVERY).** The Bot API gives a bot no way to
+look a document up in a chat — no search, no history — so whether a part whose answer was
+lost arrived **cannot be checked**. The owner's rule decides: **sent twice is acceptable, lost
+is not.** Such a part is sent again within the bounds above; the two copies are
+byte-identical (same part, same SHA-256), and the resend's caption says «ارسال دوباره». A
+refusal (4xx) is never resent: the same bytes would be refused the same way.
+
+**Kept on the server by design.** The Mirza restore's protective and post-import backups and a
+server-move member are `deliver: false`: nothing is sent, as designed. Their row now records
+`delivery_reason` `LOCAL_ONLY_IMPORT` / `LOCAL_ONLY_SERVER_MOVE` and the detail «طبق طراحی فقط
+روی سرور نگه داشته شد (بکاپ ایمپورت)», and the Web Admin shows «فقط روی سرور (طبق طراحی)» instead
+of a delivery that did not happen. A row from before this release with the old English detail
+reads the same way.
+
+**«ارسال دوبارهٔ بخش‌های نرسیده»** (the backup history, `backup.run`, audited as
+`backup.redeliver_requested`): sends again, in order, only the parts of a finished, verified
+run that carry no Telegram message id, from the archive still on this host, through the same
+resend rule, then the summary. A run's re-delivery holds its own lease
+(`redelivery_owner` / `redelivery_lease_until`), so a double press, or a press racing the
+compaction, answers «در جریان است» instead of sending twice at once. Never offered for a run
+kept on the server by design, a running or unverified run, or one whose archive is gone. The
+destination is decided at the press, like a run's: if the operations group became unusable in
+between and the dedicated chat is configured, the missing parts land there.
+
+**The part size** is `backup.part_mb` on «زمان‌بندی بکاپ خودکار»: 10–45 MiB, default 45 (under
+Telegram's 50 MB bot limit with room for the envelope). Smaller parts are shorter uploads and
+cheaper resends on a slow link. It applies from the next backup.
+
+**The legacy compaction** keeps its gate exactly: nothing is deleted unless every part of the
+«آرشیو ربات قبلی» archive has a Telegram message id. Before it fails, it re-delivers the
+archive's missing parts (bounded to 30 minutes) and applies the same gate again; its card lists
+each part, its state and the reason.
 
 ### Restoring a backup that came in parts
 
@@ -202,20 +260,20 @@ The two things an operator changes in normal operation — whether automatic bac
 run, and how often — are also in the Web Admin (see **The automatic schedule** below),
 and the environment values are then only their defaults.
 
-| Variable                     | Default                 | Notes                                                                          |
-| ---------------------------- | ----------------------- | ------------------------------------------------------------------------------ |
-| `BACKUP_SCHEDULE_ENABLED`    | `false`                 | The DEFAULT; a value set in the Web Admin wins.                                |
-| `BACKUP_INTERVAL_MS`         | 24 h                    | The DEFAULT; measured from the last **verified** run, not from process start.  |
-| `BACKUP_TICK_MS`             | 5 min                   | How often the worker asks whether one is due. Not a readiness knob.            |
-| `BACKUP_WORK_DIR`            | `/var/lib/nexa/backups` | On the data volume. Never `/tmp`.                                              |
-| `BACKUP_TELEGRAM_CHAT_ID`    | empty                   | The FALLBACK destination, used only with no operations group connected.        |
-| `BACKUP_TELEGRAM_BOT_TOKEN`  | empty                   | Set with the chat id, or not at all. Its own bot, not the customer-facing one. |
-| `BACKUP_DUMP_TIMEOUT_MS`     | 2 h                     | A dump that never ends holds the lock until its lease expires.                 |
-| `BACKUP_RESTORE_TIMEOUT_MS`  | 2 h                     |                                                                                |
-| `BACKUP_DELIVERY_TIMEOUT_MS` | 10 min                  |                                                                                |
-| `BACKUP_PG_BIN_DIR`          | empty                   | Where `pg_dump`/`pg_restore`/`psql` live, if not on `PATH`.                    |
-| `BACKUP_VERIFY_PGHOST`       | empty                   | v0.9.7: the verification's server; compose pins `backup-verify`. Empty: live.  |
-| `BACKUP_VERIFY_PGPORT`       | 5432                    | Its port. Same credentials as `DATABASE_URL`.                                  |
+| Variable                     | Default                 | Notes                                                                              |
+| ---------------------------- | ----------------------- | ---------------------------------------------------------------------------------- |
+| `BACKUP_SCHEDULE_ENABLED`    | `false`                 | The DEFAULT; a value set in the Web Admin wins.                                    |
+| `BACKUP_INTERVAL_MS`         | 24 h                    | The DEFAULT; measured from the last **verified** run, not from process start.      |
+| `BACKUP_TICK_MS`             | 5 min                   | How often the worker asks whether one is due. Not a readiness knob.                |
+| `BACKUP_WORK_DIR`            | `/var/lib/nexa/backups` | On the data volume. Never `/tmp`.                                                  |
+| `BACKUP_TELEGRAM_CHAT_ID`    | empty                   | The FALLBACK destination, used only with no operations group connected.            |
+| `BACKUP_TELEGRAM_BOT_TOKEN`  | empty                   | Set with the chat id, or not at all. Its own bot, not the customer-facing one.     |
+| `BACKUP_DUMP_TIMEOUT_MS`     | 2 h                     | A dump that never ends holds the lock until its lease expires.                     |
+| `BACKUP_RESTORE_TIMEOUT_MS`  | 2 h                     |                                                                                    |
+| `BACKUP_DELIVERY_TIMEOUT_MS` | 10 min                  | Per send of one part: upload, Telegram storing it, and its answer. The only timer. |
+| `BACKUP_PG_BIN_DIR`          | empty                   | Where `pg_dump`/`pg_restore`/`psql` live, if not on `PATH`.                        |
+| `BACKUP_VERIFY_PGHOST`       | empty                   | v0.9.7: the verification's server; compose pins `backup-verify`. Empty: live.      |
+| `BACKUP_VERIFY_PGPORT`       | 5432                    | Its port. Same credentials as `DATABASE_URL`.                                      |
 
 The chat id and the bot token are refused unless BOTH are set or NEITHER is.
 Neither set is a real configuration: the archive is verified and kept on the
@@ -256,7 +314,8 @@ useless without the KEK, which never reaches Telegram).
 
 A fallback is taken only when nothing was sent to the group. Once a send to the group
 has been attempted its answer is the run's answer: an `OUTCOME_UNKNOWN` is never
-followed by a copy anywhere else, and nothing resends automatically.
+followed by a copy anywhere else. The same part may be sent to the same destination again
+under the bounded resend rule (§ Delivering the parts, above).
 
 **Delivery never fails the backup.** A destination that cannot be resolved, a group
 that is unusable, a channel that throws — each is recorded on the run's delivery
@@ -571,9 +630,10 @@ behind the same router; nothing needs it now. A part can also be downloaded from
 younger than 48 hours, so pruning the group's old documents is manual. Archive
 FILES on the server do have a retention policy now — see below.
 
-**No automatic resend of an ambiguous delivery.** A delivery whose outcome was
-never observed is recorded as `OUTCOME_UNKNOWN` and left alone. Check for them
-with `pnpm backup list`; the archive is on disk either way.
+**No unbounded resend of an ambiguous delivery.** A part whose outcome was never observed
+is sent again at most twice more in the run (§ Delivering the parts); after that it is
+recorded as `OUTCOME_UNKNOWN` and left for «ارسال دوبارهٔ بخش‌های نرسیده» or a person. Check
+for them with `pnpm backup list`; the archive is on disk either way.
 
 **No enforcement of who can read the channel.** The archives go to the operations
 log group's backups topic (or the fallback chat): review that group's membership and

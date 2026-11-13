@@ -188,6 +188,8 @@ describe('the Recovery page when the host holds no archive', () => {
     deliveryState: 'SUCCEEDED',
     deliveryAttemptedAt: '2026-11-11T02:03:00.000Z',
     deliveryDetailPresent: false,
+    deliveryReason: null,
+    redeliverable: false,
     failureCode: null,
     cleanupOk: true,
     cleanupLeftovers: 0,

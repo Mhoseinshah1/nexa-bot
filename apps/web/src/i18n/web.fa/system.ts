@@ -112,12 +112,11 @@ export const WEB_FA_SYSTEM = {
   'web.backup_keep_on_host_off_retention':
     'نگه داشتن نسخه روی سرور خاموش است؛ این دو عدد فقط برای بکاپ‌هایی به کار می‌روند که ارسالشان به گروه تلگرام ناموفق یا نامعلوم مانده است.',
   // NEXA-BACKUP-DELIVERY: the split size (backup.part_mb) on the schedule card.
-  'web.backup_part_size': 'اندازهٔ هر بخش فایل بکاپ',
+  'web.backup_part_size': 'اندازهٔ هر بخش فایل بکاپ (مگابایت)',
   'web.backup_part_size_hint':
     'فایل بکاپ بزرگ در بخش‌هایی با این اندازه به تلگرام فرستاده می‌شود (بین 10 تا 45 مگابایت). روی اینترنت کند یا ناپایدار، عدد کوچک‌تر یعنی آپلود کوتاه‌تر و ارسال دوبارهٔ ارزان‌تر. از بکاپ بعدی اعمال می‌شود.',
   'web.backup_part_size_invalid': 'یک عدد صحیح بین 10 و 45 وارد کنید.',
   'web.backup_part_size_save': 'ذخیرهٔ اندازه',
-  'web.unit_mib': 'مگابایت',
   // NEXA-BACKUP-DELIVERY: why a delivery ended where it did (BACKUP_DELIVERY_REASONS).
   'web.backup_reason_local_only_import': 'طبق طراحی فقط روی سرور نگه داشته شد (بکاپ ایمپورت)',
   'web.backup_reason_local_only_server_move':

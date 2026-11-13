@@ -160,7 +160,7 @@ export function LegacyCompactionCard({ mayApply }: { mayApply: boolean }) {
           </Banner>
         )}
         {/*
-          NEXA-BACKUP-DELIVERY: which part of the «آرشیو ربات قبلی» archive did not reach
+          NEXA-BACKUP-DELIVERY: which part of the legacy archive backup did not reach
           Telegram, and why — the gate stays as strict; this only says where it stopped.
         */}
         {run !== null &&

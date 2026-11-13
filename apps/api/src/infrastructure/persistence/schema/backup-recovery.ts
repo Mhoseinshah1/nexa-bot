@@ -107,7 +107,8 @@ export const backupRuns = pgTable(
     /**
      * What we know about the Telegram delivery. See BACKUP_DELIVERY_STATES.
      *
-     * `OUTCOME_UNKNOWN` is durable and nothing resends on it automatically.
+     * `OUTCOME_UNKNOWN` is durable. A part is resent only under the bounded rule of
+     * NEXA-BACKUP-DELIVERY (`backup-part-delivery.ts`); the run never pretends to know.
      */
     deliveryState: text('delivery_state').notNull(),
     deliveryAttemptedAt: timestamptz('delivery_attempted_at'),

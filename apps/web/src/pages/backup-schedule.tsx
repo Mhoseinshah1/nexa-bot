@@ -8,8 +8,6 @@ import {
   BACKUP_INTERVAL_MINUTES_MAX,
   BACKUP_INTERVAL_MINUTES_MIN,
   BACKUP_PART_SIZE_MIB_DEFAULT,
-  BACKUP_PART_SIZE_MIB_MAX,
-  BACKUP_PART_SIZE_MIB_MIN,
   BACKUP_PART_SIZE_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
   type BackupDeliveryDestination,
@@ -24,6 +22,7 @@ import {
   BACKUP_INTERVAL_PRESETS,
   BACKUP_INTERVAL_UNITS,
   intervalMinutes,
+  partSizeMib,
   presetMinutes,
   presetOf,
   splitInterval,
@@ -144,12 +143,9 @@ export function BackupScheduleCard({
       : partSizeRow.value;
   const [partSizeText, setPartSizeText] = useState(String(partSize));
   useEffect(() => setPartSizeText(String(partSize)), [partSize]);
-  const partSizeParsed = /^\d{1,3}$/.test(partSizeText.trim()) ? Number(partSizeText.trim()) : NaN;
-  const partSizeValid =
-    Number.isInteger(partSizeParsed) &&
-    partSizeParsed >= BACKUP_PART_SIZE_MIB_MIN &&
-    partSizeParsed <= BACKUP_PART_SIZE_MIB_MAX;
-  const partSizeChanged = partSizeValid && partSizeParsed !== partSize;
+  const partSizeParsed = partSizeMib(partSizeText);
+  const partSizeValid = partSizeParsed !== null;
+  const partSizeChanged = partSizeParsed !== null && partSizeParsed !== partSize;
   const editable = mayEdit && enabledRow !== undefined && intervalRow !== undefined;
   const [dailyText, setDailyText] = useState(status.dailyTime ?? '');
   useEffect(() => setDailyText(status.dailyTime ?? ''), [status.dailyTime]);
@@ -349,17 +345,14 @@ export function BackupScheduleCard({
             ? {}
             : { error: t('web.backup_part_size_invalid') })}
         >
-          <div className="field-row">
-            <Input
-              id="backup-part-size"
-              inputMode="numeric"
-              dir="ltr"
-              value={partSizeText}
-              disabled={!mayEdit || partSizeRow === undefined}
-              onChange={(event) => setPartSizeText(event.target.value)}
-            />
-            <span className="muted">{t('web.unit_mib')}</span>
-          </div>
+          <Input
+            id="backup-part-size"
+            inputMode="numeric"
+            dir="ltr"
+            value={partSizeText}
+            disabled={!mayEdit || partSizeRow === undefined}
+            onChange={(event) => setPartSizeText(event.target.value)}
+          />
         </Field>
         {mayEdit && partSizeRow !== undefined && (
           <div className="btn-group">
