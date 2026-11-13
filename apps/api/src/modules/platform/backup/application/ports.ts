@@ -1,6 +1,7 @@
 import type {
   BackupArchiveFormat,
   BackupDeliveryDestination,
+  BackupDeliveryReason,
   BackupDeliveryState,
   BackupManifest,
   BackupRunState,
@@ -158,6 +159,8 @@ export type DeliveryAttempt =
   | {
       readonly state: 'FAILED_DEFINITIVE';
       readonly detail: string;
+      /** Why, as a code the Web Admin can render (NEXA-BACKUP-DELIVERY). */
+      readonly reason?: BackupDeliveryReason;
       /**
        * Telegram refused the send because the forum topic it named is gone (an operator
        * deleted it). Only ever set on a DEFINITIVE refusal — nothing was posted — which is
@@ -166,7 +169,14 @@ export type DeliveryAttempt =
        */
       readonly topicMissing?: boolean;
     }
-  | { readonly state: 'OUTCOME_UNKNOWN'; readonly detail: string };
+  | {
+      readonly state: 'OUTCOME_UNKNOWN';
+      readonly detail: string;
+      /** Why, as a code the Web Admin can render (NEXA-BACKUP-DELIVERY). */
+      readonly reason?: BackupDeliveryReason;
+      /** Telegram's `retry_after` on a 429, in milliseconds: the earliest a resend may go. */
+      readonly retryAfterMs?: number;
+    };
 
 /**
  * ONE fixed destination: what Backup V1 shipped, and still the shape of the
@@ -316,6 +326,12 @@ export interface BackupRunPartRow {
   /** Telegram's message id. Its presence is what "this part was delivered" means. */
   readonly telegramMessageId: bigint | null;
   readonly deliveryDetail: string | null;
+  /** Where the part starts in the archive (bytes). Absent on a hand-built row: derived. */
+  readonly rangeStart?: bigint;
+  /** NEXA-BACKUP-DELIVERY: why the part is where it is; absent on a hand-built row. */
+  readonly deliveryReason?: BackupDeliveryReason | null;
+  /** How many times the part was sent; absent on a hand-built row (0). */
+  readonly deliveryAttempts?: number;
 }
 
 /** What the run table holds about parts, beside `BackupRunRepository` (E4). */
@@ -335,8 +351,64 @@ export interface BackupRunPartStore {
     readonly attemptedAt: Date;
     readonly messageId: number | null;
     readonly detail: string | null;
+    /** NEXA-BACKUP-DELIVERY: why, as a code. Absent: none. */
+    readonly reason?: BackupDeliveryReason | null;
+    /** How many times the part has now been sent. Absent: unchanged. */
+    readonly attempts?: number;
   }): Promise<void>;
   parts(id: string): Promise<readonly BackupRunPartRow[]>;
+}
+
+/**
+ * NEXA-BACKUP-DELIVERY: re-delivering the undelivered parts of a FINISHED run
+ * («ارسال دوبارهٔ بخش‌های نرسیده», and the legacy compaction's retry before its gate).
+ *
+ * Its own lease (`redelivery_owner`, `redelivery_lease_until`), claimed by one conditional
+ * UPDATE, so two re-deliveries of one run never send the same part at once. Every write is
+ * guarded on that lease, never on the run's own (which guards a RUNNING run only).
+ */
+export interface BackupRedeliveryStore {
+  /**
+   * Takes the run's re-delivery lease until `leaseUntil`: only a SUCCEEDED, verified
+   * INSTALLATION run whose archive was not pruned, and only when no unexpired lease is held.
+   * False: somebody else holds it, or the run is not one that can be re-delivered.
+   */
+  claimRedelivery(input: {
+    readonly id: string;
+    readonly owner: string;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<boolean>;
+  /** Pushes the lease out while parts are still being sent. False: it was lost. */
+  extendRedelivery(input: {
+    readonly id: string;
+    readonly owner: string;
+    readonly leaseUntil: Date;
+  }): Promise<boolean>;
+  /** One part's answer, guarded on the re-delivery lease. */
+  recordRedeliveredPart(input: {
+    readonly id: string;
+    readonly owner: string;
+    readonly partNumber: number;
+    readonly state: BackupDeliveryState;
+    readonly attemptedAt: Date;
+    readonly messageId: number | null;
+    readonly detail: string | null;
+    readonly reason: BackupDeliveryReason | null;
+    readonly attempts: number;
+  }): Promise<void>;
+  /** Gives the lease back without touching the run's delivery (a re-delivery that threw). */
+  releaseRedelivery(input: { readonly id: string; readonly owner: string }): Promise<void>;
+  /** The run's aggregate after the re-delivery, and the lease released. Lease-guarded. */
+  finishRedelivery(input: {
+    readonly id: string;
+    readonly owner: string;
+    readonly deliveryState: BackupDeliveryState;
+    readonly deliveryAttemptedAt: Date;
+    readonly deliveryDetail: string | null;
+    readonly deliveryReason: BackupDeliveryReason | null;
+    readonly summaryDeliveryState: BackupDeliveryState | null;
+  }): Promise<void>;
 }
 
 export interface BackupRunRow {
@@ -355,6 +427,11 @@ export interface BackupRunRow {
   readonly deliveryState: BackupDeliveryState;
   readonly deliveryAttemptedAt: Date | null;
   readonly deliveryDetail: string | null;
+  /**
+   * NEXA-BACKUP-DELIVERY: why the delivery ended where it did, as a code. Absent on a
+   * hand-built row: null.
+   */
+  readonly deliveryReason?: BackupDeliveryReason | null;
   readonly failureCode: string | null;
   readonly failureMessage: string | null;
   readonly cleanupOk: boolean;
@@ -488,6 +565,7 @@ export interface BackupRunRepository {
     readonly deliveryState: BackupDeliveryState;
     readonly deliveryAttemptedAt?: Date | null;
     readonly deliveryDetail?: string | null;
+    readonly deliveryReason?: BackupDeliveryReason | null;
     readonly failureCode?: string | null;
     readonly failureMessage?: string | null;
     readonly cleanupOk: boolean;

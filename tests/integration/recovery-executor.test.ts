@@ -285,6 +285,8 @@ describe('the recovery executor', () => {
     // receives is kept here, as the operator would download it from the group.
     const received: Buffer[] = [];
     const service = new BackupService({
+      // NEXA-BACKUP-DELIVERY: a resend's pause never really waits in a test.
+      sleep: async () => {},
       runs: container.backupRuns,
       tools: new PostgresDatabaseTools({
         databaseUrl: liveUrl,

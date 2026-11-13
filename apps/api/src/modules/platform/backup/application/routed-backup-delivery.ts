@@ -91,7 +91,8 @@ export interface RoutedBackupDeliveryDeps {
  * A fallback is taken only when NOTHING was sent to the group. Once a send to the group
  * has been attempted its answer is the run's answer: an `OUTCOME_UNKNOWN` is never
  * followed by a second copy somewhere else, because the first may have landed — the same
- * three-outcome rule as ever (ADR-0025), and nothing here resends automatically.
+ * three-outcome rule as ever (ADR-0025). The router itself never resends; the pipeline's
+ * bounded resend of a part (NEXA-BACKUP-DELIVERY) goes to this same destination.
  *
  * The one resend is the deleted topic: Telegram DEFINITIVELY refused the send because the
  * thread is gone, so nothing was posted; the topic is recreated through the provisioner's

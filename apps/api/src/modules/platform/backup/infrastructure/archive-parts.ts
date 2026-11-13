@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import {
+  BACKUP_PART_MAX_BYTES,
+  BACKUP_PART_SIZE_MIB_DEFAULT,
+  BACKUP_PART_SIZE_MIB_MAX,
+  BACKUP_PART_SIZE_MIB_MIN,
+} from '@nexa/contracts';
 import type { BackupArchivePart } from '../application/ports.js';
 
 /**
@@ -70,4 +76,24 @@ export async function planArchiveParts(input: {
 /** `001`, `002`… — 7-Zip's volume suffix, three digits minimum. */
 export function partSuffix(partNumber: number): string {
   return String(partNumber).padStart(3, '0');
+}
+
+/**
+ * NEXA-BACKUP-DELIVERY: the split size `backup.part_mb` names, in bytes — clamped to the
+ * registry's bounds (10–45 MiB), so a value written past them by hand can never produce a
+ * part above Telegram's bot limit. A setting that cannot be read is the default, 45 MiB.
+ */
+export async function resolvePartBytes(read: () => Promise<number>): Promise<number> {
+  let mib: number;
+  try {
+    mib = await read();
+  } catch {
+    mib = BACKUP_PART_SIZE_MIB_DEFAULT;
+  }
+  if (!Number.isFinite(mib)) mib = BACKUP_PART_SIZE_MIB_DEFAULT;
+  const bounded = Math.min(
+    BACKUP_PART_SIZE_MIB_MAX,
+    Math.max(BACKUP_PART_SIZE_MIB_MIN, Math.floor(mib)),
+  );
+  return Math.min(BACKUP_PART_MAX_BYTES, bounded * 1024 * 1024);
 }

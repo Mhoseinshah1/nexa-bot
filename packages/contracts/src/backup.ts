@@ -91,10 +91,14 @@ export type BackupPhaseDurationsMs = Partial<Record<BackupStage, number>>;
  *                       artifact is sound and only its transport failed.
  *   `OUTCOME_UNKNOWN`   we sent bytes and never learned the verdict — a
  *                       timeout, a dropped socket, a 2xx we could not parse.
- *                       The document may be in the group. Nothing retries this
- *                       automatically. It is a durable record for a person or a
- *                       future reconciliation to resolve, and the one state
- *                       whose whole purpose is to refuse to guess.
+ *                       The document may be in the group. Telegram offers a bot
+ *                       no way to look a document up, so it cannot be checked;
+ *                       since NEXA-BACKUP-DELIVERY the pipeline re-sends such a
+ *                       PART a bounded number of times, in order, under the
+ *                       owner's rule "sent twice is acceptable, lost is not"
+ *                       (two copies of a part are byte-identical: same SHA-256,
+ *                       and the resend's caption says so). The state itself is
+ *                       still recorded as it was observed, never as a guess.
  */
 export const BACKUP_DELIVERY_STATES = [
   'NOT_ATTEMPTED',
@@ -103,6 +107,55 @@ export const BACKUP_DELIVERY_STATES = [
   'OUTCOME_UNKNOWN',
 ] as const;
 export type BackupDeliveryState = (typeof BACKUP_DELIVERY_STATES)[number];
+
+/**
+ * WHY a delivery — a run's, or one part's — ended where it did (NEXA-BACKUP-DELIVERY).
+ *
+ * A CODE, never a message. `backup_runs.delivery_detail` / `backup_run_parts.delivery_detail`
+ * hold the transport's own words (an error cause chain, Telegram's description), which may
+ * name a path and are kept out of every API response; this vocabulary is what the Web Admin
+ * reads and renders in Persian. Pinned by a CHECK constraint on both tables.
+ *
+ * - `LOCAL_ONLY_IMPORT` / `LOCAL_ONLY_SERVER_MOVE` / `LOCAL_ONLY_REQUESTED`: BY DESIGN, the
+ *   run was asked not to leave the host (`deliver: false`): the Mirza restore's protective and
+ *   post-import backups, a server-move member, or another caller that asked. Not a failure.
+ * - `NO_DESTINATION`: nothing is configured to deliver to.
+ * - `DESTINATION_UNAVAILABLE`: a destination exists and could not be used; nothing was sent.
+ * - `ARCHIVE_UNREADABLE`: the archive (or its part) could not be opened; nothing was sent.
+ * - `CONNECT_FAILED`: no connection to Telegram was made (DNS, refused, unreachable, connect
+ *   timeout); nothing was sent, so a resend cannot duplicate anything.
+ * - `TELEGRAM_REFUSED`: Telegram answered 4xx (`ok: false`): a definitive no.
+ * - `RATE_LIMITED`: 429. `TELEGRAM_SERVER_ERROR`: 5xx. `ANSWER_UNREADABLE`: a 2xx we could
+ *   not read as a Bot API answer. All three are `OUTCOME_UNKNOWN`.
+ * - `DEADLINE_EXCEEDED`: `BACKUP_DELIVERY_TIMEOUT_MS` passed with no answer.
+ * - `CONNECTION_RESET`: the connection dropped after it was made (ECONNRESET, EPIPE, a socket
+ *   hang-up) — the upload may have landed.
+ * - `TRANSPORT_ERROR`: any other transport failure; the cause chain is in the detail.
+ */
+export const BACKUP_DELIVERY_REASONS = [
+  'LOCAL_ONLY_IMPORT',
+  'LOCAL_ONLY_SERVER_MOVE',
+  'LOCAL_ONLY_REQUESTED',
+  'NO_DESTINATION',
+  'DESTINATION_UNAVAILABLE',
+  'ARCHIVE_UNREADABLE',
+  'CONNECT_FAILED',
+  'TELEGRAM_REFUSED',
+  'RATE_LIMITED',
+  'TELEGRAM_SERVER_ERROR',
+  'ANSWER_UNREADABLE',
+  'DEADLINE_EXCEEDED',
+  'CONNECTION_RESET',
+  'TRANSPORT_ERROR',
+] as const;
+export type BackupDeliveryReason = (typeof BACKUP_DELIVERY_REASONS)[number];
+
+/** The reasons that mean "kept on this server on purpose", never a failed delivery. */
+export const BACKUP_LOCAL_ONLY_REASONS = [
+  'LOCAL_ONLY_IMPORT',
+  'LOCAL_ONLY_SERVER_MOVE',
+  'LOCAL_ONLY_REQUESTED',
+] as const satisfies readonly BackupDeliveryReason[];
 
 /**
  * Why a run started.
@@ -439,6 +492,18 @@ export type BackupArchiveFormat = (typeof BACKUP_ARCHIVE_FORMATS)[number];
  * `.001` opens directly in 7-Zip and `cat` of every part, in order, is the archive.
  */
 export const BACKUP_PART_MAX_BYTES = 45 * 1024 * 1024;
+
+/**
+ * The size an archive is split at, in MiB (NEXA-BACKUP-DELIVERY): `backup.part_mb`, drawn on
+ * «زمان‌بندی بکاپ خودکار». 45 (the ceiling above, under Telegram's 50 MB bot limit with room for
+ * the multipart envelope) by default; down to 10 for a slow or unreliable link, where a smaller
+ * part is a shorter upload and a cheaper resend. Read at the start of each run's split, so a
+ * change applies to the next backup; an archive already split keeps its parts.
+ */
+export const BACKUP_PART_SIZE_SETTING_KEY = 'backup.part_mb';
+export const BACKUP_PART_SIZE_MIB_MIN = 10;
+export const BACKUP_PART_SIZE_MIB_MAX = 45;
+export const BACKUP_PART_SIZE_MIB_DEFAULT = 45;
 
 /** The owner-set backup password's bounds. Long, because it is the archive's only key. */
 export const BACKUP_ARCHIVE_PASSWORD_MIN_LENGTH = 12;

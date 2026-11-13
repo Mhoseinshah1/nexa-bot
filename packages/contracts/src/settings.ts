@@ -62,6 +62,10 @@ import {
   BACKUP_CPU_LIMIT_MAX,
   BACKUP_CPU_LIMIT_MIN,
   BACKUP_CPU_LIMIT_SETTING_KEY,
+  BACKUP_PART_SIZE_MIB_DEFAULT,
+  BACKUP_PART_SIZE_MIB_MAX,
+  BACKUP_PART_SIZE_MIB_MIN,
+  BACKUP_PART_SIZE_SETTING_KEY,
 } from './backup.js';
 import {
   DATA_RETENTION_SETTING_KEYS,
@@ -953,6 +957,26 @@ export const SETTINGS = [
       '(the backup-verify service), from the next botctl restart or update.',
     schema: z.number().int().min(BACKUP_CPU_LIMIT_MIN).max(BACKUP_CPU_LIMIT_MAX),
     defaultValue: BACKUP_CPU_LIMIT_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  /**
+   * NEXA-BACKUP-DELIVERY: the size a backup archive is split at for Telegram, in MiB. Drawn
+   * on «زمان‌بندی بکاپ خودکار» (`SETTINGS_MANAGED_ELSEWHERE`).
+   */
+  {
+    key: BACKUP_PART_SIZE_SETTING_KEY,
+    description:
+      'The size, in MiB, a backup archive is split into for delivery to Telegram, between ' +
+      `${String(BACKUP_PART_SIZE_MIB_MIN)} and ${String(BACKUP_PART_SIZE_MIB_MAX)}. ` +
+      `${String(BACKUP_PART_SIZE_MIB_DEFAULT)} (the default) stays under Telegram's 50 MB bot ` +
+      'limit with room to spare; a smaller part is a shorter upload and a cheaper resend on a ' +
+      'slow or unreliable link. Applies from the next backup; one already split keeps its parts.',
+    schema: z.number().int().min(BACKUP_PART_SIZE_MIB_MIN).max(BACKUP_PART_SIZE_MIB_MAX),
+    defaultValue: BACKUP_PART_SIZE_MIB_DEFAULT,
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

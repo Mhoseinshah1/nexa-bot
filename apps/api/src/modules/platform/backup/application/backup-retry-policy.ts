@@ -139,3 +139,56 @@ export function backupRetryHold(input: {
   if (input.now.getTime() >= notBefore) return null;
   return { failures: chain.length, newest, notBefore: new Date(notBefore), reason };
 }
+
+// ---------------------------------------------------------------------------
+// NEXA-BACKUP-DELIVERY: re-sending ONE PART whose delivery did not arrive
+// ---------------------------------------------------------------------------
+
+/**
+ * How many times one part is sent in one delivery pass, the first send included. Bounded:
+ * a part that three sends could not move is the operator's to look at (the run row names the
+ * reason), and a fourth would only hold the backup lock longer.
+ */
+export const BACKUP_PART_DELIVERY_ATTEMPTS = 3;
+
+/** The pause before the 2nd, 3rd… send of a part: 30 s, then 2 minutes. */
+export const BACKUP_PART_RETRY_BACKOFF_MS: readonly number[] = [30_000, 120_000];
+
+/** The longest a 429's `retry_after` is honoured before the pass gives the part up. */
+export const BACKUP_PART_RETRY_AFTER_CAP_MS = 10 * 60_000;
+
+/**
+ * Whether a part whose send ended with `attempt` may be sent again (the rule; the pass bounds
+ * it by `BACKUP_PART_DELIVERY_ATTEMPTS` and its own deadline).
+ *
+ * - `OUTCOME_UNKNOWN` (a deadline, a reset, a 5xx, a 429, an unreadable answer): YES. The
+ *   first copy may be in the group, and the Bot API gives a bot no way to look it up — no
+ *   search, no history, no read of a chat by a document's digest — so "did it arrive?" cannot
+ *   be checked. The owner's rule decides it: sent twice is acceptable, lost is not. The two
+ *   copies are byte-identical (same part, same SHA-256 in both captions), and the resend's
+ *   caption says it is one.
+ * - `FAILED_DEFINITIVE` with `CONNECT_FAILED`: YES. No connection was made; nothing reached
+ *   Telegram, so a resend cannot even duplicate.
+ * - any other `FAILED_DEFINITIVE` (Telegram refused, the archive cannot be read): NO. The
+ *   same bytes would be refused the same way.
+ */
+export function partMaySendAgain(attempt: {
+  readonly state: 'SUCCEEDED' | 'FAILED_DEFINITIVE' | 'OUTCOME_UNKNOWN';
+  readonly reason?: string;
+}): boolean {
+  if (attempt.state === 'OUTCOME_UNKNOWN') return true;
+  return attempt.state === 'FAILED_DEFINITIVE' && attempt.reason === 'CONNECT_FAILED';
+}
+
+/**
+ * The pause before send number `sent + 1` of a part, after `sent` sends (1-based), or null
+ * when a 429 asks for longer than the cap — then the pass stops at this part instead of
+ * holding the backup for an unbounded wait.
+ */
+export function partRetryDelayMs(sent: number, retryAfterMs?: number): number | null {
+  const steps = BACKUP_PART_RETRY_BACKOFF_MS;
+  const step = steps[Math.min(Math.max(sent, 1), steps.length) - 1] ?? 0;
+  if (retryAfterMs === undefined) return step;
+  if (retryAfterMs > BACKUP_PART_RETRY_AFTER_CAP_MS) return null;
+  return Math.max(step, retryAfterMs);
+}
