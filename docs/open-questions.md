@@ -5212,3 +5212,5 @@ live; the owner decides otherwise.
   without the importer keys as well, 51 MiB — still 2 parts of 45 MiB; the audit log's import
   rows (about 9 MB, OQ-V097-P2-01) are the rest of the way to one part. Owner / PR-1: include
   them?
+
+<!-- CI measurement probe (draft PR, closed unmerged). -->
