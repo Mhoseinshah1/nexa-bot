@@ -358,6 +358,10 @@ export const WEB_FA_ERRORS = {
   'web.err_backup_installation_only': 'بکاپ و بازیابی این ربات را میزبان مدیریت می‌کند.',
   'web.err_backup_tool_failed': 'ابزار پشتیبان‌گیری اجرا نشد.',
   'web.err_backup_tool_oom_killed': 'حافظهٔ سرور کافی نبود.',
+  'web.err_backup_dump_timeout':
+    'گرفتن نسخهٔ پایگاه داده از زمان مجازش گذشت و متوقف شد؛ جزئیات خطا می‌گوید منتظر چه بود.',
+  'web.err_backup_dump_lock_timeout':
+    'یک جدول پایگاه داده در اختیار کار دیگری قفل بود و بکاپ نتوانست شروع شود؛ بعداً دوباره امتحان کنید.',
   'web.err_backup_memory_insufficient':
     'حافظهٔ آزاد سرور برای فشرده‌سازی بکاپ کافی نیست؛ بکاپ شروع نشد.',
   'web.err_backup_disk_insufficient': 'فضای دیسک برای بکاپ کافی نیست؛ بکاپ شروع نشد.',

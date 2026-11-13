@@ -318,6 +318,21 @@ export const PLATFORM_ERROR_CODES = {
    */
   BACKUP_TOOL_OOM_KILLED: 'backup.tool_oom_killed',
   /**
+   * `pg_dump` ran past the dump watchdog (`BACKUP_DUMP_TIMEOUT_MS`, sized from the database's
+   * size) and was killed with everything it started. Distinct from `BACKUP_TOOL_FAILED`
+   * because a dump that never ends is a different fault from one that exits non-zero: the
+   * run's failure text says what its PostgreSQL session was waiting on when it was stopped
+   * (a lock, and who held it, or the client not reading), which is what an operator acts on.
+   */
+  BACKUP_DUMP_TIMEOUT: 'backup.dump_timeout',
+  /**
+   * `pg_dump` could not take its ACCESS SHARE lock on a table within `--lock-wait-timeout`:
+   * another session held a conflicting (ACCESS EXCLUSIVE) lock — a TRUNCATE, DROP, ALTER,
+   * VACUUM FULL or a migration. The dump fails fast with the table and the holder recorded
+   * instead of waiting behind it for as long as it holds the lock.
+   */
+  BACKUP_DUMP_LOCK_TIMEOUT: 'backup.dump_lock_timeout',
+  /**
    * The host had less free memory than the lowest 7-Zip compression level needs, so 7-Zip was
    * NOT started. Refused before spawning: a tool started with too little memory is killed by
    * the kernel part-way, which costs the whole dump and may take another process with it.
