@@ -64,7 +64,7 @@ describe('the stored decrypt-only keys across a restore', () => {
     // restore would quietly bring `removed-1` back.
     const database = `nexa_kitlive_${randomBytes(6).toString('hex')}`;
     created.push(database);
-    const url = new URL(await createMigratedDatabase(testConfig().DATABASE_URL, database));
+    await createMigratedDatabase(testConfig().DATABASE_URL, database);
 
     const wrapping = randomBytes(32);
     const removed = randomBytes(32);
