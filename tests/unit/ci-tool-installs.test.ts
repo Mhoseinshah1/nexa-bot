@@ -48,7 +48,7 @@ describe('CI tool installs do not depend on Canonical', () => {
   });
 
   it('has no other workflow that does either', () => {
-    for (const file of ['release.yml', 'exhaustive.yml']) {
+    for (const file of ['release.yml', 'nightly.yml']) {
       expect(read(`.github/workflows/${file}`), file).not.toMatch(APT_USE);
     }
   });

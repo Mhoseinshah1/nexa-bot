@@ -1,0 +1,142 @@
+name: Nightly
+
+# Once a night, on main, off the pull-request path:
+#
+# - `ci`: the whole of ci.yml, called as a reusable workflow. The event is
+#   `schedule` (or `workflow_dispatch`), so scripts/ci-scope.sh makes it a FULL
+#   run: every integration shard, both deployment smokes, the legacy source on
+#   BOTH engines (MariaDB 10.11 and MySQL 8.0 — a pull request runs MySQL 8.0
+#   only) and the dependency audit (a pull request runs it only when the
+#   dependency graph changed; the advisory database changes every day). Calling
+#   ci.yml rather than copying its jobs means the nightly cannot drift from what
+#   a push to main runs.
+#
+#   It is NOT release evidence and cannot be mistaken for it: release.yml's gate
+#   (scripts/release-ci-gate.mjs) accepts only a run whose path is
+#   .github/workflows/ci.yml and whose event is push or workflow_dispatch, and
+#   this run's path is .github/workflows/nightly.yml. A red night never touches
+#   a push run's evidence either: different run, different concurrency group
+#   (the called workflow's group is named after this workflow).
+#
+# - `exhaustive`: the combinatorial search. 1 341 orderings, each with a full
+#   database reset. The suite itself takes about four minutes; carrying it took
+#   the whole CI integration job to roughly fourteen, so the cost of the search
+#   landed on every unrelated change. Its value is finding a shape nobody has
+#   imagined yet, which is worth a great deal once a night and very little on
+#   the ninth push of an afternoon. Nothing here is the only cover for a known
+#   bug: every failure shape these enumerations found has a named, deterministic
+#   regression in `tests/integration/notification-invariants.test.ts`, which runs
+#   on every pull request that touches the application. Locally:
+#   `pnpm test:exhaustive`.
+#
+# - `report`: when either is red on main, opens ONE issue titled
+#   «CI شبانه قرمز است» listing the failing jobs and the run, or comments on the
+#   open one (scripts/ci-nightly-report.sh). The only job with `issues: write`.
+on:
+  schedule:
+    # 03:00 UTC, daily: with 01:00 and 02:00, the hours with the fewest CI runs
+    # (8 of the last 500 each), so the full run rarely competes with a PR.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+# Everything reads the repository and nothing else; `report` alone widens this.
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  exhaustive:
+    name: Exhaustive orderings
+    runs-on: ubuntu-24.04
+    # Generous, because the point of this job is to be thorough rather than
+    # quick — but bounded, so a hang is reported rather than billed.
+    timeout-minutes: 60
+
+    env:
+      DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
+      TEST_DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
+      REDIS_URL: redis://127.0.0.1:6379
+      # A throwaway key for the test database only.
+      SECRETS_KEK: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      SECRETS_KEK_ID: ci-1
+
+    steps:
+      # Pinned to an immutable commit. A tag is a moving pointer that whoever
+      # controls the action's repository can repoint at any time, and CI runs
+      # with a token. The comment names the release so an update stays legible.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+        env:
+          BUILD_VERSION: ${{ github.sha }}
+          BUILD_COMMIT: ${{ github.sha }}
+
+      # Started here rather than as `services:` so a failed pull or a container that
+      # never turns healthy is retried (scripts/ci-start-services.sh). A service
+      # container that fails stops the job at "Initialize containers" with no step
+      # to retry it, which is how 2/10 to 9/10 shards of one run failed on main.
+      - name: Start PostgreSQL and Redis (bounded retry)
+        run: bash scripts/ci-start-services.sh
+
+      # Every ordering resets the database, and a reset TRUNCATEs ~150 tables:
+      # with fsync on, that is hundreds of synced file creations per ordering.
+      # The container is discarded with the job; see the script for numbers.
+      - name: Make the throwaway database non-durable
+        run: bash scripts/ci-test-postgres.sh "$POSTGRES_CONTAINER"
+        env:
+          POSTGRES_CONTAINER: nexa-ci-postgres
+
+      - name: Apply migrations
+        run: pnpm db:migrate
+
+      # Progress per file and test as each starts, and a heartbeat, so a long
+      # quiet stretch reads as slow, stuck or held open — see ci.yml.
+      - name: Exhaustive notification orderings
+        run: >-
+          pnpm test:exhaustive
+          --reporter=default
+          --reporter=./tests/support/ci-progress-reporter.ts
+          --reporter=hanging-process
+
+  report:
+    name: Report a red night
+    needs: [ci, exhaustive]
+    # Only main's nightly opens the issue: a dispatched run on a branch is that
+    # branch's business. `always()`, because a red `ci` would otherwise skip it.
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      (needs.ci.result != 'success' || needs.exhaustive.result != 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # The one job allowed to write: issues, to open or update the report; and
+    # actions: read, to list this run's jobs.
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Open or update the nightly issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash scripts/ci-nightly-report.sh

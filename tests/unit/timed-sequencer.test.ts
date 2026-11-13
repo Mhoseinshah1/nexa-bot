@@ -23,7 +23,8 @@ const timings = readIntegrationTimings(ROOT);
 describe('partitionByWeight', () => {
   it('puts every integration file in exactly one shard, for any shard count', () => {
     expect(files.length).toBeGreaterThan(100);
-    for (let count = 1; count <= 16; count += 1) {
+    // Past the 18 CI runs (ci.yml), so a raised count is already covered.
+    for (let count = 1; count <= 24; count += 1) {
       const shards = partitionByWeight(files, timings, count);
       expect(shards).toHaveLength(count);
       const all = shards.flat();
