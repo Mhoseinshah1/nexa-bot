@@ -76,3 +76,5 @@ export function intervalMinutes(
   if (minutes > BACKUP_INTERVAL_MINUTES_MAX) return { ok: false, problem: 'too_long' };
   return { ok: true, minutes };
 }
+
+// CI measurement probe (draft PR, closed unmerged).
