@@ -2498,11 +2498,13 @@ describe('PipelineBackupPort.runBeforeImport (Phase 7)', () => {
     });
     expect(await verified.port.runBeforeImport()).toEqual({ outcome: 'TAKEN', runId: 'r1' });
     expect(verified.triggers).toEqual(['PRE_RESTORE']);
-    // Kept on this server: a Mirza restore sends nothing to Telegram, its backups included.
-    expect(verified.options).toEqual([{ deliver: false }]);
+    // Kept on this server: a Mirza restore sends nothing to Telegram, its backups included —
+    // and says so as BY DESIGN (NEXA-BACKUP-DELIVERY: LOCAL_ONLY_IMPORT), never as a failure.
+    const local = { deliver: false, localOnly: 'IMPORT' };
+    expect(verified.options).toEqual([local]);
     await verified.port.runAfterImport();
     expect(verified.triggers).toEqual(['PRE_RESTORE', 'MANUAL']);
-    expect(verified.options).toEqual([{ deliver: false }, { deliver: false }]);
+    expect(verified.options).toEqual([local, local]);
     expect(
       await port({
         kind: 'COMPLETED',

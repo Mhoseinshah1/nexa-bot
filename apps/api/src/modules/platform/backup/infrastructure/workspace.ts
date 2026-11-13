@@ -302,3 +302,16 @@ async function removeAll(paths: readonly string[]): Promise<readonly string[]> {
   }
   return survivors;
 }
+
+/**
+ * A finished installation run's archive on this host (NEXA-BACKUP-DELIVERY's re-delivery),
+ * DERIVED from the run id and the work root, never accepted from a caller: an id that is not
+ * a run directory name is null. The file name is the workspace's own constant.
+ */
+export function runArchivePath(
+  workRoot: string,
+  run: { readonly id: string; readonly archiveFormat: string | null },
+): string | null {
+  if (!RUN_DIRECTORY.test(run.id)) return null;
+  return join(workRoot, run.id, run.archiveFormat === 'SEVEN_ZIP' ? 'archive.7z' : 'archive.nxb');
+}

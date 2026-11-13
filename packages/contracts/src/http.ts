@@ -217,6 +217,7 @@ import {
   tenantMediaMimeTypeSchema,
 } from './customer-ux.js';
 import {
+  BACKUP_DELIVERY_REASONS,
   BACKUP_DELIVERY_STATES,
   BACKUP_RUN_STATES,
   BACKUP_STAGES,
@@ -7047,6 +7048,19 @@ export const backupRunSummarySchema = z.object({
    */
   deliveryDetailPresent: z.boolean(),
   /**
+   * WHY the delivery ended where it did, as a code (NEXA-BACKUP-DELIVERY) — the part of the
+   * detail an operator acts on, without the detail. A `LOCAL_ONLY_*` reason is a run kept on
+   * this server BY DESIGN (a Mirza import's backups, a server-move member), never a failure.
+   * Null on a delivered run, and on a run from before the reason was recorded.
+   */
+  deliveryReason: z.enum(BACKUP_DELIVERY_REASONS).nullable(),
+  /**
+   * Whether «ارسال دوبارهٔ بخش‌های نرسیده» applies: a finished, verified installation run
+   * whose archive is still on this host, that was not kept local by design, and some part of
+   * which carries no Telegram message id. Decided by the server; the button only follows it.
+   */
+  redeliverable: z.boolean(),
+  /**
    * The failure CODE, and never the failure MESSAGE.
    *
    * `backup_runs.failure_message` holds an arbitrary `error.message` — the same
@@ -7082,6 +7096,10 @@ export const backupRunSummarySchema = z.object({
       bytes: z.string(),
       sha256: z.string(),
       deliveryState: z.enum(BACKUP_DELIVERY_STATES),
+      /** Why this part is where it is (a code), or null when delivered / never tried. */
+      deliveryReason: z.enum(BACKUP_DELIVERY_REASONS).nullable(),
+      /** How many times this part was sent, the automatic resends included. */
+      attempts: z.number().int().nonnegative(),
     }),
   ),
   /** The summary message's outcome, or null when none was owed or sent. */
@@ -7222,6 +7240,23 @@ export const runBackupResponseSchema = z.object({
 });
 export type RunBackupResponse = z.infer<typeof runBackupResponseSchema>;
 
+/** «ارسال دوبارهٔ بخش‌های نرسیده»: re-deliver the parts of one run that did not arrive. */
+export const redeliverBackupRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type RedeliverBackupRequest = z.infer<typeof redeliverBackupRequestSchema>;
+
+/**
+ * What the press produced. `DELIVERED`: every part now carries a Telegram message id.
+ * `NOT_DELIVERED`: some part still does not — the run's parts say which and why. `BUSY`:
+ * another re-delivery of this run is in flight. Never an error for an honest answer.
+ */
+export const redeliverBackupResponseSchema = z.object({
+  outcome: z.enum(['DELIVERED', 'NOT_DELIVERED', 'BUSY']),
+  run: backupRunSummarySchema,
+});
+export type RedeliverBackupResponse = z.infer<typeof redeliverBackupResponseSchema>;
+
 /**
  * One recovery request, as the Web Admin renders it.
  *
@@ -7307,6 +7342,8 @@ export const BACKUP_ROUTES = {
   history: '/backups',
   detail: (id: string) => `/backups/${encodeURIComponent(id)}`,
   run: '/backups/run',
+  /** «ارسال دوبارهٔ بخش‌های نرسیده» for one run (NEXA-BACKUP-DELIVERY). */
+  redeliver: (id: string) => `/backups/${encodeURIComponent(id)}/redeliver`,
   download: (id: string) => `/backups/${encodeURIComponent(id)}/archive`,
   /** One part of a split 7-Zip archive (E4); `part` is 1-based. */
   downloadPart: (id: string, part: number) =>

@@ -14,15 +14,18 @@ import type { BackupPort } from '../application/ports.js';
  * - AFTER (design §4): `run('MANUAL')`, after the same quiesce question every backup trigger
  *   asks (`container.recoveryQuiesced`): a recovery holding the installation means no backup now.
  */
-/** Both backups stay on this server: a Mirza restore sends nothing to Telegram. */
-const LOCAL_ONLY = { deliver: false } as const;
+/**
+ * Both backups stay on this server: a Mirza restore sends nothing to Telegram. Recorded as
+ * `LOCAL_ONLY_IMPORT` (NEXA-BACKUP-DELIVERY), which the Web Admin shows as kept by design.
+ */
+const LOCAL_ONLY = { deliver: false, localOnly: 'IMPORT' } as const;
 
 export class PipelineBackupPort implements BackupPort {
   constructor(
     private readonly pipeline: {
       run(
         trigger: BackupTrigger,
-        options?: { readonly deliver?: boolean },
+        options?: { readonly deliver?: boolean; readonly localOnly?: 'IMPORT' },
       ): Promise<
         | { readonly kind: 'BUSY'; readonly holder: { readonly id: string } }
         | {

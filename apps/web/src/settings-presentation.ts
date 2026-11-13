@@ -1,5 +1,6 @@
 import {
   BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
+  BACKUP_PART_SIZE_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
   CARD_SWITCH_SETTING_KEYS,
   LATE_CREDIT_SETTING_KEYS,
@@ -165,6 +166,8 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   // Owner 2026-11-11: «نگه داشتن نسخه روی سرور» is on the same card, where turning it off
   // asks for the confirmation the owner wrote — a bare switch here would skip it.
   BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY,
+  // NEXA-BACKUP-DELIVERY: the split size, on the same card beside the delivery destination.
+  BACKUP_PART_SIZE_SETTING_KEY,
   // Track 3 §2: PANEL-scoped — one value per panel, on that panel's «فایل‌های اتصال» tab.
   ...PANEL_SETTING_KEYS,
 ];
@@ -476,6 +479,13 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.backup_keep_on_host_hint',
     group: 'ops',
     control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
+  // NEXA-BACKUP-DELIVERY: drawn on «زمان‌بندی بکاپ خودکار» (SETTINGS_MANAGED_ELSEWHERE).
+  'backup.part_mb': {
+    title: 'web.backup_part_size',
+    description: 'web.backup_part_size_hint',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_mib' },
   },
   // Round 8 B5: CPU share of one core the backup's heavy tools may use.
   'backup.cpu_limit_percent': {

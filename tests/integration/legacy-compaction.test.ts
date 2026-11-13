@@ -119,10 +119,21 @@ describe('the legacy data compaction (E1)', () => {
     /** PR-L: the VACUUM session (default: as the tables' owner, production's wiring). */
     maintenance?: MaintenanceConnector;
     batchSize?: number;
+    /**
+     * NEXA-BACKUP-DELIVERY: the archive's re-delivery before the gate. Given the parts as they
+     * stand (mutable: a re-delivery that lands gives a part its message id).
+     */
+    redeliver?: (
+      parts: { -readonly [K in keyof BackupRunPartRow]?: BackupRunPartRow[K] }[],
+      options: { readonly deadline: Date; readonly title: string },
+    ) => Promise<void>;
   }): { executor: LegacyCompactionExecutor; titles: string[] } {
     const titles: string[] = [];
     const backupId = randomUUID();
     const c = ctx.container;
+    const parts: { -readonly [K in keyof BackupRunPartRow]?: BackupRunPartRow[K] }[] =
+      input.parts.map((part) => ({ ...part }));
+    const redeliver = input.redeliver;
     return {
       titles,
       executor: new LegacyCompactionExecutor({
@@ -150,8 +161,16 @@ describe('the legacy data compaction (E1)', () => {
             } as never;
           },
         },
+        ...(redeliver === undefined
+          ? {}
+          : {
+              redeliverArchive: async (
+                _id: string,
+                options: { readonly deadline: Date; readonly title: string },
+              ) => redeliver(parts, options),
+            }),
         backupParts: async () =>
-          input.parts.map((part, index) => ({
+          parts.map((part, index) => ({
             backupId,
             partNumber: index + 1,
             filename: `a.7z.${String(index + 1).padStart(3, '0')}`,
@@ -227,6 +246,74 @@ describe('the legacy data compaction (E1)', () => {
     const { executor: run } = executor({ parts: [{}, { telegramMessageId: null }] });
     const ended = await run.tick();
     expect(ended?.state).toBe('FAILED');
+    expect(ended?.failureCode).toBe('legacy_compaction.archive_not_delivered');
+    expect((await ids()).has(dropped)).toBe(true);
+  });
+
+  /*
+   * NEXA-BACKUP-DELIVERY: the gate is exactly as strict — and before it fails, the parts that
+   * did not arrive are re-delivered (bounded), and the SAME gate decides again.
+   */
+  it('compacts once a re-delivery gives every part its message id', async () => {
+    const dropped = await history('panel_target', { a: 1 });
+    await request();
+    const calls: { deadline: Date; title: string }[] = [];
+    const { executor: run } = executor({
+      parts: [
+        {},
+        { telegramMessageId: null, deliveryState: 'OUTCOME_UNKNOWN' },
+        {
+          telegramMessageId: null,
+          deliveryState: 'NOT_ATTEMPTED',
+        },
+      ],
+      redeliver: async (parts, options) => {
+        calls.push(options);
+        for (const part of parts) {
+          part.deliveryState = 'SUCCEEDED';
+          part.telegramMessageId = 9n;
+        }
+      },
+    });
+    const ended = await run.tick();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.title).toBe(LEGACY_COMPACTION_ARCHIVE_TITLE);
+    // Bounded: no new send starts more than the window after the gate first failed.
+    expect(calls[0]!.deadline.getTime() - ctx.container.clock.now().getTime()).toBeLessThanOrEqual(
+      30 * 60_000,
+    );
+    expect(ended?.failureCode).toBeNull();
+    expect(ended?.state).toBe('COMPLETED');
+    expect((await ids()).has(dropped)).toBe(false);
+  }, 120_000);
+
+  it('still deletes NOTHING when a part truly cannot be delivered, re-delivery or not', async () => {
+    const dropped = await history('panel_target', { a: 1 });
+    await request();
+    let tries = 0;
+    const { executor: run } = executor({
+      parts: [{}, { telegramMessageId: null, deliveryState: 'FAILED_DEFINITIVE' }],
+      redeliver: async () => {
+        tries += 1;
+      },
+    });
+    const ended = await run.tick();
+    expect(tries).toBe(1);
+    expect(ended?.state).toBe('FAILED');
+    expect(ended?.failureCode).toBe('legacy_compaction.archive_not_delivered');
+    expect((await ids()).has(dropped)).toBe(true);
+  });
+
+  it('still deletes NOTHING when the re-delivery itself throws', async () => {
+    const dropped = await history('panel_target', { a: 1 });
+    await request();
+    const { executor: run } = executor({
+      parts: [{ telegramMessageId: null, deliveryState: 'OUTCOME_UNKNOWN' }],
+      redeliver: async () => {
+        throw new Error('the backup row is unreachable');
+      },
+    });
+    const ended = await run.tick();
     expect(ended?.failureCode).toBe('legacy_compaction.archive_not_delivered');
     expect((await ids()).has(dropped)).toBe(true);
   });

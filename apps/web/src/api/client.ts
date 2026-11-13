@@ -462,6 +462,8 @@ import {
   type SecretPurpose,
   recoveryListResponseSchema,
   runBackupResponseSchema,
+  redeliverBackupResponseSchema,
+  type RedeliverBackupResponse,
   setBackupArchivePasswordResponseSchema,
   LEGACY_COMPACTION_ROUTES,
   legacyCompactionStatusResponseSchema,
@@ -3017,6 +3019,14 @@ export function fetchBackupHistory(
 
 export function runBackupNow(input: { idempotencyKey: string }): Promise<RunBackupResponse> {
   return post(BACKUP_ROUTES.run, input, runBackupResponseSchema);
+}
+
+/** Re-deliver one run's undelivered parts (NEXA-BACKUP-DELIVERY). */
+export function redeliverBackup(
+  id: string,
+  input: { idempotencyKey: string },
+): Promise<RedeliverBackupResponse> {
+  return post(BACKUP_ROUTES.redeliver(id), input, redeliverBackupResponseSchema);
 }
 
 /**

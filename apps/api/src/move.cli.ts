@@ -248,7 +248,12 @@ async function cmdExport(container: Container, args: MoveArgs, password: string)
           const queued = await container.heavyJobs.runWhenAdmitted(
             'BACKUP',
             installationTenantId,
-            () => container.backup.run('MOVE', { deliver: false, sealPassword }),
+            () =>
+              container.backup.run('MOVE', {
+                deliver: false,
+                localOnly: 'SERVER_MOVE',
+                sealPassword,
+              }),
             HEAVY_QUEUE,
           );
           if (!queued.ran || queued.result.kind !== 'COMPLETED') return null;

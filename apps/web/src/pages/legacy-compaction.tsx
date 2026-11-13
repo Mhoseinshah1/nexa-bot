@@ -13,6 +13,7 @@ import { Banner, KV, StateSwitch } from '../ui/kit';
 import { errorText } from '../error-text';
 import { ErrorRef } from '../ui/technical-details';
 import { formatTimestamp } from '../format';
+import { BackupPartList } from './backup-delivery';
 
 /**
  * «فشرده‌سازی داده‌های ربات قبلی» — Round 4 PR-E, E1.
@@ -158,6 +159,18 @@ export function LegacyCompactionCard({ mayApply }: { mayApply: boolean }) {
             </bdi>
           </Banner>
         )}
+        {/*
+          NEXA-BACKUP-DELIVERY: which part of the legacy archive backup did not reach
+          Telegram, and why — the gate stays as strict; this only says where it stopped.
+        */}
+        {run !== null &&
+          run.archiveParts.length > 0 &&
+          run.archiveParts.some((part) => part.deliveryState !== 'SUCCEEDED') && (
+            <div className="stack small">
+              <span className="field-label">{t('web.lcp_archive_parts')}</span>
+              <BackupPartList parts={run.archiveParts} />
+            </div>
+          )}
         {run !== null && <Report run={run} />}
         {status.data?.available === true && mayApply && (
           <form onSubmit={onSubmit} className="stack" autoComplete="off">

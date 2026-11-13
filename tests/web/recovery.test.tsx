@@ -52,6 +52,8 @@ function run(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     deliveryState: 'SUCCEEDED',
     deliveryAttemptedAt: '2026-09-09T02:03:00.000Z',
     deliveryDetailPresent: false,
+    deliveryReason: null,
+    redeliverable: false,
     failureCode: null,
     cleanupOk: true,
     cleanupLeftovers: 0,
@@ -361,11 +363,7 @@ describe('the recovery page', () => {
     renderPage(<RecoveryPage route={route} permissions={ALL} />);
     expect(await screen.findAllByText('نامعلوم')).not.toHaveLength(0);
     expect(screen.queryByText('ناموفق')).toBeNull();
-    expect(
-      screen.getByText(
-        'تلگرام ممکن است این فایل‌ها را گرفته باشد یا نگرفته باشد. هیچ‌چیز به‌طور خودکار دوباره ارسال نمی‌شود.',
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText(t('web.recovery_unknown_deliveries_hint'))).toBeInTheDocument();
   });
 
   it('says a cleanup did not complete, because plaintext may still be on disk', async () => {

@@ -114,6 +114,8 @@ describe('backup against a real database', () => {
       migratorEntrypoint: MIGRATOR,
     });
     return new BackupService({
+      // NEXA-BACKUP-DELIVERY: a resend's pause never really waits in a test.
+      sleep: async () => {},
       runs: context.container.backupRuns,
       tools,
       archiver: context.container.backupArchiver,
@@ -688,8 +690,8 @@ describe('backup against a real database', () => {
     expect(outcome.run.state).toBe('SUCCEEDED');
     expect(outcome.run.verifiedAt).not.toBeNull();
     expect(outcome.run.deliveryState).toBe('OUTCOME_UNKNOWN');
-    // Exactly one attempt was made. Nothing resent it.
-    expect(delivered).toHaveLength(1);
+    // NEXA-BACKUP-DELIVERY: sent three times (bounded), then left unknown — never "failed".
+    expect(delivered).toHaveLength(3);
 
     const unknown = await context.container.backupRuns.withUnknownDelivery(10);
     expect(unknown.map((row) => row.id)).toEqual([outcome.run.id]);

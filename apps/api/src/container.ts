@@ -22,7 +22,8 @@ import {
   BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT,
   BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
   BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
-  BACKUP_PART_MAX_BYTES,
+  BACKUP_PART_SIZE_MIB_DEFAULT,
+  BACKUP_PART_SIZE_SETTING_KEY,
   DATA_COMPACTION_BATCH_SIZE,
   DATA_RETENTION_SETTING_KEYS,
   IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT,
@@ -266,7 +267,8 @@ import {
 import { MonitorProfileService } from './modules/platform/panels/application/monitor-profile.service.js';
 import { DiagnosticsService } from './modules/platform/system/application/diagnostics.service.js';
 import { DrizzleDiagnosticsReader } from './modules/platform/system/infrastructure/drizzle-diagnostics.reader.js';
-import { BackupService } from './modules/platform/backup/application/backup.service.js';
+import { BackupService, realSleep } from './modules/platform/backup/application/backup.service.js';
+import { BackupRedelivery } from './modules/platform/backup/application/backup-redelivery.js';
 import { BackupScheduler } from './modules/platform/backup/application/backup-scheduler.js';
 import {
   BackupHousekeeping,
@@ -311,7 +313,10 @@ import {
   backupArchivePasswordSource,
   DrizzleBackupPasswordStore,
 } from './modules/platform/backup/infrastructure/drizzle-backup-password.store.js';
-import { planArchiveParts } from './modules/platform/backup/infrastructure/archive-parts.js';
+import {
+  planArchiveParts,
+  resolvePartBytes,
+} from './modules/platform/backup/infrastructure/archive-parts.js';
 import { purgePublishedOutboxBefore } from './modules/platform/eventing/infrastructure/outbox-retention.js';
 import { MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS } from '@nexa/contracts';
 import { clearExpiredNotificationText } from './modules/commerce/messaging/infrastructure/customer-notification-text-retention.js';
@@ -343,6 +348,7 @@ import { OpsGroupBackupTopicAdapter } from './modules/control/ops-group/applicat
 import {
   FilesystemBackupDebris,
   FilesystemBackupWorkspaces,
+  runArchivePath,
 } from './modules/platform/backup/infrastructure/workspace.js';
 import { OpsLogService } from './modules/platform/opslog/application/opslog.service.js';
 import { IncidentService } from './modules/platform/incidents/application/incident.service.js';
@@ -8870,10 +8876,23 @@ export function createContainer(
         : { tenantId: installationTenantId, botInstanceId: null },
     logger,
     leaseOwner,
-    // E4: ≤ 45 MiB parts, byte ranges of the one verified archive.
+    // E4: ≤ 45 MiB parts, byte ranges of the one verified archive. NEXA-BACKUP-DELIVERY: the
+    // size is `backup.part_mb` (10–45), read at each split so a change applies to the next run.
     parts: {
-      plan: (input) => planArchiveParts({ ...input, partBytes: BACKUP_PART_MAX_BYTES }),
+      plan: async (input) =>
+        planArchiveParts({
+          ...input,
+          partBytes: await resolvePartBytes(() =>
+            installationTenantId === null
+              ? Promise.resolve(BACKUP_PART_SIZE_MIB_DEFAULT)
+              : settingsResolver.valueOf<number>(
+                  { tenantId: installationTenantId, botInstanceId: null },
+                  BACKUP_PART_SIZE_SETTING_KEY,
+                ),
+          ),
+        }),
     },
+    sleep: realSleep,
     restoreCommand: 'botctl restore --target <empty-db> <part.001> [<part.002> …]',
     formatTakenAt: (at) => formatDateTime(at, DEFAULT_TEMPLATE_PRESENTATION),
     conditionOpen: backupConditionOpen,
@@ -9009,6 +9028,7 @@ export function createContainer(
     ids,
     idempotency,
     scopeActivity: tenants,
+    archiveParts: (backupId) => backupRuns.parts(backupId),
   });
   /*
    * E1: STARTED in the worker only (`main.worker.ts`), beside the backup scheduler whose
@@ -9028,6 +9048,30 @@ export function createContainer(
     actor: () => systemJobActor('legacy-cleanup', newCorrelationId(ids.uuid())),
     logger,
   });
+  /*
+   * NEXA-BACKUP-DELIVERY: «ارسال دوبارهٔ بخش‌های نرسیده» and the legacy compaction's retry
+   * before its gate — the pipeline's own bounded, in-order resend, over a finished run's
+   * archive still on this host, under the run's re-delivery lease.
+   */
+  const backupRedelivery = new BackupRedelivery({
+    runs: backupRuns,
+    pipeline: backup,
+    archivePathOf: (run) => runArchivePath(config.BACKUP_WORK_DIR, run),
+    archiveExists: async (path) => {
+      try {
+        return (await stat(path)).isFile();
+      } catch {
+        return false;
+      }
+    },
+    clock,
+    sleep: realSleep,
+    logger,
+    owner: leaseOwner,
+    // One send's deadline plus the longest pause between sends (a 429's capped wait), with room.
+    leaseMs: config.BACKUP_DELIVERY_TIMEOUT_MS + 15 * 60_000,
+    formatTakenAt: (at) => formatDateTime(at, DEFAULT_TEMPLATE_PRESENTATION),
+  });
   const legacyCompactionExecutor = new LegacyCompactionExecutor({
     repository: legacyCompactionRepository,
     automatic: legacyCleanupScheduler,
@@ -9038,6 +9082,7 @@ export function createContainer(
     clock,
     backup: { run: (trigger, options) => backup.run(trigger, options) },
     backupParts: (backupId) => backupRuns.parts(backupId),
+    redeliverArchive: (backupId, options) => backupRedelivery.redeliver(backupId, options),
     quiesced: () => recoveryQuiesced(),
     actor: () => systemJobActor('legacy-compaction', newCorrelationId(ids.uuid())),
     leaseOwner,
@@ -9094,6 +9139,7 @@ export function createContainer(
     workRoot: config.BACKUP_WORK_DIR,
     schedule: () => backupSchedule.effective(),
     disk: backupDiskState,
+    redelivery: backupRedelivery,
   });
   /*
    * Phase 6B PR-2 (ADR-0039 § 7): hosted-bot backups. Delivery is to the HOSTED bot's own
