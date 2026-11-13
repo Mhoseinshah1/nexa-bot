@@ -352,6 +352,55 @@ export class BackupService {
   }
 
   /**
+   * Closes every run whose lease went stale — its process stopped reporting — as FAILED
+   * (`backup.lease_expired`), and reports it. Returns how many.
+   *
+   * Called at the start of every run, and (2026-11-13) on every scheduler tick: a run whose
+   * process died used to stay RUNNING, in whatever stage it died in, until the NEXT backup
+   * started — on the owner's test server a manual backup showed DUMP for almost two hours,
+   * closed only when the import's protective backup began. Never adopts the run: its files
+   * belong to a process that may still be writing them.
+   */
+  async reclaimAbandoned(): Promise<number> {
+    const now0 = this.deps.clock.now();
+    const reclaimed = await this.deps.runs.reclaimStale({
+      staleBefore: new Date(now0.getTime() - BACKUP_LEASE_STALE_AFTER_MS),
+      now: now0,
+    });
+    if (reclaimed > 0) {
+      this.deps.logger.warn(
+        { reclaimed },
+        'closed a backup run whose lease had gone stale; its process is gone',
+      );
+      /*
+       * REPORTED, not only logged. Review finding 3.
+       *
+       * A reclaim means a backup was under way and its process died — the worker
+       * was SIGKILLed mid-dump, the container was evicted, the host rebooted. The
+       * row is marked FAILED here, and before this the only trace was a log line:
+       * no condition, no notification. Worse than silent, because the NEXT run
+       * succeeds and reports `backup.run_ok`, which closes a condition that was
+       * never opened — so an installation that lost a backup ends up looking
+       * exactly like one that did not.
+       *
+       * Under the same installation-wide dedupe key as any other failure, so a
+       * crash loop is one rising condition rather than an alert per tick, and a
+       * later success closes it.
+       */
+      await this.report({
+        code: 'backup.run_failed',
+        severity: 'ERROR',
+        message:
+          `${toPersianDigits(String(reclaimed))} اجرای بکاپ را فرایندی رها کرد که دیگر گزارشی نمی‌داد؛ ` +
+          'ناموفق بسته شد و آن بکاپ‌ها کامل نشدند.',
+        context: { reclaimed },
+        dedupeKey: BACKUP_CONDITION_KEY,
+      });
+    }
+    return reclaimed;
+  }
+
+  /**
    * Runs one backup, end to end, or reports truthfully that one is running.
    *
    * `BUSY` is a return value and not an exception because it is not a failure:
@@ -401,41 +450,7 @@ export class BackupService {
     // Release any lock whose owner died before it could. Done first, and by
     // FAILING the abandoned run rather than adopting it: its files belong to a
     // process that may still be writing them.
-    const now0 = this.deps.clock.now();
-    const reclaimed = await this.deps.runs.reclaimStale({
-      staleBefore: new Date(now0.getTime() - BACKUP_LEASE_STALE_AFTER_MS),
-      now: now0,
-    });
-    if (reclaimed > 0) {
-      this.deps.logger.warn(
-        { reclaimed },
-        'closed a backup run whose lease had gone stale; its process is gone',
-      );
-      /*
-       * REPORTED, not only logged. Review finding 3.
-       *
-       * A reclaim means a backup was under way and its process died — the worker
-       * was SIGKILLed mid-dump, the container was evicted, the host rebooted. The
-       * row is marked FAILED here, and before this the only trace was a log line:
-       * no condition, no notification. Worse than silent, because the NEXT run
-       * succeeds and reports `backup.run_ok`, which closes a condition that was
-       * never opened — so an installation that lost a backup ends up looking
-       * exactly like one that did not.
-       *
-       * Under the same installation-wide dedupe key as any other failure, so a
-       * crash loop is one rising condition rather than an alert per tick, and a
-       * later success closes it.
-       */
-      await this.report({
-        code: 'backup.run_failed',
-        severity: 'ERROR',
-        message:
-          `${toPersianDigits(String(reclaimed))} اجرای بکاپ را فرایندی رها کرد که دیگر گزارشی نمی‌داد؛ ` +
-          'ناموفق بسته شد و آن بکاپ‌ها کامل نشدند.',
-        context: { reclaimed },
-        dedupeKey: BACKUP_CONDITION_KEY,
-      });
-    }
+    await this.reclaimAbandoned();
 
     // A run that stays on this server also says nothing to Telegram about itself (M2).
     const quiet = options.deliver === false;
@@ -808,7 +823,7 @@ export class BackupService {
           : {
               code: 'backup.run_failed',
               severity: 'ERROR',
-              message: `بکاپ ${id} در مرحلهٔ ${stage} ناموفق بود (${failureCode}).`,
+              message: `بکاپ ${id} در مرحلهٔ ${stage} ناموفق بود (${failureCode}).${dumpLockNote(error)}`,
               context: { backupId: id, trigger, stage, failureCode, failureMessage },
               dedupeKey: BACKUP_CONDITION_KEY,
             },
@@ -1628,6 +1643,27 @@ export class BackupService {
       },
     };
   }
+}
+
+/**
+ * The dump watchdog's lock, said in the ops message (2026-11-13): which TABLE the dump waited
+ * on, and nothing more — a relation name from this database's own catalogue, checked to be a
+ * plain (optionally schema-qualified) identifier. The holder's query and application name are
+ * in the run's failure text and the event's context, which are redacted and not projected.
+ */
+function dumpLockNote(error: unknown): string {
+  if (!(error instanceof NexaError)) return '';
+  if (
+    error.code !== PLATFORM_ERROR_CODES.BACKUP_DUMP_TIMEOUT &&
+    error.code !== PLATFORM_ERROR_CODES.BACKUP_DUMP_LOCK_TIMEOUT
+  ) {
+    return '';
+  }
+  const relation = error.details.lockRelation;
+  if (typeof relation !== 'string' || !/^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$/.test(relation)) {
+    return '';
+  }
+  return ` pg_dump منتظر قفل جدول ${relation} بود.`;
 }
 
 /** An error's message and nothing else: never a stack, never a cause chain. */

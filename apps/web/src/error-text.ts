@@ -209,6 +209,8 @@ export const ERROR_TEXT = {
   'backup.installation_only': 'web.err_backup_installation_only',
   'backup.tool_failed': 'web.err_backup_tool_failed',
   'backup.tool_oom_killed': 'web.err_backup_tool_oom_killed',
+  'backup.dump_timeout': 'web.err_backup_dump_timeout',
+  'backup.dump_lock_timeout': 'web.err_backup_dump_lock_timeout',
   'backup.memory_insufficient': 'web.err_backup_memory_insufficient',
   'backup.disk_insufficient': 'web.err_backup_disk_insufficient',
   'backup.not_redeliverable': 'web.err_backup_not_redeliverable',

@@ -793,7 +793,13 @@ looks like a backup and is not:
 - One backup at a time is a **partial unique index**, not a process. Two worker
   replicas is normal on every rolling update. A stale lease is taken over by
   FAILING the abandoned run, never by adopting it: its files belong to a process
-  that may still be writing them.
+  that may still be writing them. Every scheduler tick does this, not only the next
+  run's start (2026-11-13: a dead manual run read DUMP for almost two hours).
+- **The dump is bounded** (2026-11-13): `min(BACKUP_DUMP_TIMEOUT_MS, 20 min + 5 min per GiB)`,
+  `pg_dump --lock-wait-timeout` of 5 minutes, its session named `nexa-backup-dump-*` so the
+  lock it waited on and its holder are recorded, and its whole process group killed at the
+  deadline (`backup.dump_timeout`, `backup.dump_lock_timeout`; `docs/backup.md` § The dump
+  watchdog).
 - **No copies on the server (owner, 2026-11-11, «بدون نگهداری»).** The switch
   «نگه داشتن نسخه روی سرور» (`backup.archive_keep_on_host`, default on, installation tenant
   only, audited) — the old «There is no zero: "keep nothing" is not a policy» changed on

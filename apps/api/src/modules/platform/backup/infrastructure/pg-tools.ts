@@ -25,6 +25,19 @@ import {
   wrapLowPriority,
 } from './tool-process.js';
 import { excludeTableDataArgs, manifestExclusions } from './backup-exclusions.js';
+import {
+  DATABASE_SIZE_SQL,
+  DUMP_LOCK_WAIT_TIMEOUT_MS,
+  dumpApplicationName,
+  dumpLockTimedOut,
+  dumpSessionSql,
+  dumpTimedOut,
+  dumpTimeoutFor,
+  lockHoldersSql,
+  lockTimeoutRelations,
+  parseDumpSessions,
+  parseLockHolders,
+} from './dump-watchdog.js';
 
 /**
  * The PostgreSQL command-line tools, as an adapter.
@@ -133,6 +146,13 @@ async function run(
   timeoutMs: number,
   /** `prefix` set: the tool runs under nice/ionice (`tool-process.ts`). */
   lowPriority?: { readonly prefix: readonly string[]; readonly cpuLimit?: CpuLimitProvider },
+  /**
+   * The dump watchdog (`dump-watchdog.ts`). `processGroup`: the tool leads a process group of
+   * its own and a timeout kills the GROUP, so nothing it started outlives it. `beforeKill`:
+   * observes the tool's state at the timeout, before the kill (bounded; its answer lands in the
+   * error's `details.atTimeout`).
+   */
+  watch?: { readonly processGroup?: boolean; readonly beforeKill?: () => Promise<unknown> },
 ): Promise<RunResult> {
   // `pg_dump` and `pg_restore` open their OWN connections to the database, and
   // a dump runs for as long as the database is large. Inside a transaction that
@@ -153,7 +173,30 @@ async function run(
     const child = spawn(wrapped.command, [...wrapped.args], {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      ...(watch?.processGroup === true ? { detached: true } : {}),
     });
+    let exited = false;
+    child.on('exit', () => {
+      exited = true;
+    });
+    /**
+     * The whole group when asked for one — even once the leader has exited, since what it
+     * started may not have (a group id is not reused while any member lives) — else the child
+     * alone, and never after it has exited (its pid may be another process's by then).
+     */
+    const signal = (name: NodeJS.Signals): void => {
+      if (watch?.processGroup === true && child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, name);
+          return;
+        } catch {
+          // ESRCH: every member is gone. Anything else: fall back to the child itself.
+        }
+      }
+      if (!exited) child.kill(name);
+    };
+    let settled = false;
+    let atTimeout: unknown = undefined;
 
     const stdoutChunks: Buffer[] = [];
     let stdoutBytes = 0;
@@ -162,13 +205,63 @@ async function run(
     let timedOut = false;
 
     const throttle = startCpuThrottle(child, cpuPercent);
-    const timer = setTimeout(() => {
-      timedOut = true;
+    const timedOutError = (): NexaError =>
+      new NexaError({
+        kind: 'INTERNAL',
+        code: PLATFORM_ERROR_CODES.BACKUP_TOOL_FAILED,
+        message: `"${command}" did not finish within ${timeoutMs}ms and was stopped.`,
+        details: {
+          command,
+          stderr: stderr.slice(0, 2000),
+          timedOut: true,
+          timeoutMs,
+          ...(atTimeout === undefined ? {} : { atTimeout }),
+        },
+      });
+    const kill = (): void => {
       throttle.release();
-      child.kill('SIGTERM');
+      signal('SIGTERM');
       // A dump that ignores SIGTERM still has to stop, or the lease it holds
       // outlives the run that took it.
-      setTimeout(() => child.kill('SIGKILL'), 5_000).unref();
+      setTimeout(() => {
+        signal('SIGKILL');
+        // `close` waits for the pipes as well as the process: a descendant still holding
+        // one would keep this promise pending for ever. Once the tool has exited, settle.
+        setTimeout(() => {
+          if (!settled && exited) {
+            settled = true;
+            reject(timedOutError());
+          }
+        }, 10_000).unref();
+      }, 5_000).unref();
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      const observe = watch?.beforeKill;
+      if (observe === undefined) {
+        kill();
+        return;
+      }
+      // Observed BEFORE the kill, while the tool's database session still exists; bounded,
+      // so a database that does not answer delays the kill by seconds, never more.
+      let bound: NodeJS.Timeout | undefined;
+      void Promise.race([
+        observe(),
+        new Promise<null>((resolve) => {
+          bound = setTimeout(() => resolve(null), 10_000);
+          bound.unref();
+        }),
+      ])
+        .then(
+          (value) => {
+            atTimeout = value;
+          },
+          () => undefined,
+        )
+        .finally(() => {
+          if (bound !== undefined) clearTimeout(bound);
+          kill();
+        });
     }, timeoutMs);
 
     child.stdout.on('data', (chunk: Buffer) => {
@@ -190,6 +283,8 @@ async function run(
     child.on('error', (error) => {
       clearTimeout(timer);
       throttle.release();
+      if (settled) return;
+      settled = true;
       reject(
         new NexaError({
           kind: 'CONFIGURATION',
@@ -202,18 +297,13 @@ async function run(
       );
     });
 
-    child.on('close', (code, signal) => {
+    child.on('close', (code, closeSignal) => {
       clearTimeout(timer);
       throttle.release();
+      if (settled) return;
+      settled = true;
       if (timedOut) {
-        reject(
-          new NexaError({
-            kind: 'INTERNAL',
-            code: PLATFORM_ERROR_CODES.BACKUP_TOOL_FAILED,
-            message: `"${command}" did not finish within ${timeoutMs}ms and was stopped.`,
-            details: { command, stderr: stderr.slice(0, 2000) },
-          }),
-        );
+        reject(timedOutError());
         return;
       }
       if (stdoutOverflowed) {
@@ -227,14 +317,25 @@ async function run(
         );
         return;
       }
-      resolve({ code, signal, stdout: Buffer.concat(stdoutChunks).toString('utf8'), stderr });
+      resolve({
+        code,
+        signal: closeSignal,
+        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+        stderr,
+      });
     });
   });
 }
 
 export interface PgToolsOptions {
   readonly databaseUrl: string;
+  /**
+   * The CEILING of the dump watchdog (`BACKUP_DUMP_TIMEOUT_MS`): each dump gets
+   * `dumpTimeoutFor` of the database's size, never more than this (`dump-watchdog.ts`).
+   */
   readonly dumpTimeoutMs: number;
+  /** `pg_dump --lock-wait-timeout`. Absent: `DUMP_LOCK_WAIT_TIMEOUT_MS`. A test seam. */
+  readonly dumpLockWaitTimeoutMs?: number | undefined;
   readonly restoreTimeoutMs: number;
   /** Where the tools live, when they are not on PATH. */
   readonly binDir?: string | undefined;
@@ -436,11 +537,19 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
    *
    * Read-only against the live database, and it takes no lock that blocks
    * writers — `pg_dump` runs in a repeatable-read snapshot.
+   *
+   * Under the dump watchdog (`dump-watchdog.ts`): a timeout sized from the database, a
+   * `--lock-wait-timeout`, its own `application_name`, and a process group killed whole.
    */
   async dump(
     destination: string,
     options: { readonly uncompressed?: boolean } = {},
   ): Promise<DumpOutcome> {
+    const databaseBytes = await this.databaseBytes();
+    const timeoutMs = dumpTimeoutFor({ databaseBytes, capMs: this.options.dumpTimeoutMs });
+    const lockWaitMs = this.options.dumpLockWaitTimeoutMs ?? DUMP_LOCK_WAIT_TIMEOUT_MS;
+    const applicationName = dumpApplicationName(randomBytes(4).toString('hex'));
+    let sessions: ReturnType<typeof parseDumpSessions> | null = null;
     const result = await run(
       this.bin('pg_dump'),
       [
@@ -455,16 +564,47 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
         '--no-owner',
         '--no-acl',
         ...excludeTableDataArgs(),
+        // Fail, with the table named, rather than wait behind an exclusive lock for ever.
+        `--lock-wait-timeout=${String(lockWaitMs)}`,
         '--file',
         destination,
         this.databaseName,
       ],
-      this.env(this.databaseName),
-      this.options.dumpTimeoutMs,
+      // `PGAPPNAME` names the dump's session, so the watchdog can find it.
+      { ...this.env(this.databaseName), PGAPPNAME: applicationName },
+      timeoutMs,
       this.lowPriority(),
-    );
+      {
+        processGroup: true,
+        beforeKill: async () => {
+          sessions = await this.psqlJson(dumpSessionSql(applicationName), parseDumpSessions);
+          return sessions;
+        },
+      },
+    ).catch((error: unknown) => {
+      if (error instanceof NexaError && error.details.timedOut === true) {
+        throw dumpTimedOut({
+          timeoutMs,
+          databaseBytes,
+          applicationName,
+          sessions,
+          stderr: typeof error.details.stderr === 'string' ? error.details.stderr : '',
+        });
+      }
+      throw error;
+    });
     if (killedBySignal(result.code, result.signal)) {
       throw toolOomKilled('pg_dump', result.code, result.signal);
+    }
+    const lockedRelations = result.code === 0 ? null : lockTimeoutRelations(result.stderr);
+    if (lockedRelations !== null) {
+      throw dumpLockTimedOut({
+        relations: lockedRelations,
+        holders: await this.psqlJson(lockHoldersSql(lockedRelations), parseLockHolders),
+        lockWaitMs,
+        exitCode: result.code,
+        stderr: result.stderr,
+      });
     }
     if (result.code !== 0) {
       throw new NexaError({
@@ -479,6 +619,33 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
       pgDumpVersion: await this.pgDumpVersion(),
       exclusions: manifestExclusions(),
     };
+  }
+
+  /** `pg_database_size` of the live database, or null when it cannot be read. */
+  private async databaseBytes(): Promise<number | null> {
+    const value = await this.psqlJson(DATABASE_SIZE_SQL, (stdout) =>
+      stdout.trim() === '' ? Number.NaN : Number(stdout.trim()),
+    );
+    return value !== null && Number.isFinite(value) && value >= 0 ? value : null;
+  }
+
+  /**
+   * One diagnostic query on the live database, its output parsed by `parse`; null on any
+   * failure. The watchdog's reads must never be what fails a run, or delays one by more than
+   * their own bound.
+   */
+  private async psqlJson<T>(command: string, parse: (stdout: string) => T): Promise<T | null> {
+    try {
+      const result = await run(
+        this.bin('psql'),
+        ['--no-psqlrc', '--quiet', '--tuples-only', '--no-align', '--command', command],
+        this.env(this.databaseName),
+        10_000,
+      );
+      return result.code === 0 ? parse(result.stdout) : null;
+    } catch {
+      return null;
+    }
   }
 
   // --- The restore primitives -------------------------------------------
