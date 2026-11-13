@@ -7,14 +7,17 @@
 #   dump    pg_dump --format=custom --compress=0 (the dump 7-Zip compresses; no gzip first)
 #   seal    7z a -t7z -m0=lzma2 -mx -md -mmt -ms=off -mhe=on, password on the command line (a
 #           measurement only: the pipeline sends it on stdin)
-#   verify  7z t, then pg_restore into a scratch database (VERIFY_DB, dropped afterwards)
+#   verify  7z t, then pg_restore into a scratch database (a scratch database with a unique name, created by
+#           this run and dropped by it; an existing database is never touched)
 #   deliver not measurable here (it is Telegram / S3 network time); printed as N/A
 # Each level is "mx:md:mmt", default the pipeline's levels. Needs python3 (peak RSS and CPU), 7z, pg_dump, pg_restore.
 # The scratch directory needs free space of about the database size plus the archive.
 set -euo pipefail
 
 : "${DATABASE_URL:?set DATABASE_URL to the database to dump}"
-VERIFY_DB="${VERIFY_DB:-nexa_measure_verify}"
+VERIFY_DB="nexa_measure_$(date +%s)_$$"
+CREATED_DB=""
+BASE_URL="${DATABASE_URL%/*}"
 LEVELS=("$@")
 if [ "${#LEVELS[@]}" -eq 0 ]; then LEVELS=("9:64m:1" "5:16m:4"); fi
 for tool in 7z pg_dump pg_restore psql python3; do
@@ -22,7 +25,13 @@ for tool in 7z pg_dump pg_restore psql python3; do
 done
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/nexa-backup-measure.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+cleanup() {
+  rm -rf "$WORK"
+  if [ -n "$CREATED_DB" ]; then
+    psql "$BASE_URL/postgres" -q -c "drop database if exists $CREATED_DB" || true
+  fi
+}
+trap cleanup EXIT
 now() { date +%s.%N; }
 secs() { awk -v a="$1" -v b="$2" 'BEGIN { printf "%.1f", b - a }'; }
 
@@ -55,10 +64,13 @@ PY
   7z t -pmeasure -bd -y -- "$WORK/out.7z" >/dev/null
   7z x -pmeasure -bd -y "-o$WORK/x" -- "$WORK/out.7z" >/dev/null
   psql "$DATABASE_URL" -qAt -c "select 1" >/dev/null
-  base="${DATABASE_URL%/*}"
-  psql "$base/postgres" -q -c "drop database if exists $VERIFY_DB" -c "create database $VERIFY_DB"
-  pg_restore --no-owner --exit-on-error --dbname="$base/$VERIFY_DB" "$WORK/x/dump.pgc"
-  psql "$base/postgres" -q -c "drop database $VERIFY_DB"
+  # No prior DROP: a name that already exists makes CREATE fail and the run stops.
+  psql "$BASE_URL/postgres" -q -c "create database $VERIFY_DB"
+  CREATED_DB="$VERIFY_DB"
+  pg_restore --no-owner --exit-on-error --dbname="$BASE_URL/$VERIFY_DB" "$WORK/x/dump.pgc"
+  psql "$BASE_URL/postgres" -q -c "drop database $VERIFY_DB"
+  CREATED_DB=""
+  VERIFY_DB="nexa_measure_$(date +%s)_$$_$RANDOM"
   rm -rf "$WORK/x"
   v1=$(now)
   printf '%-14s %9s %9d %11d %9s %9s\n' "$level" "$(secs "$s0" "$s1")" $((rss_kb / 1024)) "$size_mb" "$(secs "$v0" "$v1")" "$cpu"
