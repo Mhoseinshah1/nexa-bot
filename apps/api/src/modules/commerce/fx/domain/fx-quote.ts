@@ -263,3 +263,5 @@ export function decideQuote(
   }
   return { kind: 'NONE', reason: null, healthy: healthySources };
 }
+
+// CI measurement probe (draft PR, closed unmerged).
