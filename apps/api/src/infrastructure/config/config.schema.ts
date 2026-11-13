@@ -1049,6 +1049,18 @@ export const configSchema = z
       .max(60_000)
       .default(1_000),
     /**
+     * The least total time a RickPanel inventory page (a list page of up to 2000 rows) is
+     * given, whatever PANEL_HTTP_TIMEOUT_MS says: a page that large legitimately takes a
+     * while. A test affordance below 30000, refused in production — a panel that never
+     * answers would otherwise cost every attempt of a read its full 30 s.
+     */
+    RICKPANEL_INVENTORY_PAGE_TIMEOUT_FLOOR_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(600_000)
+      .default(30_000),
+    /**
      * Rows per list page the Web Admin's Mirza importer asks a RickPanel for: the reader's
      * 2000 maximum (`INVENTORY_MAX_PAGE_SIZE`), the load the owner asked for — a 138-page walk
      * at 100 becomes a 7-page one. The inventory reads have their own response cap sized for
@@ -1402,6 +1414,19 @@ export const configSchema = z
           'RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS below 250 is refused in production: a ' +
           "migration's inventory read would ask a live RickPanel more than four times a second. " +
           'Remove the setting (1000) or raise it.',
+      });
+    }
+
+    if (
+      config.NODE_ENV === 'production' &&
+      config.RICKPANEL_INVENTORY_PAGE_TIMEOUT_FLOOR_MS < 30_000
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['RICKPANEL_INVENTORY_PAGE_TIMEOUT_FLOOR_MS'],
+        message:
+          'RICKPANEL_INVENTORY_PAGE_TIMEOUT_FLOOR_MS below 30000 is refused in production: a ' +
+          'full inventory page is large and would be cut off mid-answer. Remove the setting.',
       });
     }
 

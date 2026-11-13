@@ -125,6 +125,11 @@ export function testConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): AppConfi
     // integration case that asks for it. A test that builds a PRODUCTION configuration gets
     // the production floor instead (250): the schema refuses less there, and must.
     RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS: overrides['NODE_ENV'] === 'production' ? '250' : '0',
+    // An inventory page the fake panel never answers is cut off after the client's timeout; the
+    // production floor (30 s) would cost every attempt of such a read 30 s of real time (150 s a
+    // read). A production configuration keeps the floor, which the schema enforces.
+    RICKPANEL_INVENTORY_PAGE_TIMEOUT_FLOOR_MS:
+      overrides['NODE_ENV'] === 'production' ? '30000' : '1000',
     ...overrides,
   });
 }
