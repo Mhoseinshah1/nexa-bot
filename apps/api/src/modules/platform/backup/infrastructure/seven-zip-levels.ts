@@ -109,7 +109,7 @@ export type AvailableMemoryReader = () => Promise<number | null>;
  * by its limit instead of refused or given a lighter level.
  */
 export const readMemAvailableMb: AvailableMemoryReader = async () => {
-  let host: number | null = null;
+  let host: number | null;
   try {
     host = parseMemAvailableMb(await readFile('/proc/meminfo', 'utf8'));
   } catch {
