@@ -7,6 +7,10 @@ import {
   BACKUP_DAILY_TIME_PATTERN,
   BACKUP_INTERVAL_MINUTES_MAX,
   BACKUP_INTERVAL_MINUTES_MIN,
+  BACKUP_PART_SIZE_MIB_DEFAULT,
+  BACKUP_PART_SIZE_MIB_MAX,
+  BACKUP_PART_SIZE_MIB_MIN,
+  BACKUP_PART_SIZE_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
   type BackupDeliveryDestination,
   type BackupScheduleSource,
@@ -132,6 +136,20 @@ export function BackupScheduleCard({
       ? BACKUP_ARCHIVE_KEEP_ON_HOST_DEFAULT
       : keepOnHostRow.value !== false;
   const [confirmKeepOff, setConfirmKeepOff] = useState(false);
+  // NEXA-BACKUP-DELIVERY: the split size, `backup.part_mb` (10–45 MiB).
+  const partSizeRow = all.find((row) => row.key === BACKUP_PART_SIZE_SETTING_KEY);
+  const partSize =
+    partSizeRow === undefined || typeof partSizeRow.value !== 'number'
+      ? BACKUP_PART_SIZE_MIB_DEFAULT
+      : partSizeRow.value;
+  const [partSizeText, setPartSizeText] = useState(String(partSize));
+  useEffect(() => setPartSizeText(String(partSize)), [partSize]);
+  const partSizeParsed = /^\d{1,3}$/.test(partSizeText.trim()) ? Number(partSizeText.trim()) : NaN;
+  const partSizeValid =
+    Number.isInteger(partSizeParsed) &&
+    partSizeParsed >= BACKUP_PART_SIZE_MIB_MIN &&
+    partSizeParsed <= BACKUP_PART_SIZE_MIB_MAX;
+  const partSizeChanged = partSizeValid && partSizeParsed !== partSize;
   const editable = mayEdit && enabledRow !== undefined && intervalRow !== undefined;
   const [dailyText, setDailyText] = useState(status.dailyTime ?? '');
   useEffect(() => setDailyText(status.dailyTime ?? ''), [status.dailyTime]);
@@ -165,6 +183,7 @@ export function BackupScheduleCard({
   const intervalKey = useSubmissionKey();
   const dailyKey = useSubmissionKey();
   const keepOnHostKey = useSubmissionKey();
+  const partSizeKey = useSubmissionKey();
   const keyFor = (settingKey: string) =>
     settingKey === BACKUP_SCHEDULE_SETTING_KEYS.enabled
       ? enabledKey
@@ -172,7 +191,9 @@ export function BackupScheduleCard({
         ? dailyKey
         : settingKey === BACKUP_ARCHIVE_KEEP_ON_HOST_SETTING_KEY
           ? keepOnHostKey
-          : intervalKey;
+          : settingKey === BACKUP_PART_SIZE_SETTING_KEY
+            ? partSizeKey
+            : intervalKey;
   const save = useMutation({
     mutationFn: (command: {
       key: string;
@@ -311,6 +332,47 @@ export function BackupScheduleCard({
           onCancel={() => setConfirmKeepOff(false)}
         />
       )}
+
+      {/* NEXA-BACKUP-DELIVERY: the size a large archive is split into for Telegram. */}
+      <form
+        className="stack"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (partSizeChanged) write(partSizeRow, partSizeParsed);
+        }}
+      >
+        <Field
+          label={t('web.backup_part_size')}
+          hint={t('web.backup_part_size_hint')}
+          htmlFor="backup-part-size"
+          {...(partSizeText.trim() === '' || partSizeValid
+            ? {}
+            : { error: t('web.backup_part_size_invalid') })}
+        >
+          <div className="field-row">
+            <Input
+              id="backup-part-size"
+              inputMode="numeric"
+              dir="ltr"
+              value={partSizeText}
+              disabled={!mayEdit || partSizeRow === undefined}
+              onChange={(event) => setPartSizeText(event.target.value)}
+            />
+            <span className="muted">{t('web.unit_mib')}</span>
+          </div>
+        </Field>
+        {mayEdit && partSizeRow !== undefined && (
+          <div className="btn-group">
+            <button
+              type="submit"
+              className="btn primary"
+              disabled={!partSizeChanged || save.isPending}
+            >
+              {t('web.backup_part_size_save')}
+            </button>
+          </div>
+        )}
+      </form>
 
       {editable && dailyRow !== undefined && (
         <form

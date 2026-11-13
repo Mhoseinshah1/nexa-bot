@@ -20,6 +20,7 @@ import {
 } from '../../access/application/authorized-mutation.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { BackupRunPartRow } from '../../backup/application/ports.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import type { LegacyCompactionRepository, LegacyCompactionRow } from './ports.js';
@@ -51,6 +52,11 @@ export interface LegacyCompactionServiceDeps {
   readonly ids: IdGenerator;
   readonly idempotency: IdempotencyStore;
   readonly scopeActivity: ScopeActivityReader;
+  /**
+   * NEXA-BACKUP-DELIVERY: the parts of the run's «آرشیو ربات قبلی» archive, so the card can
+   * say which part did not reach Telegram and why. Absent: none are shown.
+   */
+  readonly archiveParts?: (backupId: string) => Promise<readonly BackupRunPartRow[]>;
 }
 
 export class LegacyCompactionService {
@@ -59,7 +65,11 @@ export class LegacyCompactionService {
   async status(
     scope: TenantContext,
     actor: ActorContext,
-  ): Promise<{ available: boolean; run: LegacyCompactionRow | null }> {
+  ): Promise<{
+    available: boolean;
+    run: LegacyCompactionRow | null;
+    archiveParts: readonly BackupRunPartRow[];
+  }> {
     await this.authorize(scope, actor, VIEW_PERMISSION, 'legacy.compaction.status');
     const [readiness, run, completed] = await Promise.all([
       this.deps.repository.importReadiness(scope.tenantId),
@@ -67,10 +77,15 @@ export class LegacyCompactionService {
       this.deps.repository.completedExists(scope.tenantId),
     ]);
     const active = run !== null && run.state !== 'COMPLETED' && run.state !== 'FAILED';
+    const archiveParts =
+      run === null || run.archiveBackupId === null || this.deps.archiveParts === undefined
+        ? []
+        : await this.deps.archiveParts(run.archiveBackupId);
     return {
       available:
         readiness.completed && readiness.reconciled && !readiness.inFlight && !active && !completed,
       run,
+      archiveParts,
     };
   }
 

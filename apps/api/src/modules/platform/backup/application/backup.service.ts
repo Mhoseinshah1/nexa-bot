@@ -9,6 +9,7 @@ import {
   PLATFORM_ERROR_CODES,
   type BackupArchiveFormat,
   type BackupDeliveryDestination,
+  type BackupDeliveryReason,
   type BackupDeliveryState,
   type BackupManifest,
   type BackupPhaseDurationsMs,
@@ -17,6 +18,7 @@ import {
 } from '@nexa/contracts';
 import type { Clock, IdGenerator, OperationalEventRecorder, ScopeContext } from '@nexa/contracts';
 import type { DeliveryAttempt } from './ports.js';
+import { deliverPartsInOrder } from './backup-part-delivery.js';
 import {
   isBackupDeliveryRouter,
   type BackupArchivePart,
@@ -24,6 +26,7 @@ import {
   type BackupPartPlanner,
   type BackupRunPartStore,
   type BackupDelivery,
+  type BackupDeliveryChannel,
   type BackupDeliveryResolution,
   type BackupRunRepository,
   type BackupRunRow,
@@ -211,6 +214,37 @@ export interface BackupServiceDeps {
    * never changes the run's outcome, and nothing here ever removes the local archive.
    */
   readonly offsite?: OffsiteBackupUploader;
+  /**
+   * NEXA-BACKUP-DELIVERY: the pause between two sends of a part that did not arrive
+   * (`backup-part-delivery.ts`). Absent: a real timer. Tests pass one that advances a fake
+   * clock.
+   */
+  readonly sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * NEXA-BACKUP-DELIVERY: what a run kept on this server BY DESIGN records as its delivery
+ * detail — the owner's words — beside a `LOCAL_ONLY_*` reason the Web Admin renders. Never a
+ * failure: the caller asked the archive not to leave the host.
+ */
+export const BACKUP_LOCAL_ONLY_DETAIL: Readonly<
+  Record<'IMPORT' | 'SERVER_MOVE' | 'REQUESTED', string>
+> = {
+  IMPORT: 'طبق طراحی فقط روی سرور نگه داشته شد (بکاپ ایمپورت)',
+  SERVER_MOVE: 'طبق طراحی فقط روی سرور نگه داشته شد (عضو بستهٔ انتقال سرور)',
+  REQUESTED: 'طبق طراحی فقط روی سرور نگه داشته شد',
+};
+const LOCAL_ONLY_REASON: Readonly<
+  Record<'IMPORT' | 'SERVER_MOVE' | 'REQUESTED', BackupDeliveryReason>
+> = {
+  IMPORT: 'LOCAL_ONLY_IMPORT',
+  SERVER_MOVE: 'LOCAL_ONLY_SERVER_MOVE',
+  REQUESTED: 'LOCAL_ONLY_REQUESTED',
+};
+
+/** A real pause, for the composition root; tests inject their own. */
+export function realSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms).unref());
 }
 
 /**
@@ -251,6 +285,8 @@ const PARTIAL_CONDITION_KEY = 'backup.delivery_partial';
 interface DeliveryResult {
   readonly state: BackupDeliveryState;
   readonly detail: string | null;
+  /** Why, as a code (NEXA-BACKUP-DELIVERY); null when delivered. */
+  readonly reason: BackupDeliveryReason | null;
   readonly attemptedAt: Date | null;
   /** Parts Telegram answered `ok` for, with a message id. */
   readonly delivered: number;
@@ -333,6 +369,12 @@ export class BackupService {
      */
     options: {
       readonly deliver?: boolean;
+      /**
+       * NEXA-BACKUP-DELIVERY: WHY a `deliver: false` run stays here — recorded as its
+       * delivery reason (`LOCAL_ONLY_*`) and detail, so the Web Admin shows it as by design,
+       * never as a failed delivery. Absent: `REQUESTED`.
+       */
+      readonly localOnly?: 'IMPORT' | 'SERVER_MOVE';
       /**
        * E1: the headline the delivered parts and summary carry instead of «بکاپ» — the
        * one-time «آرشیو ربات قبلی» the legacy compaction takes before deleting anything.
@@ -452,6 +494,7 @@ export class BackupService {
     let deliveryState: BackupDeliveryState = 'NOT_ATTEMPTED';
     let deliveryAttemptedAt: Date | null = null;
     let deliveryDetail: string | null = null;
+    let deliveryReason: BackupDeliveryReason | null = null;
     let archiveFormat: BackupArchiveFormat | null = null;
     let partCount: number | null = null;
     let archiveSealId: string | null = null;
@@ -620,7 +663,8 @@ export class BackupService {
         options.deliver === false
           ? {
               state: 'NOT_ATTEMPTED',
-              detail: 'Kept on this server only: this run was asked not to leave it.',
+              detail: BACKUP_LOCAL_ONLY_DETAIL[options.localOnly ?? 'REQUESTED'],
+              reason: LOCAL_ONLY_REASON[options.localOnly ?? 'REQUESTED'],
               attemptedAt: null,
               delivered: 0,
               summaryState: null,
@@ -637,6 +681,7 @@ export class BackupService {
             });
       deliveryState = delivered.state;
       deliveryDetail = delivered.detail;
+      deliveryReason = delivered.reason;
       deliveryAttemptedAt = delivered.attemptedAt;
       summaryDeliveryState = delivered.summaryState;
       // Phase 6A D0: the off-site copy, after Telegram and inside the DELIVER stage. A run
@@ -711,6 +756,7 @@ export class BackupService {
         deliveryState,
         deliveryAttemptedAt,
         deliveryDetail,
+        deliveryReason,
         cleanupOk,
         cleanupDetail: cleanupOk ? null : leftovers.join(', '),
         archiveFormat,
@@ -804,6 +850,7 @@ export class BackupService {
         deliveryState,
         deliveryAttemptedAt,
         deliveryDetail,
+        deliveryReason,
         failureCode,
         failureMessage,
         cleanupOk: leftovers.length === 0,
@@ -925,11 +972,13 @@ export class BackupService {
    * Delivers the archive PART BY PART, and records what we actually learned (E4).
    *
    * Each part is its own `sendDocument` with its own outcome, recorded on its own row the
-   * moment it is known. The first part that is not `SUCCEEDED` STOPS the delivery: the
-   * parts after it stay `NOT_ATTEMPTED`, and nothing is resent — an `OUTCOME_UNKNOWN` part
-   * may be in the group, and a blind resend of it would be a second copy decided by a
-   * process that admits it does not know (ADR-0025). Only when every part arrived is the
-   * one summary message sent (a single part's caption already is the summary).
+   * moment it is known. A part whose answer was lost (`OUTCOME_UNKNOWN`) or that never
+   * connected is sent again, a bounded number of times with a pause between (NEXA-BACKUP-
+   * DELIVERY, `backup-part-delivery.ts`): Telegram gives a bot no way to check whether the
+   * first copy landed, and the owner's rule is that a part sent twice is acceptable and a
+   * part lost is not. A part that still did not arrive STOPS the delivery: the parts after
+   * it stay `NOT_ATTEMPTED`. Only when every part arrived is the one summary message sent
+   * (a single part's caption already is the summary).
    *
    * The run's delivery state is the aggregate: `SUCCEEDED` only when every part was; else
    * `OUTCOME_UNKNOWN` if the stopping part's outcome is unknown, else `FAILED_DEFINITIVE`.
@@ -961,6 +1010,7 @@ export class BackupService {
       return {
         state: 'FAILED_DEFINITIVE',
         detail: `The backup destination could not be resolved: ${messageOf(error)}`,
+        reason: 'DESTINATION_UNAVAILABLE',
         attemptedAt: this.deps.clock.now(),
         delivered: 0,
         summaryState: null,
@@ -970,6 +1020,7 @@ export class BackupService {
       return {
         state: 'NOT_ATTEMPTED',
         detail: 'No backup destination is configured.',
+        reason: 'NO_DESTINATION',
         attemptedAt: null,
         delivered: 0,
         summaryState: null,
@@ -980,6 +1031,7 @@ export class BackupService {
       return {
         state: 'FAILED_DEFINITIVE',
         detail: resolution.detail,
+        reason: 'DESTINATION_UNAVAILABLE',
         attemptedAt,
         delivered: 0,
         summaryState: null,
@@ -991,104 +1043,131 @@ export class BackupService {
     const takenAt = this.deps.formatTakenAt?.(created) ?? created.toISOString();
     const sevenZip = input.format === 'SEVEN_ZIP';
     const count = input.parts.length;
-    let delivered = 0;
-    let stopped: { state: BackupDeliveryState; detail: string | null } | null = null;
-    for (const part of input.parts) {
-      const at = this.deps.clock.now();
-      let attempt: DeliveryAttempt;
-      try {
-        const technical = backupPartCaption({
-          id: input.id,
-          takenAt,
-          partNumber: part.partNumber,
-          partCount: count,
-          filename: part.filename,
-          bytes: part.bytes,
-          sha256: part.sha256,
-          sevenZip,
-          totalBytes: input.archiveBytes,
-          dumpChecksum: input.manifest.checksum,
-          restoreCommand: this.deps.restoreCommand,
-          tableCount: input.tableCount,
-          postgresVersion: input.manifest.postgresVersion,
-          ...(input.title === undefined ? {} : { title: input.title }),
-        });
-        attempt = await channel.sendDocument({
-          archivePath: input.archivePath,
-          filename: part.filename,
-          caption:
-            count === 1 && input.title === undefined
-              ? await this.withRenderedHead(technical, input, part.filename)
-              : technical,
-          // One part is the whole file; several are ranges of it.
-          ...(count === 1 ? {} : { range: { start: part.start, end: part.end } }),
-        });
-      } catch (error) {
-        // A channel is built not to throw. If one did anyway, bytes may have left: that is
-        // precisely an outcome nobody observed, and it is recorded as one — never resent.
-        attempt = {
-          state: 'OUTCOME_UNKNOWN',
-          detail: `The delivery did not complete: ${messageOf(error)}`,
-        };
-      }
-      const messageId = attempt.state === 'SUCCEEDED' ? (attempt.messageId ?? null) : null;
-      await this.deps.runs.recordPartOutcome({
-        id: input.id,
-        leaseOwner: this.deps.leaseOwner,
-        partNumber: part.partNumber,
-        state: attempt.state,
-        attemptedAt: at,
-        messageId,
-        detail: attempt.detail,
-      });
-      if (attempt.state !== 'SUCCEEDED') {
-        stopped = { state: attempt.state, detail: attempt.detail };
-        break;
-      }
-      delivered += 1;
-    }
+    // NEXA-BACKUP-DELIVERY: in order, each part until it arrives or the rule says stop — an
+    // unanswered part is sent again a bounded number of times (`backup-part-delivery.ts`).
+    const pass = await deliverPartsInOrder(
+      {
+        backupId: input.id,
+        channel,
+        archivePath: input.archivePath,
+        whole: count === 1,
+        parts: input.parts.map((part) => ({ ...part, attemptsSoFar: 0 })),
+        caption: async (part, resend) => {
+          const planned = input.parts.find((one) => one.partNumber === part.partNumber);
+          const technical = backupPartCaption({
+            id: input.id,
+            takenAt,
+            partNumber: part.partNumber,
+            partCount: count,
+            filename: part.filename,
+            bytes: part.end - part.start,
+            sha256: planned?.sha256 ?? '',
+            sevenZip,
+            totalBytes: input.archiveBytes,
+            dumpChecksum: input.manifest.checksum,
+            restoreCommand: this.deps.restoreCommand,
+            tableCount: input.tableCount,
+            postgresVersion: input.manifest.postgresVersion,
+            resend,
+            ...(input.title === undefined ? {} : { title: input.title }),
+          });
+          return count === 1 && input.title === undefined && !resend
+            ? this.withRenderedHead(technical, input, part.filename)
+            : technical;
+        },
+        record: (outcome) =>
+          this.deps.runs.recordPartOutcome({
+            id: input.id,
+            leaseOwner: this.deps.leaseOwner,
+            partNumber: outcome.partNumber,
+            state: outcome.state,
+            attemptedAt: outcome.attemptedAt,
+            messageId: outcome.messageId,
+            detail: outcome.detail,
+            reason: outcome.reason,
+            attempts: outcome.attempts,
+          }),
+      },
+      { clock: this.deps.clock, sleep: this.deps.sleep ?? realSleep, logger: this.deps.logger },
+    );
+    const delivered = pass.delivered;
 
-    if (stopped !== null) {
+    if (pass.stopped !== null) {
+      const stopped = pass.stopped;
       return {
         state: stopped.state === 'OUTCOME_UNKNOWN' ? 'OUTCOME_UNKNOWN' : 'FAILED_DEFINITIVE',
         detail:
-          `${String(delivered)} of ${String(count)} part(s) delivered; part ${String(delivered + 1)}: ` +
+          `${String(delivered)} of ${String(count)} part(s) delivered; part ${String(stopped.partNumber)}: ` +
           (stopped.detail ?? stopped.state),
+        reason: stopped.reason ?? 'TRANSPORT_ERROR',
         attemptedAt,
         delivered,
         summaryState: null,
       };
     }
 
-    let summaryState: BackupDeliveryState | null = null;
-    let detail: string | null = count === 1 ? null : `All ${String(count)} parts delivered.`;
-    if (count > 1) {
-      let summary: DeliveryAttempt;
-      try {
-        summary = await channel.sendMessage(
-          backupSummaryMessage({
-            id: input.id,
-            takenAt,
-            totalBytes: input.archiveBytes,
-            parts: input.parts,
-            sevenZip,
-            dumpChecksum: input.manifest.checksum,
-            restoreInstruction: BACKUP_SEVEN_ZIP_RESTORE_INSTRUCTION,
-            restoreCommand: this.deps.restoreCommand,
-            ...(input.title === undefined ? {} : { title: input.title }),
-          }),
-        );
-      } catch (error) {
-        summary = { state: 'OUTCOME_UNKNOWN', detail: messageOf(error) };
-      }
-      summaryState = summary.state;
-      if (summary.state !== 'SUCCEEDED') {
-        // The parts are there and each carries its own digest; a missing summary is a
-        // note on the row, not a failed copy.
-        detail = `All ${String(count)} parts delivered; the summary message: ${summary.state}.`;
-      }
+    const summary = await this.sendSummary(channel, {
+      id: input.id,
+      takenAt,
+      totalBytes: input.archiveBytes,
+      parts: input.parts,
+      sevenZip,
+      dumpChecksum: input.manifest.checksum,
+      ...(input.title === undefined ? {} : { title: input.title }),
+    });
+    return { ...summary, reason: null, attemptedAt, delivered };
+  }
+
+  /**
+   * The ONE summary message once every part of a split archive arrived (E4); nothing for a
+   * single part, whose caption already is the summary. The parts are there and each carries
+   * its own digest, so a missing summary is a note on the row, not a failed copy. Shared
+   * with the re-delivery (`BackupRedelivery`).
+   */
+  async sendSummary(
+    channel: Pick<BackupDeliveryChannel, 'sendMessage'>,
+    input: {
+      readonly id: string;
+      readonly takenAt: string;
+      readonly totalBytes: number;
+      readonly parts: readonly { readonly filename: string; readonly sha256: string }[];
+      readonly sevenZip: boolean;
+      readonly dumpChecksum: string;
+      readonly title?: string;
+    },
+  ): Promise<{
+    readonly state: 'SUCCEEDED';
+    readonly detail: string | null;
+    readonly summaryState: BackupDeliveryState | null;
+  }> {
+    const count = input.parts.length;
+    if (count <= 1) return { state: 'SUCCEEDED', detail: null, summaryState: null };
+    let summary: DeliveryAttempt;
+    try {
+      summary = await channel.sendMessage(
+        backupSummaryMessage({
+          id: input.id,
+          takenAt: input.takenAt,
+          totalBytes: input.totalBytes,
+          parts: input.parts,
+          sevenZip: input.sevenZip,
+          dumpChecksum: input.dumpChecksum,
+          restoreInstruction: BACKUP_SEVEN_ZIP_RESTORE_INSTRUCTION,
+          restoreCommand: this.deps.restoreCommand,
+          ...(input.title === undefined ? {} : { title: input.title }),
+        }),
+      );
+    } catch (error) {
+      summary = { state: 'OUTCOME_UNKNOWN', detail: messageOf(error) };
     }
-    return { state: 'SUCCEEDED', detail, attemptedAt, delivered, summaryState };
+    return {
+      state: 'SUCCEEDED',
+      detail:
+        summary.state === 'SUCCEEDED'
+          ? `All ${String(count)} parts delivered.`
+          : `All ${String(count)} parts delivered; the summary message: ${summary.state}.`,
+      summaryState: summary.state,
+    };
   }
 
   /**
@@ -1130,8 +1209,8 @@ export class BackupService {
     return delivery.configured ? 'DEDICATED_CHAT' : 'NONE';
   }
 
-  /** A fixed channel is a degenerate router: itself, or nothing. */
-  private async resolveDelivery(): Promise<BackupDeliveryResolution> {
+  /** A fixed channel is a degenerate router: itself, or nothing. Shared with the re-delivery. */
+  async resolveDelivery(): Promise<BackupDeliveryResolution> {
     const { delivery } = this.deps;
     if (isBackupDeliveryRouter(delivery)) return delivery.resolve();
     return delivery.configured
@@ -1151,7 +1230,7 @@ export class BackupService {
    * Closed by a run that delivered, or that had no destination to deliver to —
    * the latter is a configuration the status card already shows, not a failure.
    */
-  private async reportDelivery(
+  async reportDelivery(
     id: string,
     state: BackupDeliveryState,
     delivered: number,

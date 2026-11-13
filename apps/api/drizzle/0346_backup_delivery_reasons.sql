@@ -1,0 +1,8 @@
+ALTER TABLE "backup_run_parts" ADD COLUMN "delivery_reason" text;--> statement-breakpoint
+ALTER TABLE "backup_run_parts" ADD COLUMN "delivery_attempts" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "backup_runs" ADD COLUMN "delivery_reason" text;--> statement-breakpoint
+ALTER TABLE "backup_runs" ADD COLUMN "redelivery_owner" text;--> statement-breakpoint
+ALTER TABLE "backup_runs" ADD COLUMN "redelivery_lease_until" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "backup_run_parts" ADD CONSTRAINT "backup_run_parts_delivery_reason_check" CHECK (delivery_reason IS NULL OR delivery_reason IN ('LOCAL_ONLY_IMPORT', 'LOCAL_ONLY_SERVER_MOVE', 'LOCAL_ONLY_REQUESTED', 'NO_DESTINATION', 'DESTINATION_UNAVAILABLE', 'ARCHIVE_UNREADABLE', 'CONNECT_FAILED', 'TELEGRAM_REFUSED', 'RATE_LIMITED', 'TELEGRAM_SERVER_ERROR', 'ANSWER_UNREADABLE', 'DEADLINE_EXCEEDED', 'CONNECTION_RESET', 'TRANSPORT_ERROR'));--> statement-breakpoint
+ALTER TABLE "backup_run_parts" ADD CONSTRAINT "backup_run_parts_delivery_attempts_check" CHECK (delivery_attempts >= 0);--> statement-breakpoint
+ALTER TABLE "backup_runs" ADD CONSTRAINT "backup_runs_delivery_reason_check" CHECK (delivery_reason IS NULL OR delivery_reason IN ('LOCAL_ONLY_IMPORT', 'LOCAL_ONLY_SERVER_MOVE', 'LOCAL_ONLY_REQUESTED', 'NO_DESTINATION', 'DESTINATION_UNAVAILABLE', 'ARCHIVE_UNREADABLE', 'CONNECT_FAILED', 'TELEGRAM_REFUSED', 'RATE_LIMITED', 'TELEGRAM_SERVER_ERROR', 'ANSWER_UNREADABLE', 'DEADLINE_EXCEEDED', 'CONNECTION_RESET', 'TRANSPORT_ERROR'));

@@ -72,6 +72,8 @@ describe('backup parts, the 7-Zip archive and local-copy retention (E4)', () => 
     const config = testConfig();
     let calls = 0;
     return new BackupService({
+      // NEXA-BACKUP-DELIVERY: a resend's pause never really waits in a test.
+      sleep: async () => {},
       runs: context.container.backupRuns,
       tools: new PostgresDatabaseTools({
         databaseUrl: config.DATABASE_URL,
@@ -258,8 +260,11 @@ describe('backup parts, the 7-Zip archive and local-copy retention (E4)', () => 
    */
   it('removes a local copy only after every part has a recorded message id', async () => {
     const full = await completedRun(16 * 1024);
+    // Part 2 stays unknown through its bounded resends (NEXA-BACKUP-DELIVERY).
     outcomes = [
       { state: 'SUCCEEDED', detail: null, messageId: 1 },
+      { state: 'OUTCOME_UNKNOWN', detail: 'HTTP 502' },
+      { state: 'OUTCOME_UNKNOWN', detail: 'HTTP 502' },
       { state: 'OUTCOME_UNKNOWN', detail: 'HTTP 502' },
     ];
     const partial = await completedRun(16 * 1024);

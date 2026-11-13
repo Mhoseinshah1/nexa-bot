@@ -25,6 +25,7 @@ import {
   type LegacyCompactionRun,
   type LegacyCompactionStatusResponse,
   runBackupRequestSchema,
+  redeliverBackupRequestSchema,
   setBackupArchivePasswordRequestSchema,
   uuidV7Schema,
   type BackupHistoryResponse,
@@ -36,12 +37,14 @@ import {
   type RecoveryListResponse,
   type RecoveryRequestSummary,
   type RunBackupResponse,
+  type RedeliverBackupResponse,
   type SetBackupArchivePasswordResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import type { BackupRunView } from '../../modules/platform/recovery/application/backup-admin.service.js';
+import type { BackupRunPartRow } from '../../modules/platform/backup/application/ports.js';
 import type { RecoveryRequestRow } from '../../modules/platform/recovery/application/ports.js';
 import type { LegacyCompactionRow } from '../../modules/platform/legacy-compaction/application/ports.js';
 
@@ -179,6 +182,19 @@ export class RecoveryController {
     return { run: toRunSummary(await this.container.backupAdmin.detail(scope, actor, id)) };
   }
 
+  /** «ارسال دوبارهٔ بخش‌های نرسیده» (NEXA-BACKUP-DELIVERY). `backup.run`, checked by the service. */
+  @Post('backups/:id/redeliver')
+  async redeliverBackup(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<RedeliverBackupResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const command = redeliverBackupRequestSchema.parse(body);
+    const outcome = await this.container.backupAdmin.redeliver(scope, actor, id, command);
+    return { outcome: outcome.outcome, run: toRunSummary(outcome.run) };
+  }
+
   @Post(BACKUP_ROUTES.run)
   async runBackup(
     @Req() request: FastifyRequest,
@@ -251,7 +267,7 @@ export class RecoveryController {
     const status = await this.container.legacyCompaction.status(scope, actor);
     return {
       available: status.available,
-      run: status.run === null ? null : toCompactionRun(status.run),
+      run: status.run === null ? null : toCompactionRun(status.run, status.archiveParts),
     };
   }
 
@@ -548,6 +564,9 @@ function toRunSummary(view: BackupRunView): BackupRunSummary {
      * `opslog.view` is the permission that governs it.
      */
     deliveryDetailPresent: run.deliveryDetail !== null,
+    // The CODE of why, never the detail (NEXA-BACKUP-DELIVERY): `LOCAL_ONLY_*` is by design.
+    deliveryReason: run.deliveryReason ?? null,
+    redeliverable: view.redeliverable,
     failureCode: run.failureCode,
     cleanupOk: run.cleanupOk,
     /*
@@ -570,6 +589,8 @@ function toRunSummary(view: BackupRunView): BackupRunSummary {
       bytes: String(part.bytes),
       sha256: part.sha256,
       deliveryState: part.deliveryState,
+      deliveryReason: part.deliveryReason ?? null,
+      attempts: part.deliveryAttempts ?? 0,
     })),
     summaryDeliveryState: run.summaryDeliveryState,
     phaseDurationsMs: run.phaseDurationsMs,
@@ -577,7 +598,10 @@ function toRunSummary(view: BackupRunView): BackupRunSummary {
 }
 
 /** A compaction run as JSON: counts and sizes, never a record value. */
-function toCompactionRun(row: LegacyCompactionRow): LegacyCompactionRun {
+function toCompactionRun(
+  row: LegacyCompactionRow,
+  archiveParts: readonly BackupRunPartRow[] = [],
+): LegacyCompactionRun {
   return {
     id: row.id,
     state: row.state,
@@ -586,6 +610,13 @@ function toCompactionRun(row: LegacyCompactionRow): LegacyCompactionRun {
     requestedBy: row.requestedByLabel,
     updatedAt: row.updatedAt.toISOString(),
     archiveBackupId: row.archiveBackupId,
+    // Which part of the archive did not reach Telegram, and why — codes, never the detail.
+    archiveParts: archiveParts.map((part) => ({
+      partNumber: part.partNumber,
+      deliveryState: part.deliveryState,
+      deliveryReason: part.deliveryReason ?? null,
+      attempts: part.deliveryAttempts ?? 0,
+    })),
     deleted: Number(row.deleted),
     deduplicated: Number(row.deduplicated),
     stripped: Number(row.stripped),

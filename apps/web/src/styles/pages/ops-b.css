@@ -1740,3 +1740,19 @@ form.set-row > * + * {
   background: var(--bg-3);
   font-size: var(--fs-ui);
 }
+
+/*
+ * NEXA-BACKUP-DELIVERY: a run's parts in the history's delivery cell and on the legacy
+ * compaction card — one line per part, its badge, reason and send count.
+ */
+.backup-parts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.backup-part {
+  line-height: 1.6;
+}

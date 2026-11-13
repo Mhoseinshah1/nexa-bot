@@ -30,6 +30,17 @@ import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js'
 // The executor: the worker's half (its own file: the service has no loop)
 // ---------------------------------------------------------------------------
 
+/**
+ * THE GATE (unchanged by NEXA-BACKUP-DELIVERY): the archive left the host only when it has
+ * parts and EVERY one of them is SUCCEEDED with a recorded Telegram message id.
+ */
+export function archiveDelivered(parts: readonly BackupRunPartRow[]): boolean {
+  return (
+    parts.length > 0 &&
+    parts.every((part) => part.deliveryState === 'SUCCEEDED' && part.telegramMessageId !== null)
+  );
+}
+
 export interface LegacyCompactionExecutorDeps {
   readonly repository: LegacyCompactionRepository;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -42,6 +53,18 @@ export interface LegacyCompactionExecutorDeps {
     run(trigger: 'MANUAL', options: { readonly title: string }): Promise<BackupOutcome>;
   };
   readonly backupParts: (backupId: string) => Promise<readonly BackupRunPartRow[]>;
+  /**
+   * NEXA-BACKUP-DELIVERY: sends the archive's parts that did not arrive again — the same
+   * bounded, in-order resend the pipeline uses (`BackupRedelivery`) — before the gate is
+   * applied a second time. No new send starts after `deadline`. Absent: the gate is applied
+   * once, as before. Never loosens the gate: only a part with a Telegram message id counts.
+   */
+  readonly redeliverArchive?: (
+    backupId: string,
+    options: { readonly deadline: Date; readonly title: string },
+  ) => Promise<unknown>;
+  /** How long the compaction keeps re-delivering its archive before it fails. Default 30 min. */
+  readonly archiveRedeliveryWindowMs?: number;
   readonly quiesced: () => Promise<boolean>;
   readonly actor: () => ActorContext;
   readonly leaseOwner: string;
@@ -67,6 +90,8 @@ export interface LegacyCompactionExecutorDeps {
 const LEASE_STALE_MS = 15 * 60_000;
 const HEARTBEAT_MS = 60_000;
 const MAX_STEP_ATTEMPTS = 3;
+/** NEXA-BACKUP-DELIVERY: the bound on re-delivering the archive before the gate fails. */
+const ARCHIVE_REDELIVERY_WINDOW_MS = 30 * 60_000;
 
 /**
  * Runs a REQUESTED compaction to the end, stage by stage, resumable at every batch.
@@ -276,12 +301,30 @@ export class LegacyCompactionExecutor {
           }
         }
         // THE GATE: every part has a recorded Telegram message id.
-        const parts = await this.deps.backupParts(backupId);
-        const delivered =
-          parts.length > 0 &&
-          parts.every(
-            (part) => part.deliveryState === 'SUCCEEDED' && part.telegramMessageId !== null,
+        let parts = await this.deps.backupParts(backupId);
+        let delivered = archiveDelivered(parts);
+        const redeliver = this.deps.redeliverArchive;
+        if (!delivered && parts.length > 0 && redeliver !== undefined) {
+          // NEXA-BACKUP-DELIVERY: the parts that did not arrive are sent again — bounded in
+          // time — and then the SAME gate decides. A failure to re-deliver is the gate's
+          // failure, never a reason to pass it.
+          const archiveId = backupId;
+          const deadline = new Date(
+            now().getTime() + (this.deps.archiveRedeliveryWindowMs ?? ARCHIVE_REDELIVERY_WINDOW_MS),
           );
+          try {
+            await this.heartbeating(run, () =>
+              redeliver(archiveId, { deadline, title: LEGACY_COMPACTION_ARCHIVE_TITLE }),
+            );
+          } catch (error) {
+            this.deps.logger.warn(
+              { compactionId: run.id, backupId: archiveId, err: errorDiagnostics(error) },
+              'the legacy archive could not be re-delivered',
+            );
+          }
+          parts = await this.deps.backupParts(archiveId);
+          delivered = archiveDelivered(parts);
+        }
         if (!delivered) {
           await this.fail(run, 'legacy_compaction.archive_not_delivered', backupId);
           return 'NEXT';

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   NexaError,
   PLATFORM_ERROR_CODES,
+  type BackupDeliveryReason,
   type BackupDeliveryState,
   type BackupManifest,
   type BackupStage,
@@ -88,6 +89,8 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
     attemptedAt: Date;
     messageId: number | null;
     detail: string | null;
+    reason?: BackupDeliveryReason | null;
+    attempts?: number;
   }): Promise<void> {
     this.writes.push(`part:${String(input.partNumber)}:${input.state}`);
     const key = `${input.id}:${String(input.partNumber)}`;
@@ -99,6 +102,8 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
       deliveryAttemptedAt: input.attemptedAt,
       telegramMessageId: input.messageId === null ? null : BigInt(input.messageId),
       deliveryDetail: input.detail,
+      deliveryReason: input.reason ?? null,
+      deliveryAttempts: input.attempts ?? row.deliveryAttempts ?? 0,
     });
   }
 
@@ -199,6 +204,7 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
     deliveryState: BackupDeliveryState;
     deliveryAttemptedAt?: Date | null;
     deliveryDetail?: string | null;
+    deliveryReason?: BackupDeliveryReason | null;
     failureCode?: string | null;
     failureMessage?: string | null;
     cleanupOk: boolean;
@@ -224,6 +230,7 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
       deliveryState: input.deliveryState,
       deliveryAttemptedAt: input.deliveryAttemptedAt ?? null,
       deliveryDetail: input.deliveryDetail ?? null,
+      deliveryReason: input.deliveryReason ?? null,
       failureCode: input.failureCode ?? null,
       failureMessage: input.failureMessage ?? null,
       cleanupOk: input.cleanupOk,
@@ -348,6 +355,8 @@ interface Harness {
     sealError: Error | null;
     /** Real milliseconds the dump takes, so the lease heartbeat has time to fire. */
     dumpRealMs: number;
+    /** NEXA-BACKUP-DELIVERY: every pause between two sends of a part, in ms (fake clock). */
+    sleeps: number[];
   };
 }
 
@@ -403,6 +412,7 @@ function harness(
     dumps: 0,
     sealError: null,
     dumpRealMs: 0,
+    sleeps: [],
   };
 
   const workspace: BackupWorkspace = {
@@ -516,6 +526,11 @@ function harness(
       },
     },
     ...(options.renderCaption === undefined ? {} : { renderCaption: options.renderCaption }),
+    // The pause between two sends of a part advances the fake clock; it never waits.
+    async sleep(ms) {
+      state.sleeps.push(ms);
+      clock.advance(ms);
+    },
     clock,
     ids: {
       uuid: () => `run-${String(++counter)}`,
@@ -640,6 +655,37 @@ describe('the backup pipeline', () => {
     // Without the option, the same harness delivers: the difference is the option.
     const delivered = await completed(harness());
     expect(delivered.deliveryState).toBe('SUCCEEDED');
+  });
+
+  /*
+   * NEXA-BACKUP-DELIVERY: the owner's 196 MB post-import backup read NOT_ATTEMPTED in every
+   * part, which looked like a failed delivery. It is by design — a Mirza restore sends nothing
+   * to Telegram — and is now recorded as exactly that, and still never sent.
+   */
+  it('an import backup (deliver: false) is recorded as kept by design and is never sent', async () => {
+    const h = harness();
+    h.state.archiveBytes = 100 * 1024 * 1024;
+    const outcome = await h.service.run('MANUAL', { deliver: false, localOnly: 'IMPORT' });
+    if (outcome.kind !== 'COMPLETED') throw new Error('expected the run to complete');
+    const run = outcome.run;
+    expect(run.state).toBe('SUCCEEDED');
+    expect(run.deliveryState).toBe('NOT_ATTEMPTED');
+    expect(run.deliveryReason).toBe('LOCAL_ONLY_IMPORT');
+    expect(run.deliveryDetail).toBe('طبق طراحی فقط روی سرور نگه داشته شد (بکاپ ایمپورت)');
+    expect(h.state.documents).toHaveLength(0);
+    expect(h.state.deliveredMessage).toBeNull();
+    // Its parts are planned (the archive is split as any other) and none was sent.
+    const parts = await h.runs.parts(run.id);
+    expect(parts).toHaveLength(3);
+    expect(parts.every((part) => part.deliveryState === 'NOT_ATTEMPTED')).toBe(true);
+    // A server-move member says so in its own words.
+    const move = await harness().service.run('MOVE', {
+      deliver: false,
+      localOnly: 'SERVER_MOVE',
+      sealPassword: 'a one-time bundle password',
+    });
+    if (move.kind !== 'COMPLETED') throw new Error('expected the run to complete');
+    expect(move.run.deliveryReason).toBe('LOCAL_ONLY_SERVER_MOVE');
   });
 
   it('deliver: false announces nothing and leaves the delivery condition alone (review M2)', async () => {
@@ -794,17 +840,29 @@ describe('the backup pipeline', () => {
     expect(run.deliveryDetail).toContain('chat not found');
   });
 
-  it('records an unobserved delivery as unknown and resends nothing', async () => {
+  it('records an unobserved delivery as unknown after a bounded number of resends', async () => {
     const h = harness();
-    h.state.delivery = { state: 'OUTCOME_UNKNOWN', detail: 'The request did not complete' };
+    h.state.delivery = {
+      state: 'OUTCOME_UNKNOWN',
+      reason: 'CONNECTION_RESET',
+      detail: 'The request did not complete: read ECONNRESET (ECONNRESET)',
+    };
 
     const run = await completed(h);
     expect(run.state).toBe('SUCCEEDED');
     expect(run.deliveryState).toBe('OUTCOME_UNKNOWN');
     expect(run.deliveryAttemptedAt).not.toBeNull();
-    // Exactly one attempt. The state exists because the system does not know
-    // enough to decide; a resend would be deciding.
-    expect(h.state.deliveredDocument).not.toBeNull();
+    // NEXA-BACKUP-DELIVERY: sent three times (sent twice is acceptable, lost is not), with
+    // the backoff between, and then left as what it is — unknown, with its real reason.
+    expect(h.state.documents).toHaveLength(3);
+    expect(h.state.sleeps).toEqual([30_000, 120_000]);
+    expect(h.state.documents[1]?.caption).toContain('ارسال دوباره');
+    expect(h.state.documents[0]?.caption).not.toContain('ارسال دوباره');
+    expect(run.deliveryReason).toBe('CONNECTION_RESET');
+    expect(run.deliveryDetail).toContain('ECONNRESET');
+    const [part] = await h.runs.parts(run.id);
+    expect(part?.deliveryAttempts).toBe(3);
+    expect(part?.deliveryReason).toBe('CONNECTION_RESET');
     expect(await h.runs.withUnknownDelivery()).toHaveLength(1);
   });
 
@@ -877,19 +935,32 @@ describe('the backup pipeline', () => {
       expect(run.summaryDeliveryState).toBeNull();
     });
 
-    it('stops at an unknown part: never resends it, never sends the rest, reports PARTIAL in ERRORS', async () => {
+    it('stops at a part that stays unknown after its resends, never sends the rest, reports PARTIAL in ERRORS', async () => {
       const h = harness();
       h.state.archiveBytes = 100 * MiB;
+      const unknown = {
+        state: 'OUTCOME_UNKNOWN',
+        reason: 'TELEGRAM_SERVER_ERROR',
+        detail: 'HTTP 502',
+      } as const;
       h.state.documentOutcomes = [
         { state: 'SUCCEEDED', detail: null, messageId: 21 },
-        { state: 'OUTCOME_UNKNOWN', detail: 'HTTP 502' },
+        unknown,
+        unknown,
+        unknown,
         { state: 'SUCCEEDED', detail: null, messageId: 23 },
       ];
       const run = await completed(h);
       expect(run.state).toBe('SUCCEEDED');
       expect(run.deliveryState).toBe('OUTCOME_UNKNOWN');
-      // Exactly two attempts: the unknown part once, and nothing after it.
-      expect(h.state.documents).toHaveLength(2);
+      // Part 1 once, part 2 three times (bounded), and nothing after it: parts go in order.
+      expect(h.state.documents).toHaveLength(4);
+      expect(h.state.documents.map((doc) => doc.filename.slice(-4))).toEqual([
+        '.001',
+        '.002',
+        '.002',
+        '.002',
+      ]);
       expect(h.state.deliveredMessage).toBeNull();
       const parts = await h.runs.parts(run.id);
       expect(parts.map((part) => part.deliveryState)).toEqual([
@@ -917,14 +988,14 @@ describe('the backup pipeline', () => {
       expect(codes).not.toContain('backup.delivery_partial');
     });
 
-    it('a channel that THROWS mid-delivery is an unknown part, recorded and never resent', async () => {
+    it('a channel that THROWS mid-delivery is an unknown part, recorded and resent within bounds', async () => {
       let calls = 0;
       const h = harness({
         delivery: {
           configured: true,
           async sendDocument() {
             calls += 1;
-            if (calls === 2) throw new Error('socket hang up');
+            if (calls >= 2) throw new Error('socket hang up');
             return { state: 'SUCCEEDED', detail: null, messageId: calls };
           },
           async sendMessage() {
@@ -934,10 +1005,12 @@ describe('the backup pipeline', () => {
       });
       h.state.archiveBytes = 100 * MiB;
       const run = await completed(h);
-      expect(calls).toBe(2);
+      // Part 1, then part 2 three times; part 3 never.
+      expect(calls).toBe(4);
       expect(run.deliveryState).toBe('OUTCOME_UNKNOWN');
       const parts = await h.runs.parts(run.id);
       expect(parts[1]?.deliveryState).toBe('OUTCOME_UNKNOWN');
+      expect(parts[2]?.deliveryState).toBe('NOT_ATTEMPTED');
     });
 
     it('a full delivery closes an open partial-delivery condition', async () => {
@@ -993,7 +1066,7 @@ describe('the backup pipeline', () => {
       expect(h.state.everythingRemoved).toBe(false);
     });
 
-    it('records a channel that throws as an unobserved outcome, never resent', async () => {
+    it('records a channel that throws as an unobserved outcome, resent a bounded number of times', async () => {
       let sends = 0;
       const h = harness({
         delivery: router(async () => ({
@@ -1014,7 +1087,7 @@ describe('the backup pipeline', () => {
       const run = await completed(h);
       expect(run.state).toBe('SUCCEEDED');
       expect(run.deliveryState).toBe('OUTCOME_UNKNOWN');
-      expect(sends).toBe(1);
+      expect(sends).toBe(3);
       expect(await h.runs.withUnknownDelivery()).toHaveLength(1);
     });
 

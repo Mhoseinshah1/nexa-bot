@@ -62,6 +62,13 @@ export function mebibytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} مگ`;
 }
 
+/**
+ * The line a RESENT part carries (NEXA-BACKUP-DELIVERY): its first send's answer was lost, so
+ * the group may hold it twice — byte-identical, the same SHA-256 — and either copy will do.
+ */
+export const BACKUP_RESEND_NOTE =
+  '🔁 ارسال دوباره: اگر این بخش دو بار در گروه هست، هر دو یکسان‌اند (همان SHA-256)؛ یکی کافی است.';
+
 /** What one part of a backup is captioned with (E4). Its OWN SHA-256 travels with it. */
 export function backupPartCaption(input: {
   readonly id: string;
@@ -80,8 +87,14 @@ export function backupPartCaption(input: {
   readonly postgresVersion: string;
   /** The headline instead of «بکاپ» (E1's «آرشیو ربات قبلی»). */
   readonly title?: string;
+  /**
+   * NEXA-BACKUP-DELIVERY: this part was sent before and its answer was lost, so the group may
+   * hold it twice. Said in the caption, so two copies are never mistaken for two backups.
+   */
+  readonly resend?: boolean;
 }): string {
   const title = input.title ?? 'بکاپ';
+  const resent = input.resend === true ? [BACKUP_RESEND_NOTE] : [];
   if (input.partCount === 1) {
     // One file: the caption IS the summary (L31), so no second message is posted.
     return [
@@ -89,6 +102,7 @@ export function backupPartCaption(input: {
       `📦 ${input.filename} · ${mebibytes(input.bytes)}`,
       '✅ رمزگذاری و بازیابی آزمایشی موفق',
       ...(input.sevenZip ? ['🔐 با 7-Zip و رمز بکاپ باز می‌شود.'] : []),
+      ...resent,
       '',
       `Backup: ${input.id}`,
       `PostgreSQL ${input.postgresVersion}; verified: restored into an empty database, ${String(input.tableCount)} tables`,
@@ -100,6 +114,37 @@ export function backupPartCaption(input: {
   return [
     `💾 ${title} — ${input.takenAt} — بخش ${String(input.partNumber)} از ${String(input.partCount)}`,
     `📦 ${input.filename} · ${mebibytes(input.bytes)}`,
+    ...resent,
+    '',
+    `Backup: ${input.id}`,
+    `Part: ${String(input.partNumber)}/${String(input.partCount)}`,
+    `SHA-256: ${input.sha256}`,
+  ].join('\n');
+}
+
+/**
+ * The caption of a part sent by a RE-delivery of a finished run (NEXA-BACKUP-DELIVERY): the
+ * part's identity and its own SHA-256, which is all a restore matches on. The verification
+ * facts the run's own first caption carried are on the run row, not repeated here.
+ */
+export function backupRedeliveredPartCaption(input: {
+  readonly id: string;
+  readonly takenAt: string;
+  readonly partNumber: number;
+  readonly partCount: number;
+  readonly filename: string;
+  readonly bytes: number;
+  readonly sha256: string;
+  readonly title?: string;
+  readonly resend: boolean;
+}): string {
+  const where =
+    input.partCount === 1 ? '' : ` — بخش ${String(input.partNumber)} از ${String(input.partCount)}`;
+  return [
+    `💾 ${input.title ?? 'بکاپ'} — ${input.takenAt}${where}`,
+    `📦 ${input.filename} · ${mebibytes(input.bytes)}`,
+    '✅ رمزگذاری و بازیابی آزمایشی موفق',
+    ...(input.resend ? [BACKUP_RESEND_NOTE] : []),
     '',
     `Backup: ${input.id}`,
     `Part: ${String(input.partNumber)}/${String(input.partCount)}`,

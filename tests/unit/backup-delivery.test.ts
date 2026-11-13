@@ -2,7 +2,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createServer as createNetServer } from 'node:net';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TelegramBackupDelivery } from '../../apps/api/src/modules/platform/backup/infrastructure/telegram-backup-delivery';
 
 /**
@@ -354,5 +355,133 @@ describe('backup delivery to Telegram', () => {
       caption: 'c',
     });
     expect(unknown.state).toBe('OUTCOME_UNKNOWN');
+  });
+  /*
+   * NEXA-BACKUP-DELIVERY. The owner's 197 MB archive: part 1 (45 MB) ended «The request did
+   * not complete: fetch failed» — `fetch`'s bundled undici cut the request at its own 300 s
+   * headers/body timeout, under a 10-minute BACKUP_DELIVERY_TIMEOUT_MS, and the cause was
+   * thrown away. These pin the transport that replaced it.
+   */
+  describe('the real cause, and no hidden timer (NEXA-BACKUP-DELIVERY)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('waits past 300 s for a slow Telegram, up to BACKUP_DELIVERY_TIMEOUT_MS only', async () => {
+      // Telegram reads the whole upload, then takes its time storing the file.
+      let answer: (() => void) | null = null;
+      handler = (request, response) => {
+        request.resume();
+        request.on('end', () => {
+          answer = () => {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ ok: true, result: { message_id: 77 } }));
+          };
+        });
+      };
+      // The clock is fake for timers only: sockets and the file stream run for real.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      let settled = false;
+      const pending = delivery({ timeoutMs: 600_000 })
+        .sendDocument({ archivePath, filename: 'b.7z.001', caption: 'part 1' })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await vi.waitFor(() => expect(answer).not.toBeNull(), { timeout: 5_000 });
+      // Five minutes and one second with no answer: undici's default would have given up.
+      await vi.advanceTimersByTimeAsync(301_000);
+      expect(settled).toBe(false);
+      answer!();
+      await expect(pending).resolves.toEqual({ state: 'SUCCEEDED', detail: null, messageId: 77 });
+    });
+
+    it('gives up at its own deadline, says which one, and calls it unknown', async () => {
+      handler = (request) => {
+        request.resume();
+      };
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const pending = delivery({ timeoutMs: 600_000 }).sendDocument({
+        archivePath,
+        filename: 'b.nxb',
+        caption: 'c',
+      });
+      await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: 5_000 });
+      await vi.advanceTimersByTimeAsync(600_001);
+      const result = await pending;
+      expect(result).toMatchObject({ state: 'OUTCOME_UNKNOWN', reason: 'DEADLINE_EXCEEDED' });
+      expect(result.detail).toContain('BACKUP_DELIVERY_TIMEOUT_MS');
+      expect(result.detail).toContain('600 s');
+    });
+
+    it('records a connection reset mid-upload with its code, never a bare «fetch failed»', async () => {
+      // A part big enough that the reset lands while the body is still being written.
+      await writeFile(archivePath, Buffer.alloc(8 * 1024 * 1024, 7));
+      handler = (request) => {
+        let seen = 0;
+        request.on('data', (chunk: Buffer) => {
+          seen += chunk.length;
+          if (seen > 256 * 1024) request.socket.destroy();
+        });
+      };
+      const result = await send();
+      expect(result.state).toBe('OUTCOME_UNKNOWN');
+      expect(result).toMatchObject({ reason: 'CONNECTION_RESET' });
+      expect(result.detail).toMatch(/ECONNRESET|EPIPE/);
+      expect(result.detail).toMatch(/bytes written/);
+      expect(result.detail).not.toContain('fetch failed');
+      expect(result.detail).not.toContain(TOKEN);
+    });
+
+    it('calls a refused connection definitive: not one byte reached Telegram', async () => {
+      const closed = createNetServer();
+      await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
+      const address = closed.address();
+      if (address === null || typeof address === 'string') throw new Error('no address');
+      await new Promise<void>((resolve) => closed.close(() => resolve()));
+      const result = await new TelegramBackupDelivery({
+        apiBaseUrl: `http://127.0.0.1:${String(address.port)}`,
+        token: TOKEN,
+        chatId: '-100',
+        timeoutMs: 5_000,
+      }).sendDocument({ archivePath, filename: 'b.nxb', caption: 'c' });
+      expect(result).toMatchObject({ state: 'FAILED_DEFINITIVE', reason: 'CONNECT_FAILED' });
+      expect(result.detail).toContain('ECONNREFUSED');
+    });
+
+    it("streams the part with an exact Content-Length, and reads Telegram's retry_after", async () => {
+      await writeFile(archivePath, Buffer.alloc(3 * 1024 * 1024, 1));
+      let length = '';
+      let received = 0;
+      handler = (request, response) => {
+        length = String(request.headers['content-length']);
+        request.on('data', (chunk: Buffer) => {
+          received += chunk.length;
+        });
+        request.on('end', () => {
+          response.writeHead(429, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              description: 'Too Many Requests',
+              parameters: { retry_after: 42 },
+            }),
+          );
+        });
+      };
+      const result = await delivery().sendDocument({
+        archivePath,
+        filename: 'b.7z.002',
+        caption: 'part 2',
+        range: { start: 1024 * 1024, end: 3 * 1024 * 1024 },
+      });
+      expect(Number(length)).toBe(received);
+      expect(received).toBeGreaterThan(2 * 1024 * 1024);
+      expect(result).toMatchObject({
+        state: 'OUTCOME_UNKNOWN',
+        reason: 'RATE_LIMITED',
+        retryAfterMs: 42_000,
+      });
+    });
   });
 });

@@ -21,6 +21,7 @@ import { sql } from 'drizzle-orm';
 import {
   BACKUP_ARCHIVE_FORMATS,
   BACKUP_ARCHIVE_SCOPES,
+  BACKUP_DELIVERY_REASONS,
   BACKUP_DELIVERY_STATES,
   BACKUP_RUN_STATES,
   BACKUP_STAGES,
@@ -112,6 +113,22 @@ export const backupRuns = pgTable(
     deliveryAttemptedAt: timestamptz('delivery_attempted_at'),
     /** Redacted operator-facing detail. Never a token, never a chat payload. */
     deliveryDetail: text('delivery_detail'),
+    /**
+     * NEXA-BACKUP-DELIVERY: WHY the delivery ended where it did, as a code from
+     * `BACKUP_DELIVERY_REASONS` — what the Web Admin renders, since the detail stays out of
+     * every response. `LOCAL_ONLY_*` is a run kept on this server by design. Null when
+     * delivered, and on every run before this column.
+     */
+    deliveryReason: text('delivery_reason'),
+    /**
+     * NEXA-BACKUP-DELIVERY: the lease of a RE-delivery of this finished run's undelivered
+     * parts («ارسال دوبارهٔ بخش‌های نرسیده», the legacy compaction's retry). A conditional
+     * claim (`redelivery_lease_until` null or past), so two presses, or a press and the
+     * compaction, never send the same part at once. Not the run's own lease: that one guards
+     * a RUNNING run, and a re-delivery only ever touches a finished one.
+     */
+    redeliveryOwner: text('redelivery_owner'),
+    redeliveryLeaseUntil: timestamptz('redelivery_lease_until'),
 
     /** Set on FAILED. The stage is in `stage`; this says what went wrong. */
     failureCode: text('failure_code'),
@@ -183,6 +200,10 @@ export const backupRuns = pgTable(
     check('backup_runs_state_check', enumCheck('state', BACKUP_RUN_STATES)),
     check('backup_runs_stage_check', enumCheck('stage', BACKUP_STAGES)),
     check('backup_runs_delivery_state_check', enumCheck('delivery_state', BACKUP_DELIVERY_STATES)),
+    check(
+      'backup_runs_delivery_reason_check',
+      nullableEnumCheck('delivery_reason', BACKUP_DELIVERY_REASONS),
+    ),
     /**
      * A terminal run has an end; a RUNNING one does not.
      *
@@ -244,6 +265,10 @@ export const backupRunParts = pgTable(
     telegramMessageId: bigint('telegram_message_id', { mode: 'bigint' }),
     /** Redacted operator-facing detail. Never a token. */
     deliveryDetail: text('delivery_detail'),
+    /** NEXA-BACKUP-DELIVERY: why this part is where it is (`BACKUP_DELIVERY_REASONS`). */
+    deliveryReason: text('delivery_reason'),
+    /** How many times this part was sent, automatic resends and re-deliveries included. */
+    deliveryAttempts: integer('delivery_attempts').notNull().default(0),
   },
   (table) => [
     primaryKey({ columns: [table.backupId, table.partNumber] }),
@@ -251,6 +276,11 @@ export const backupRunParts = pgTable(
       'backup_run_parts_delivery_state_check',
       enumCheck('delivery_state', BACKUP_DELIVERY_STATES),
     ),
+    check(
+      'backup_run_parts_delivery_reason_check',
+      nullableEnumCheck('delivery_reason', BACKUP_DELIVERY_REASONS),
+    ),
+    check('backup_run_parts_delivery_attempts_check', sql`delivery_attempts >= 0`),
     check('backup_run_parts_part_number_check', sql`part_number > 0`),
     check('backup_run_parts_bytes_check', sql`bytes >= 0 AND range_start >= 0`),
     /** A message id is a delivered part, and only a delivered part has one. */
