@@ -308,6 +308,7 @@ import {
 } from './infrastructure/persistence/write-gate.js';
 import { DualFormatBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
 import { readMemAvailableMb } from './modules/platform/backup/infrastructure/seven-zip-levels.js';
+import { readAllowedCores } from './modules/platform/backup/infrastructure/cgroup-limits.js';
 import {
   backupArchivePasswordSource,
   DrizzleBackupPasswordStore,
@@ -8681,6 +8682,7 @@ export function createContainer(
       binary: config.BACKUP_SEVEN_ZIP_BIN,
       level: config.BACKUP_SEVEN_ZIP_LEVEL,
       threads: config.BACKUP_SEVEN_ZIP_THREADS,
+      allowedCores: readAllowedCores,
       cpuLimit: backupCpuLimit,
       memoryBudgetMb: config.BACKUP_SEVEN_ZIP_MEMORY_MB,
       memoryHeadroomMb: config.BACKUP_SEVEN_ZIP_HEADROOM_MB,
@@ -9158,6 +9160,7 @@ export function createContainer(
       binary: config.BACKUP_SEVEN_ZIP_BIN,
       level: config.BACKUP_SEVEN_ZIP_LEVEL,
       threads: config.BACKUP_SEVEN_ZIP_THREADS,
+      allowedCores: readAllowedCores,
       cpuLimit: backupCpuLimit,
       memoryBudgetMb: config.BACKUP_SEVEN_ZIP_MEMORY_MB,
       memoryHeadroomMb: config.BACKUP_SEVEN_ZIP_HEADROOM_MB,

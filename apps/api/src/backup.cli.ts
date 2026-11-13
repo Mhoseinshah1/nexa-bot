@@ -13,6 +13,7 @@ import {
   DEFAULT_SEVEN_ZIP_MEMORY_MB,
   readMemAvailableMb,
 } from './modules/platform/backup/infrastructure/seven-zip-levels.js';
+import { readAllowedCores } from './modules/platform/backup/infrastructure/cgroup-limits.js';
 import { readArchiveHeader } from './modules/platform/backup/infrastructure/archive.js';
 import {
   keepScratchAlive,
@@ -436,7 +437,8 @@ function sevenZipOptionsFromEnvironment() {
   return {
     binary: process.env.BACKUP_SEVEN_ZIP_BIN?.trim() || '7z',
     level: number('BACKUP_SEVEN_ZIP_LEVEL', 9),
-    threads: number('BACKUP_SEVEN_ZIP_THREADS', 1),
+    threads: number('BACKUP_SEVEN_ZIP_THREADS', 16),
+    allowedCores: readAllowedCores,
     memoryBudgetMb: number('BACKUP_SEVEN_ZIP_MEMORY_MB', DEFAULT_SEVEN_ZIP_MEMORY_MB),
     memoryHeadroomMb: number('BACKUP_SEVEN_ZIP_HEADROOM_MB', DEFAULT_SEVEN_ZIP_HEADROOM_MB),
     readAvailableMb: readMemAvailableMb,

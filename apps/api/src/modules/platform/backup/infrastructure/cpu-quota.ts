@@ -10,9 +10,11 @@
  * `cpulimit` itself implements: a duty cycle of SIGSTOP / SIGCONT over a short period.
  *
  * WHAT IT BOUNDS. The tool's CPU time over any period is at most `percent / 100` of the period,
- * for however many threads it has; the tool cannot opt out, and nothing is installed. Combined
- * with `-mmt=1` (one thread) a quota of 70 is 70 percent of ONE core, which leaves the other
- * vCPU entirely to the bot.
+ * for however many threads it has; the tool cannot opt out, and nothing is installed. It is a
+ * share of WALL time, so with N threads the CPU is `percent` of N cores. The seal's thread
+ * count is the cores the container may use (`cgroup-limits.ts`), not 1: a quota that forced
+ * one thread turned a 2.6 GB dump into a 36-minute seal on a 4-core server (docs/backup.md
+ * § Speed). The bot keeps its share through `nice`/`ionice` (`tool-process.ts`).
  *
  * THE TRADE-OFFS, stated so they are not rediscovered. (1) Wall time grows by 100/percent:
  * a step that needs 100 CPU-seconds takes about 143 s at 70. (2) The stopped process still
