@@ -19,7 +19,6 @@ import {
   type SevenZipLevel,
 } from './seven-zip-levels.js';
 import {
-  CPU_QUOTA_UNLIMITED,
   resolveCpuLimit,
   startCpuThrottle,
   type CpuLimitProvider,
@@ -79,6 +78,11 @@ export interface SevenZipOptions {
   readonly level: number;
   /** The CEILING on compression threads (`BACKUP_SEVEN_ZIP_THREADS`). */
   readonly threads: number;
+  /**
+   * The cores the container may use, read at each seal (`readAllowedCores`: the cgroup CPU
+   * quota, floored, at least 1, at most the host's). Absent: one thread, as before.
+   */
+  readonly allowedCores?: () => Promise<number>;
   /** The most memory 7-Zip may use while sealing, MiB (`BACKUP_SEVEN_ZIP_MEMORY_MB`). */
   readonly memoryBudgetMb: number;
   /** Memory the host keeps free beside 7-Zip, MiB. */
@@ -91,8 +95,9 @@ export interface SevenZipOptions {
    */
   readonly lowPriorityPrefix?: readonly string[];
   /**
-   * The CPU quota, percent of ONE core, read at each spawn (`backup.cpu_limit_percent`).
-   * Absent: unlimited (CLI and tests). See `cpu-quota.ts`.
+   * The CPU quota, the share of wall time the process may run, read at each spawn
+   * (`backup.cpu_limit_percent`). It bounds the whole process, so with N threads the CPU is
+   * `percent` of N cores. Absent: unlimited (CLI and tests). See `cpu-quota.ts`.
    */
   readonly cpuLimit?: CpuLimitProvider;
   readonly sealTimeoutMs: number;
@@ -160,9 +165,8 @@ async function run7z(input: {
 }): Promise<ChildResult> {
   assertOutsideTransaction('The 7-Zip subprocess');
   const cpuPercent = await resolveCpuLimit(input.cpuLimit, BACKUP_CPU_LIMIT_DEFAULT);
-  const args = cappedThreadArgs(input.args, cpuPercent);
   return new Promise((resolve, reject) => {
-    const wrapped = wrapLowPriority(input.binary, args, input.lowPriorityPrefix);
+    const wrapped = wrapLowPriority(input.binary, input.args, input.lowPriorityPrefix);
     const child = spawn(wrapped.command, [...wrapped.args], {
       cwd: input.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -294,17 +298,6 @@ export function sealEntryArgs(
   ];
 }
 
-/**
- * The duty cycle bounds WALL time, so it bounds CPU to `percent` of ONE core only while 7-Zip
- * runs one thread: two threads in each run slice would be twice the promise (Codex on #319).
- * Whenever a quota is in force, every `-mmt=N` is therefore rewritten to `-mmt=1` here, at
- * the one spawn site, whatever level or `BACKUP_SEVEN_ZIP_THREADS` override chose N.
- */
-export function cappedThreadArgs(args: readonly string[], cpuPercent: number): readonly string[] {
-  if (!(cpuPercent < CPU_QUOTA_UNLIMITED)) return args;
-  return args.map((arg) => (arg.startsWith('-mmt=') ? '-mmt=1' : arg));
-}
-
 /** Chooses the level for this host right now, or refuses with `backup.memory_insufficient`. */
 async function pickLevel(options: SevenZipOptions): Promise<SevenZipLevel> {
   const choice = await chooseSevenZipLevel({
@@ -312,6 +305,7 @@ async function pickLevel(options: SevenZipOptions): Promise<SevenZipLevel> {
     headroomMb: options.memoryHeadroomMb,
     maxMx: options.level,
     maxThreads: options.threads,
+    cores: options.allowedCores === undefined ? 1 : await options.allowedCores(),
     readAvailableMb: options.readAvailableMb,
   });
   if (choice.kind === 'LEVEL') return choice.level;

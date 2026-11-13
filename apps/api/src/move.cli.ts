@@ -42,6 +42,7 @@ import {
   volumeFreeBytes,
 } from './modules/platform/backup/infrastructure/server-move.js';
 import { readMemAvailableMb } from './modules/platform/backup/infrastructure/seven-zip-levels.js';
+import { readAllowedCores } from './modules/platform/backup/infrastructure/cgroup-limits.js';
 import type { SevenZipOptions } from './modules/platform/backup/infrastructure/seven-zip.js';
 import { migrationHead } from './modules/platform/backup/infrastructure/tenant-archive-export.js';
 import {
@@ -160,6 +161,7 @@ function sevenZipOf(config: AppConfig): SevenZipOptions {
     binary: config.BACKUP_SEVEN_ZIP_BIN,
     level: config.BACKUP_SEVEN_ZIP_LEVEL,
     threads: config.BACKUP_SEVEN_ZIP_THREADS,
+    allowedCores: readAllowedCores,
     memoryBudgetMb: config.BACKUP_SEVEN_ZIP_MEMORY_MB,
     memoryHeadroomMb: config.BACKUP_SEVEN_ZIP_HEADROOM_MB,
     readAvailableMb: readMemAvailableMb,

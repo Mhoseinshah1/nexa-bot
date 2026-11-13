@@ -785,14 +785,15 @@ export const configSchema = z
      */
     BACKUP_SEVEN_ZIP_BIN: z.string().trim().min(1).default('7z'),
     /**
-     * E4: the CEILINGS on LZMA2 effort and threads. Since Round 5B the level is chosen from
-     * a table of measured memory peaks (`seven-zip-levels.ts`), strongest first, and these
-     * only cap it: `-mx=9` with every core measured about 2.4 GB on a 4 GB / 2 vCPU host
-     * and was killed by the kernel. Lower them to force a lighter archive. Threads default to 1
-     * (Round 8): at 2 the compress step held both vCPUs of a 2-core host for 13 minutes.
+     * E4: the CEILINGS on LZMA2 effort and threads. The plan is chosen from the table in
+     * `seven-zip-levels.ts` (fastest that fits the memory), and these only cap it: `-mx=9`
+     * with every core measured about 2.4 GB on a 4 GB / 2 vCPU host and was killed by the
+     * kernel. The thread count used is the cores the container may use (its cgroup CPU quota,
+     * floored), up to this ceiling; the default 16 therefore means "all allowed cores"
+     * (it was 1 until the 2026-11 round: a 2.6 GB dump then took 36 minutes to compress).
      */
     BACKUP_SEVEN_ZIP_LEVEL: z.coerce.number().int().min(1).max(9).default(9),
-    BACKUP_SEVEN_ZIP_THREADS: z.coerce.number().int().min(1).max(16).default(1),
+    BACKUP_SEVEN_ZIP_THREADS: z.coerce.number().int().min(1).max(16).default(16),
     /**
      * The most memory 7-Zip may use while sealing a backup, MiB. The strongest level whose
      * measured peak fits this AND the host's free memory (less the headroom) is used; when
