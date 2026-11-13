@@ -145,7 +145,7 @@ None. («removed X - covered by Y»: no entries.)
   windows = 1 125 orderings, each real database work, inside ONE 600 s budget that a slow runner
   crossed (the 3-step case beside it takes 243 s). Fix: one test per (prelude, landing) pair, each
   with its own 600 s budget (about 125 orderings, a ninth of the work), the coverage claims
-  asserted over the sum in a final test. Same orderings, same invariants. No retry.
+  asserted over the sum in a final test. One case measured 281 s locally (budget 600 s), so each now has more than 2x headroom; the whole block was not run end to end here (about 40 minutes locally). Same orderings, same invariants. No retry.
 
 ## 7. Guard: a migration must not drop CHECK values
 

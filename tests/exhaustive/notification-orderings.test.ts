@@ -431,11 +431,15 @@ describe('notification state machine invariants', () => {
   const inFlight = { swept: 0, corrected: 0, sweptThenFailing: 0 };
 
   const slowSendCases = PRELUDES.flatMap((prelude) =>
-    LANDINGS.map((landing) => ({ prelude, landing })),
+    LANDINGS.map((landing) => ({
+      prelude,
+      landing,
+      label: `${prelude.length === 0 ? 'first attempt' : prelude.join(' > ')}, send ${landing.name}`,
+    })),
   );
 
   it.each(slowSendCases)(
-    'holds every invariant when a send is still in flight (prelude $prelude, send $landing.name)',
+    'holds every invariant when a send is still in flight ($label)',
     async ({ prelude, landing }) => {
       const broken: string[] = [];
       let windows: Step[][] = [[]];
