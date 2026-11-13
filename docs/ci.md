@@ -488,3 +488,66 @@ unchanged.
 Every job runs on `ubuntu-24.04`, never `ubuntu-latest`, which migrates to a
 newer Ubuntu on GitHub's schedule and would change the toolchain under a green
 commit that the release workflow requires.
+
+## No dependency on Canonical's mirrors
+
+On 2026-11-11 Canonical's DNS was down for hours and CI went red with it: the unit job
+and every integration shard ran `apt-get update && apt-get install 7zip`, and the
+legacy rehearsal ran `apt-get download mysql-server-core-8.0 …`, both against
+`*.ubuntu.com`. None of that is the code under test, so nothing in the common CI path
+now reaches Canonical's hosts. Two approaches were weighed: (a) the tool from somewhere
+that is not apt, or (b) a cached, mirror-independent install. Both tools use (b) with the
+download made once and kept in `actions/cache`.
+
+- **7-Zip** — `scripts/ci-install-7zip.sh`: the official static build from the 7-Zip
+  project's GitHub release (`ip7z/7zip`, `7z<ver>-linux-x64.tar.xz`), version and
+  sha256 pinned in the script, verified on every run (a cached tarball too; a mismatch is
+  re-fetched once, then fails). The tarball is cached (`7zip-<ver>-linux-x64-<script hash>`);
+  the script links `7zz` as `7z` and puts it first on `PATH`, because
+  `BACKUP_SEVEN_ZIP_BIN` defaults to `7z`. `tests/unit/backup-seven-zip.test.ts` (real archive, encrypted headers, listing) passes against this binary.
+  The `7z` an image may already ship is not trusted: the
+  pinned one is installed every run, so the suites test one known version.
+  To bump: change `VERSION` and `SHA256` together.
+- **MySQL 8.0 binaries** (legacy rehearsal) — `scripts/ci-fetch-debs.sh DEST PACKAGE…`.
+  `DEST` is cached by the exact package list; on a hit the script downloads nothing. On a
+  miss it tries `archive.ubuntu.com` and then `mirrors.edge.kernel.org/ubuntu` (kernel.org's
+  own DNS and CDN), through a temporary apt tree (`Dir::Etc::sourcelist`, own state and
+  cache, no sudo, the runner's `/etc/apt` untouched) whose sources are
+  `[signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg]` for `noble`, `-updates` and
+  `-security`: the same signature checks as a default install, never `trusted=yes`. Why
+  not the `mysql:8.0` image's binaries: the harness runs the server unpacked on a scratch
+  directory, and a different build of the server is
+  a behaviour change this round does not take on.
+- **Left alone**: the deployment smokes build the production image, whose Dockerfile still
+  installs Debian packages; the image and `deploy/**` are unchanged.
+
+### The outage drill
+
+Dispatch CI with `block_ubuntu_hosts: true` and, to exercise the cache-miss path too,
+`bypass_tool_cache: true`:
+
+```
+gh api repos/Mhoseinshah1/nexa-bot/actions/workflows/ci.yml/dispatches \
+  -f ref=<branch> -f 'inputs[block_ubuntu_hosts]=true' -f 'inputs[bypass_tool_cache]=true'
+```
+
+The three jobs that install these tools (`unit`, `integration`, `legacy-rehearsal`) then
+begin with `scripts/ci-block-ubuntu-hosts.sh`, which writes `0.0.0.0 <host>` into
+`/etc/hosts` for the Canonical and Launchpad hosts (`archive`, `azure.archive`, `security`,
+`ports`, `esm`, `keyserver`, `changelogs`, `motd`, `ppa.launchpadcontent.net`,
+`api.launchpad.net`, …) and then checks that `archive.ubuntu.com`,
+`security.ubuntu.com` and `azure.archive.ubuntu.com` really cannot be fetched. A green run is
+the proof. `tests/unit/ci-tool-installs.test.ts` keeps the rule on every push: no job step runs
+`apt`/`apt-get` against the default sources, the 7-Zip checksum is pinned and verified, the
+fetch script keeps its signed sources and the kernel.org fallback, and both inputs exist, default
+to false and gate their steps. `scripts/mutate-ci-no-ubuntu.py` reverts each rule in turn and
+confirms a test fails.
+
+**Proof run:** [CI run 2726](https://github.com/Mhoseinshah1/nexa-bot/actions/runs/43196377712)
+(dispatch, 2026-11-12, head `5c7d26d4`, both inputs `true`) is green on all 23 jobs. In the
+unit job, all ten integration shards and the legacy rehearsal the drill step logged
+`blocked: archive.ubuntu.com / security.ubuntu.com / azure.archive.ubuntu.com is unreachable`,
+the cache steps were skipped, 7-Zip 25.01 was downloaded from the GitHub release, and the
+MySQL packages logged `http://archive.ubuntu.com/ubuntu failed, trying the next mirror` and
+then `fetched from https://mirrors.edge.kernel.org/ubuntu`; the rehearsal then passed
+(164 PASS, 0 FAIL).
