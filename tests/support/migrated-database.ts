@@ -10,7 +10,8 @@ import { runMigrations } from '../../apps/api/src/infrastructure/persistence/mig
  * The recovery and restore suites need a fresh live database per case (the executor renames
  * the database it runs against). Running all of `apps/api/drizzle` into each took ~7 s a case;
  * `CREATE DATABASE ... TEMPLATE` copies the migrated schema in a fraction of a second. The
- * template is keyed by a hash of the migration files, so a changed migration builds a new one,
+ * template is keyed by a hash of the migration files and of the persistence code `runMigrations`
+ * runs after them (indexes, policies, grants), so a change to either builds a new one,
  * and it is built under a temporary name and renamed when complete, so a crashed build is never
  * mistaken for a template. Building and cloning both happen under one session advisory lock:
  * PostgreSQL refuses to clone a template another session is cloning or connected to.
@@ -29,6 +30,14 @@ function migrationHash(): string {
     .sort();
   for (const name of files) hash.update(name).update(readFileSync(join(folder, name)));
   hash.update(readFileSync(join(folder, 'meta/_journal.json')));
+  // runMigrations also builds objects outside the SQL files (online indexes, row-level
+  // security policies and grants, backfills), from the persistence code. Any change there
+  // must build a new template too, or a persistent local database would keep a stale one.
+  const persistence = join(__dirname, '../../apps/api/src/infrastructure/persistence');
+  const sources = (readdirSync(persistence, { recursive: true }) as string[])
+    .filter((name) => name.endsWith('.ts'))
+    .sort();
+  for (const name of sources) hash.update(name).update(readFileSync(join(persistence, name)));
   return hash.digest('hex').slice(0, 16);
 }
 
