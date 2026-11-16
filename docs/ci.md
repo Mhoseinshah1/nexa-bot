@@ -112,6 +112,15 @@ With the CI's exact Node 22.23.4, forcing 2048 MiB reproduced the heap abort on
 the same main API graph (2193.0 MiB peak RSS). The full workspace build at
 4096 MiB passed with 3561.5 MiB peak aggregate RSS across its process session
 and 2570.2 MiB for its largest process, without reducing workspace parallelism.
+Full workspace/test typechecking also passed at 4096 MiB: 4014.4 MiB sampled
+aggregate RSS and 3824.8 MiB for its largest process. RSS includes more than V8
+old space; these figures are not heap-size measurements.
+Reproduce sampled process-session RSS with the read-only observer (logs stay
+outside the checkout; shared pages are counted per process):
+
+```bash
+NODE_OPTIONS=--max-old-space-size=4096 python3 scripts/claude/measure-rss.py /tmp/nexa-build -- pnpm build
+```
 
 ### Which jobs a pull request runs
 
