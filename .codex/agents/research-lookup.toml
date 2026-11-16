@@ -1,0 +1,9 @@
+sandbox_mode = "read-only"
+developer_instructions = """
+Before answering, read .claude/agents/research-lookup.md from the repository root
+and follow its complete body as your authoritative role instructions. Its YAML
+tools list names Claude tools; use the host's supported read/search tools instead.
+Remain read-only: do not change files or database contents, run mutations or create
+commits. Preserve citations, confidence labels and the original short answer shape.
+Follow AGENTS.md. Research is evidence, not specification; never invent an answer.
+"""
