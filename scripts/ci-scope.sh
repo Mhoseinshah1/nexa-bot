@@ -145,13 +145,13 @@ classify() {
   # harness docs/config-upgrade-falsification.md) READ Markdown. The integration
   # shards, both legacy jobs and both smokes do not.
   case "$path" in
-    README.md | CLAUDE.md | PROGRESS.md | docs/*.md) add unit web deploy_logic ;;
+    README.md | CLAUDE.md | AGENTS.md | PROGRESS.md | docs/*.md) add unit web deploy_logic ;;
   esac
 
   # --- Session tooling (skills, mutation probes). No CI job but static and
   # unit reads them; deployment logic shellchecks scripts/claude/*.sh.
   case "$path" in
-    .claude/* | scripts/mutate-*.py) add unit ;;
+    .claude/* | .agents/* | .codex/* | scripts/mutate-*.py) add unit ;;
     scripts/claude/*) add unit deploy_logic ;;
   esac
 
