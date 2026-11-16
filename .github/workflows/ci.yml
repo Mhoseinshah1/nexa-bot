@@ -139,7 +139,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        run: pnpm typecheck
+        # The API compiler exceeds V8's ~2 GiB default on some hosted runners.
+        # Scope the measured budget to compilation, not tests or runtime processes.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          node -e 'console.log({node: process.version, heapLimitMiB: require("node:v8").getHeapStatistics().heap_size_limit / 1024 ** 2, totalMemoryMiB: require("node:os").totalmem() / 1024 ** 2, constrainedMemoryMiB: process.constrainedMemory() / 1024 ** 2})'
+          pnpm typecheck
 
       - name: Lint
         run: pnpm lint
@@ -190,8 +196,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Build all workspaces
-        run: pnpm build
+        run: |
+          node -e 'console.log({node: process.version, heapLimitMiB: require("node:v8").getHeapStatistics().heap_size_limit / 1024 ** 2, totalMemoryMiB: require("node:os").totalmem() / 1024 ** 2, constrainedMemoryMiB: process.constrainedMemory() / 1024 ** 2})'
+          pnpm build
         env:
+          NODE_OPTIONS: --max-old-space-size=4096
           BUILD_VERSION: ${{ github.sha }}
           BUILD_COMMIT: ${{ github.sha }}
 

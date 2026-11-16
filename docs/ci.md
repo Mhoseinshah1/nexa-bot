@@ -83,6 +83,36 @@ audit ────────────────────────�
 Coverage is unchanged: every command the workflow ran before the split is still
 run, and `ci-workflow.test.ts` lists them.
 
+### Compilation memory budget
+
+Build and Typecheck set `NODE_OPTIONS=--max-old-space-size=4096` on their
+individual steps only. Docker uses the same option on the builder's single
+`RUN ... pnpm build` command, not an `ENV` inherited by production. Tests,
+dependency installation, deployment and runtime keep their existing settings.
+This is a per-process old-space ceiling, not a reservation or a total RSS limit.
+The two CI steps log Node, effective heap limit, host RAM and cgroup limit so a
+future runner change can be distinguished from compiler growth.
+
+Evidence: [PR #483 run 43957977889](https://github.com/Mhoseinshah1/nexa-bot/actions/runs/43957977889)
+failed in the API compiler in Build, Typecheck and the Docker builder, with V8
+mark-compacts around 1998 MiB live / 2080 MiB committed and exit 134. The
+[successful main run 43485109395](https://github.com/Mhoseinshah1/nexa-bot/actions/runs/43485109395)
+built the same application/lockfile with the same Node 22.23.4; the compatibility
+diff changed none of the compiler inputs. Neither old run recorded available
+RAM or effective heap limits, so attributing the difference to a particular
+runner RAM change or a source-memory regression would be speculation.
+
+A local `tsc -p apps/api/tsconfig.build.json --extendedDiagnostics` on that main
+tree with a 4096 MiB ceiling passed: 2641 files, 830247 types, 5367526
+instantiations, 2327974 KiB compiler memory and 2542.7 MiB peak process RSS.
+This establishes that the API graph needs more than 2 GiB and leaves measured
+headroom at 4 GiB. Re-measure compiler and aggregate build RSS before raising
+the budget again; multiple build children share the runner's physical memory.
+With the CI's exact Node 22.23.4, forcing 2048 MiB reproduced the heap abort on
+the same main API graph (2193.0 MiB peak RSS). The full workspace build at
+4096 MiB passed with 3561.5 MiB peak aggregate RSS across its process session
+and 2570.2 MiB for its largest process, without reducing workspace parallelism.
+
 ### Which jobs a pull request runs
 
 `changes` runs `scripts/ci-scope.sh`, which reads the merge commit against its
@@ -94,7 +124,8 @@ and build run on every run.
 
 | A changed path under …                                                                                                                                        | adds                                               |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `docs/**/*.md`, `README.md`, `CLAUDE.md`, `PROGRESS.md`                                                                                                       | unit, web, deploy-logic (today's docs-only rule)   |
+| `docs/**/*.md`, `README.md`, `CLAUDE.md`, `AGENTS.md`, `PROGRESS.md`                                                                                          | unit, web, deploy-logic (today's docs-only rule)   |
+| `.claude/**`, `.agents/**`, `.codex/**`                                                                                                                       | unit (shared AI session tooling)                   |
 | `apps/web/**`, `apps/miniapp/**`, `tests/web/**`, `scripts/web-shots/**`                                                                                      | unit, web                                          |
 | `apps/api/src/**`, `packages/i18n/**`                                                                                                                         | unit, web, integration                             |
 | the importer (`apps/api/src/modules/*/legacy*`, `nxpkg`, `legacy-*.ts`, `cutover-*`), `tests/legacy-mysql/**`, `tests/fixtures/legacy/**`, `scripts/legacy-*` | + legacy-mysql (MySQL 8.0 only) + legacy-rehearsal |

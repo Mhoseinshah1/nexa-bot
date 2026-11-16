@@ -66,7 +66,9 @@ ENV BUILD_VERSION=${BUILD_VERSION}
 ENV BUILD_COMMIT=${BUILD_COMMIT}
 ENV BUILD_TIME=${BUILD_TIME}
 
-RUN pnpm build
+# Measured API compilation needs more than V8's ~2 GiB implicit heap ceiling.
+# One RUN only: neither the production dependency deployment nor runtime inherits it.
+RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm build
 
 # `pnpm deploy` resolves the workspace graph — including @nexa/contracts and
 # @nexa/i18n — into one tree with a real node_modules.
