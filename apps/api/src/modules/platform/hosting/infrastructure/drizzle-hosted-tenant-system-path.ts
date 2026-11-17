@@ -3,7 +3,11 @@ import {
   errors,
   OWNER_ROLE_KEY,
   IDENTITY_ERROR_CODES,
+  DEFAULT_PRODUCT_CATEGORY_NAME,
   type AdminId,
+  type IdGenerator,
+  type ProductCategoryId,
+  type SalesCurrencyCode,
   type BotInstanceStatus,
   type RoleId,
   type SystemContext,
@@ -28,6 +32,8 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { HostedTenantFacts, HostedTenantSystemPath } from '../application/ports.js';
+import type { PaymentGatewayRepository } from '../../../commerce/payments/application/gateway-ports.js';
+import type { ProductCategoryRepository } from '../../../commerce/catalog/application/ports.js';
 
 function executorOf(db: Database, tx?: unknown): Executor {
   return (tx as TransactionScope | undefined)?.tx ?? db;
@@ -44,8 +50,12 @@ function acrossTenants<T>(tx: unknown, reason: string, fn: () => Promise<T>): Pr
   return open === undefined ? withSystemScope(reason, fn) : withSystemScopeIn(open, reason, fn);
 }
 
-/** What `provision` needs from identity: the same repositories every admin path uses. */
+/** Shared repositories and defaults used by the original tenant creation transaction. */
 export interface HostedOwnerProvisioning {
+  readonly gateways: Pick<PaymentGatewayRepository, 'ensureDefaults'>;
+  readonly categories: Pick<ProductCategoryRepository, 'ensureDefault'>;
+  readonly ids: IdGenerator;
+  readonly salesCurrency: (scope: TenantContext, tx: unknown) => Promise<SalesCurrencyCode>;
   readonly admins: {
     create(
       scope: TenantContext,
@@ -228,6 +238,24 @@ export class DrizzleHostedTenantSystemPath implements HostedTenantSystemPath {
     });
     // The hosted tenant's OWN scope: its roles and its first owner are its rows.
     const hosted: TenantContext = { tenantId: input.tenantId as never, botInstanceId: null };
+    // Seed only this tenant's defaults, on the ORIGINAL creation transaction. In
+    // particular, sales.currency resolves in the child's scope, not the parent's;
+    // neither routes nor credentials/settings are copied from the installation.
+    await this.provisioning.gateways.ensureDefaults(
+      hosted,
+      await this.provisioning.salesCurrency(hosted, tx),
+      input.now,
+      tx,
+    );
+    await this.provisioning.categories.ensureDefault(
+      hosted,
+      {
+        id: this.provisioning.ids.uuid() as ProductCategoryId,
+        name: DEFAULT_PRODUCT_CATEGORY_NAME,
+        now: input.now,
+      },
+      tx,
+    );
     await this.provisioning.roles.ensureSystemRoles(hosted, tx);
     const ownerRole = await this.provisioning.roles.findByKey(hosted, OWNER_ROLE_KEY, tx);
     if (ownerRole === null) {

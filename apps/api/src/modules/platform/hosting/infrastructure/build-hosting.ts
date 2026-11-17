@@ -38,6 +38,8 @@ import {
 } from './drizzle-hosted-tenant-system-path.js';
 import { OsHostingServerProbe } from './os-server-probe.js';
 import type { DrizzleHostingEnterRepository } from './drizzle-hosting-enter.repository.js';
+import { DrizzlePaymentGatewayRepository } from '../../../commerce/payments/infrastructure/drizzle-payment-gateway.repository.js';
+import { DrizzleProductCategoryRepository } from '../../../commerce/catalog/infrastructure/drizzle-product.repository.js';
 
 /**
  * Phase 6A PR-3: the creator panel's services, assembled in one place so `container.ts`
@@ -62,6 +64,7 @@ export function buildHosting(deps: {
     roleKeysFor(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<string[]>;
   };
   readonly roles: HostedOwnerProvisioning['roles'];
+  readonly salesCurrency: HostedOwnerProvisioning['salesCurrency'];
   readonly sessions: {
     isLive(scope: ScopeContext, id: AdminSessionId, now: Date, tx?: unknown): Promise<boolean>;
   };
@@ -89,6 +92,10 @@ export function buildHosting(deps: {
   const system = new DrizzleHostedTenantSystemPath(deps.db, {
     admins: deps.admins,
     roles: deps.roles,
+    gateways: new DrizzlePaymentGatewayRepository(deps.db),
+    categories: new DrizzleProductCategoryRepository(deps.db),
+    ids: deps.ids,
+    salesCurrency: deps.salesCurrency,
   });
   const owner = new HostingOwnerGuard({
     guard: deps.guard,

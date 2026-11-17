@@ -100,6 +100,7 @@ describe('the hosted-bot create gate', () => {
         qr: null,
         admins: fake,
         roles: fake,
+        salesCurrency: async () => 'IRT',
         sessions: fake,
         verifyOwnPassword: fake,
         capacityLimits: fake,
