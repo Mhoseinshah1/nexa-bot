@@ -1,7 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { and, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   API_PREFIX,
+  DEFAULT_PRODUCT_CATEGORY_NAME,
+  EMPTY_PRODUCT_DISPLAY,
+  PAYMENT_GATEWAY_PROVIDERS,
+  uuidV7Schema,
+  money,
   BACKUP_SCHEDULE_SETTING_KEYS,
   HOSTING_CODE_LOCKOUT_SECONDS,
   HOSTING_ERROR_CODES,
@@ -13,6 +19,7 @@ import {
   systemJobActor,
   type ActorContext,
   type CorrelationId,
+  type PanelId,
   type TenantContext,
 } from '@nexa/contracts';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
@@ -27,6 +34,10 @@ import {
   hostingTotpFactors,
   operationalEvents,
   outboxMessages,
+  paymentGateways,
+  paymentGatewayCredentials,
+  productCategories,
+  settingValues,
   tenants,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
@@ -37,6 +48,7 @@ import {
   createAdmin,
   createApiApp,
   migrateOnce,
+  makePanelSellable,
   resetDatabase,
   tenantA,
   tenantB,
@@ -508,6 +520,402 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
   }
 
   describe('the actions', () => {
+    it('manually provisions independent owners, isolated routes/categories and no reseller-wallet charge', async () => {
+      const db = api.container.database.db;
+      const panel = await openPanel();
+      const primaryCredential = 'primary-hosting-fixture-key';
+      await api.container.paymentGateways.setCredential(tenantA, ownerActor, {
+        idempotencyKey: key(),
+        provider: 'TONPAYS',
+        apiKey: primaryCredential,
+      });
+      // A parent's sales setting and configured route are NOT defaults for a child.
+      await db
+        .insert(settingValues)
+        .values({
+          id: api.container.ids.uuid(),
+          tenantId: tenantA.tenantId,
+          settingKey: 'sales.currency',
+          value: 'IRR',
+        })
+        .onConflictDoUpdate({
+          target: [settingValues.tenantId, settingValues.settingKey],
+          set: { value: 'IRR' },
+        });
+      // Manual creation must stay independent even when legacy reseller billing is offered.
+      await db
+        .insert(settingValues)
+        .values({
+          id: api.container.ids.uuid(),
+          tenantId: tenantA.tenantId,
+          settingKey: 'hosting.reseller_bot_monthly_fee',
+          value: { amountMinor: '500000', currency: 'IRR' },
+        })
+        .onConflictDoUpdate({
+          target: [settingValues.tenantId, settingValues.settingKey],
+          set: { value: { amountMinor: '500000', currency: 'IRR' } },
+        });
+      await db
+        .update(paymentGateways)
+        .set({ instructions: 'Primary-only instructions', minAmountMinor: 123n })
+        .where(
+          and(
+            eq(paymentGateways.tenantId, tenantA.tenantId),
+            eq(paymentGateways.provider, 'TONPAYS'),
+          ),
+        );
+      const financialRows = () =>
+        db.execute(sql`
+        SELECT (SELECT count(*) FROM customers) AS customers,
+               (SELECT count(*) FROM resellers) AS resellers,
+               (SELECT count(*) FROM wallet_entries) AS entries,
+               (SELECT count(*) FROM wallet_entries WHERE reason = 'HOSTED_BOT_FEE') AS hosted_fees,
+               (SELECT count(*) FROM reseller_bot_requests) AS requests`);
+      const before = await financialRows();
+      const expiresAt = new Date(now().getTime() + 31 * 86_400_000).toISOString();
+      const first = await createBot(panel, 'independent-one', { expiresAt });
+      const second = await createBot(panel, 'independent-two');
+      expect(first.bot.expiresAt).toBe(expiresAt);
+      expect(first.bot.customerCount).toBe(0);
+      expect(second.bot.customerCount).toBe(0);
+      // Running the legacy renewal job must not turn these manual bots into subscriptions.
+      await api.container.resellerBotFees.runOnce(tenantA);
+      expect((await financialRows()).rows).toEqual(before.rows);
+      const scope = (id: string): TenantContext => ({ tenantId: id as never, botInstanceId: null });
+      const a = scope(first.bot.tenantId);
+      const b = scope(second.bot.tenantId);
+      const login = async (tenant: TenantContext, slug: string) => {
+        const [admin] = await db.select().from(admins).where(eq(admins.tenantId, tenant.tenantId));
+        return signIn(
+          { id: admin!.id as never, username: `${slug}-admin`, password: HOSTED_PASSWORD },
+          tenant,
+        );
+      };
+      const ownerA = (await login(a, 'independent-one')).actor;
+      const ownerB = (await login(b, 'independent-two')).actor;
+      for (const [tenant, actor] of [
+        [a, ownerA],
+        [b, ownerB],
+      ] as const) {
+        const routes = await api.container.paymentGateways.list(tenant, actor);
+        expect(routes.currency).toBe('IRT');
+        expect(routes.gateways.map((g) => g.provider).sort()).toEqual(
+          [...PAYMENT_GATEWAY_PROVIDERS].sort(),
+        );
+        for (const route of routes.gateways) {
+          expect(route).toMatchObject({
+            boundsCurrency: 'IRT',
+            status: route.provider === 'MANUAL_TRANSFER' ? 'ACTIVE' : 'DISABLED',
+            instructions: null,
+            displayName: null,
+            minAmountMinor: 0n,
+            providerUnitRateMinor: null,
+          });
+        }
+        expect(
+          await db
+            .select()
+            .from(paymentGatewayCredentials)
+            .where(eq(paymentGatewayCredentials.tenantId, tenant.tenantId)),
+        ).toHaveLength(0);
+        expect(
+          await db.select().from(settingValues).where(eq(settingValues.tenantId, tenant.tenantId)),
+        ).toHaveLength(0);
+        const categories = await api.container.productCategories.list(tenant, actor);
+        expect(categories).toHaveLength(1);
+        expect(categories[0]).toMatchObject({
+          name: DEFAULT_PRODUCT_CATEGORY_NAME,
+          status: 'ACTIVE',
+          visibility: 'VISIBLE',
+        });
+      }
+      const category = await api.container.productCategories.create(a, ownerA, {
+        idempotencyKey: key(),
+        draft: { name: 'Own catalogue', description: null, emoji: null, sortOrder: 10 },
+      });
+      const panelId = api.container.ids.uuid() as PanelId;
+      await db.execute(sql`INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+        VALUES (${panelId}, ${a.tenantId}, 'Hosted panel', 'sanaei', 'https://hosted-panel.example.test', 'ACTIVE')`);
+      await makePanelSellable(api.container, a, panelId);
+      const product = await api.container.products.create(a, ownerA, {
+        idempotencyKey: key(),
+        draft: {
+          title: 'Own product',
+          description: null,
+          audience: 'EVERYONE',
+          sortOrder: 1,
+          panelId,
+          categoryId: category.id,
+          specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
+          price: money(100_000n, 'IRT'),
+          display: EMPTY_PRODUCT_DISPLAY,
+        },
+      });
+      const ownKey = 'independent-hosted-fixture-key';
+      await api.container.paymentGateways.setCredential(a, ownerA, {
+        idempotencyKey: key(),
+        provider: 'TONPAYS',
+        apiKey: ownKey,
+      });
+      expect((await api.container.paymentGateways.list(b, ownerB)).gateways).toHaveLength(
+        PAYMENT_GATEWAY_PROVIDERS.length,
+      );
+      await expect(
+        api.container.productCategories.get(b, ownerB, category.id),
+      ).rejects.toMatchObject({ kind: 'NOT_FOUND' });
+      await expect(api.container.products.get(b, ownerB, product.id)).rejects.toMatchObject({
+        kind: 'NOT_FOUND',
+      });
+      await expect(api.container.paymentGateways.list(b, ownerA)).rejects.toMatchObject({
+        kind: 'PERMISSION_DENIED',
+      });
+      await expect(
+        api.container.paymentGateways.setCredential(b, ownerA, {
+          idempotencyKey: key(),
+          provider: 'TONPAYS',
+          apiKey: 'unauthorized-fixture-key',
+        }),
+      ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
+      expect(
+        await db
+          .select()
+          .from(paymentGatewayCredentials)
+          .where(eq(paymentGatewayCredentials.tenantId, b.tenantId)),
+      ).toHaveLength(0);
+      const projection = JSON.stringify(
+        await api.container.paymentGateways.list(a, ownerA),
+        (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value),
+      );
+      expect(projection).not.toContain(ownKey);
+      expect(projection).not.toContain(primaryCredential);
+    });
+
+    it('backfills only missing hosted defaults, preserving every configured row on repeated execution', async () => {
+      const db = api.container.database.db;
+      const panel = await openPanel();
+      const a = (await createBot(panel, 'repair-empty')).bot.tenantId;
+      const b = (await createBot(panel, 'repair-custom')).bot.tenantId;
+      const c = (await createBot(panel, 'repair-invalid')).bot.tenantId;
+      await db.insert(settingValues).values([
+        { id: api.container.ids.uuid(), tenantId: a, settingKey: 'sales.currency', value: 'IRR' },
+        {
+          id: api.container.ids.uuid(),
+          tenantId: c,
+          settingKey: 'sales.currency',
+          value: 'invalid-old-currency',
+        },
+      ]);
+      await db.delete(paymentGateways).where(eq(paymentGateways.tenantId, a));
+      await db.delete(paymentGateways).where(eq(paymentGateways.tenantId, c));
+      await db.delete(productCategories).where(eq(productCategories.tenantId, a));
+      // Inactive/hidden and renamed still counts as an existing custom category.
+      await db
+        .update(productCategories)
+        .set({ name: 'Custom name', status: 'INACTIVE', visibility: 'HIDDEN', sortOrder: 45 })
+        .where(eq(productCategories.tenantId, b));
+      await db
+        .update(paymentGateways)
+        .set({
+          status: 'DISABLED',
+          instructions: 'Keep me',
+          minAmountMinor: 150n,
+          customerFeeBasisPoints: 123,
+          requiresVerifiedPhone: true,
+        })
+        .where(
+          and(eq(paymentGateways.tenantId, b), eq(paymentGateways.provider, 'MANUAL_TRANSFER')),
+        );
+      await db
+        .delete(paymentGateways)
+        .where(and(eq(paymentGateways.tenantId, b), eq(paymentGateways.provider, 'CUSTOM')));
+      const ownerB = await db.select().from(admins).where(eq(admins.tenantId, b));
+      const actorB = (
+        await signIn(
+          {
+            id: ownerB[0]!.id as never,
+            username: 'repair-custom-admin',
+            password: HOSTED_PASSWORD,
+          },
+          { tenantId: b as never, botInstanceId: null },
+        )
+      ).actor;
+      await api.container.paymentGateways.setCredential(
+        { tenantId: b as never, botInstanceId: null },
+        actorB,
+        { idempotencyKey: key(), provider: 'TONPAYS', apiKey: 'preserved-hosted-fixture-key' },
+      );
+      const preservedRoutes = await db
+        .select()
+        .from(paymentGateways)
+        .where(eq(paymentGateways.tenantId, b));
+      const preservedCategories = await db
+        .select()
+        .from(productCategories)
+        .where(eq(productCategories.tenantId, b));
+      const credentials = await db.select().from(paymentGatewayCredentials);
+      const primaryRoutes = await db
+        .select()
+        .from(paymentGateways)
+        .where(eq(paymentGateways.tenantId, tenantA.tenantId));
+      const primaryCategories = await db
+        .select()
+        .from(productCategories)
+        .where(eq(productCategories.tenantId, tenantA.tenantId));
+      const migration = readFileSync('apps/api/drizzle/0347_hosted_tenant_defaults.sql', 'utf8');
+      const apply = () =>
+        api.container.database.db.transaction(async (tx) => {
+          for (const statement of migration.split('--> statement-breakpoint'))
+            await tx.execute(sql.raw(statement));
+        });
+      await apply();
+      const repaired = await db
+        .select()
+        .from(paymentGateways)
+        .where(eq(paymentGateways.tenantId, a));
+      expect(repaired.map((g) => g.provider).sort()).toEqual([...PAYMENT_GATEWAY_PROVIDERS].sort());
+      for (const row of repaired)
+        expect(row).toMatchObject({
+          boundsCurrency: 'IRR',
+          status: row.provider === 'MANUAL_TRANSFER' ? 'ACTIVE' : 'DISABLED',
+        });
+      const backfilledCategories = await db
+        .select()
+        .from(productCategories)
+        .where(eq(productCategories.tenantId, a));
+      expect(backfilledCategories).toMatchObject([{ name: DEFAULT_PRODUCT_CATEGORY_NAME }]);
+      const backfilledId = uuidV7Schema.parse(backfilledCategories[0]?.id);
+      const [adminA] = await db.select().from(admins).where(eq(admins.tenantId, a));
+      const scopeA: TenantContext = { tenantId: a as never, botInstanceId: null };
+      const actorA = (
+        await signIn(
+          { id: adminA!.id as never, username: 'repair-empty-admin', password: HOSTED_PASSWORD },
+          scopeA,
+        )
+      ).actor;
+      // A row in the table is not enough: the real service must accept its identifier.
+      expect(await api.container.productCategories.get(scopeA, actorA, backfilledId)).toMatchObject(
+        { id: backfilledId, name: DEFAULT_PRODUCT_CATEGORY_NAME },
+      );
+      const invalid = await db
+        .select()
+        .from(paymentGateways)
+        .where(eq(paymentGateways.tenantId, c));
+      expect(invalid.every((row) => row.boundsCurrency === 'IRT')).toBe(true);
+      const routesB = await db
+        .select()
+        .from(paymentGateways)
+        .where(eq(paymentGateways.tenantId, b));
+      expect(routesB).toHaveLength(PAYMENT_GATEWAY_PROVIDERS.length);
+      for (const row of preservedRoutes) expect(routesB).toContainEqual(row);
+      expect(
+        await db.select().from(productCategories).where(eq(productCategories.tenantId, b)),
+      ).toEqual(preservedCategories);
+      expect(await db.select().from(paymentGatewayCredentials)).toEqual(credentials);
+      expect(
+        await db
+          .select()
+          .from(paymentGateways)
+          .where(eq(paymentGateways.tenantId, tenantA.tenantId)),
+      ).toEqual(primaryRoutes);
+      expect(
+        await db
+          .select()
+          .from(productCategories)
+          .where(eq(productCategories.tenantId, tenantA.tenantId)),
+      ).toEqual(primaryCategories);
+      const allRoutes = await db.select().from(paymentGateways);
+      const allCategories = await db.select().from(productCategories);
+      await apply();
+      expect(await db.select().from(paymentGateways)).toEqual(allRoutes);
+      expect(await db.select().from(productCategories)).toEqual(allCategories);
+      expect(await db.select().from(paymentGatewayCredentials)).toEqual(credentials);
+    });
+
+    it('does not duplicate a first custom category committing concurrently with the backfill', async () => {
+      const panel = await openPanel();
+      const tenantId = (await createBot(panel, 'repair-race')).bot.tenantId;
+      const db = api.container.database.db;
+      await db.delete(productCategories).where(eq(productCategories.tenantId, tenantId));
+      const categoryId = api.container.ids.uuid();
+      const migration = readFileSync('apps/api/drizzle/0347_hosted_tenant_defaults.sql', 'utf8');
+      await api.container.database.withClient(async (writer) => {
+        await writer.query('BEGIN');
+        let repair: Promise<unknown> | undefined;
+        let committed = false;
+        try {
+          await writer.query(
+            'INSERT INTO product_categories (id, tenant_id, name) VALUES ($1, $2, $3)',
+            [categoryId, tenantId, 'Concurrent custom category'],
+          );
+          repair = db.transaction(async (tx) => {
+            for (const statement of migration.split('--> statement-breakpoint'))
+              await tx.execute(sql.raw(statement));
+          });
+          // Observe the actual database lock, not a sleep or a guess that the repair started.
+          await vi.waitFor(
+            async () => {
+              const { rows } = await db.execute(sql`
+              SELECT count(*)::int AS waiting FROM pg_locks
+              WHERE relation = 'product_categories'::regclass
+                AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+                AND mode = 'ShareRowExclusiveLock' AND NOT granted`);
+              expect(rows).toEqual([{ waiting: 1 }]);
+            },
+            { timeout: 5000 },
+          );
+          await writer.query('COMMIT');
+          committed = true;
+          await repair;
+        } finally {
+          if (!committed) await writer.query('ROLLBACK');
+          // Drain a blocked repair on assertion failure before the next test resets tables.
+          if (repair !== undefined) await Promise.allSettled([repair]);
+        }
+      });
+      const categories = await db
+        .select()
+        .from(productCategories)
+        .where(eq(productCategories.tenantId, tenantId));
+      expect(categories).toHaveLength(1);
+      expect(categories[0]).toMatchObject({ id: categoryId, name: 'Concurrent custom category' });
+    });
+
+    it('rolls back routes, categories, identity and tenant rows when owner provisioning fails', async () => {
+      const panel = await openPanel();
+      const snapshot = async () =>
+        (
+          await api.container.database.db.execute(sql`
+        SELECT (SELECT count(*) FROM tenants) AS tenants,
+               (SELECT count(*) FROM admins) AS admins,
+               (SELECT count(*) FROM roles) AS roles,
+               (SELECT count(*) FROM role_permissions) AS permissions,
+               (SELECT count(*) FROM payment_gateways) AS gateways,
+               (SELECT count(*) FROM product_categories) AS categories,
+               (SELECT count(*) FROM hosted_bots) AS hosted,
+               (SELECT count(*) FROM outbox_messages) AS outbox`)
+        ).rows;
+      const before = await snapshot();
+      const fail = vi
+        .spyOn(api.container.roles, 'setAdminRoles')
+        .mockRejectedValueOnce(new Error('owner provisioning fixture failure'));
+      try {
+        await expect(createBot(panel, 'must-rollback')).rejects.toThrow(
+          'owner provisioning fixture failure',
+        );
+      } finally {
+        fail.mockRestore();
+      }
+      expect(await snapshot()).toEqual(before);
+      expect(
+        await api.container.database.db
+          .select()
+          .from(tenants)
+          .where(eq(tenants.slug, 'must-rollback')),
+      ).toHaveLength(0);
+      // A subsequent attempt can provision normally: no partial slug/owner/defaults survived.
+      expect((await createBot(panel, 'must-rollback')).bot.state).toBe('ACTIVE');
+    });
+
     it('creates a HOSTED tenant with its own Web Admin owner, audited in the owner’s log only', async () => {
       const panel = await openPanel();
       const idempotencyKey = key();

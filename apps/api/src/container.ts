@@ -2665,6 +2665,9 @@ export function createContainer(
     hostingSystemPath,
   } = buildHosting({
     db: database.db,
+    // Late-bound: settings are assembled below; provisioning runs after assembly.
+    salesCurrency: (scope, tx) =>
+      settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency', tx),
     config,
     uow,
     guard,

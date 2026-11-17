@@ -2430,6 +2430,13 @@
       "when": 1794580344678,
       "tag": "0346_backup_delivery_reasons",
       "breakpoints": true
+    },
+    {
+      "idx": 347,
+      "version": "7",
+      "when": 1794901414784,
+      "tag": "0347_hosted_tenant_defaults",
+      "breakpoints": true
     }
   ]
 }
