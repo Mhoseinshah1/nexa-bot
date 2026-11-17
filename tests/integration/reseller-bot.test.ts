@@ -337,7 +337,10 @@ describe('a reseller’s dedicated bot (reseller-phase PR-6)', () => {
           },
         });
     const denied = await inject('?limit=1', false);
-    expect(denied.statusCode).toBe(403);
+    expect(denied.statusCode).toBe(401);
+    expect(denied.json()).toMatchObject({
+      error: { code: HOSTING_ERROR_CODES.SECTION_SESSION_REQUIRED },
+    });
     const first = await inject('?limit=1');
     expect(first.statusCode, first.body).toBe(200);
     const page = first.json() as ResellerBotRequestsAdminResponse;
