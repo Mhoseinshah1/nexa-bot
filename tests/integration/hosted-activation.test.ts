@@ -7,6 +7,7 @@ import {
   HOSTED_DOMAIN_CHECK_PATH,
   HOSTING_ACTIVATION_ERROR_CODES as CODES,
   HOSTING_ERROR_CODES,
+  IDENTITY_ERROR_CODES,
   isNexaError,
   systemContext,
   type ActorContext,
@@ -445,9 +446,18 @@ describe('hosted bot activation (phase 6A PR-4)', () => {
         });
         // Session revocation can also stop the next page read; neither path can send.
         try {
-          expect((await recover()).totals.failed).toBe(1);
+          const result = await recover();
+          expect(result.totals).toEqual(
+            change === 'stop'
+              ? { ready: 0, skipped: 1, failed: 0 }
+              : { ready: 0, skipped: 0, failed: 1 },
+          );
         } catch (error) {
           if (change !== 'session' || !isNexaError(error)) throw error;
+          expect([
+            IDENTITY_ERROR_CODES.AUTH_SESSION_INVALID,
+            HOSTING_ERROR_CODES.SECTION_SESSION_REQUIRED,
+          ]).toContain(error.code);
         }
         expect(changed).toBe(true);
         expect(sent()).toHaveLength(0);
@@ -502,13 +512,22 @@ describe('hosted bot activation (phase 6A PR-4)', () => {
         .select()
         .from(hostedBots)
         .where(eq(hostedBots.hostedTenantId, first));
+      const [owner] = await db().select().from(admins).where(eq(admins.id, hosted!.ownerAdminId));
       const ids = Array.from({ length: 51 }, () => api.container.ids.uuid());
       await db()
         .insert(tenants)
         .values(ids.map((id, index) => ({ ...tenant!, id, slug: `page-${String(index)}` })));
+      const owners = ids.map((tenantId) => ({ ...owner!, id: api.container.ids.uuid(), tenantId }));
+      await db().insert(admins).values(owners);
       await db()
         .insert(hostedBots)
-        .values(ids.map((id) => ({ ...hosted!, hostedTenantId: id })));
+        .values(
+          owners.map((owner) => ({
+            ...hosted!,
+            hostedTenantId: owner.tenantId,
+            ownerAdminId: owner.id,
+          })),
+        );
       const reader = new DrizzleHostedRecoveryCandidates(api.container.database.db);
       const preview = await reader.preview(tenantA);
       expect(preview.count).toBe(52);
@@ -516,9 +535,11 @@ describe('hosted bot activation (phase 6A PR-4)', () => {
       await db()
         .insert(tenants)
         .values({ ...tenant!, id: late, slug: 'page-late' });
+      const lateOwner = { ...owner!, id: api.container.ids.uuid(), tenantId: late };
+      await db().insert(admins).values(lateOwner);
       await db()
         .insert(hostedBots)
-        .values({ ...hosted!, hostedTenantId: late });
+        .values({ ...hosted!, hostedTenantId: late, ownerAdminId: lateOwner.id });
       const page = await reader.page(tenantA, null, preview.through!);
       expect(page).toHaveLength(50);
       const rest = await reader.page(tenantA, page[49]!.hostedTenantId, preview.through!);
