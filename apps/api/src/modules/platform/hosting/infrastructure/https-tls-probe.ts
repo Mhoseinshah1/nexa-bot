@@ -31,9 +31,11 @@ export class HttpsTlsProbe implements HostedTlsProbe {
     assertOutsideTransaction('A hosted-domain HTTPS probe');
     return new Promise((resolve) => {
       let settled = false;
+      let deadline: NodeJS.Timeout | undefined;
       const finish = (result: HostedTlsProbeResult): void => {
         if (settled) return;
         settled = true;
+        if (deadline !== undefined) clearTimeout(deadline);
         resolve(result);
       };
       const req = request(
@@ -55,6 +57,11 @@ export class HttpsTlsProbe implements HostedTlsProbe {
           );
         },
       );
+      // Socket timeouts do not cover a stalled DNS lookup. Bound the entire probe too.
+      deadline = setTimeout(() => {
+        req.destroy();
+        finish({ ok: false, reason: 'UNREACHABLE' });
+      }, this.timeoutMs);
       req.on('timeout', () => {
         req.destroy();
         finish({ ok: false, reason: 'UNREACHABLE' });

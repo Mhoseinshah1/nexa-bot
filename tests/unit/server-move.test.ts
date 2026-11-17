@@ -563,6 +563,11 @@ describe('the Persian output', () => {
     expect(text).toContain('owner.example  →  رکورد A/AAAA به 198.51.100.9');
     expect(text).toContain('a.example (@a_bot)  →  CNAME به owner.example');
     expect(text).toContain('sudo botctl telegram register');
+    expect(text).toContain('sudo botctl telegram register-hosted');
+    expect(text).toContain('کد بخش «میزبانی‌ها»');
+    expect(text.indexOf('sudo botctl telegram register-hosted')).toBeLessThan(
+      text.indexOf('sudo botctl roles enable provisioner monitor'),
+    );
     expect(text).toContain('BACKUP_TELEGRAM_BOT_TOKEN');
     expect(text.indexOf('sudo botctl telegram register')).toBeLessThan(
       text.indexOf('sudo botctl roles enable provisioner monitor'),

@@ -376,6 +376,11 @@ script can compare it without parsing prose. `unavailable` is the fourth and thi
 section used to document only three, which meant automation written from it
 rejected a legitimate answer exactly when something had been disabled.
 
+For hosted bots after a move, run `botctl telegram register-hosted` in a terminal. It uses the
+installation owner's normal sign-in and hosting-section proof, asks for counted confirmation,
+and rechecks eligible bots from their stored credentials without changing the primary bot.
+See [server move](server-move.md#5-verify-and-webhooks) for summaries, retries and exit codes.
+
 #### What `botctl telegram status` decides from: both halves
 
 Since the 2026-10-07 hardening the word is decided from **two** facts, and both

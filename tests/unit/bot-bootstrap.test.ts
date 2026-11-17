@@ -841,6 +841,26 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
     return built;
   }
 
+  it.each([ORIGIN, 'https://moved.example.com'])(
+    'honours the hosted recovery gate after identity, before reporting or sending to %s',
+    async (origin) => {
+      const { service, telegram } = await installed();
+      const before = telegram.webhookCalls.length;
+      await expect(
+        service.execute(scope, {
+          token: null,
+          publicBaseUrl: origin,
+          beforeRegister: async () => {
+            throw new Error('hosted setup changed');
+          },
+        }),
+      ).rejects.toThrow('hosted setup changed');
+      expect(telegram.webhookCalls).toHaveLength(before);
+      // The denied run released its claim: a subsequent valid run can finish.
+      await service.execute(scope, { token: null, publicBaseUrl: origin });
+    },
+  );
+
   it('does nothing at all when Telegram is already pointed here', async () => {
     const { service, bots, telegram } = await installed();
     const before = telegram.webhookCalls.length;

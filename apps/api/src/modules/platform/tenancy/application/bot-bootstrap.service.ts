@@ -218,6 +218,8 @@ export interface BotBootstrapInput {
    * keeps the registered URL and the served route from drifting apart.
    */
   readonly publicBaseUrl: string;
+  /** Hosted recovery's additional owner/setup/lifecycle gate; never supplies credentials. */
+  readonly beforeRegister?: () => Promise<void>;
 }
 
 export type BotBootstrapOutcomeKind =
@@ -966,6 +968,7 @@ export class BotBootstrapService {
       });
     }
     if (holds === 'HOLDS') {
+      await input.beforeRegister?.();
       /*
        * The menu is reconciled even here, and THIS is `OQ-4H-02`.
        *
@@ -1036,6 +1039,7 @@ export class BotBootstrapService {
     const claimId = await this.claimRegistration(scope, view.id);
     const dropPendingUpdates = ensured.createdNow;
     try {
+      await input.beforeRegister?.();
       const registered = await this.deps.telegram.registerWebhook({
         token,
         url,

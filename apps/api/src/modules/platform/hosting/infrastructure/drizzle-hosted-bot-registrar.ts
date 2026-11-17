@@ -176,7 +176,7 @@ export class DrizzleHostedBotRegistrar implements HostedBotRegistrar {
 
   async registerWebhook(
     context: SystemContext,
-    input: { hostedTenantId: string; origin: string },
+    input: Parameters<HostedBotRegistrar['registerWebhook']>[1],
   ): Promise<HostedWebhookOutcome> {
     assertSystem(context);
     try {
@@ -184,6 +184,7 @@ export class DrizzleHostedBotRegistrar implements HostedBotRegistrar {
         // The token is read from the row; a hosted bot always has one by now.
         token: null,
         publicBaseUrl: input.origin,
+        ...(input.beforeRegister === undefined ? {} : { beforeRegister: input.beforeRegister }),
       });
       return { outcome: 'REGISTERED' };
     } catch (error) {
