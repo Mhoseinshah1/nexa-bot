@@ -4,6 +4,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { launchChrome, openPage, startServer } from './harness.mjs';
 import { me } from '../../tests/web/reseller-fixtures.ts';
 
@@ -52,6 +53,14 @@ const status = {
 const server = await startServer();
 const chrome = await launchChrome();
 const report = [];
+async function waitForElement(page, selector) {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (await page.evaluate(`!!document.querySelector(${JSON.stringify(selector)})`)) return;
+    await delay(100);
+  }
+  throw new Error(`page content did not become ready: ${selector}`);
+}
 try {
   for (const view of [
     { width: 390, theme: 'dark' },
@@ -84,7 +93,25 @@ try {
         else if (url.pathname === '/api/admin/v1/hosting/status') body = status;
         else if (url.pathname === '/api/admin/v1/hosting/bots')
           body = { bots: [], create: status.create };
-        else if (url.pathname === '/api/admin/v1/hosting/server') body = { measuredAt: now };
+        else if (url.pathname === '/api/admin/v1/hosting/restores') body = { restores: [] };
+        else if (url.pathname === '/api/admin/v1/hosting/server')
+          body = {
+            measuredAt: now,
+            cpu: { cores: 4, loadAverage1m: 0.8, loadPercent: 20 },
+            memory: { totalBytes: 8 * 1024 ** 3, availableBytes: 5 * 1024 ** 3 },
+            disks: [],
+            estimate: {
+              formula: 'budget = floor(75 x min(1, cores / 4))',
+              budgetConcurrentCustomers: 75,
+              ownerReserved: 25,
+              liveHostedBots: 0,
+              headroom: 50,
+              moreSmallBots: 50,
+              moreMediumBots: 16,
+              moreLargeBots: 5,
+              blockedBy: null,
+            },
+          };
         else if (url.pathname === '/api/admin/v1/hosting/reseller-bot-requests')
           body = {
             requests: [request(url.searchParams.has('cursor'))],
@@ -108,17 +135,31 @@ try {
       await page.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/*' }] });
       await page.send('Page.navigate', { url: `http://127.0.0.1:${server.port}${route}` });
       if (!(await page.settle())) throw new Error(`unsettled: ${route}`);
+      // Network quiet can precede React mounting the authenticated route.
+      await waitForElement(
+        page,
+        route === '/hosting'
+          ? '#hosting-panel-tab-reseller-requests'
+          : 'details.disclosure > summary',
+      );
       if (route === '/hosting') {
         const selected = await page.evaluate(
-          `(() => { const tab = [...document.querySelectorAll('[role=tab]')].find(el => el.textContent.includes('درخواست')); tab?.click(); return !!tab; })()`,
+          `(() => { const tab = document.getElementById('hosting-panel-tab-reseller-requests'); tab?.click(); return !!tab; })()`,
         );
         if (!selected || !(await page.settle())) throw new Error('owner request tab missing');
       } else if (!(await page.click('details.disclosure > summary')))
         throw new Error('historical timeline missing');
+      const framed = await page.evaluate(
+        route === '/hosting'
+          ? `(() => { const target = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === 'بارگذاری بیشتر')?.closest('.card'); target?.scrollIntoView({ block: 'start', behavior: 'instant' }); return !!target; })()`
+          : `(() => { const target = document.querySelector('details.disclosure'); target?.scrollIntoView({ block: 'start', behavior: 'instant' }); return !!target; })()`,
+      );
+      if (!framed) throw new Error('screenshot target missing');
       const facts = await page.evaluate(`(() => ({
         rtl: document.documentElement.dir === 'rtl',
         overflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
         visible: document.body.innerText.includes(${JSON.stringify(route === '/hosting' ? 'current_request_bot' : 'older_linked_bot')}),
+        historyExpanded: ${route === '/hosting'} || document.querySelector('details.disclosure')?.open === true,
         targets: [...document.querySelectorAll('button, summary')].filter(el =>
           el.matches('.disclosure > summary') || ['بارگذاری بیشتر', 'تازه‌سازی'].some(text => el.textContent.trim() === text)
         ).map(el => ({ text: el.textContent.trim(), height: el.getBoundingClientRect().height })),
@@ -126,6 +167,7 @@ try {
       if (
         !facts.rtl ||
         !facts.visible ||
+        !facts.historyExpanded ||
         facts.overflow > 0 ||
         page.errors.length > 0 ||
         (view.width < 900 && facts.targets.some((target) => target.height < 44))
