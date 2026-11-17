@@ -212,8 +212,9 @@ export interface ResellerBotRequestAdminView extends ResellerBotRequestView {
 /** Newest-first keyset pages. The cursor is the last request id, scoped to the installation.
  * Later inserts ahead of it appear on refresh; this is not a historical snapshot.
  */
-export const RESELLER_BOT_ADMIN_PAGE_SIZE = 50;
-export const RESELLER_BOT_ADMIN_PAGE_MAX = 100;
+// Preserve the old first-page size for cached clients; the current Web UI requests 50.
+export const RESELLER_BOT_ADMIN_PAGE_SIZE = 200;
+export const RESELLER_BOT_ADMIN_PAGE_MAX = 200;
 export const resellerBotAdminListQuerySchema = z.object({
   cursor: z.string().uuid().optional(),
   limit: z.coerce
