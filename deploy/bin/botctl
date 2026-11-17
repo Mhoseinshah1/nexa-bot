@@ -2917,7 +2917,9 @@ cmd_telegram() {
 
   case "$action" in
     register-hosted)
-      [ -t 0 ] && [ -t 1 ] || nexa_die "register-hosted needs an interactive terminal for owner sign-in and confirmation."
+      if [ ! -t 0 ] || [ ! -t 1 ]; then
+        nexa_die "register-hosted needs an interactive terminal for owner sign-in and confirmation."
+      fi
       move_refuse_if_frozen
       nexa_acquire_lock 0
       nexa_compose run --rm --no-deps --entrypoint node api dist/register-hosted-webhooks.cli.js
