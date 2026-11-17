@@ -1,4 +1,15 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Req, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Inject,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
@@ -21,9 +32,12 @@ export class ResellerBotAdminController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
   @Get()
-  async list(@Req() request: FastifyRequest): Promise<ResellerBotRequestsAdminResponse> {
+  async list(
+    @Req() request: FastifyRequest,
+    @Query() query: unknown,
+  ): Promise<ResellerBotRequestsAdminResponse> {
     const { scope, actor } = await authenticateAdmin(this.container, request);
-    return this.container.resellerBots.adminList(scope, actor, this.token(request));
+    return this.container.resellerBots.adminList(scope, actor, this.token(request), query);
   }
 
   @Post(':requestId/approve')

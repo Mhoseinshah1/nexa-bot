@@ -1,5 +1,5 @@
 import { useId, useState, type FormEvent, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   RESELLER_BOT_GRACE_DAYS_MAX,
   RESELLER_BOT_GRACE_DAYS_SETTING_KEY,
@@ -77,10 +77,13 @@ type Dialog = {
 
 export function ResellerBotRequests() {
   const queryClient = useQueryClient();
-  const requests = useQuery({
+  const requests = useInfiniteQuery({
     queryKey: RESELLER_BOT_REQUESTS_KEY,
-    queryFn: fetchResellerBotRequests,
+    queryFn: ({ pageParam }) => fetchResellerBotRequests(pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
+  const rows = requests.data?.pages.flatMap((page) => page.requests) ?? [];
   const [dialog, setDialog] = useState<Dialog>(null);
   const toast = useToast();
   const refresh = async () => {
@@ -97,18 +100,29 @@ export function ResellerBotRequests() {
     <div className="stack">
       <ResellerBotSettings />
       <Card title={t('web.rbot_requests_title')} hint={t('web.rbot_requests_hint')}>
+        <Button
+          disabled={requests.isFetching}
+          onClick={() => void queryClient.resetQueries({ queryKey: RESELLER_BOT_REQUESTS_KEY })}
+        >
+          {t('web.refresh')}
+        </Button>
         <StateSwitch query={requests}>
           {requests.data !== undefined &&
-            (requests.data.requests.length === 0 ? (
+            (rows.length === 0 ? (
               <Empty title={t('web.rbot_requests_empty')} />
             ) : (
               <div className="stack">
-                {requests.data.requests.map((request) => (
+                {rows.map((request) => (
                   <RequestCard key={request.id} request={request} onAction={setDialog} />
                 ))}
               </div>
             ))}
         </StateSwitch>
+        {requests.hasNextPage && (
+          <Button disabled={requests.isFetching} onClick={() => void requests.fetchNextPage()}>
+            {t('web.load_more')}
+          </Button>
+        )}
       </Card>
       {dialog?.kind === 'approve' && (
         <CodePromptDialog

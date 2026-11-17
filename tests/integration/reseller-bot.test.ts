@@ -2,6 +2,10 @@ import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   HOSTING_ERROR_CODES,
+  HOSTING_SESSION_COOKIE_NAME,
+  SESSION_COOKIE_NAME,
+  API_PREFIX,
+  type ResellerBotRequestsAdminResponse,
   RESELLER_BOT_ERROR_CODES as CODES,
   isNexaError,
   systemJobActor,
@@ -80,6 +84,7 @@ describe('a reseller’s dedicated bot (reseller-phase PR-6)', () => {
   let offsetMs = 0;
   let keys = 0;
   let ownerActor: ActorContext;
+  let ownerSessionToken: string;
   let owner: { id: string; username: string; password: string };
   let panel: { secret: string; token: string };
   let reseller: UserId;
@@ -125,6 +130,7 @@ describe('a reseller’s dedicated bot (reseller-phase PR-6)', () => {
       { username: admin.username, password: admin.password },
       { ip: null, userAgent: null },
     );
+    ownerSessionToken = result.token;
     return {
       type: 'WEB_ADMIN',
       id: admin.id,
@@ -306,6 +312,53 @@ describe('a reseller’s dedicated bot (reseller-phase PR-6)', () => {
     await makeReseller(otherReseller);
     await setFee(FEE);
     botToken = telegram.createBot({ id: 7_200_000_001, username: 'reseller_one_bot' });
+  });
+
+  it('pages through the authenticated owner HTTP endpoint and approves/creates from a later page', async () => {
+    const filed = await submit(reseller);
+    offsetMs += 1_000;
+    const newer = await submit(otherReseller, {
+      botToken: telegram.createBot({ id: 7_200_000_002, username: 'second_reseller_bot' }),
+    });
+    await bots().cancel(tenantA, panelActor, {
+      customerId: otherReseller,
+      requestId: newer.id,
+      idempotencyKey: key(),
+    });
+    const inject = (query: string, section = true) =>
+      api.app
+        .getHttpAdapter()
+        .getInstance()
+        .inject({
+          method: 'GET',
+          url: `${API_PREFIX}/hosting/reseller-bot-requests${query}`,
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${ownerSessionToken}${section ? `; ${HOSTING_SESSION_COOKIE_NAME}=${panel.token}` : ''}`,
+          },
+        });
+    const denied = await inject('?limit=1', false);
+    expect(denied.statusCode).toBe(403);
+    const first = await inject('?limit=1');
+    expect(first.statusCode, first.body).toBe(200);
+    const page = first.json() as ResellerBotRequestsAdminResponse;
+    expect(page.requests.map((row) => row.id)).toEqual([newer.id]);
+    const second = await inject(`?limit=1&cursor=${page.nextCursor}`);
+    const older = second.json() as ResellerBotRequestsAdminResponse;
+    expect(older.requests.map((row) => row.id)).toEqual([filed.id]);
+    expect(older.nextCursor).toBeNull();
+    await credit(reseller, FEE);
+    await approve(older.requests[0]!.id);
+    const hosted = await createLinked(older.requests[0]!.id);
+    expect(
+      (
+        await bots().adminList(tenantA, ownerActor, panel.token, {
+          limit: 1,
+          cursor: page.nextCursor,
+        })
+      ).requests[0],
+    ).toMatchObject({ id: filed.id, state: 'APPROVED', hostedTenantId: hosted });
+    expect((await inject('?limit=201')).statusCode).toBe(400);
+    expect((await inject('?cursor=invalid')).statusCode).toBe(400);
   });
 
   describe('the offer and the request', () => {

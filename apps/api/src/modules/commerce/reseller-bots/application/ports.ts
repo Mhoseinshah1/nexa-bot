@@ -1,5 +1,6 @@
 import type {
   CurrencyCode,
+  HostedBotState,
   ResellerBotChargeKind,
   ResellerBotRequestState,
   TenantContext,
@@ -112,7 +113,33 @@ export interface ResellerBotRepository {
   /** Another PENDING or APPROVED request already names this Telegram bot. */
   liveBotTaken(scope: TenantContext, telegramBotId: string, tx?: unknown): Promise<boolean>;
   listByCustomer(scope: TenantContext, customerId: UserId): Promise<ResellerBotRequestRecord[]>;
-  listAll(scope: TenantContext, limit: number): Promise<ResellerBotRequestRecord[]>;
+  listAll(
+    scope: TenantContext,
+    limit: number,
+    cursor?: string,
+  ): Promise<ResellerBotRequestRecord[]>;
+  /** Minimal owner-only display fields, never customer secrets or unrelated profiles. */
+  customerSummaries(
+    scope: TenantContext,
+    ids: readonly UserId[],
+  ): Promise<
+    readonly {
+      id: string;
+      firstName: string | null;
+      lastName: string | null;
+      username: string | null;
+      telegramUserId: string | null;
+    }[]
+  >;
+  hostedStates(
+    scope: TenantContext,
+    ids: readonly string[],
+  ): Promise<
+    readonly {
+      id: string;
+      state: HostedBotState;
+    }[]
+  >;
   approve(
     scope: TenantContext,
     id: string,

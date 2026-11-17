@@ -1,9 +1,11 @@
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, or } from 'drizzle-orm';
-import type { CurrencyCode, TenantContext, UserId } from '@nexa/contracts';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import type { CurrencyCode, HostedBotState, TenantContext, UserId } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { ScopeBound } from '../../../../infrastructure/persistence/database-scope.js';
 import {
   auditLogs,
+  customers,
+  hostedBots,
   hostedBotActivationLinks,
   resellerBotFeeCharges,
   resellerBotFeeNotices,
@@ -189,14 +191,58 @@ export class DrizzleResellerBotRepository implements ResellerBotRepository {
     return rows.map(toRecord);
   }
 
-  async listAll(scope: TenantContext, limit: number): Promise<ResellerBotRequestRecord[]> {
+  async listAll(
+    scope: TenantContext,
+    limit: number,
+    cursor?: string,
+  ): Promise<ResellerBotRequestRecord[]> {
     const rows = await this.db
       .select()
       .from(resellerBotRequests)
-      .where(eq(resellerBotRequests.tenantId, requireTenantId(scope)))
+      .where(
+        and(
+          eq(resellerBotRequests.tenantId, requireTenantId(scope)),
+          // Resolve the anchor in SQL: Date would truncate microseconds. A foreign/missing
+          // anchor yields NULL, hence no rows; it cannot select another tenant's position.
+          cursor === undefined
+            ? undefined
+            : sql`(${resellerBotRequests.createdAt}, ${resellerBotRequests.id}) < (
+          SELECT anchor.created_at, anchor.id FROM reseller_bot_requests anchor
+          WHERE anchor.tenant_id = ${requireTenantId(scope)} AND anchor.id = ${cursor}::uuid
+        )`,
+        ),
+      )
       .orderBy(desc(resellerBotRequests.createdAt), desc(resellerBotRequests.id))
       .limit(limit);
     return rows.map(toRecord);
+  }
+
+  async customerSummaries(scope: TenantContext, ids: readonly UserId[]) {
+    if (ids.length === 0) return [];
+    return this.db
+      .select({
+        id: customers.id,
+        firstName: customers.firstName,
+        lastName: customers.lastName,
+        username: customers.username,
+        telegramUserId: customers.telegramUserId,
+      })
+      .from(customers)
+      .where(and(eq(customers.tenantId, requireTenantId(scope)), inArray(customers.id, [...ids])));
+  }
+
+  async hostedStates(scope: TenantContext, ids: readonly string[]) {
+    if (ids.length === 0) return [];
+    const rows = await this.db
+      .select({ id: hostedBots.hostedTenantId, state: hostedBots.state })
+      .from(hostedBots)
+      .where(
+        and(
+          eq(hostedBots.tenantId, requireTenantId(scope)),
+          inArray(hostedBots.hostedTenantId, [...ids]),
+        ),
+      );
+    return rows.map((row) => ({ ...row, state: row.state as HostedBotState }));
   }
 
   async approve(

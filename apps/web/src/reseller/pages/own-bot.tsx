@@ -13,6 +13,7 @@ import {
   Badge,
   Banner,
   Button,
+  Disclosure,
   Empty,
   Field,
   Input,
@@ -102,10 +103,7 @@ export function OwnBotPage() {
   const query = useQuery({ queryKey: OWN_BOT_KEY, queryFn: fetchOwnBot });
   const data = query.data;
   const current = data === undefined ? null : currentRequest(data.requests);
-  const past =
-    data === undefined
-      ? []
-      : data.requests.filter((one) => one.state === 'REJECTED' || one.state === 'CANCELLED');
+  const past = data === undefined ? [] : data.requests.filter((one) => one.id !== current?.id);
   return (
     <div className="rp-split rp-stretch">
       <div className="rp-grow">
@@ -419,24 +417,44 @@ function CurrentRequest({ request }: { request: Request }) {
 function PastRequests({ requests }: { requests: readonly Request[] }) {
   return (
     <RpCard title={t('web.rp_bot_past_title')}>
-      <ul className="rp-list">
+      <div className="rp-stack">
         {requests.map((request) => (
-          <li key={request.id}>
-            <div>
-              <b>{t('web.rp_bot_request_title').replace('{number}', request.number)}</b>
-              <span className="muted small">
-                <Ltr>{`@${request.botUsername}`}</Ltr> {formatTimestamp(request.createdAt)}
-              </span>
-              {request.rejectReason !== null && (
-                <span className="small">
-                  {t('web.rp_bot_reject_reason').replace('{reason}', request.rejectReason)}
-                </span>
-              )}
+          <section
+            key={request.id}
+            className="rp-stack"
+            aria-label={t('web.rp_bot_request_title').replace('{number}', request.number)}
+          >
+            <div className="rp-between">
+              <div>
+                <b>{t('web.rp_bot_request_title').replace('{number}', request.number)}</b>
+                <p className="muted small">
+                  <Ltr>{`@${request.botUsername}`}</Ltr> {formatTimestamp(request.createdAt)}
+                </p>
+                {request.rejectReason !== null && (
+                  <p className="small">
+                    {t('web.rp_bot_reject_reason').replace('{reason}', request.rejectReason)}
+                  </p>
+                )}
+              </div>
+              <Badge tone={STATE_TONE[request.state]}>{t(STATE_LABEL[request.state])}</Badge>
             </div>
-            <Badge tone={STATE_TONE[request.state]}>{t(STATE_LABEL[request.state])}</Badge>
-          </li>
+            {request.timeline.length > 0 && (
+              <Disclosure summary={t('web.rp_bot_history_title')}>
+                <Timeline
+                  items={request.timeline.map((entry, index) => ({
+                    key: `${entry.event}:${entry.at}:${String(index)}`,
+                    at: formatTimestamp(entry.at),
+                    title: eventText(entry),
+                    ...(EVENT_TONE[entry.event] === undefined
+                      ? {}
+                      : { tone: EVENT_TONE[entry.event] }),
+                  }))}
+                />
+              </Disclosure>
+            )}
+          </section>
         ))}
-      </ul>
+      </div>
     </RpCard>
   );
 }

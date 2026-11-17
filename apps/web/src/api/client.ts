@@ -6043,9 +6043,12 @@ export function fetchHostingServer(): Promise<HostingServerResponse> {
 
 // --- Reseller-phase PR-6: «درخواست‌های نماینده‌ها» -------------------------------------------
 
-export function fetchResellerBotRequests(): Promise<ResellerBotRequestsAdminResponse> {
+export function fetchResellerBotRequests(
+  cursor?: string,
+): Promise<ResellerBotRequestsAdminResponse> {
   return authedGet(
-    RESELLER_BOT_ADMIN_ROUTES.list,
+    RESELLER_BOT_ADMIN_ROUTES.list +
+      `?${new URLSearchParams({ limit: '50', ...(cursor === undefined ? {} : { cursor }) }).toString()}`,
     hostingShape<ResellerBotRequestsAdminResponse>(),
   );
 }
