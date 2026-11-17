@@ -48,7 +48,8 @@ Data migration `0347_hosted_tenant_defaults.sql`:
   setting, or IRT for a missing/invalid setting, matching the resolver.
 - Inserts «عمومی» only when the hosted tenant has **zero** categories. An
   inactive, hidden, renamed or custom category also means no insertion.
-  Backfill UUIDs use PostgreSQL's generator, as migration 0097 does.
+  Backfill UUIDv7s use migration 0100's timestamp/version-bit construction;
+  bare PostgreSQL UUIDv4s would be rejected by category service/API readers.
 - Never reads/writes credentials, billing, customer, product, order or wallet
   rows. It sends no notification. Non-hosted tenants are untouched.
 - Can be executed repeatedly without changing already initialized rows.

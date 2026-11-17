@@ -25,7 +25,8 @@ WHERE t.kind = 'HOSTED'
 ON CONFLICT (tenant_id, provider) DO NOTHING;
 --> statement-breakpoint
 -- Any category (including hidden/inactive or renamed) means "already initialized".
--- UUID generation here follows 0097: a data migration has no application generator.
+-- UUIDv7 generation follows 0100; plain gen_random_uuid() would make a v4 that
+-- productCategoryIdSchema refuses, leaving the repaired category unusable.
 -- The block keeps the lock and insert atomic even for a SQL runner that executes
 -- migration statements separately (the rollback-compatibility suite does this).
 DO $$
@@ -37,7 +38,13 @@ BEGIN
   LOCK TABLE product_categories IN SHARE ROW EXCLUSIVE MODE;
   PERFORM set_config('lock_timeout', previous_lock_timeout, true);
   INSERT INTO product_categories (id, tenant_id, name)
-  SELECT gen_random_uuid(), t.id, 'عمومی'
+  SELECT encode(
+    set_bit(set_bit(overlay(
+      uuid_send(gen_random_uuid())
+      PLACING substring(int8send(floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint) FROM 3)
+      FROM 1 FOR 6
+    ), 52, 1), 53, 1), 'hex'
+  )::uuid, t.id, 'عمومی'
   FROM tenants t
   WHERE t.kind = 'HOSTED'
     AND NOT EXISTS (SELECT 1 FROM product_categories c WHERE c.tenant_id = t.id);

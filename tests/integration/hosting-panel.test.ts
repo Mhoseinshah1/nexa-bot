@@ -6,6 +6,7 @@ import {
   DEFAULT_PRODUCT_CATEGORY_NAME,
   EMPTY_PRODUCT_DISPLAY,
   PAYMENT_GATEWAY_PROVIDERS,
+  uuidV7Schema,
   money,
   BACKUP_SCHEDULE_SETTING_KEYS,
   HOSTING_CODE_LOCKOUT_SECONDS,
@@ -777,9 +778,24 @@ describe('creator panel «میزبانی‌ها» (phase 6A PR-3)', () => {
           boundsCurrency: 'IRR',
           status: row.provider === 'MANUAL_TRANSFER' ? 'ACTIVE' : 'DISABLED',
         });
-      expect(
-        await db.select().from(productCategories).where(eq(productCategories.tenantId, a)),
-      ).toMatchObject([{ name: DEFAULT_PRODUCT_CATEGORY_NAME }]);
+      const backfilledCategories = await db
+        .select()
+        .from(productCategories)
+        .where(eq(productCategories.tenantId, a));
+      expect(backfilledCategories).toMatchObject([{ name: DEFAULT_PRODUCT_CATEGORY_NAME }]);
+      const backfilledId = uuidV7Schema.parse(backfilledCategories[0]?.id);
+      const [adminA] = await db.select().from(admins).where(eq(admins.tenantId, a));
+      const scopeA: TenantContext = { tenantId: a as never, botInstanceId: null };
+      const actorA = (
+        await signIn(
+          { id: adminA!.id as never, username: 'repair-empty-admin', password: HOSTED_PASSWORD },
+          scopeA,
+        )
+      ).actor;
+      // A row in the table is not enough: the real service must accept its identifier.
+      expect(await api.container.productCategories.get(scopeA, actorA, backfilledId)).toMatchObject(
+        { id: backfilledId, name: DEFAULT_PRODUCT_CATEGORY_NAME },
+      );
       const invalid = await db
         .select()
         .from(paymentGateways)
