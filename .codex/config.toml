@@ -1,0 +1,9 @@
+# Native role adapters; the authoritative prompts remain in .claude/agents/.
+# Project configuration must be trusted by the Codex client before it is loaded.
+[agents.spec_guardian]
+description = "Read-only review against frozen contracts, domain boundaries and project conventions."
+config_file = "agents/spec-guardian.toml"
+
+[agents.research_lookup]
+description = "Read-only research lookup with citations and the original confidence labels."
+config_file = "agents/research-lookup.toml"
