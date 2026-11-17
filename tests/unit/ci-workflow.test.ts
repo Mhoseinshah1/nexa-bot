@@ -516,6 +516,7 @@ describe('the CI workflow', () => {
         on('web', 'deploy_logic'),
       ],
       [['CLAUDE.md', 'PROGRESS.md'], on('web', 'deploy_logic')],
+      [['AGENTS.md'], on('web', 'deploy_logic')],
       // The Web Admin, its text slices and the Mini App: the web project.
       [['apps/web/src/pages/x.tsx'], on('web')],
       [['apps/web/src/i18n/web.fa/customers.ts'], on('web')],
@@ -566,6 +567,9 @@ describe('the CI workflow', () => {
       [['tests/deploy/botctl.test.sh', 'scripts/release-ci-gate.mjs'], on('deploy_logic')],
       // Session tooling.
       [['.claude/skills/nexa-ci-watch/SKILL.md', 'scripts/mutate-tb1.py'], NONE],
+      [['.agents/skills/nexa-ci-watch'], NONE],
+      [['.agents/skills/nexa-ci-watch/SKILL.md'], NONE],
+      [['.codex/config.toml', '.codex/agents/spec-guardian.toml'], NONE],
       [['scripts/claude/run-gate.sh'], on('deploy_logic')],
     ])('%j', (paths, expected) => {
       expect(decided('pull_request', ...paths)).toEqual(expected);
@@ -605,6 +609,8 @@ describe('the CI workflow', () => {
       ]) {
         expect(decided('pull_request', path), path).toEqual(FULL);
         expect(decided('pull_request', 'docs/ci.md', path), path).toEqual(FULL);
+        expect(decided('pull_request', '.agents/skills/nexa-ci-watch', path), path).toEqual(FULL);
+        expect(decided('pull_request', '.codex/config.toml', path), path).toEqual(FULL);
       }
     });
 
@@ -621,6 +627,8 @@ describe('the CI workflow', () => {
       ]) {
         expect(decided('pull_request', path), path).toEqual(FULL);
         expect(decided('pull_request', 'docs/ci.md', path), path).toEqual(FULL);
+        expect(decided('pull_request', '.agents/skills/nexa-ci-watch', path), path).toEqual(FULL);
+        expect(decided('pull_request', '.codex/config.toml', path), path).toEqual(FULL);
       }
       // The dependency graph: full, and the audit too.
       for (const path of ['pnpm-lock.yaml', 'package.json', 'apps/web/package.json']) {
