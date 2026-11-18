@@ -5,6 +5,7 @@ import {
   miniAppOrderSchema,
   miniAppServiceDetailSchema,
   miniAppServiceOfferSchema,
+  supportAiStartPayload,
   type MiniAppAutoRenew,
   type MiniAppServiceAction,
   type MiniAppServiceDetail,
@@ -12,6 +13,7 @@ import {
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { dateTime, money, traffic } from '../format.js';
+import { openTelegram } from '../telegram.js';
 import { Button, Card, Loading, Ltr, PersonalPrice, errorText, useLoad } from '../ui.js';
 import { ServiceCard } from './service-card.js';
 import { QrSheet } from './qr-sheet.js';
@@ -28,8 +30,9 @@ import { UsageChart } from './usage-chart.js';
  * days from stored snapshots. Not drawn: a connected-device count (only the stored usage and
  * the device LIMIT exist), «افزودن خودکار به برنامه» (client apps carry no import
  * link), and «حذف سرویس» (a customer can suspend or resume, never delete). Suspend, rotate,
- * transfer, files, note and refund request arrive with their screens; the QR and the
- * location change are sheets over this page, and the connection guide and support are links.
+ * transfer, note and refund request arrive with their screens. On a files-only panel, the
+ * connection files are received in the bot. The QR and location change are sheets over this
+ * page, and the connection guide and support are links.
  */
 export function ServiceDetail({ serviceId }: { serviceId: string }) {
   const { api } = useApp();
@@ -54,7 +57,15 @@ function Detail({
   /** Re-reads the service: a location change was accepted, so the remaining count moved. */
   onChanged: () => void;
 }) {
-  const { navigate } = useApp();
+  const {
+    navigate,
+    me: { botLink },
+  } = useApp();
+  const subscriptionUrl = service.connectionFiles === undefined ? service.subscriptionUrl : null;
+  const serviceBotLink =
+    service.connectionFiles === 'TELEGRAM' && botLink !== null
+      ? `${botLink}?start=${supportAiStartPayload('service', service.id)}`
+      : null;
   const [copied, setCopied] = useState(false);
   const [sheet, setSheet] = useState<'qr' | 'location' | null>(null);
   const [action, setAction] = useState<MiniAppServiceAction | null>(null);
@@ -74,15 +85,34 @@ function Detail({
         </p>
       </Card>
       {service.usageChart && <UsageChart serviceId={service.id} />}
-      {service.subscriptionUrl !== null && (
+      {service.connectionFiles !== undefined && (
+        <Card>
+          <h2>{t('miniapp.service_files')}</h2>
+          <p>
+            {t(
+              service.connectionFiles === 'UNAVAILABLE'
+                ? 'miniapp.service_files_unavailable'
+                : serviceBotLink === null
+                  ? 'miniapp.service_files_manual'
+                  : 'miniapp.service_files_in_bot',
+            )}
+          </p>
+          {serviceBotLink !== null && (
+            <Button onClick={() => openTelegram(serviceBotLink)}>
+              {t('miniapp.service_files_open_bot')}
+            </Button>
+          )}
+        </Card>
+      )}
+      {subscriptionUrl !== null && (
         <Card>
           <h2>{t('miniapp.service_link')}</h2>
           <p className="secret">
-            <Ltr>{service.subscriptionUrl}</Ltr>
+            <Ltr>{subscriptionUrl}</Ltr>
           </p>
           <Button
             onClick={() => {
-              void navigator.clipboard.writeText(service.subscriptionUrl as string);
+              void navigator.clipboard.writeText(subscriptionUrl);
               setCopied(true);
             }}
           >
@@ -129,10 +159,10 @@ function Detail({
           </Button>
         </div>
       </Card>
-      {sheet === 'qr' && service.subscriptionUrl !== null && (
+      {sheet === 'qr' && subscriptionUrl !== null && (
         <QrSheet
           serviceId={service.id}
-          link={service.subscriptionUrl}
+          link={subscriptionUrl}
           kinds={service.qrKinds}
           onClose={() => setSheet(null)}
         />

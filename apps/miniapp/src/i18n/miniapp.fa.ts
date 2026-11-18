@@ -57,6 +57,13 @@ export const MINIAPP_FA = {
   'miniapp.service_not_synced': 'مصرف هنوز از سرور خوانده نشده است.',
   'miniapp.service_working': 'تغییری روی این سرویس در حال اعمال است؛ کمی بعد دوباره ببینید.',
   'miniapp.service_link': 'لینک اشتراک',
+  'miniapp.service_files': 'فایل‌های اتصال',
+  'miniapp.service_files_in_bot': 'سرویس را در ربات باز کنید و «دریافت فایل‌های اتصال» را بزنید.',
+  'miniapp.service_files_open_bot': 'باز کردن سرویس در ربات',
+  'miniapp.service_files_manual':
+    'در ربات، از بخش «سرویس‌های من» این سرویس را باز کنید و «دریافت فایل‌های اتصال» را بزنید.',
+  'miniapp.service_files_unavailable':
+    'فایل‌های اتصال فعلاً در دسترس نیستند. اگر به کمک نیاز دارید، از بخش پشتیبانی پیام بدهید.',
   'miniapp.service_copy_link': 'کپی لینک',
   'miniapp.service_copied': 'کپی شد',
   'miniapp.service_show_qr': 'نمایش QR',

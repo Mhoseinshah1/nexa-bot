@@ -24,6 +24,7 @@ import {
 import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
+import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import {
   createApiApp,
   adminActorFor,
@@ -67,7 +68,7 @@ describe('the mini app on a files-only panel', () => {
   let ctx: TestContext;
   let api: ApiApp;
   let telegram: Server;
-  let panel: FakeMarzban | undefined;
+  let panel: FakeMarzban | FakeRickpanel | undefined;
   let owner: ActorContext;
   let keySeq = 0;
   const distDir = mkdtempSync(join(tmpdir(), 'nexa-miniapp-fo-'));
@@ -145,19 +146,34 @@ describe('the mini app on a files-only panel', () => {
       ...(post === undefined ? {} : { payload: post }),
     });
 
-  /** A delivered service on a Marzban panel; its id, panel and the customer's session. */
-  async function deliveredService(): Promise<{
+  async function sessionFor(telegramId: number): Promise<string> {
+    const minted = await inject({
+      method: 'POST',
+      url: `${MINIAPP_API_PREFIX}${miniAppPath(MINIAPP_ROUTES.session, { botInstanceId: BOT_A1 })}`,
+      payload: { initData: initDataFor({ id: telegramId, first_name: 'سارا' }) },
+    });
+    expect(minted.statusCode, minted.body).toBe(201);
+    return (JSON.parse(minted.body) as { token: string }).token;
+  }
+
+  async function deliveredService(providerType: 'marzban' | 'rickpanel' = 'marzban'): Promise<{
     token: string;
     serviceId: string;
     panelId: string;
+    customerId: UserId;
   }> {
-    panel = await startFakeMarzban({ host: '127.0.0.2' });
+    const options = { host: '127.0.0.2' };
+    const rickpanel = providerType === 'rickpanel';
+    panel = rickpanel ? await startFakeRickpanel(options) : await startFakeMarzban(options);
+    const activation = rickpanel
+      ? {}
+      : { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS TCP'] } };
     const created = await ctx.container.panels.create(tenantA, owner, {
-      name: 'Marzban A',
-      providerType: 'marzban',
+      name: providerType,
+      providerType,
       baseUrl: panel.baseUrl,
       credentials: { username: panel.username, password: panel.password },
-      activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS TCP'] } },
+      activation,
       idempotencyKey: key(),
     });
     const panelId = created.view.panel.id;
@@ -180,13 +196,7 @@ describe('the mini app on a files-only panel', () => {
     });
     await products.setStatus(tenantA, made.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());
 
-    const minted = await inject({
-      method: 'POST',
-      url: `${MINIAPP_API_PREFIX}${miniAppPath(MINIAPP_ROUTES.session, { botInstanceId: BOT_A1 })}`,
-      payload: { initData: initDataFor({ id: 700901, first_name: 'سارا' }) },
-    });
-    expect(minted.statusCode, minted.body).toBe(201);
-    const token = (JSON.parse(minted.body) as { token: string }).token;
+    const token = await sessionFor(700901);
     const rows = await ctx.container.database.db.execute<{ id: string }>(
       sql`SELECT id FROM customers WHERE tenant_id = ${tenantA.tenantId} AND telegram_user_id = '700901'`,
     );
@@ -206,7 +216,7 @@ describe('the mini app on a files-only panel', () => {
     const serviceId = miniAppServicesResponseSchema.parse(
       JSON.parse((await call(token, MINIAPP_ROUTES.services)).body),
     ).items[0]?.id as string;
-    return { token, serviceId, panelId };
+    return { token, serviceId, panelId, customerId };
   }
 
   const setFilesOnly = (panelId: string, value: boolean) =>
@@ -221,6 +231,7 @@ describe('the mini app on a files-only panel', () => {
     const detail = miniAppServiceDetailSchema.parse(JSON.parse(response.body));
     expect(detail.subscriptionUrl).not.toBeNull();
     expect(detail.qr).toBe(true);
+    expect(JSON.parse(response.body)).not.toHaveProperty('connectionFiles');
     expect((await call(token, MINIAPP_ROUTES.serviceQr, { serviceId })).statusCode).toBe(200);
   });
 
@@ -241,10 +252,78 @@ describe('the mini app on a files-only panel', () => {
     const detail = miniAppServiceDetailSchema.parse(JSON.parse(response.body));
     expect(detail.subscriptionUrl).toBeNull();
     expect(detail.qr).toBe(false);
+    expect(detail.connectionFiles).toBe('UNAVAILABLE');
     expect((await call(token, MINIAPP_ROUTES.serviceQr, { serviceId })).statusCode).toBe(404);
 
     const list = await call(token, MINIAPP_ROUTES.services);
     expect(list.body).not.toContain(url);
+  }, 60_000);
+
+  it('offers the bot action after expiry even without a stored link', async () => {
+    const { token, serviceId, panelId } = await deliveredService('rickpanel');
+    await ctx.container.panels.update(tenantA, owner, panelId, {
+      filesOnlyDelivery: true,
+      idempotencyKey: key(),
+    });
+
+    const detail = async () => {
+      const response = await call(token, MINIAPP_ROUTES.service, { serviceId });
+      expect(response.statusCode, response.body).toBe(200);
+      return miniAppServiceDetailSchema.parse(JSON.parse(response.body));
+    };
+    expect(await detail()).toMatchObject({
+      state: 'ACTIVE',
+      connectionFiles: 'TELEGRAM',
+      subscriptionUrl: null,
+      qr: false,
+      qrKinds: [],
+    });
+
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'EXPIRED', subscription_url = NULL WHERE id = ${serviceId}`,
+    );
+    expect(await detail()).toMatchObject({ state: 'EXPIRED', connectionFiles: 'TELEGRAM' });
+
+    // A legacy Files-only panel can have the customer action switched off.
+    const policy = {
+      delivery: { mode: 'CARD_WITH_QR' },
+      actions: { SUBSCRIPTION_FILES: { customerEnabled: false } },
+    };
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO panel_policies (tenant_id, panel_id, policy)
+      VALUES (${tenantA.tenantId}, ${panelId}, ${JSON.stringify(policy)}::jsonb)
+    `);
+    expect(await detail()).toMatchObject({
+      connectionFiles: 'UNAVAILABLE',
+      subscriptionUrl: null,
+      qr: false,
+      qrKinds: [],
+    });
+  }, 60_000);
+
+  it('withholds status from unauthenticated, foreign, or blocked customers', async () => {
+    const { token, serviceId, panelId, customerId } = await deliveredService('rickpanel');
+    await setFilesOnly(panelId, true);
+
+    const unauthenticated = await inject({
+      method: 'GET',
+      url: `${MINIAPP_API_PREFIX}${miniAppPath(MINIAPP_ROUTES.service, { serviceId })}`,
+    });
+    const foreign = await call(await sessionFor(700902), MINIAPP_ROUTES.service, { serviceId });
+    await ctx.container.customers.block(tenantA, owner, {
+      customerId,
+      reason: 'fixture',
+      idempotencyKey: key(),
+    });
+    const blocked = await call(token, MINIAPP_ROUTES.service, { serviceId });
+
+    expect(unauthenticated.statusCode).toBe(401);
+    expect(foreign.statusCode).toBe(404);
+    expect(blocked.statusCode).toBe(403);
+    for (const response of [unauthenticated, foreign, blocked]) {
+      expect(JSON.parse(response.body)).not.toHaveProperty('connectionFiles');
+      expect(JSON.parse(response.body)).not.toHaveProperty('subscriptionUrl');
+    }
   }, 60_000);
 
   // ---- «نوع بارکد» --------------------------------------------------------------------

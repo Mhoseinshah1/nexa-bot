@@ -756,8 +756,10 @@ export const miniAppLocationRemainingSchema = z.object({
 export type MiniAppLocationRemaining = z.infer<typeof miniAppLocationRemainingSchema>;
 
 export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
-  /** The subscription link, only while the service is deliverable. A secret: never logged. */
+  /** The subscription link when deliverable and allowed by the panel. A secret: never logged. */
   subscriptionUrl: z.string().nullable(),
+  /** Files-only delivery: the existing Telegram action is offered, or files are unavailable. */
+  connectionFiles: z.enum(['TELEGRAM', 'UNAVAILABLE']).optional(),
   /** Whether a change is still being applied; the actions wait until it has its answer. */
   working: z.boolean(),
   /** The actions offered now, re-decided by every quote. */

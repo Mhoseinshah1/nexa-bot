@@ -85,16 +85,15 @@ export class MiniAppServicesController {
           call.actor,
           service,
         );
-    /*
-     * R11 A4: on a «فقط فایل، بدون لینک ساب» panel the link is NOT in the payload at all —
-     * not hidden by the screen, not sent and ignored — and the QR the link would draw is
-     * not offered. The field stays in the schema as null, the answer for "no link to show".
-     */
-    const deliverable = ProvisioningService.isDeliverable(service);
-    const showLink =
-      deliverable && !(await this.container.delivery.isFilesOnly(call.context.scope, service));
-    // R11 A4, «نوع بارکد»: the QRs the sheet offers (none while the link is hidden).
-    const qrKinds = deliverable
+    const filesOnly = await this.container.delivery.isFilesOnly(call.context.scope, service);
+    // The bot's own files action decides availability, independently of the stored link.
+    const filesOffered =
+      filesOnly &&
+      !working &&
+      (await this.container.subscriptionFiles.offered(call.context.scope, service));
+    const showLink = !filesOnly && ProvisioningService.isDeliverable(service);
+    // R11 A4: a hidden link and every QR of it stay out of the response.
+    const qrKinds = showLink
       ? (await this.container.delivery.qrPayloadsFor(call.context.scope, service)).map(
           (payload) => payload.kind,
         )
@@ -102,6 +101,7 @@ export class MiniAppServicesController {
     return {
       ...serviceSummaryWire(service, title),
       subscriptionUrl: showLink ? service.subscriptionUrl : null,
+      connectionFiles: filesOnly ? (filesOffered ? 'TELEGRAM' : 'UNAVAILABLE') : undefined,
       working,
       actions: MINIAPP_SERVICE_ACTIONS.filter((kind) => offered.includes(kind)),
       qr: qrKinds.length > 0,
