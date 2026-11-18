@@ -381,8 +381,8 @@ export function moveChecklistFa(input: {
   const hostedBots = input.bots.filter((bot) => bot.kind === 'HOSTED');
   if (hostedBots.length > 0) {
     lines.push(
-      `   و برای ${toFa(hostedBots.length)} ربات میزبانی‌شده، در «میزبانی‌ها» روی کارت هر ربات ` +
-        'مراحل فعال‌سازی (DNS ← SSL ← وب‌هوک) را دوباره بزنید:',
+      `   برای ${toFa(hostedBots.length)} ربات میزبانی‌شده، با حساب مالک و کد بخش «میزبانی‌ها» وارد شوید و تعداد را تأیید کنید:`,
+      '     sudo botctl telegram register-hosted',
     );
     for (const bot of hostedBots) lines.push(`     - @${bot.username ?? '؟'}`);
   }

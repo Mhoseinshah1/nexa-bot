@@ -653,13 +653,17 @@ Built (ten PRs, `docs/round-reports/phase-6b.md`; decisions in
 - **Server move.** `botctl move export|import|verify|abort`; freeze marker `/etc/nexa/move-frozen`
   blocks `restart`/`update`/`rollback` until `move abort`; the import checks head and freshness and
   compares each hosted member to its live tenant by canonical digest.
+- **Hosted webhook recovery.** `botctl telegram register-hosted`: interactive installation-owner
+  sign-in and hosting-section proof, counted confirmation, sequential token/DNS/TLS/webhook
+  checks from existing credentials. Active, unexpired hosted children only; independent failures,
+  closed per-bot summaries and safe repeats. The primary bot keeps `telegram register`.
 - **Reset.** `botctl admin reset-hosting-2fa --username --reason`.
 
 Not done (decided, not forgotten): the owner's installation backup still contains hosted rows
 (ADR-0039 § 6; this conflicts with ADR-0025's exclusion rule and ADR-0028's cutover and needs an
 owner decision); media-library files in the export; a second fresh code for the host's download;
 ZIP64; restoring a hosted tenant missing from the installation backup inside `move import` (kept in
-`move-unrestored/`, exit 2); `botctl telegram register-hosted`; physical erasure of a purged tenant
+`move-unrestored/`, exit 2); physical erasure of a purged tenant
 (designed only, ADR-0039 § 10). The real-provider TonPays acceptance is unchanged.
 
 ## Reseller web panel

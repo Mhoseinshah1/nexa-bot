@@ -7,6 +7,7 @@ import {
   HOSTED_DOMAIN_CHECK_PATH,
   HOSTING_ACTIVATION_ERROR_CODES as CODES,
   HOSTING_ERROR_CODES,
+  IDENTITY_ERROR_CODES,
   isNexaError,
   systemContext,
   type ActorContext,
@@ -14,6 +15,7 @@ import {
   type HostedActivationView,
   type TenantContext,
 } from '@nexa/contracts';
+import { registerHostedInteractively } from '../../apps/api/src/register-hosted-webhooks.cli';
 import type { ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
@@ -42,6 +44,12 @@ import type {
 } from '../../apps/api/src/modules/platform/hosting/application/activation-ports';
 import type { DnsObservation } from '../../apps/api/src/modules/platform/hosting/domain/hosted-domain';
 import { DrizzleHostedOwnerActivation } from '../../apps/api/src/modules/platform/hosting/infrastructure/drizzle-hosted-owner-activation';
+import {
+  HostedWebhookRecoveryService,
+  type HostedRecoveryResult,
+} from '../../apps/api/src/modules/platform/hosting/application/hosted-webhook-recovery.service';
+import { DrizzleHostedRecoveryCandidates } from '../../apps/api/src/modules/platform/hosting/infrastructure/drizzle-hosted-recovery-candidates';
+import { DrizzleHostingRepository } from '../../apps/api/src/modules/platform/hosting/infrastructure/drizzle-hosting.repository';
 import { perBotWebhookSecret } from '../../apps/api/src/modules/platform/tenancy/application/webhook-secret';
 import { startFakeTelegramBotApi, type FakeTelegramBotApi } from '../support/fake-telegram-bot-api';
 import {
@@ -243,6 +251,315 @@ describe('hosted bot activation (phase 6A PR-4)', () => {
     panel = { secret: enrolment.secret, token: activated.opened.token };
     botToken = telegram.createBot({ id: TELEGRAM_ID, username: 'alpha_store_bot' });
     telegram.calls.length = 0;
+  });
+
+  describe('server-move hosted webhook recovery', () => {
+    const recovery = () =>
+      new HostedWebhookRecoveryService({
+        candidates: new DrizzleHostedRecoveryCandidates(api.container.database.db),
+        hosting: new DrizzleHostingRepository(api.container.database.db),
+        tenants: api.container.tenants,
+        section: api.container.hostingSection,
+        activation: api.container.hostedActivation,
+        clock: api.container.clock,
+        ids: api.container.ids,
+      });
+    const recover = async () => {
+      const service = recovery();
+      const rows: HostedRecoveryResult[] = [];
+      const preview = await service.preview(tenantA, ownerActor, panel.token);
+      const totals = await service.run(tenantA, ownerActor, panel.token, preview, (row) =>
+        rows.push(row),
+      );
+      return { rows, totals };
+    };
+    const readyNetwork = () => {
+      dnsNow.set(DOMAIN, { cname: [], addresses: [SERVER_IP] });
+      tlsReady.add(DOMAIN);
+    };
+    const setup = async () => {
+      const id = await createHosted();
+      await configure(id);
+      readyNetwork();
+      telegram.calls.length = 0;
+      return id;
+    };
+    const sent = () => telegram.calls.filter((call) => call.method === 'setWebhook');
+
+    it('rechecks cleared move marks, preserves queued updates, and retries without another setWebhook', async () => {
+      const id = await setup();
+      telegram.setPending(TELEGRAM_ID, 9);
+      expect((await recover()).rows).toEqual([
+        { hostedTenantId: id, outcome: 'READY', code: null },
+      ]);
+      expect(sent()).toHaveLength(1);
+      expect(sent()[0]?.body.drop_pending_updates).toBe(false);
+      expect(telegram.registration(TELEGRAM_ID)?.url).toContain(
+        `https://${DOMAIN}/telegram/webhook/`,
+      );
+      expect((await recover()).totals).toEqual({ ready: 1, skipped: 0, failed: 0 });
+      expect(sent()).toHaveLength(1);
+      expect(telegram.calls.every((call) => call.botId === TELEGRAM_ID)).toBe(true);
+    });
+
+    it.each(['invalid', 'reserved', 'dns', 'dns-timeout', 'tls', 'identity', 'revoked'])(
+      'refuses %s before registration, including formerly successful checks',
+      async (failure) => {
+        const id = await setup();
+        await recover();
+        telegram.calls.length = 0;
+        if (failure === 'invalid' || failure === 'reserved') {
+          await db()
+            .update(hostedBotActivations)
+            .set({
+              domain: failure === 'invalid' ? 'https://evil.com/token' : 'admin.hosting.test',
+            })
+            .where(eq(hostedBotActivations.hostedTenantId, id));
+        } else if (failure === 'dns') dnsNow.clear();
+        else if (failure === 'dns-timeout') dnsFails = true;
+        else if (failure === 'tls') tlsReady.clear();
+        else if (failure === 'identity') {
+          await db()
+            .update(botInstances)
+            .set({ telegramBotId: '9999999999' })
+            .where(eq(botInstances.tenantId, id));
+        } else telegram.revoke(TELEGRAM_ID, { keepWebhook: true });
+        expect((await recover()).totals.failed).toBe(1);
+        expect(sent()).toHaveLength(0);
+      },
+    );
+
+    it.each(['SUSPENDED', 'EXPIRED', 'DELETED', 'PURGED', 'deadline', 'stopped', 'foreign-parent'])(
+      'skips %s without contacting Telegram',
+      async (state) => {
+        const id = await setup();
+        if (state === 'deadline')
+          await db()
+            .update(hostedBots)
+            .set({ expiresAt: now() })
+            .where(eq(hostedBots.hostedTenantId, id));
+        else if (state === 'stopped')
+          await db().update(tenants).set({ status: 'STOPPED' }).where(eq(tenants.id, id));
+        else if (state === 'foreign-parent')
+          await db()
+            .update(tenants)
+            .set({ parentTenantId: SEED_IDS.tenantB })
+            .where(eq(tenants.id, id));
+        else
+          await db()
+            .update(hostedBots)
+            .set({
+              state,
+              deletedAt: state === 'DELETED' || state === 'PURGED' ? now() : null,
+              purgedAt: state === 'PURGED' ? now() : null,
+            })
+            .where(eq(hostedBots.hostedTenantId, id));
+        expect((await recover()).totals).toEqual({ ready: 0, skipped: 1, failed: 0 });
+        expect(telegram.calls).toHaveLength(0);
+      },
+    );
+
+    it('isolates a failed bot, hides upstream credentials, and safely retries a lost setWebhook answer', async () => {
+      const first = await setup();
+      const second = await createHosted('beta');
+      const token = telegram.createBot({ id: TELEGRAM_ID + 1, username: 'beta_store_bot' });
+      const domain = 'bots.beta-store.com';
+      await configure(second, { botToken: token, domain });
+      dnsNow.set(domain, { cname: [], addresses: [SERVER_IP] });
+      tlsReady.add(domain);
+      telegram.calls.length = 0;
+      telegram.failNext('setWebhook', {
+        kind: 'refuse',
+        description: `bad token ${botToken} secret ${WEBHOOK_SECRET}`,
+      });
+      const firstRun = await recover();
+      expect(firstRun.totals).toEqual({ ready: 1, skipped: 0, failed: 1 });
+      expect(firstRun.rows.map((row) => row.hostedTenantId)).toEqual([first, second]);
+      expect(JSON.stringify(firstRun)).not.toContain(botToken);
+      expect(JSON.stringify(firstRun)).not.toContain(WEBHOOK_SECRET);
+      telegram.failNext('setWebhook', { kind: 'apply_then_drop' });
+      expect((await recover()).totals.failed).toBe(1);
+      expect((await recover()).totals).toEqual({ ready: 2, skipped: 0, failed: 0 });
+      expect(telegram.registration(TELEGRAM_ID)?.url).toContain(DOMAIN);
+      expect(telegram.registration(TELEGRAM_ID + 1)?.url).toContain(domain);
+    });
+
+    it('bounds a Telegram timeout and continues to report failure', async () => {
+      await setup();
+      const hold = telegram.hold('getMe');
+      try {
+        const result = await recover();
+        expect(result.totals.failed).toBe(1);
+        expect(sent()).toHaveLength(0);
+      } finally {
+        hold.release();
+      }
+    });
+
+    it.each(['domain', 'stop', 'session', 'identity', 'credential'])(
+      'rechecks %s after the bootstrap identity call and before setWebhook',
+      async (change) => {
+        const id = await setup();
+        let changed = false;
+        // First getMe is the token step; second is bootstrap's independent identity check.
+        telegram.beforeNext('getMe', () => {
+          telegram.beforeNext('getMe', async () => {
+            if (change === 'domain')
+              await db()
+                .update(hostedBotActivations)
+                .set({ domain: 'bots.other-store.com' })
+                .where(eq(hostedBotActivations.hostedTenantId, id));
+            else if (change === 'stop')
+              await db()
+                .update(hostedBots)
+                .set({ state: 'SUSPENDED' })
+                .where(eq(hostedBots.hostedTenantId, id));
+            else if (change === 'identity') {
+              await db()
+                .update(botInstances)
+                .set({ telegramBotId: '9999999999' })
+                .where(eq(botInstances.tenantId, id));
+            } else if (change === 'credential') {
+              const [bot] = await db()
+                .select()
+                .from(botInstances)
+                .where(eq(botInstances.tenantId, id));
+              const sealed = api.container.cipher.encrypt(
+                '7100000001:changed-token-secret-for-race',
+                {
+                  purpose: 'bot_instance.token',
+                  tenantId: id,
+                  entityId: bot!.id,
+                },
+              );
+              await db()
+                .update(botInstances)
+                .set({ tokenCiphertext: sealed.ciphertext, tokenKeyId: sealed.keyId })
+                .where(eq(botInstances.tenantId, id));
+            } else
+              await db()
+                .update(adminSessions)
+                .set({ revokedAt: now() })
+                .where(eq(adminSessions.id, ownerActor.sessionId!));
+            changed = true;
+          });
+        });
+        // Session revocation can also stop the next page read; neither path can send.
+        try {
+          const result = await recover();
+          expect(result.totals).toEqual(
+            change === 'stop'
+              ? { ready: 0, skipped: 1, failed: 0 }
+              : { ready: 0, skipped: 0, failed: 1 },
+          );
+        } catch (error) {
+          if (change !== 'session' || !isNexaError(error)) throw error;
+          expect([
+            IDENTITY_ERROR_CODES.AUTH_SESSION_INVALID,
+            HOSTING_ERROR_CODES.SECTION_SESSION_REQUIRED,
+          ]).toContain(error.code);
+        }
+        expect(changed).toBe(true);
+        expect(sent()).toHaveLength(0);
+      },
+    );
+
+    it.each(['nonowner', 'missing-factor', 'wrong-factor'])(
+      'the CLI refuses a real %s principal before bot enumeration and revokes its login',
+      async (kind) => {
+        await setup();
+        const username = kind === 'wrong-factor' ? 'panel-owner' : `cli-${kind}`;
+        let adminId = ownerActor.id!;
+        if (kind !== 'wrong-factor') {
+          const admin = await createAdmin(api.container, tenantA, {
+            username,
+            password: OWNER_PASSWORD,
+            roleKeys: kind === 'nonowner' ? [] : ['owner'],
+          });
+          adminId = admin.id;
+        }
+        let secret = 0;
+        const before = await db()
+          .select()
+          .from(adminSessions)
+          .where(eq(adminSessions.adminId, adminId));
+        await expect(
+          registerHostedInteractively(
+            api.container,
+            recovery(),
+            {
+              line: async () => username,
+              secret: async () => (secret++ === 0 ? OWNER_PASSWORD : 'invalid-recovery-code'),
+            },
+            () => undefined,
+          ),
+        ).rejects.toThrow();
+        const after = await db()
+          .select()
+          .from(adminSessions)
+          .where(eq(adminSessions.adminId, adminId));
+        const created = after.filter((row) => !before.some((old) => old.id === row.id));
+        expect(created).toHaveLength(1);
+        expect(created[0]!.revokedAt).not.toBeNull();
+        expect(telegram.calls).toHaveLength(0);
+      },
+    );
+
+    it('pages the installation register in batches of 50 and excludes later inserts', async () => {
+      const first = await setup();
+      const [tenant] = await db().select().from(tenants).where(eq(tenants.id, first));
+      const [hosted] = await db()
+        .select()
+        .from(hostedBots)
+        .where(eq(hostedBots.hostedTenantId, first));
+      const [owner] = await db().select().from(admins).where(eq(admins.id, hosted!.ownerAdminId));
+      const ids = Array.from({ length: 51 }, () => api.container.ids.uuid());
+      await db()
+        .insert(tenants)
+        .values(ids.map((id, index) => ({ ...tenant!, id, slug: `page-${String(index)}` })));
+      const owners = ids.map((tenantId) => ({ ...owner!, id: api.container.ids.uuid(), tenantId }));
+      await db().insert(admins).values(owners);
+      await db()
+        .insert(hostedBots)
+        .values(
+          owners.map((owner) => ({
+            ...hosted!,
+            hostedTenantId: owner.tenantId,
+            ownerAdminId: owner.id,
+          })),
+        );
+      const reader = new DrizzleHostedRecoveryCandidates(api.container.database.db);
+      const preview = await reader.preview(tenantA);
+      expect(preview.count).toBe(52);
+      const late = api.container.ids.uuid();
+      await db()
+        .insert(tenants)
+        .values({ ...tenant!, id: late, slug: 'page-late' });
+      const lateOwner = { ...owner!, id: api.container.ids.uuid(), tenantId: late };
+      await db().insert(admins).values(lateOwner);
+      await db()
+        .insert(hostedBots)
+        .values({ ...hosted!, hostedTenantId: late, ownerAdminId: lateOwner.id });
+      const page = await reader.page(tenantA, null, preview.through!);
+      expect(page).toHaveLength(50);
+      const rest = await reader.page(tenantA, page[49]!.hostedTenantId, preview.through!);
+      expect(rest).toHaveLength(2);
+      expect([...page, ...rest].map((row) => row.hostedTenantId)).toEqual([first, ...ids]);
+      expect(telegram.calls).toHaveLength(0);
+    });
+
+    it('denies enumeration without the owner section and excludes another installation under RLS', async () => {
+      await setup();
+      await expect(recovery().preview(tenantA, ownerActor, 'wrong-section')).rejects.toThrow();
+      const candidates = new DrizzleHostedRecoveryCandidates(api.container.database.db);
+      expect(
+        await candidates.preview({
+          tenantId: SEED_IDS.tenantB as TenantContext['tenantId'],
+          botInstanceId: null,
+        }),
+      ).toEqual({ count: 0, through: null });
+      expect(telegram.calls).toHaveLength(0);
+    });
   });
 
   describe('step 1 — the token and the domain', () => {

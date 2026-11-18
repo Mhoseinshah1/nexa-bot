@@ -70,10 +70,29 @@ scp /root/nexa-move.7z root@NEW-SERVER:/root/
 ```bash
 sudo botctl move verify          # تا همهٔ دامنه‌ها DNS و TLS «آماده» شوند
 sudo botctl telegram register    # ربات اصلی
+sudo botctl telegram register-hosted # ربات‌های میزبانی‌شده؛ داخل ترمینال
 ```
 
-برای هر ربات میزبانی‌شده در «میزبانی‌ها» مراحل فعال‌سازی (DNS ← SSL ← وب‌هوک) را دوباره بزنید، سپس
-دوباره `sudo botctl move verify` تا ستون وب‌هوک همه «آماده» شود.
+با نام کاربری و رمز مالک نصب وارد شوید؛ اگر ورود دومرحله‌ای فعال است کد آن هم پرسیده می‌شود.
+سپس کد جداگانهٔ بخش «میزبانی‌ها» یا کد بازیابی آن را وارد کنید و با `REGISTER <count>` تعداد
+نمایش‌داده‌شده را تأیید کنید. اگر این بخش عامل دوم ندارد، ابتدا در پنل آن را فعال کنید.
+رمزها و کدها بی‌نمایش خوانده می‌شوند؛ هیچ توکن رباتی وارد نکنید و هیچ رمزی در آرگومان یا متغیر
+محیطی ننویسید.
+
+فرمان با همان توکن رمزگذاری‌شده و دامنهٔ ثبت‌شده، هویت ربات، DNS، TLS و وب‌هوک را یکی‌یکی بررسی
+می‌کند (صفحه‌های ۵۰تایی). ربات اصلی را تغییر نمی‌دهد. ربات تعلیق‌شده، متوقف، منقضی، حذف‌شده،
+پاک‌شده یا در حال بازیابی کنار گذاشته می‌شود. سرور قدیمیِ منجمد این فرمان را نمی‌پذیرد.
+برای هر شناسهٔ ربات، `READY`، `SKIPPED` یا `FAILED` و کد بستهٔ خطا چاپ می‌شود؛ مشکل را روی کارت
+همان ربات در «میزبانی‌ها» اصلاح و فرمان را دوباره اجرا کنید. خطای یک ربات مانع ادامهٔ بقیه نیست.
+DNS حداکثر ۵ ثانیه، TLS حداکثر ۲۵ ثانیه و درخواست تلگرام مهلت تنظیم‌شدهٔ خود را دارد.
+خروج ۰ یعنی همهٔ ربات‌های امتحان‌شده آماده‌اند (کنارگذاشته‌ها جدا شمرده می‌شوند)، ۲ یعنی بعضی
+شکست خورده‌اند و ۱ یعنی ورود، تأیید یا اجرا متوقف شده است. نشست‌های همین فرمان در پایان بسته
+می‌شوند. پاسخ گم‌شدهٔ تلگرام موفقیت شمرده نمی‌شود؛ اجرای دوباره پیام‌های صف را حفظ می‌کند.
+
+هنگام اجرا دامنه یا وضعیت ربات‌ها را تغییر ندهید: نوشتن در پایگاه داده و تلگرام تراکنش مشترک
+ندارد. دسترسی مالک، اتصال ربات، دامنه و وضعیت درست پیش از ثبت دوباره بررسی می‌شوند و مسیر
+دریافت وب‌هوک همچنان ربات متوقف را رد می‌کند. در پایان دوباره `sudo botctl move verify` بزنید تا
+ستون وب‌هوک ربات‌های فعال موردنظر «آماده» شود؛ خروج ۰ آن یعنی همه‌چیز آماده است.
 
 ### ۶. پایان
 
@@ -153,9 +172,32 @@ the new `HOSTED_BOTS_CNAME_TARGET` (or A to its addresses).
 ### 5. Verify and webhooks
 
 `sudo botctl move verify` until every domain resolves here and answers TLS; then
-`sudo botctl telegram register` (the installation's bot) and, for each hosted bot, the activation
-steps (DNS → SSL → webhook) on its card in «میزبانی‌ها»; then `move verify` again until every
-webhook reads «آماده». Exit status 0 means everything is ready.
+`sudo botctl telegram register` (the installation's bot), followed by
+`sudo botctl telegram register-hosted` in an interactive terminal. Sign in as the installation
+owner (password and the sign-in factor if enrolled), enter the separate hosting-section code
+or recovery code, then confirm `REGISTER <count>`. Credentials are hidden prompts, never
+arguments or environment variables. Enrol a missing hosting factor in «میزبانی‌ها» first.
+
+The command checks the stored token identity → DNS → TLS → webhook for each eligible hosted
+bot, one at a time, using pages of 50 and the existing encrypted credential. It neither asks
+for bot tokens nor changes domains or the primary bot. Stopped, suspended, expired (including a
+deadline not yet swept), deleted, purged and restoring bots are skipped. The owner/section
+session, domain/bot binding and lifecycle are rechecked before registration. No background
+roles are started. The old server's move-freeze marker refuses this command.
+
+Each line names a hosted tenant id and READY, SKIPPED or FAILED with a closed activation code;
+look up that id's card in «میزبانی‌ها» to repair its configuration. DNS lookups have a five-second
+ceiling, HTTPS probes 25 seconds, and Telegram calls use the existing configured transport
+timeout. A bot's failure does not stop the next bot. Exit 0 means all attempted bots are ready
+(skips are counted), 2 means some failed, and 1 means sign-in, confirmation or execution stopped.
+The CLI closes its own sessions on exit. A lost Telegram answer is a failure, never assumed
+success; repeating the command uses the same bootstrap reconciliation and retains queued updates.
+
+Do not edit activation settings or change lifecycle while the command runs. Database changes
+and Telegram writes cannot share an atomic transaction; the per-bot registration claim and
+last-moment rechecks narrow that race, and the webhook receiver still refuses stopped tenants.
+Then run `sudo botctl move verify` until every intended active webhook reads «آماده»; its exit 0
+means everything is ready.
 
 ### 6. Finish
 

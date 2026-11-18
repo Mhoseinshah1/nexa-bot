@@ -181,7 +181,12 @@ export interface HostedBotRegistrar {
    */
   registerWebhook(
     context: SystemContext,
-    input: { readonly hostedTenantId: string; readonly origin: string },
+    input: {
+      readonly hostedTenantId: string;
+      readonly origin: string;
+      /** Recovery rechecks the owner, setup and lifecycle just before the external write. */
+      readonly beforeRegister?: () => Promise<void>;
+    },
   ): Promise<HostedWebhookOutcome>;
 }
 

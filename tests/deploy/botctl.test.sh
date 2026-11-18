@@ -6278,6 +6278,57 @@ assert_contains 'a reconcile without a token source never ran the CLI' \
 setup_root
 setup_fake_docker
 
+test_case 'hosted webhook recovery refuses noninteractive execution and secret arguments'
+run_botctl telegram register-hosted
+assert_fails 'hosted registration ran without a terminal' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'terminal refusal missing' "$BOTCTL_OUTPUT" 'interactive terminal'
+run_botctl telegram register-hosted --token never-print-this-token
+assert_fails 'hosted registration accepted arguments' test "$BOTCTL_STATUS" -eq 0
+assert_not_contains 'hosted refusal leaked argv' "$BOTCTL_OUTPUT" 'never-print-this-token'
+
+run_hosted_in_tty() {
+  python3 - "$BOTCTL" <<'HOSTED_TTY'
+import errno, os, pty, sys
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(sys.argv[1], [sys.argv[1], "telegram", "register-hosted"])
+while True:
+    try:
+        data = os.read(fd, 4096)
+        if not data:
+            break
+        sys.stdout.buffer.write(data)
+    except OSError as error:
+        if error.errno != errno.EIO:
+            raise
+        break
+os.close(fd)
+_, status = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(status))
+HOSTED_TTY
+}
+
+test_case 'hosted recovery dispatches only its CLI in a terminal and takes the deployment lock'
+: >"$DOCKER_LOG"
+hosted_tty_output="$(run_hosted_in_tty 2>&1)"
+hosted_tty_status=$?
+assert_ok 'hosted recovery failed with a terminal' test "$hosted_tty_status" -eq 0
+assert_contains 'hosted recovery did not dispatch its CLI' "$(docker_log)" 'dist/register-hosted-webhooks.cli.js'
+assert_not_contains 'hosted recovery touched the primary CLI' "$(docker_log)" 'dist/bootstrap-bot.cli.js'
+exec 9>>"$NEXA_LOCK_FILE"
+flock -x 9
+hosted_tty_output="$(run_hosted_in_tty 2>&1)"
+hosted_tty_status=$?
+assert_fails 'hosted recovery ignored the deployment lock' test "$hosted_tty_status" -eq 0
+assert_contains 'hosted lock refusal missing' "$hosted_tty_output" 'already running'
+exec 9>&-
+touch "${NEXA_CONFIG_DIR}/move-frozen"
+hosted_tty_output="$(run_hosted_in_tty 2>&1)"
+hosted_tty_status=$?
+assert_fails 'hosted recovery ran on the frozen old server' test "$hosted_tty_status" -eq 0
+assert_contains 'hosted freeze refusal missing' "$hosted_tty_output" 'FROZEN'
+rm -f "${NEXA_CONFIG_DIR}/move-frozen"
+
 test_case 'telegram register takes the deployment lock'
 # A registration is an external effect followed by a local one and the two
 # cannot be atomic — `setWebhook` must happen outside the transaction that

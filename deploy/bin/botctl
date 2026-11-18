@@ -138,6 +138,7 @@ botctl — operate a Nexa installation
 
   botctl telegram status     the local registration AND Telegram's own webhook state
   botctl telegram register   reconcile the webhook with Telegram (keeps queued updates)
+  botctl telegram register-hosted  verify and recover hosted webhooks (owner sign-in + hosting code)
 
   botctl secrets status                    configuration, held keys, versions, key ids, unreadable rows
   botctl secrets verify                    decrypt every stored secret; per kind readable/unreadable
@@ -2882,7 +2883,7 @@ cmd_telegram() {
   local action="${1:-}"
   shift || true
 
-  # Neither subcommand takes an argument, so anything left is REFUSED rather
+  # No subcommand takes an argument, so anything left is REFUSED rather
   # than dropped.
   #
   # `botctl telegram register --tenant reseller` shifted the action off and
@@ -2902,19 +2903,27 @@ cmd_telegram() {
   # tokens for precisely this reason, and a refusal that reproduces what it
   # refused is worse than the thing it refuses.
   #
-  # The order is the mechanism. After this case, `$action` is provably one of two
+  # The order is the mechanism. After this case, `$action` is provably one of three
   # literals, so nothing downstream can name a caller's value even by accident;
   # the arity refusal below therefore states a COUNT and no content at all.
   case "$action" in
-    status | register) ;;
-    *) nexa_die "usage: botctl telegram <status|register>" ;;
+    status | register | register-hosted) ;;
+    *) nexa_die "usage: botctl telegram <status|register|register-hosted>" ;;
   esac
 
   if [ "$#" -gt 0 ]; then
-    nexa_die "botctl telegram ${action} takes no arguments, and was given $#. This command reconciles the installation's own bot from its stored credential: there is nothing to aim it at, and nothing here reads a token. What you passed is not repeated here in case it was one."
+    nexa_die "botctl telegram ${action} takes no arguments, and was given $#. Bot selection and bot credentials come from stored configuration. What you passed is not repeated here in case it was a secret."
   fi
 
   case "$action" in
+    register-hosted)
+      if [ ! -t 0 ] || [ ! -t 1 ]; then
+        nexa_die "register-hosted needs an interactive terminal for owner sign-in and confirmation."
+      fi
+      move_refuse_if_frozen
+      nexa_acquire_lock 0
+      nexa_compose run --rm --no-deps --entrypoint node api dist/register-hosted-webhooks.cli.js
+      ;;
     status)
       # Read-only, and the one word goes to stdout so a script can read it
       # without parsing prose. Since incident A (2026-10-07) the word is decided
@@ -2949,7 +2958,7 @@ cmd_telegram() {
         dist/bootstrap-bot.cli.js --public-base-url "$(telegram_origin)"
       ;;
     *)
-      # Unreachable: the validation above admits exactly `status` and `register`.
+      # Unreachable: the validation above admits only the three documented subcommands.
       # Kept as an assertion rather than deleted, because a `case` with no default
       # silently does nothing if that validation is ever loosened.
       nexa_die "internal error: unvalidated telegram subcommand"

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   errors,
   HOSTED_ACTIVATION_PAGE_PATH,
@@ -329,6 +330,58 @@ export class HostedActivationService {
     return { activation: await this.view(installation, hostedTenantId), replayed: false };
   }
 
+  /** Server-move recovery: prove every check again, bound to one unchanged setup. */
+  async recoverWebhook(
+    scope: ScopeContext,
+    actor: ActorContext,
+    token: string,
+    id: string,
+    runId: string,
+    eligible: () => Promise<void>,
+  ): Promise<void> {
+    const installation = await this.deps.section.requireSection(
+      scope,
+      actor,
+      token,
+      'hosting.activation_webhook',
+      parseTenantId(id),
+    );
+    const expected = await this.deps.repository.find(installation, id);
+    if (expected?.domain == null || expected.botInstanceId === null) {
+      throw activationError(CODES.NOT_CONFIGURED, 'Enter the bot token and domain first.');
+    }
+    const parsed = parseHostedDomain(expected.domain, this.deps.reservedHosts);
+    if (!parsed.ok || parsed.domain !== expected.domain) {
+      throw activationError(
+        parsed.ok ? CODES.DOMAIN_INVALID : parsed.code,
+        'Invalid hosted domain.',
+      );
+    }
+    const context = systemContext('hosting.activation_webhook');
+    const binding = await this.deps.registrar.currentBot(context, id);
+    if (binding === null || binding.botInstanceId !== expected.botInstanceId) {
+      throw activationError(CODES.TOKEN_OTHER_BOT, 'The connected bot changed.');
+    }
+    // Ephemeral comparison only: no credential or digest reaches idempotency/audit/output.
+    const credential = tokenFingerprint(
+      await this.deps.registrar.tokenOf(context, id, binding.botInstanceId),
+    );
+    for (const step of ['token', 'domain', 'ssl', 'webhook'] as const) {
+      await eligible();
+      await this.executeStep(
+        scope,
+        actor,
+        token,
+        id,
+        step,
+        {
+          idempotencyKey: `hosted-recovery:${runId}:${id}:${step}`,
+        },
+        { expected, eligible, telegramBotId: binding.telegramBotId, credential },
+      );
+    }
+  }
+
   /** Re-runs one check: the stored token, the DNS, the HTTPS certificate, or the webhook. */
   async runStep(
     scope: ScopeContext,
@@ -337,6 +390,23 @@ export class HostedActivationService {
     id: string,
     stepSlug: string,
     input: unknown,
+  ): Promise<HostedActivationResponse> {
+    return this.executeStep(scope, actor, token, id, stepSlug, input);
+  }
+
+  private async executeStep(
+    scope: ScopeContext,
+    actor: ActorContext,
+    token: string | null,
+    id: string,
+    stepSlug: string,
+    input: unknown,
+    recovery?: {
+      readonly expected: HostedActivationRow;
+      readonly eligible: () => Promise<void>;
+      readonly telegramBotId: string;
+      readonly credential: string;
+    },
   ): Promise<HostedActivationResponse> {
     const hostedTenantId = parseTenantId(id);
     const slug = HOSTED_ACTIVATION_RUNNABLE_STEPS.find((candidate) => candidate === stepSlug);
@@ -369,8 +439,44 @@ export class HostedActivationService {
       throw activationError(CODES.NOT_CONFIGURED, 'Enter the bot token and the domain first.');
     }
     this.requirePrerequisites(step, row);
+    if (recovery !== undefined) assertSameSetup(row, recovery.expected);
 
-    const failure = await this.check(slug, row, hostedTenantId);
+    // Called again by bootstrap after getMe and the registration claim, immediately
+    // before setWebhook. A lifecycle/domain change during those calls must stop the send.
+    const beforeRegister =
+      recovery === undefined
+        ? undefined
+        : async () => {
+            await recovery.eligible();
+            const bound = await this.deps.registrar.currentBot(
+              systemContext('hosting.activation_webhook'),
+              hostedTenantId,
+            );
+            if (
+              bound?.botInstanceId !== row.botInstanceId ||
+              bound.telegramBotId !== recovery.telegramBotId
+            ) {
+              throw activationError(CODES.TOKEN_OTHER_BOT, 'The connected bot changed.');
+            }
+            const currentCredential = await this.deps.registrar.tokenOf(
+              systemContext('hosting.activation_webhook'),
+              hostedTenantId,
+              bound.botInstanceId,
+            );
+            if (tokenFingerprint(currentCredential) !== recovery.credential) {
+              throw activationError(CODES.TOKEN_DIFFERS, 'The stored credential changed.');
+            }
+            await this.deps.uow.run(installation, async (tx) => {
+              await this.inTransaction(installation, actor, token, tx);
+              assertActive(await this.requireHostedIn(installation, hostedTenantId, tx));
+              assertSameSetup(
+                await this.deps.repository.find(installation, hostedTenantId, tx, true),
+                row,
+              );
+            });
+          };
+    if (slug === 'webhook') await beforeRegister?.();
+    const failure = await this.check(slug, row, hostedTenantId, beforeRegister);
     const now = this.deps.clock.now();
     await this.deps.uow.run(installation, async (tx) => {
       await this.inTransaction(installation, actor, token, tx);
@@ -582,12 +688,13 @@ export class HostedActivationService {
     slug: HostedActivationRunnableStep,
     row: HostedActivationRow,
     hostedTenantId: string,
+    beforeRegister?: () => Promise<void>,
   ): Promise<NexaError | null> {
     const context = systemContext(`hosting.activation_${slug}`);
     switch (slug) {
       case 'token': {
         const bound = await this.deps.registrar.currentBot(context, hostedTenantId);
-        if (bound === null) {
+        if (bound === null || bound.botInstanceId !== row.botInstanceId) {
           return activationError(CODES.NOT_CONFIGURED, 'Enter the bot token first.');
         }
         const stored = await this.deps.registrar.tokenOf(
@@ -645,6 +752,7 @@ export class HostedActivationService {
         const result = await this.deps.registrar.registerWebhook(context, {
           hostedTenantId,
           origin: `https://${row.domain as string}`,
+          ...(beforeRegister === undefined ? {} : { beforeRegister }),
         });
         return result.outcome === 'REGISTERED'
           ? null
@@ -799,6 +907,23 @@ export class HostedActivationService {
             },
       ownerActivatedAt: row?.ownerActivatedAt?.toISOString() ?? null,
     };
+  }
+}
+
+function tokenFingerprint(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+function assertSameSetup(row: HostedActivationRow | null, expected: HostedActivationRow): void {
+  if (
+    row === null ||
+    row.domain !== expected.domain ||
+    row.botInstanceId !== expected.botInstanceId
+  ) {
+    throw errors.conflict(
+      HOSTING_ERROR_CODES.STATE_CONFLICT,
+      'The activation changed. Run recovery again.',
+    );
   }
 }
 

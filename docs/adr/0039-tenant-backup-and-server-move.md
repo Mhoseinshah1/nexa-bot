@@ -881,9 +881,15 @@ sealPassword })` seals the installation member with it (no password id recorded)
 - **Activation marks** are cleared in the INSTALLATION's own scope (its rows), audited
   `hosting.move_marks_cleared` by a SYSTEM_JOB actor; the § Contract reason `move: clear
 activation marks after import` was therefore not needed.
-- **`botctl telegram register-hosted` is NOT built.** The checklist sends the operator to each
-  hosted bot's activation steps in «میزبانی‌ها» (DNS → SSL → webhook) after
-  `botctl telegram register`. `move verify` reads every bot's `getWebhookInfo` and every domain's
+- **`botctl telegram register-hosted` is built.** After `botctl telegram register`, the operator
+  signs in once as the installation owner, opens the existing hosting section with a fresh proof,
+  and confirms the counted batch. Existing activation checks (token → DNS → SSL → webhook)
+  run sequentially for eligible ACTIVE hosted children, with the stored encrypted token/domain,
+  current lifecycle and owner/session checks, per-bot failures and safe queue-preserving retry.
+  No configuration or activation-link proof is bypassed; those operations are never called.
+  The command requires a terminal, takes no arguments, and refuses the old server's freeze.
+  See `docs/server-move.md` for output/exit codes and concurrent-change limits.
+  `move verify` reads every bot's `getWebhookInfo` and every domain's
   DNS (`judgeDns`) and TLS (`HttpsTlsProbe`); "here" is the host's own addresses plus
   `HOSTED_BOTS_SERVER_IPS` (and the CNAME target's addresses for a hosted domain).
 - **System-path reasons** (pinned): `move: list hosted tenants for the bundle` (also read by
