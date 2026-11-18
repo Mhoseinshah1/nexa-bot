@@ -209,19 +209,9 @@ describe('the customer Telegram turn', () => {
     // transport has always sent: `textMessageBody` takes `chatId: string`, so
     // there is one spelling rather than one per caller.
     expect(sent[0]?.body['chat_id']).toBe('4242');
-    /*
-     * The EXACT rendered text, from the shared catalogue.
-     *
-     * Asserting merely that something was sent cannot tell one template from
-     * another, which is how the blocked-reply rule came to have no integration
-     * test: a mutation that made every arrival answer with the welcome survived
-     * sixteen green cases. The text is read from `CATALOGUE_FA` rather than
-     * copied, so a wording change moves both sides at once while a WRONG KEY
-     * still fails.
-     */
-    // R6 item 3: the owner's greeting, with this customer's own first name filled in.
-    expect(sent[0]?.body['text']).toContain('ZED PROXY');
+    // Distinguish the first welcome from the returning and blocked replies.
     expect(sent[0]?.body['text']).toContain('عزیز، خوش آمدید.');
+    expect(sent[0]?.body['text']).toContain('✓ سرویس تست رایگان قبل از خرید');
     expect(sent[0]?.body['text']).not.toContain('{firstName}');
 
     // And a domain event exists for the registration, written inside the
@@ -651,7 +641,7 @@ describe('the customer Telegram turn', () => {
     // fact about the statement rather than a guess.
     expect(sent[0]?.body['text']).toContain('خوش برگشتی');
     expect(sent[0]?.body['text']).not.toContain('{');
-    expect(sent[0]?.body['text']).not.toContain('ZED PROXY');
+    expect(sent[0]?.body['text']).not.toContain('عزیز، خوش آمدید.');
     const registrations = await api.container.database.db.execute(
       sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'CustomerRegistered'`,
     );
@@ -817,7 +807,7 @@ describe('the customer Telegram turn', () => {
     await start({ update: id });
     const row = (await customers())[0] as Record<string, unknown>;
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.body['text']).toContain('ZED PROXY');
+    expect(sent[0]?.body['text']).toContain('Ali عزیز، خوش آمدید.');
 
     await api.container.database.db.execute(sql`
       UPDATE customers
@@ -839,7 +829,7 @@ describe('the customer Telegram turn', () => {
     expect(sent[0]?.body['text']).toBe(
       CATALOGUE_FA['bot.blocked_with_reason'].replace('{reason}', 'blocked after the turn'),
     );
-    expect(sent[0]?.body['text']).not.toContain('ZED PROXY');
+    expect(sent[0]?.body['text']).not.toContain('عزیز، خوش آمدید.');
     expect(sent[0]?.body['text']).not.toContain('خوش برگشتی');
   });
 
@@ -1109,6 +1099,46 @@ describe('the customer Telegram turn', () => {
     expect(new Set(rows.map((row) => row['tenant_id'])).size).toBe(2);
     expect(new Set(rows.map((row) => row['id'])).size).toBe(2);
   });
+
+  it.each(['HOSTED', 'RESELLER_BOT'] as const)(
+    'keeps the PRIMARY custom welcome out of a %s bot’s default reply',
+    async (kind) => {
+      if (kind === 'HOSTED') {
+        await api.container.database.db.execute(
+          sql`UPDATE tenants SET kind = 'HOSTED' WHERE id = ${SEED_IDS.tenantB}`,
+        );
+      }
+      const owner = adminActorFor(
+        await createAdmin(api.container, tenantA, {
+          username: 'welcome-owner',
+          roleKeys: ['owner'],
+        }),
+      );
+      const customBody = 'ZED PROXY\nسلام {firstName}';
+      await api.container.templatesService.set(tenantA, owner, {
+        key: 'bot.start.welcome',
+        body: customBody,
+        expectedVersion: null,
+        expectedRevision: null,
+        idempotencyKey: 'custom-welcome',
+      });
+
+      expect((await start({ bot: BOT_A })).statusCode).toBe(201);
+      expect((await start({ bot: BOT_B })).statusCode).toBe(201);
+      expect(sent).toHaveLength(2);
+      expect(sent[0]?.body['text']).toBe(customerText('ZED PROXY\nسلام Ali'));
+      expect(sent[1]?.body['text']).toBe(
+        customerText(CATALOGUE_FA['bot.start.welcome'].replace('{firstName}', 'Ali')),
+      );
+      expect(sent[1]?.body['text']).not.toContain('ZED PROXY');
+      expect(
+        await api.container.templateResolver.resolve(tenantA, 'bot.start.welcome'),
+      ).toMatchObject({
+        body: customBody,
+        source: 'TENANT',
+      });
+    },
+  );
 
   it('writes nothing and sends nothing for an INACTIVE bot instance', async () => {
     await api.container.database.db.execute(

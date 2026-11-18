@@ -66,10 +66,10 @@ describe('the /start greeting is filled from the receiving customer', () => {
     expect(again).toBe(first);
   });
 
-  it('the new default welcome greets by name and keeps the owner’s lines', () => {
+  it('the default welcome starts with a neutral greeting and keeps the trial wording', () => {
     const text = render(WELCOME, WELCOME_BODY, facts());
-    expect(text.split('\n')[0]).toBe('ZED PROXY');
-    expect(text).toContain('علی عزیز، خوش آمدید.');
+    expect(text.split('\n')[0]).toBe('علی عزیز، خوش آمدید.');
+    expect(text).toContain('✓ سرویس تست رایگان قبل از خرید');
     expect(text).toContain('«🔐 خرید اشتراک» یا «اشتراک رایگان {تست}»');
   });
 
@@ -122,7 +122,8 @@ describe('a name is neutralised', () => {
 
   it('markup, mentions and links in a name are inert in a plain greeting', () => {
     const text = render(WELCOME, WELCOME_BODY, facts({ firstName: ATTACK }));
-    const line = text.split('\n')[2] ?? '';
+    const line = text.split('\n')[0] ?? '';
+    expect(line).toContain('عزیز، خوش آمدید.');
     expect(line).not.toMatch(/[<>]/u);
     expect(line).not.toContain('@');
     expect(line).not.toContain('://');
@@ -168,7 +169,7 @@ describe('an empty value never leaves a gap', () => {
     for (const firstName of [null, '', '   ', '​‮']) {
       const f = facts({ firstName });
       const welcome = render(WELCOME, WELCOME_BODY, f);
-      expect(welcome).toContain('\nعزیز، خوش آمدید.\n');
+      expect(welcome.startsWith('عزیز، خوش آمدید.\n')).toBe(true);
       expect(welcome).not.toMatch(/ {2}|\n[ ،]/u);
       expect(render(BACK, BACK_BODY, f)).toContain('👋 سلام، خوش برگشتی');
     }

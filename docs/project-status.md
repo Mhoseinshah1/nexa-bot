@@ -14,6 +14,7 @@ This file was moved verbatim out of `CLAUDE.md` on 2026-10-24. It holds project 
 - [Money rules](#money-rules)
 - [Phase 4 product rules](#phase-4-product-rules)
 - [Automatic renewal (Round 10, D1)](#automatic-renewal-round-10-d1)
+- [Default customer copy (R12 F3)](#default-customer-copy-r12-f3)
 - [Phase 2 control plane](#phase-2-control-plane)
 - [Phase 6 capacity and usernames](#phase-6-capacity-and-usernames)
 - [Phase 6A creator panel](#phase-6a-creator-panel-میزبانیها-pr-3)
@@ -564,6 +565,19 @@ Lead decisions (PR-3):
   by quiet hours, which would eat that window.
 - **The rate limit** is applied where the TERMINATE enters the provisioning queue, serialised per
   panel; the sweep runs every minute in the customer-reminder fan-out (`TenantFanOut`).
+
+## Default customer copy (R12 F3)
+
+Owner decision (2026-11-18, `OQ-R12-F3-01`). Default customer-facing copy uses
+neutral Persian across Telegram, Hosted Bots, Mini App and reseller Web. Remove
+fixed commercial branding from shared defaults. Keep the existing trial wording
+and behavior for every trial setting and preserve operator-saved templates,
+technical identifiers and legitimate provider or product names. Default copy
+uses neither a substitute brand nor a tenant-name variable or branding setting.
+
+The changed strings are `bot.start.welcome` (brand header), the Mini App HTML
+title and `miniapp.app_title` (navigation label), and the shared Web HTML title
+served to reseller routes before the app mounts.
 
 ## Phase 2 control plane
 

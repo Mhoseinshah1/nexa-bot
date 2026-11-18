@@ -14,6 +14,14 @@ describe('shared catalogue', () => {
     expect(audit.undeclaredTokens).toEqual([]);
   });
 
+  it('omits the former merchant name from shared default copy', () => {
+    const formerBrand = /\bzed\b|\bzed[\s\p{Pd}_\u200c]*proxy\b|زد[\s\p{Pd}_\u200c]*پروکس[یي]/iu;
+    const matches = TEMPLATE_KEYS.filter((key) =>
+      formerBrand.test(CATALOGUE_FA[key].normalize('NFKC')),
+    );
+    expect(matches).toEqual([]);
+  });
+
   it('stores templates raw, with placeholders un-substituted', () => {
     // The legacy editor echoes the RENDERED string — {first_name} resolves in
     // the viewing admin's context — so saving from that view would bake the

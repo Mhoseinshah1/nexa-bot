@@ -6,6 +6,7 @@ import { MiniAppApi } from '../../apps/miniapp/src/api';
 import { MINIAPP_FA } from '../../apps/miniapp/src/i18n/miniapp.fa';
 import { Checkout } from '../../apps/miniapp/src/screens/checkout';
 import { Store } from '../../apps/miniapp/src/screens/store';
+import { TabBar } from '../../apps/miniapp/src/ui';
 
 /**
  * v0.9.5 PR-5 — the mini app's layout: a shop card with ONE tap target (the real button, no
@@ -48,6 +49,14 @@ afterEach(() => {
 const css = readFileSync(resolve(__dirname, '../../apps/miniapp/src/styles/base.css'), 'utf8');
 const rule = (selector: string) =>
   new RegExp(`(?:^|\\n)${selector.replace('.', '\\.')}\\s*\\{([^}]*)\\}`, 'u').exec(css)?.[1] ?? '';
+
+it('uses a neutral Persian document title and tab navigation label', () => {
+  const html = readFileSync(resolve(__dirname, '../../apps/miniapp/index.html'), 'utf8');
+  const page = new DOMParser().parseFromString(html, 'text/html');
+  expect(page.title).toBe('مینی‌اپ');
+  render(<TabBar current="home" onSelect={vi.fn()} />);
+  expect(screen.getByRole('navigation', { name: 'مینی‌اپ' })).toBeInTheDocument();
+});
 
 describe('shop cards', () => {
   it('a plan card has exactly one tap target, and the title and price share one head row', async () => {
