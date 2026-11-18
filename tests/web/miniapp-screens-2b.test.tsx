@@ -41,7 +41,7 @@ let navigate: ReturnType<typeof vi.fn>;
 let replace: ReturnType<typeof vi.fn>;
 let refreshMe: ReturnType<typeof vi.fn>;
 
-function mountApi() {
+function mountApi(me: { botLink: string | null } = { botLink: null }) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -62,7 +62,7 @@ function mountApi() {
   refreshMe = vi.fn(async () => undefined);
   state.ctx = {
     api: new MiniAppApi(BOT),
-    me: {},
+    me,
     refreshMe,
     navigate,
     replace,
@@ -425,6 +425,7 @@ describe('the QR and link sheet', () => {
     render(<ServiceDetail serviceId="s1" />);
     fireEvent.click(await screen.findByText(fa('miniapp.service_show_qr')));
     const dialog = await screen.findByRole('dialog', { name: fa('miniapp.service_qr_title') });
+    expect(screen.queryByText(fa('miniapp.service_files'))).toBeNull();
     expect(
       (await within(dialog).findByAltText(fa('miniapp.service_qr_alt'))).getAttribute('src'),
     ).toBe('blob:qr');
@@ -482,6 +483,80 @@ describe('the QR and link sheet', () => {
     render(<ServiceDetail serviceId="s1" />);
     await screen.findByText('پلن پایه');
     expect(screen.queryByText(fa('miniapp.service_show_qr'))).toBeNull();
+  });
+});
+
+describe('files-only service detail', () => {
+  const serviceId = '01900000-0000-7000-8000-000000000001';
+  const botLink = 'https://t.me/nexa_test_bot';
+
+  it('opens the service in Telegram and suppresses link and QR controls', async () => {
+    mountApi({ botLink });
+    const openTelegramLink = vi.fn();
+    vi.stubGlobal('Telegram', { WebApp: { initData: 'test', openTelegramLink } });
+    // The panel's mode governs presentation even if an unexpected link or QR is in the wire.
+    routes[`GET /services/${serviceId}`] = () => ({
+      body: service({ id: serviceId, connectionFiles: 'TELEGRAM' }),
+    });
+    render(<ServiceDetail serviceId={serviceId} />);
+
+    const action = await screen.findByRole('button', {
+      name: fa('miniapp.service_files_open_bot'),
+    });
+    expect(screen.getByText(fa('miniapp.service_files_in_bot'))).toBeTruthy();
+    expect(screen.queryByText('https://sub.example.test/abc')).toBeNull();
+    expect(screen.queryByText(fa('miniapp.service_copy_link'))).toBeNull();
+    expect(screen.queryByText(fa('miniapp.service_show_qr'))).toBeNull();
+    fireEvent.click(action);
+
+    expect(openTelegramLink).toHaveBeenCalledExactlyOnceWith(
+      `${botLink}?start=sai-sv-${serviceId}`,
+    );
+    expect(calls.map(({ key }) => key)).toEqual([`GET /services/${serviceId}`]);
+  });
+
+  it('gives manual instructions when the bot link is missing', async () => {
+    routes[`GET /services/${serviceId}`] = () => ({
+      body: service({ id: serviceId, connectionFiles: 'TELEGRAM', subscriptionUrl: null }),
+    });
+    render(<ServiceDetail serviceId={serviceId} />);
+
+    expect(await screen.findByText(fa('miniapp.service_files_manual'))).toBeTruthy();
+    expect(screen.queryByRole('button', { name: fa('miniapp.service_files_open_bot') })).toBeNull();
+  });
+
+  it('opens the same service link without a Telegram WebView', async () => {
+    mountApi({ botLink });
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    routes[`GET /services/${serviceId}`] = () => ({
+      body: service({ id: serviceId, connectionFiles: 'TELEGRAM', subscriptionUrl: null }),
+    });
+    try {
+      render(<ServiceDetail serviceId={serviceId} />);
+      fireEvent.click(
+        await screen.findByRole('button', { name: fa('miniapp.service_files_open_bot') }),
+      );
+      expect(open).toHaveBeenCalledExactlyOnceWith(
+        `${botLink}?start=sai-sv-${serviceId}`,
+        '_blank',
+        'noopener',
+      );
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('points to support when the files action is unavailable', async () => {
+    mountApi({ botLink });
+    routes[`GET /services/${serviceId}`] = () => ({
+      body: service({ id: serviceId, connectionFiles: 'UNAVAILABLE', subscriptionUrl: null }),
+    });
+    render(<ServiceDetail serviceId={serviceId} />);
+
+    expect(await screen.findByText(fa('miniapp.service_files_unavailable'))).toBeTruthy();
+    expect(screen.queryByRole('button', { name: fa('miniapp.service_files_open_bot') })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: fa('miniapp.service_support') }));
+    expect(navigate).toHaveBeenCalledWith({ name: 'support' });
   });
 });
 

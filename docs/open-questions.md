@@ -4912,9 +4912,10 @@ live; the owner decides otherwise.
   لینک ساب» on, such a customer then has neither the link nor the files. Not guarded: the two
   settings are saved independently. Default: left as is; refusing the combination in the policy
   save (and warning on the switch) is a small follow-up if the owner wants it.
-- **OQ-R11-A4-02 — a mini-app customer of a files-only panel.** The mini app has no files screen,
-  so such a customer sees no link and no QR there and is not shown how to get the files. Default:
-  nothing new is added; the bot's «📁 دریافت فایل‌های اتصال» is where the files are.
+- **OQ-R11-A4-02 — a mini-app customer of a files-only panel.** The service detail guides the
+  customer to the bot's «📁 دریافت فایل‌های اتصال» when offered. It opens the service card when the
+  bot link is available and gives manual steps otherwise. If the action is unavailable, the detail
+  directs the customer to support. Files-only services have no subscription link or QR here.
 - **OQ-R11-A4-03 — the panel's own per-file captions.** RickPanel may write the subscription link
   into the caption it sends with a file. The bot passes that caption through; on a files-only panel
   it cannot know whether it names the link. Default: unchanged.
