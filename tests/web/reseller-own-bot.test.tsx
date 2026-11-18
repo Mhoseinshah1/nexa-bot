@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { PanelShell } from '../../apps/web/src/reseller/shell';
 import { requestSteps } from '../../apps/web/src/reseller/pages/own-bot';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -73,6 +73,49 @@ const approved = (billing: Record<string, unknown>) =>
   });
 
 describe('«ربات اختصاصی»', () => {
+  it.each(['PENDING', 'APPROVED'])(
+    'keeps an older linked approved request and timeline visible beside the current %s request',
+    async (state) => {
+      stubApi([
+        ...signedIn(),
+        {
+          url: `${API}/own-bot`,
+          method: 'GET',
+          body: {
+            offer: offer({ canRequest: false }),
+            requests: [
+              state === 'PENDING'
+                ? request()
+                : approved({
+                    state: 'PAID',
+                    paidThrough: '2026-12-10T10:00:00.000Z',
+                    stopsAt: null,
+                  }),
+              {
+                ...approved({
+                  state: 'PAID',
+                  paidThrough: '2026-12-10T10:00:00.000Z',
+                  stopsAt: null,
+                }),
+                id: '0190a0b0-0000-7000-8000-0000000000bb',
+                number: 'RB-00011',
+                botUsername: 'older_linked_bot',
+              },
+            ],
+          },
+        },
+      ]);
+      renderPage(<PanelShell />);
+      expect(await screen.findByText('@older_linked_bot')).toBeInTheDocument();
+      const older = screen.getByText('@older_linked_bot').closest('section')!;
+      fireEvent.click(within(older).getByText(t('web.rp_bot_history_title')));
+      expect(within(older).getByText(t('web.rp_bot_event_link_sent'))).toBeInTheDocument();
+      expect(screen.queryAllByRole('button', { name: t('web.rp_bot_cancel') })).toHaveLength(
+        state === 'PENDING' ? 1 : 0,
+      );
+    },
+  );
+
   it('says «فعلاً ارائه نمی‌شود» and shows no form while the fee is unset', async () => {
     stubApi(
       signedIn([

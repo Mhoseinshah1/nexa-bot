@@ -209,7 +209,25 @@ export interface ResellerBotRequestAdminView extends ResellerBotRequestView {
   readonly hostedTenantId: string | null;
 }
 
+/** Newest-first keyset pages. The cursor is the last request id, scoped to the installation.
+ * Later inserts ahead of it appear on refresh; this is not a historical snapshot.
+ */
+// Preserve the old first-page size for cached clients; the current Web UI requests 50.
+export const RESELLER_BOT_ADMIN_PAGE_SIZE = 200;
+export const RESELLER_BOT_ADMIN_PAGE_MAX = 200;
+export const resellerBotAdminListQuerySchema = z.object({
+  cursor: z.string().uuid().optional(),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(RESELLER_BOT_ADMIN_PAGE_MAX)
+    .default(RESELLER_BOT_ADMIN_PAGE_SIZE),
+});
+export type ResellerBotAdminListQuery = z.input<typeof resellerBotAdminListQuerySchema>;
+
 export interface ResellerBotRequestsAdminResponse {
+  readonly nextCursor: string | null;
   readonly requests: readonly ResellerBotRequestAdminView[];
   readonly settings: { readonly fee: MoneyWire | null; readonly graceDays: number };
 }

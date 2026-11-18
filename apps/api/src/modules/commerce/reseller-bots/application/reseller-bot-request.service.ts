@@ -5,6 +5,7 @@ import {
   RESELLER_BOT_MONTHLY_FEE_SETTING_KEY,
   RESELLER_BOT_OPS_CODES,
   resellerBotApproveRequestSchema,
+  resellerBotAdminListQuerySchema,
   resellerBotCancelRequestSchema,
   resellerBotConfigureRequestSchema,
   resellerBotPayRequestSchema,
@@ -49,11 +50,9 @@ import type { HostingOwnerGuard } from '../../../platform/hosting/application/ho
 import type { HostingSectionService } from '../../../platform/hosting/application/hosting-section.service.js';
 import type { HostedActivationService } from '../../../platform/hosting/application/hosted-activation.service.js';
 import type { HostedBotIdentifier } from '../../../platform/hosting/application/activation-ports.js';
-import type { HostingRepository } from '../../../platform/hosting/application/ports.js';
 import { parseHostedDomain } from '../../../platform/hosting/domain/hosted-domain.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
-import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { ResellerRepository } from '../../resellers/application/ports.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import { shortfallMinor } from '../../wallet/domain/balance.js';
@@ -71,13 +70,12 @@ import type {
 const BOT_TOKEN_SHAPE = /^\d{4,20}:[A-Za-z0-9_-]{20,}$/;
 /** What the reseller's own writes run under (`SYSTEM_JOB` holds it), as reseller requests do. */
 const CUSTOMER_PERMISSION: PermissionKey = 'maintenance.run';
-/** The owner's list: the newest requests. */
-const ADMIN_LIST_LIMIT = 200;
+/** Bounds each enrichment read, including the reseller's complete historical list. */
+const READ_BATCH_SIZE = 100;
 
 export interface ResellerBotRequestDeps {
   readonly repository: ResellerBotRepository;
   readonly resellers: Pick<ResellerRepository, 'findByCustomer'>;
-  readonly customers: Pick<CustomerRepository, 'findById'>;
   readonly wallet: Pick<WalletRepository, 'lockCustomer' | 'balanceOf' | 'append'>;
   readonly fees: Pick<ResellerBotFeeService, 'payNow' | 'graceDays'>;
   readonly telegram: HostedBotIdentifier;
@@ -87,7 +85,6 @@ export interface ResellerBotRequestDeps {
     'requireSection' | 'assertSectionIn' | 'withFreshProof'
   >;
   readonly owner: Pick<HostingOwnerGuard, 'check'>;
-  readonly hosting: Pick<HostingRepository, 'findHosted'>;
   readonly activation: Pick<HostedActivationService, 'configure'>;
   readonly notifier: Pick<CustomerNotifier, 'notify'>;
   readonly settings: Pick<SettingsResolver, 'valueOf'>;
@@ -386,6 +383,7 @@ export class ResellerBotRequestService {
     scope: ScopeContext,
     actor: ActorContext,
     sectionToken: string | null,
+    input: unknown = {},
   ): Promise<ResellerBotRequestsAdminResponse> {
     const installation = await this.deps.section.requireSection(
       scope,
@@ -393,9 +391,12 @@ export class ResellerBotRequestService {
       sectionToken,
       'hosting.reseller_bot.list',
     );
-    const rows = await this.deps.repository.listAll(installation, ADMIN_LIST_LIMIT);
+    const query = resellerBotAdminListQuerySchema.parse(input);
+    const found = await this.deps.repository.listAll(installation, query.limit + 1, query.cursor);
+    const rows = found.slice(0, query.limit);
     const fee = await this.fee(installation);
     return {
+      nextCursor: found.length > query.limit ? (rows.at(-1)?.id ?? null) : null,
       requests: await this.adminViews(installation, rows),
       settings: {
         fee: fee === null ? null : wire(fee.amountMinor, fee.currency),
@@ -911,10 +912,23 @@ export class ResellerBotRequestService {
     rows: readonly ResellerBotRequestRecord[],
   ): Promise<ResellerBotRequestAdminView[]> {
     const views = await this.views(installation, rows);
+    const customers = new Map<
+      string,
+      Awaited<ReturnType<ResellerBotRepository['customerSummaries']>>[number]
+    >();
+    const ids = [...new Set(rows.map((row) => row.customerId))];
+    for (let offset = 0; offset < ids.length; offset += READ_BATCH_SIZE) {
+      for (const customer of await this.deps.repository.customerSummaries(
+        installation,
+        ids.slice(offset, offset + READ_BATCH_SIZE),
+      )) {
+        customers.set(customer.id, customer);
+      }
+    }
     const out: ResellerBotRequestAdminView[] = [];
     for (const [index, view] of views.entries()) {
       const row = rows[index] as ResellerBotRequestRecord;
-      const customer = await this.deps.customers.findById(installation, row.customerId);
+      const customer = customers.get(row.customerId);
       const name = [customer?.firstName, customer?.lastName].filter(Boolean).join(' ');
       out.push({
         ...view,
@@ -933,25 +947,42 @@ export class ResellerBotRequestService {
     scope: TenantContext,
     rows: readonly ResellerBotRequestRecord[],
   ): Promise<ResellerBotRequestView[]> {
-    const ids = rows.map((row) => row.id);
-    const charges = await this.deps.repository.listCharges(scope, ids);
-    const marks = await this.deps.repository.lifecycleMarks(scope, ids);
+    const charges = new Map<string, ResellerBotChargeRecord[]>();
+    const marks = new Map<string, ResellerBotLifecycleMark[]>();
+    const hosted = new Map<string, HostedBotState>();
+    for (let offset = 0; offset < rows.length; offset += READ_BATCH_SIZE) {
+      const batch = rows.slice(offset, offset + READ_BATCH_SIZE);
+      const ids = batch.map((row) => row.id);
+      for (const charge of await this.deps.repository.listCharges(scope, ids)) {
+        const group = charges.get(charge.requestId) ?? [];
+        group.push(charge);
+        charges.set(charge.requestId, group);
+      }
+      for (const mark of await this.deps.repository.lifecycleMarks(scope, ids)) {
+        const group = marks.get(mark.requestId) ?? [];
+        group.push(mark);
+        marks.set(mark.requestId, group);
+      }
+      const hostedIds = [
+        ...new Set(
+          batch.flatMap((row) => (row.hostedTenantId === null ? [] : [row.hostedTenantId])),
+        ),
+      ];
+      for (const bot of await this.deps.repository.hostedStates(scope, hostedIds))
+        hosted.set(bot.id, bot.state);
+    }
     const graceDays = rows.some((row) => row.status === 'APPROVED')
       ? await this.deps.fees.graceDays(scope)
       : 0;
     const now = this.deps.clock.now();
     const out: ResellerBotRequestView[] = [];
     for (const row of rows) {
-      const hosted =
-        row.hostedTenantId === null
-          ? null
-          : await this.deps.hosting.findHosted(scope, row.hostedTenantId);
       out.push(
         this.view(
           row,
-          hosted?.state ?? null,
-          charges.filter((charge) => charge.requestId === row.id),
-          marks.filter((mark) => mark.requestId === row.id),
+          row.hostedTenantId === null ? null : (hosted.get(row.hostedTenantId) ?? null),
+          charges.get(row.id) ?? [],
+          marks.get(row.id) ?? [],
           graceDays,
           now,
         ),

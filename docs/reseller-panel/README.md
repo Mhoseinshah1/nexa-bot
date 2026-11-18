@@ -72,6 +72,10 @@ wallet refuses approval. The fee is the figure snapshotted when the request was 
 then the bot is stopped (EXPIRED; data kept) and a later debit or «پرداخت و فعال‌سازی دوباره» resumes it. Reject and
 cancel never charge; an approved request that never gets a bot is not refunded.
 
+Owner requests support server-side cursor pagination and «بارگذاری بیشتر»; `/r/bot` keeps all
+noncurrent requests and their timelines accessible. See the [history and performance audit](request-history-audit.md)
+for cursor semantics, the reproduced presentation defect and repeatable measurements.
+
 ## Demo comparison
 
 Screens: `docs/reseller-panel/screens/` — every `/r/` screen, dark and light, `desk-*` at 1536×730 and `phone-*` at

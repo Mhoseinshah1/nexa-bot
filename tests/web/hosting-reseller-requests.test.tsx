@@ -65,6 +65,7 @@ function routes(requests: ResellerBotRequestAdminView[]) {
       method: 'GET',
       body: {
         requests,
+        nextCursor: null,
         settings: { fee: { amountMinor: '500000', currency: 'IRT' }, graceDays: 3 },
       },
     },
@@ -88,6 +89,101 @@ async function openTab() {
 }
 
 describe('«درخواست‌های نماینده‌ها»', () => {
+  it('loads subsequent pages, retains rows on a failed load, acts on the second page and refreshes from the start', async () => {
+    const olderId = '01a05e35-c9ad-7e93-bef3-1ed9b55292d2';
+    let failed = true;
+    let refreshed = false;
+    let rejected = false;
+    const base = routes([]).filter((route) => route.url !== url(RESELLER_BOT_ADMIN_ROUTES.list));
+    const api = stubApi([
+      ...base,
+      {
+        url: url(RESELLER_BOT_ADMIN_ROUTES.list) + '?limit=50',
+        method: 'GET',
+        get body() {
+          return {
+            requests: [
+              request({
+                state: 'CANCELLED',
+                botUsername: refreshed ? 'newest_after_refresh_bot' : 'first_page_bot',
+              }),
+            ],
+            nextCursor: REQUEST_ID,
+            settings: { fee: null, graceDays: 3 },
+          };
+        },
+      },
+      {
+        url: url(RESELLER_BOT_ADMIN_ROUTES.list) + `?limit=50&cursor=${REQUEST_ID}`,
+        method: 'GET',
+        get status() {
+          return failed ? 500 : 200;
+        },
+        get body() {
+          return failed
+            ? {
+                error: {
+                  kind: 'internal',
+                  code: 'internal.error',
+                  message: 'failed',
+                  correlationId: 'page-failure',
+                },
+              }
+            : {
+                requests: [
+                  request({
+                    id: olderId,
+                    botUsername: 'second_page_bot',
+                    state: rejected ? 'REJECTED' : 'PENDING',
+                  }),
+                ],
+                nextCursor: null,
+                settings: { fee: null, graceDays: 3 },
+              };
+        },
+      },
+      {
+        url: url(RESELLER_BOT_ADMIN_ROUTES.reject.replace(':requestId', olderId)),
+        method: 'POST',
+        get body() {
+          rejected = true;
+          return { request: request({ id: olderId, state: 'REJECTED' }), replayed: false };
+        },
+      },
+    ]);
+    await openTab();
+    expect(await screen.findByText('@first_page_bot')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: t('web.load_more') }));
+    await waitFor(() => expect(api.calls.some((call) => call.url.includes('cursor='))).toBe(true));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: t('web.load_more') })).not.toBeDisabled(),
+    );
+    expect(screen.getByText('@first_page_bot')).toBeInTheDocument();
+    failed = false;
+    fireEvent.click(screen.getByRole('button', { name: t('web.load_more') }));
+    expect(await screen.findByText('@second_page_bot')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: t('web.load_more') })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: t('web.rbot_reject') }));
+    fireEvent.change(screen.getByLabelText(t('web.rbot_reject_reason'), { exact: false }), {
+      target: { value: 'دامنه مناسب نیست' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: t('web.rbot_reject') }).at(-1)!);
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.method === 'POST' && call.url.includes(olderId))).toBe(
+        true,
+      ),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: t('web.refresh') })).not.toBeDisabled(),
+    );
+    refreshed = true;
+    fireEvent.click(screen.getByRole('button', { name: t('web.refresh') }));
+    expect(await screen.findByText('@newest_after_refresh_bot')).toBeInTheDocument();
+    expect(screen.queryByText('@second_page_bot')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.load_more') })).toBeInTheDocument();
+  });
+
   it('lists a pending request with the token masked and both decisions', async () => {
     stubApi(routes([request()]));
     await openTab();

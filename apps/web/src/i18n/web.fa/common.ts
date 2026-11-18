@@ -61,6 +61,7 @@ export const WEB_FA_COMMON = {
   'web.unresolved': 'باز',
   'web.all': 'همه',
   'web.refresh': 'تازه‌سازی',
+  'web.load_more': 'بارگذاری بیشتر',
   'web.empty': 'موردی برای نمایش نیست.',
   'web.unit_days': 'روز',
   'web.unit_percent': 'درصد',
