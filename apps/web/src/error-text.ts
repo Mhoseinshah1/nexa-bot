@@ -589,6 +589,7 @@ export const ERROR_TEXT = {
   'panel.credential_too_short': 'web.err_panel_credential_too_short',
   'panel.credential_unsupported': 'web.err_panel_credential_unsupported',
   'panel.files_only_unsupported': 'web.err_panel_files_only_unsupported',
+  'panel.files_only_policy_conflict': 'web.err_panel_files_only_policy_conflict',
   'panel.qr_kind_unsupported': 'web.err_panel_qr_kind_unsupported',
   'panel.credentials_missing': 'web.err_panel_credentials_missing',
   'panel.delivery_tutorial_stale': 'web.err_panel_delivery_tutorial_stale',

@@ -171,6 +171,28 @@ The adapter and the fake agree. Two things only a real RickPanel settles:
 
 `tests/acceptance/real-panel-rickpanel.test.ts` has never been run against a RickPanel.
 
+## Files-only configuration and captions (R11 A4)
+
+Files-only requires a file-capable adapter, a current announcement for provider
+types that announce files per panel, and a readable policy that allows the
+customer connection-files action. Both configuration saves check the pair
+under the panel lock. An older incompatible panel continues to hide its link
+and QR. The delivery card warns the operator about the stored configuration.
+
+To restore files without exposing links, restore the provider capability if it
+was lost, run the connection test for a bridge, then enable the customer
+«فایل‌های اتصال» action in the Capabilities tab and save the policy. For a
+bridge with a readable policy, saving the selected «فقط فایل» option can also
+restore the disabled action. If links are intentionally allowed, switch off
+«فقط فایل» explicitly before disabling the customer file action.
+
+The mocked RickPanel test demonstrates that a provider caption can carry a
+subscription URL when the operator selects panel captions. Files-only delivery
+omits provider captions and uses plain
+attachment names, including in reseller downloads. It preserves file bytes,
+media types, and ordinary configuration filenames. Live RickPanel behavior
+and any production exposure remain unverified.
+
 ## 9. Rollback
 
 There is no migration and no stored value. The previous release has no button, no

@@ -1,3 +1,5 @@
+import { PanelPolicyReader } from '../../apps/api/src/modules/platform/panels/application/panel-policy';
+import { DrizzlePanelPolicyRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-policy.repository';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq, sql, type SQL } from 'drizzle-orm';
 import {
@@ -221,6 +223,9 @@ describe('panels', () => {
       const panelId = view.panel.id;
 
       const service = new PanelService({
+        panelPolicy: new PanelPolicyReader(
+          new DrizzlePanelPolicyRepository(ctx.container.database.db),
+        ),
         capacity: ctx.container.panelCapacity,
         usernameNamespace: ctx.container.usernameNamespace,
         repository: new DrizzlePanelRepository(ctx.container.database.db),
@@ -1356,6 +1361,9 @@ describe('panels', () => {
     };
 
     const service = new PanelService({
+      panelPolicy: new PanelPolicyReader(
+        new DrizzlePanelPolicyRepository(ctx.container.database.db),
+      ),
       capacity: ctx.container.panelCapacity,
       usernameNamespace: ctx.container.usernameNamespace,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
@@ -1551,6 +1559,9 @@ describe('panels', () => {
     adapterOverrides: Partial<ProviderConnectionAdapter> = {},
   ) {
     const scripted = new PanelService({
+      panelPolicy: new PanelPolicyReader(
+        new DrizzlePanelPolicyRepository(ctx.container.database.db),
+      ),
       capacity: ctx.container.panelCapacity,
       usernameNamespace: ctx.container.usernameNamespace,
       repository: new DrizzlePanelRepository(ctx.container.database.db),

@@ -28,14 +28,11 @@ import {
   NexaError,
   shapeAcceptsCredential,
   providerDescriptor,
-  panelDeliversConnectionFiles,
-  providerDeliversConnectionFiles,
   panelSupportsQrKind,
   DEFAULT_PANEL_QR_KIND,
   DEFAULT_SINGBOX_NAME_MODE,
   normalizeSingboxCustomName,
   type SingboxNameMode,
-  deriveCapabilityRegistry,
   validateUsernamePolicy as decideUsernamePolicy,
 } from '@nexa/contracts';
 import { refuseImpersonatedSecretWrite } from '../../identity/application/impersonation.js';
@@ -76,6 +73,8 @@ import type {
   PanelUsernamePolicy,
 } from './ports.js';
 import { capacityOf } from './panel-capacity.js';
+import { assertFilesOnlyAvailable } from './panel-files-only.js';
+import type { PanelPolicyGate } from './panel-policy.js';
 import {
   activationIssues,
   connectionIdentityOf,
@@ -172,6 +171,7 @@ export interface UpdatePanelCommand {
 
 export interface PanelServiceDeps {
   readonly repository: PanelRepository;
+  readonly panelPolicy: PanelPolicyGate;
   /**
    * How full each panel is. A SECOND repository, and deliberately so.
    *
@@ -765,38 +765,6 @@ export class PanelService {
     }
   }
 
-  /**
-   * R11 A4: whether «فقط فایل، بدون لینک ساب» may be on for a panel of this provider type.
-   *
-   * The descriptor must declare `SUBSCRIPTION_FILES` (the question the Web Admin asks to draw
-   * the switch) AND the adapter must implement and declare it (the capability registry's
-   * row), so a provider that declares files with no method behind them cannot be switched
-   * into hiding the only thing a customer would have.
-   *
-   * v0.9.5 PR-3: and the PANEL must hand them over now — for a type whose files are
-   * announced per panel (a custom bridge's `files`), its latest health check announced
-   * them (`panelDeliversConnectionFiles`), read from the row held under the lock.
-   */
-  private assertDeliversFiles(view: PanelView): void {
-    const providerType = view.panel.providerType;
-    let supported = false;
-    if (
-      providerDeliversConnectionFiles(providerType) &&
-      panelDeliversConnectionFiles(providerType, view.health?.announcedCapabilities ?? null)
-    ) {
-      supported = deriveCapabilityRegistry(this.deps.adapters(providerType as ProviderType)).some(
-        (entry) => entry.row === 'SUBSCRIPTION_FILES' && entry.supported,
-      );
-    }
-    if (!supported) {
-      throw errors.validation(
-        PANEL_ERROR_CODES.PANEL_FILES_ONLY_UNSUPPORTED,
-        'This panel does not hand over connection files, so its customers cannot be given files only.',
-        { providerType },
-      );
-    }
-  }
-
   async create(
     scope: ScopeContext,
     actor: ActorContext,
@@ -1262,7 +1230,10 @@ export class PanelService {
          * Setting the value it already has changes nothing and is not an audit row.
          */
         if (command.filesOnlyDelivery !== undefined) {
-          if (command.filesOnlyDelivery) this.assertDeliversFiles(before);
+          if (command.filesOnlyDelivery) {
+            const policy = await this.deps.panelPolicy.forPanel(tenant, panelId, tx);
+            assertFilesOnlyAvailable(before, policy, this.deps.adapters);
+          }
           if (command.filesOnlyDelivery !== before.panel.filesOnlyDelivery) {
             changes.filesOnlyDelivery = command.filesOnlyDelivery;
           }
