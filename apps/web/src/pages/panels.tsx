@@ -782,8 +782,12 @@ export function PanelDetailPage({
   const route = useRoute();
   const [lifecycleSlot, setLifecycleSlot] = useState<HTMLElement | null>(null);
   const rawTab = route.query.get('tab');
+  const showConnectionFiles =
+    data !== undefined && (sendsConnectionFiles(data) || data.filesOnlyDelivery);
   const tab: DetailTab =
-    rawTab !== null && (DETAIL_TABS as readonly string[]).includes(rawTab)
+    rawTab !== null &&
+    (DETAIL_TABS as readonly string[]).includes(rawTab) &&
+    (rawTab !== 'connection-files' || showConnectionFiles)
       ? (rawTab as DetailTab)
       : 'overview';
   const setTab = (next: DetailTab) => {
@@ -870,7 +874,7 @@ export function PanelDetailPage({
                 // Phase 2 item 5: the optional tutorial sent after a delivery on this panel.
                 { id: 'delivery-tutorial', label: t('web.panel_tab_delivery_tutorial') },
                 // Track 3 §2: the connection files' caption, where the provider hands files.
-                ...(sendsConnectionFiles(data)
+                ...(showConnectionFiles
                   ? [
                       {
                         id: 'connection-files' as const,
@@ -931,17 +935,19 @@ export function PanelDetailPage({
                   mayEdit={mayEdit && data.status !== 'ARCHIVED'}
                 />
               )}
-              {tab === 'connection-files' && sendsConnectionFiles(data) && (
+              {tab === 'connection-files' && (
                 <>
                   {/* R11 A4: files only / QR kind, above the files' caption. */}
                   <PanelDeliveryOptionsCard
                     panel={data}
                     mayEdit={mayEdit && data.status !== 'ARCHIVED'}
                   />
-                  <PanelConnectionFilesTab
-                    panelId={data.id}
-                    mayEdit={mayEdit && data.status !== 'ARCHIVED'}
-                  />
+                  {sendsConnectionFiles(data) && (
+                    <PanelConnectionFilesTab
+                      panelId={data.id}
+                      mayEdit={mayEdit && data.status !== 'ARCHIVED'}
+                    />
+                  )}
                 </>
               )}
               {tab === 'capabilities' && (

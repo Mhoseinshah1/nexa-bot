@@ -1,3 +1,5 @@
+import { PanelPolicyReader } from '../../apps/api/src/modules/platform/panels/application/panel-policy';
+import { DrizzlePanelPolicyRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-policy.repository';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ProductCategoryId } from '@nexa/contracts';
 import { and, eq, isNull, like, sql } from 'drizzle-orm';
@@ -231,6 +233,9 @@ describe('the panel health monitor', () => {
   function service(probe: Partial<ProbeCoreDeps> = {}): PanelService {
     const deps = probeDeps(probe);
     return new PanelService({
+      panelPolicy: new PanelPolicyReader(
+        new DrizzlePanelPolicyRepository(ctx.container.database.db),
+      ),
       capacity: ctx.container.panelCapacity,
       usernameNamespace: ctx.container.usernameNamespace,
       repository: deps.repository,

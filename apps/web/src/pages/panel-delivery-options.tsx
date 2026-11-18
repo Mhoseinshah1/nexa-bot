@@ -71,7 +71,7 @@ export function PanelDeliveryOptionsCard({
 }) {
   const offersFilesOnly = providerDeliversConnectionFiles(panel.providerType);
   const offersQrKind = panelSupportsQrKind(panel.providerType);
-  if (!offersFilesOnly && !offersQrKind) return null;
+  if (!offersFilesOnly && !offersQrKind && !panel.filesOnlyDelivery) return null;
   // v0.9.5 PR-3: a type whose files each panel must announce (the custom bridge) gets the
   // three-way choice, with the two file options enabled only while the latest health
   // check announced them.
@@ -110,6 +110,17 @@ function Options({
   const toast = useToast();
   const submission = useSubmissionKey();
   const [filesOnly, setFilesOnly] = useState(panel.filesOnlyDelivery);
+  const advanced = useQuery({
+    queryKey: advancedKey(panel.id),
+    queryFn: () => fetchPanelAdvanced(panel.id),
+    enabled: offersFilesOnly && (filesOnly || panel.filesOnlyDelivery),
+  });
+  const filesAction = advanced.data?.registry.find((entry) => entry.row === 'SUBSCRIPTION_FILES');
+  const filesBlocked =
+    !offersFilesOnly ||
+    filesAction?.supported === false ||
+    (advanced.data !== undefined && !filesSwitchOf(advanced.data));
+  const showFilesOption = offersFilesOnly || panel.filesOnlyDelivery;
   const [kind, setKind] = useState<PanelQrKind>(panel.qrKind);
   const [interval, setIntervalText] = useState(String(panel.singboxIntervalMinutes));
   const minutes = Number(interval);
@@ -128,7 +139,7 @@ function Options({
 
   const body = {
     id: panel.id,
-    ...(offersFilesOnly && filesOnly !== panel.filesOnlyDelivery
+    ...(showFilesOption && filesOnly !== panel.filesOnlyDelivery
       ? { filesOnlyDelivery: filesOnly }
       : {}),
     ...(offersQrKind && kind !== panel.qrKind ? { qrKind: kind } : {}),
@@ -158,14 +169,23 @@ function Options({
   return (
     <Card title={t('web.delivery_options_title')} hint={t('web.delivery_options_hint')}>
       <div className="stack-sm">
-        {offersFilesOnly && (
+        {showFilesOption && (
           <ToggleRow
             title={t('web.files_only_title')}
             description={t('web.files_only_hint')}
             checked={filesOnly}
-            disabled={!editable}
+            disabled={!editable || (!filesOnly && filesBlocked)}
             onChange={setFilesOnly}
           />
+        )}
+        {filesOnly && filesBlocked && (
+          <Banner tone="warn" role="alert">
+            {t(
+              !offersFilesOnly || filesAction?.supported === false
+                ? 'web.err_panel_files_only_unsupported'
+                : 'web.err_panel_files_only_policy_conflict',
+            )}
+          </Banner>
         )}
         {offersQrKind && (
           <>
@@ -362,10 +382,10 @@ function AnnouncedChoice({
   const panelSubmission = useSubmissionKey();
   const policySubmission = useSubmissionKey();
   const toast = useToast();
-  const announced = panelDeliversConnectionFiles(
-    panel.providerType,
-    panel.health.announcedCapabilities,
-  );
+  const filesAction = advanced.registry.find((entry) => entry.row === 'SUBSCRIPTION_FILES');
+  const announced =
+    filesAction?.supported !== false &&
+    panelDeliversConnectionFiles(panel.providerType, panel.health.announcedCapabilities);
   const filesSwitch = filesSwitchOf(advanced);
   const stored: DeliveryChoice = panel.filesOnlyDelivery ? 'FILES' : filesSwitch ? 'BOTH' : 'LINK';
   const [choice, setChoice] = useState<DeliveryChoice>(stored);
@@ -374,7 +394,7 @@ function AnnouncedChoice({
   const wantFilesOnly = choice === 'FILES';
   const wantFilesSwitch = choice !== 'LINK';
   const policyChanges = wantFilesSwitch !== filesSwitch;
-  const dirty = choice !== stored;
+  const dirty = choice !== stored || (wantFilesOnly && policyChanges && announced);
 
   const writePanel = (filesOnlyDelivery: boolean) => {
     const body = { id: panel.id, filesOnlyDelivery };
@@ -425,7 +445,7 @@ function AnnouncedChoice({
       await client.invalidateQueries({ queryKey: ['panels'] });
     },
   });
-  const editable = mayEdit && readable && !save.isPending;
+  const editable = mayEdit && !save.isPending;
 
   return (
     <div className="stack-sm">
@@ -437,7 +457,11 @@ function AnnouncedChoice({
               name={`panel-delivery-${panel.id}`}
               value={one.value}
               selected={choice}
-              disabled={!editable || (one.value !== 'LINK' && !announced)}
+              disabled={
+                !editable ||
+                (one.value !== 'LINK' && !announced) ||
+                (!readable && (one.value !== 'LINK' || !panel.filesOnlyDelivery))
+              }
               onChange={setChoice}
               label={t(one.title)}
             />
@@ -449,6 +473,11 @@ function AnnouncedChoice({
       {!announced && panel.filesOnlyDelivery && (
         <Banner tone="warn" role="alert">
           {t('web.delivery_files_only_stranded')}
+        </Banner>
+      )}
+      {announced && readable && panel.filesOnlyDelivery && !filesSwitch && (
+        <Banner tone="warn" role="alert">
+          {t('web.err_panel_files_only_policy_conflict')}
         </Banner>
       )}
       {!readable && (
@@ -467,7 +496,7 @@ function AnnouncedChoice({
           <Button
             variant="primary"
             size="sm"
-            disabled={!dirty || !editable}
+            disabled={!dirty || !editable || (!readable && choice !== 'LINK')}
             onClick={() => save.mutate()}
           >
             {save.isPending ? t('web.working') : t('web.save')}

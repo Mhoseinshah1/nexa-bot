@@ -430,6 +430,102 @@ describe('files only, no subscription link (R11 A4): the bot', () => {
     expect(without).not.toContain(service.subscriptionUrl ?? '-');
   });
 
+  it('keeps provider-supplied links out of files-only captions and attachment metadata', async () => {
+    const service = await deliveredService('provider-caption');
+    for (const [setting, value] of [
+      ['panel.connection_files.caption_mode', 'PANEL_DEFAULT'],
+      ['panel.connection_files.caption_placement', 'EVERY_FILE'],
+    ] as const) {
+      await ctx.container.panelSettings.set(tenantA, owner, panelId, setting, {
+        value,
+        expectedVersion: null,
+        idempotencyKey: randomUUID(),
+      });
+    }
+    const link = service.subscriptionUrl;
+    if (link === null) throw new Error('the fixture has no subscription URL');
+    const encodedLink = encodeURIComponent(link);
+    const body = 'fixture attachment bytes';
+    const content = Buffer.from(body).toString('base64');
+    panel.filesBody = JSON.stringify([
+      {
+        filename: 'اتصال.txt',
+        media_type: 'text/plain',
+        content_b64: content,
+        caption: `راهنما: ${link}`,
+      },
+      {
+        filename: `${encodedLink}.json`,
+        media_type: 'application/json',
+        content_b64: content,
+        caption: `متن <a href="${link}">راهنما</a>`,
+      },
+      { error: `provider error ${link}` },
+    ]);
+    const album = async () => {
+      panel.forgetFileReads();
+      sent = [];
+      await tap(`sf:${service.id}`);
+      const parts = posts('/sendMediaGroup');
+      expect(parts).toHaveLength(1);
+      return textOf(parts[0]!);
+    };
+    expect(await album(), 'link-mode control: the RickPanel caption reaches Telegram').toContain(
+      link,
+    );
+
+    await filesOnly(true);
+    const sentAlbum = await album();
+    expect(sentAlbum).not.toContain(link);
+    expect(sentAlbum).not.toContain(encodedLink);
+    expect(sentAlbum).toContain('اتصال.txt');
+    expect(sentAlbum).toContain('subscription-2.json');
+    expect(sentAlbum).toContain(body);
+    expect(customerText()).not.toContain(link);
+
+    panel.forgetFileReads();
+    const downloaded = await ctx.container.subscriptionFiles.filesInMemory(
+      tenantA,
+      systemActor('provider-file-metadata'),
+      { customerId, serviceId: service.id },
+    );
+    expect(downloaded).toMatchObject({
+      outcome: 'FILES',
+      failed: 1,
+      files: [
+        { fileName: 'اتصال.txt', caption: null, bytes: new Uint8Array(Buffer.from(body)) },
+        {
+          fileName: 'subscription-2.json',
+          caption: null,
+          bytes: new Uint8Array(Buffer.from(body)),
+        },
+      ],
+    });
+  });
+
+  it('keeps links hidden for a legacy files-only panel whose file action is disabled', async () => {
+    const service = await deliveredService('legacy-conflict');
+    await ctx.container.panelAdvanced.updatePolicy(tenantA, owner, panelId, {
+      policy: {
+        delivery: { mode: 'CARD_WITH_QR' },
+        actions: { SUBSCRIPTION_FILES: { customerEnabled: false } },
+      },
+      expectedRevision: 0,
+      idempotencyKey: randomUUID(),
+    });
+    await ctx.container.database.db.execute(
+      sql`UPDATE panels SET files_only_delivery = true WHERE id = ${panelId}`,
+    );
+    sent = [];
+    await tap(`s:${service.id}`);
+    expect(lastMessage()).not.toContain(`sf:${service.id}`);
+    expect(lastMessage()).not.toContain('لینک اشتراک');
+    expect((await tap(`sf:${service.id}`)).replyKey).toBe('bot.service.files_unavailable');
+    expect(customerText()).not.toContain(service.subscriptionUrl ?? '-');
+    expect(posts('/sendMediaGroup')).toHaveLength(0);
+    expect(posts('/sendPhoto')).toHaveLength(0);
+  });
+
   // =========================================================================
   // «نوع بارکد»
   // =========================================================================

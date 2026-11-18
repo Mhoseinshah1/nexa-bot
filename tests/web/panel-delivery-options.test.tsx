@@ -34,6 +34,21 @@ describe('the panel delivery options card', () => {
     expect(container.querySelector('.card')).toBeNull();
   });
 
+  it('warns on a legacy files-only panel without file support and lets the operator switch it off', async () => {
+    const api = stubApi([{ url: `/panels/${ID}`, method: 'POST', body: { panel: as('sanaei') } }]);
+    renderPage(
+      <PanelDeliveryOptionsCard panel={as('sanaei', { filesOnlyDelivery: true })} mayEdit />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(t('web.err_panel_files_only_unsupported'));
+    fireEvent.click(filesOnlySwitch() as HTMLElement);
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() =>
+      expect(api.calls.find((one) => one.method === 'POST')?.body).toMatchObject({
+        filesOnlyDelivery: false,
+      }),
+    );
+  });
+
   it('shows the sing-box interval only for a kind that includes sing-box', () => {
     stubApi([]);
     renderPage(<PanelDeliveryOptionsCard panel={as('rickpanel')} mayEdit />);
@@ -233,6 +248,25 @@ describe('the custom panel delivery options', () => {
     );
     expect(await option('web.delivery_choice_files')).toBeChecked();
     expect(screen.getByText(t('web.delivery_files_only_stranded'))).toBeInTheDocument();
+  });
+
+  it('repairs disabled files on a files-only bridge without changing the link setting', async () => {
+    const api = stubApi([
+      { url: '/advanced', body: advanced(false) },
+      { url: '/policy', method: 'POST', body: { advanced: advanced(true), changed: true } },
+    ]);
+    renderPage(
+      <PanelDeliveryOptionsCard panel={custom(true, { filesOnlyDelivery: true })} mayEdit />,
+    );
+    expect(await option('web.delivery_choice_files')).toBeChecked();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      t('web.err_panel_files_only_policy_conflict'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => expect(api.calls.filter((one) => one.method === 'POST')).toHaveLength(1));
+    expect(api.calls.find((one) => one.method === 'POST')?.body).toMatchObject({
+      policy: { actions: { SUBSCRIPTION_FILES: { customerEnabled: true } } },
+    });
   });
 
   it('«فقط فایل» from «فقط لینک ساب»: the policy switch ON first, then files only ON', async () => {

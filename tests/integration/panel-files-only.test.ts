@@ -1,11 +1,12 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { type ActorContext } from '@nexa/contracts';
+import { customerActionVerdict, resolvePanelPolicy, type ActorContext } from '@nexa/contracts';
 import {
   adminActorFor,
   createAdmin,
   createTestContext,
   tenantA,
+  tenantB,
   type TestContext,
 } from './harness';
 
@@ -50,6 +51,16 @@ describe('panel option: files only, no subscription link', () => {
   const stored = async (panelId: string): Promise<boolean> =>
     (await ctx.container.panels.get(tenantA, owner, panelId)).panel.filesOnlyDelivery;
 
+  const setFilesAction = (customerEnabled: boolean, expectedRevision = 0) =>
+    ctx.container.panelAdvanced.updatePolicy(tenantA, owner, FILES, {
+      policy: {
+        delivery: { mode: 'CARD_WITH_QR' },
+        actions: { SUBSCRIPTION_FILES: { customerEnabled } },
+      },
+      expectedRevision,
+      idempotencyKey: key(),
+    });
+
   it('is off by default, for a new column on an existing panel', async () => {
     expect(await stored(FILES)).toBe(false);
     expect(await stored(NO_FILES)).toBe(false);
@@ -79,6 +90,76 @@ describe('panel option: files only, no subscription link', () => {
     );
     await setOption(NO_FILES, false);
     expect(await stored(NO_FILES)).toBe(false);
+  });
+
+  it('refuses switching on when the saved policy disables customer files', async () => {
+    await setFilesAction(false);
+    await expect(setOption(FILES, true)).rejects.toMatchObject({
+      code: 'panel.files_only_policy_conflict',
+      details: { reason: 'POLICY_DISABLED' },
+    });
+    expect(await stored(FILES)).toBe(false);
+  });
+
+  it('refuses turning customer files off on a files-only panel, including concurrent edits', async () => {
+    const results = await Promise.allSettled([setOption(FILES, true), setFilesAction(false)]);
+    expect(results.filter((one) => one.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((one) => one.status === 'rejected')).toMatchObject({
+      reason: { code: 'panel.files_only_policy_conflict' },
+    });
+    const advanced = await ctx.container.panelAdvanced.advanced(tenantA, owner, FILES);
+    const action = customerActionVerdict(
+      resolvePanelPolicy(advanced.policy.policy),
+      'SUBSCRIPTION_FILES',
+    );
+    expect(await stored(FILES)).toBe(action.allowed);
+  });
+
+  it('repairs a legacy conflict by enabling files while keeping the link hidden', async () => {
+    const disabled = await setFilesAction(false);
+    await ctx.container.database.db.execute(
+      sql`UPDATE panels SET files_only_delivery = true WHERE id = ${FILES}`,
+    );
+    const view = await ctx.container.panelAdvanced.advanced(tenantA, owner, FILES);
+    expect(view.registry.find((one) => one.row === 'SUBSCRIPTION_FILES')?.customer).toEqual({
+      available: false,
+      blocker: 'POLICY_DISABLED',
+    });
+    const repaired = await setFilesAction(true, disabled.advanced.policy.revision);
+    expect(repaired.changed).toBe(true);
+    expect(await stored(FILES)).toBe(true);
+  });
+
+  it('fails closed on an unreadable policy and permits an explicit change away from files-only', async () => {
+    await setOption(FILES, true);
+    await setFilesAction(true);
+    await ctx.container.database.db.execute(
+      sql`UPDATE panel_policies SET policy = '{"unreadable":true}'::jsonb WHERE panel_id = ${FILES}`,
+    );
+    await expect(setOption(FILES, true)).rejects.toMatchObject({
+      code: 'panel.files_only_policy_conflict',
+      details: { reason: 'POLICY_UNREADABLE' },
+    });
+    expect(await stored(FILES)).toBe(true);
+    await setOption(FILES, false);
+    expect(await stored(FILES)).toBe(false);
+  });
+
+  it('does not resolve a files-only conflict against another tenant’s panel', async () => {
+    const outsider = adminActorFor(
+      await createAdmin(ctx.container, tenantB, { username: 'outside-fo', roleKeys: ['owner'] }),
+    );
+    await expect(
+      ctx.container.panelAdvanced.updatePolicy(tenantB, outsider, FILES, {
+        policy: {
+          delivery: { mode: 'CARD_WITH_QR' },
+          actions: { SUBSCRIPTION_FILES: { customerEnabled: false } },
+        },
+        expectedRevision: 0,
+        idempotencyKey: key(),
+      }),
+    ).rejects.toMatchObject({ code: 'panel.not_found' });
+    expect(await stored(FILES)).toBe(false);
   });
 
   it('audits the change with the value before and after, and only when it changed', async () => {

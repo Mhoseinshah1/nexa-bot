@@ -176,6 +176,24 @@ function announcesFiles(view: {
   );
 }
 
+const FILES_ONLY_SUFFIX = /\.(?:conf|ini|json|mobileconfig|ovpn|png|toml|txt|xml|ya?ml)$/iu;
+const FILES_ONLY_BASENAME = /^[\p{L}\p{N}_-][\p{L}\p{N}\p{M} _-]*$/u;
+
+function filesOnlyMetadata(
+  file: ProviderSubscriptionFile,
+  index: number,
+): ProviderSubscriptionFile {
+  const suffix = FILES_ONLY_SUFFIX.exec(file.fileName)?.[0] ?? '';
+  const baseName = file.fileName.slice(0, file.fileName.length - suffix.length);
+  return {
+    ...file,
+    caption: null,
+    fileName: FILES_ONLY_BASENAME.test(baseName)
+      ? file.fileName
+      : `subscription-${String(index + 1)}${suffix}`,
+  };
+}
+
 /**
  * A panel's ready-made connection files, fetched for their owner and sent to them
  * (Package E, `docs/package-e-rickpanel-files-audit.md`).
@@ -315,8 +333,8 @@ export class SubscriptionFileService {
     if (fetched.outcome !== 'FILES') return fetched;
     const view = fetched.view;
     /*
-     * Round N (F2): the files as ALBUMS, in the panel's order, each with the panel's own
-     * caption. `planMediaBatches` cuts the list into the fewest consecutive albums Telegram
+     * Round N (F2): the files as ALBUMS, in the panel's order. `planMediaBatches` cuts
+     * the list into the fewest consecutive albums Telegram
      * accepts (every file here is a document, so one album class; at most 10 per album); a
      * batch of one — the only thing that cannot be an album — goes by `sendFile`, in its
      * place. The first batch Telegram does not certainly accept stops the delivery: nothing
@@ -327,10 +345,12 @@ export class SubscriptionFileService {
      * R11 A4: the captions' link variables ({sub_link}, {subscription_url}) read a service's
      * `subscriptionUrl`. On a «فقط فایل، بدون لینک ساب» panel the caption is built from a
      * service WITHOUT it, so a template that names the link renders that line absent — the
-     * renderer drops a line made only of absent facts — and a caption can never carry it.
+     * renderer drops a line made only of absent facts. Provider captions are already omitted
+     * from files-only results in `fetchFiles`.
      */
-    const captionService: ServiceRecord =
-      view?.panel.filesOnlyDelivery === true ? { ...service, subscriptionUrl: null } : service;
+    const captionService: ServiceRecord = view.panel.filesOnlyDelivery
+      ? { ...service, subscriptionUrl: null }
+      : service;
     const captionFor = await this.captionPlan(scope, captionService, files);
     const kinds = files.map(() => 'DOCUMENT' as const);
     let sent = 0;
@@ -455,7 +475,13 @@ export class SubscriptionFileService {
       return { outcome: 'UNAVAILABLE' };
     }
     if (!fetched.found || fetched.files.length === 0) return { outcome: 'UNAVAILABLE' };
-    return { outcome: 'FILES', files: fetched.files, failed: fetched.failed, view };
+    // Provider captions can contain the link in plain text or in a link entity. Files-only
+    // omits the entire provider caption and allows plain attachment names, for both Telegram
+    // and the in-memory downloads. Attachment bytes and media types are preserved.
+    const files = view.panel.filesOnlyDelivery
+      ? fetched.files.map(filesOnlyMetadata)
+      : fetched.files;
+    return { outcome: 'FILES', files, failed: fetched.failed, view };
   }
 
   /**

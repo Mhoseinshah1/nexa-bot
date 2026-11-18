@@ -45,6 +45,7 @@ import type { ScopeActivityReader } from '../../system/application/record-ping.s
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelWithCapacity } from './capacity-ports.js';
 import { diagnosePanel } from './panel-diagnostics.js';
+import { assertFilesOnlyAvailable } from './panel-files-only.js';
 import { readHealth } from './panel-health-view.js';
 import type { PanelPolicyRepository, StoredPanelPolicy } from './panel-policy.js';
 import type { PanelRepository } from './ports.js';
@@ -230,6 +231,13 @@ export class PanelAdvancedService {
             PANEL_ERROR_CODES.PANEL_POLICY_STALE,
             'The policy changed since it was read. Reload it and try again.',
             { revision },
+          );
+        }
+        if (view.panel.filesOnlyDelivery) {
+          assertFilesOnlyAvailable(
+            view,
+            { readable: true, policy: command.policy },
+            this.deps.adapters,
           );
         }
         const before = stored === null ? DEFAULT_PANEL_POLICY : stored.policy;

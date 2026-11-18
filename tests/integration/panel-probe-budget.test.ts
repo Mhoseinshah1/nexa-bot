@@ -1,3 +1,5 @@
+import { PanelPolicyReader } from '../../apps/api/src/modules/platform/panels/application/panel-policy';
+import { DrizzlePanelPolicyRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-policy.repository';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import type { Clock, Instant, ProviderProbeOutcome, ProviderType } from '@nexa/contracts';
@@ -106,6 +108,9 @@ describe('the tenant-wide probe budget', () => {
     repository: PanelRepository = new DrizzlePanelRepository(context.container.database.db),
   ) =>
     new PanelService({
+      panelPolicy: new PanelPolicyReader(
+        new DrizzlePanelPolicyRepository(context.container.database.db),
+      ),
       capacity: ctx.container.panelCapacity,
       usernameNamespace: ctx.container.usernameNamespace,
       repository,

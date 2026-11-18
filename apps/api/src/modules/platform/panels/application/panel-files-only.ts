@@ -1,13 +1,59 @@
 import {
+  customerActionVerdict,
+  deriveCapabilityRegistry,
+  errors,
+  isProviderType,
+  PANEL_ERROR_CODES,
+  panelDeliversConnectionFiles,
   DEFAULT_SINGBOX_NAME_MODE,
   type SingboxNameMode,
   DEFAULT_PANEL_QR_KIND,
   SINGBOX_INTERVAL_DEFAULT_MINUTES,
   type PanelQrKind,
+  type ProviderConnectionAdapter,
+  type ProviderType,
+  type ResolvedPanelPolicy,
   type TenantContext,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelRepository } from './ports.js';
+
+/** Both configuration writes check the resulting pair while holding the panel row lock. */
+export function assertFilesOnlyAvailable(
+  view: {
+    readonly panel: { readonly providerType: string };
+    readonly health: { readonly announcedCapabilities: readonly string[] } | null;
+  },
+  policy: ResolvedPanelPolicy,
+  adapters: (type: ProviderType) => ProviderConnectionAdapter | null,
+): void {
+  const { providerType } = view.panel;
+  const adapter =
+    isProviderType(providerType) &&
+    panelDeliversConnectionFiles(providerType, view.health?.announcedCapabilities ?? null)
+      ? adapters(providerType)
+      : null;
+  if (
+    adapter === null ||
+    !deriveCapabilityRegistry(adapter).some(
+      (entry) => entry.row === 'SUBSCRIPTION_FILES' && entry.supported,
+    )
+  ) {
+    throw errors.validation(
+      PANEL_ERROR_CODES.PANEL_FILES_ONLY_UNSUPPORTED,
+      'This panel does not hand over connection files, so its customers cannot be given files only.',
+      { providerType },
+    );
+  }
+  const verdict = customerActionVerdict(policy, 'SUBSCRIPTION_FILES');
+  if (!verdict.allowed) {
+    throw errors.validation(
+      PANEL_ERROR_CODES.PANEL_FILES_ONLY_POLICY_CONFLICT,
+      'Files-only delivery requires the customer connection-files action. Enable it or explicitly choose a delivery mode with links.',
+      { reason: verdict.reason },
+    );
+  }
+}
 
 /**
  * R11 A4: whether a panel is set to «فقط فایل، بدون لینک ساب» — its services' subscription

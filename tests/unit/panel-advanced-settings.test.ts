@@ -45,6 +45,7 @@ import {
   providerAdapter,
 } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { diagnosePanel } from '../../apps/api/src/modules/platform/panels/application/panel-diagnostics';
+import { assertFilesOnlyAvailable } from '../../apps/api/src/modules/platform/panels/application/panel-files-only';
 import type {
   PanelHealthSnapshot,
   PanelView,
@@ -297,6 +298,18 @@ describe('the capability registry', () => {
         expect(entry.gap === null, entry.row).toBe(entry.supported);
       }
     }
+  });
+});
+
+describe('files-only configuration', () => {
+  it('requires a callable files adapter even when the provider declares support', () => {
+    const view = { panel: { providerType: 'rickpanel' }, health: null };
+    const policy = resolvePanelPolicy(null);
+    const rick = new RickpanelAdapter();
+    expect(() => assertFilesOnlyAvailable(view, policy, () => rick)).not.toThrow();
+    expect(() =>
+      assertFilesOnlyAvailable(view, policy, () => without(rick, 'fetchSubscriptionFiles')),
+    ).toThrow(expect.objectContaining({ code: 'panel.files_only_unsupported' }));
   });
 });
 

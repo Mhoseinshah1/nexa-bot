@@ -5125,6 +5125,7 @@ export function createContainer(
    */
   const panelService = new PanelService({
     repository: panelRepository,
+    panelPolicy: panelPolicyReader,
     capacity: panelCapacity,
     credentials: panelCredentials,
     /*
