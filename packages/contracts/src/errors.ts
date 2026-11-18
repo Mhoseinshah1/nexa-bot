@@ -708,6 +708,8 @@ export const PANEL_ERROR_CODES = {
    * a panel, so this is the server's own answer to a request that did not come from it.
    */
   PANEL_FILES_ONLY_UNSUPPORTED: 'panel.files_only_unsupported',
+  /** Files-only requires the panel policy to allow the customer connection-files action. */
+  PANEL_FILES_ONLY_POLICY_CONFLICT: 'panel.files_only_policy_conflict',
   /**
    * R11 A4: a QR kind other than the plain link (or a sing-box interval) was asked for a panel
    * that is not a RickPanel. Refused rather than stored: nothing would read it.
