@@ -4,7 +4,7 @@
  * — a plan's title, an operator's FAQ, a price — comes from the API and is never here.
  */
 export const MINIAPP_FA = {
-  'miniapp.app_title': 'نکسا',
+  'miniapp.app_title': 'مینی‌اپ',
   'miniapp.open_from_telegram': 'این صفحه را از داخل ربات تلگرام باز کنید.',
   'miniapp.loading': 'در حال بارگذاری…',
   'miniapp.reopen': 'این ورود دیگر معتبر نیست. مینی‌اپ را از ربات دوباره باز کنید.',

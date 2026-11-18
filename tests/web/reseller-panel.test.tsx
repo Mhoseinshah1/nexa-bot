@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -39,6 +41,15 @@ afterEach(() => {
 });
 
 describe('login', () => {
+  it('has a neutral tab title before and after the reseller app mounts', () => {
+    const html = readFileSync(resolve(__dirname, '../../apps/web/index.html'), 'utf8');
+    const page = new DOMParser().parseFromString(html, 'text/html');
+    expect(page.title).toBe('پنل کاربری');
+    stubApi([problem(`${API}/me`, 401, 'reseller_web.session_invalid')]);
+    renderPage(<ResellerRoot takeToken={() => ({ token: null, alreadyOpened: false })} />);
+    expect(document.title).toBe('پنل نماینده');
+  });
+
   it('posts the link token once, then opens the dashboard', async () => {
     const api = stubApi([
       { url: `${API}/auth/exchange`, method: 'POST', body: { state: 'ACTIVE', expiresAt: 'x' } },
